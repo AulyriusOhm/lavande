@@ -146,6 +146,7 @@ function MorningSummary({
   unread,
   attachments,
   encrypted,
+  demo,
   onToggle,
   onOpen,
 }: {
@@ -153,6 +154,7 @@ function MorningSummary({
   unread: number;
   attachments: number;
   encrypted: number;
+  demo: boolean;
   onToggle: () => void;
   onOpen: (id: string) => void;
 }) {
@@ -165,7 +167,9 @@ function MorningSummary({
         className="focus-ring flex h-[52px] w-full items-center gap-2 rounded-full border border-accent-ring/60 bg-accent-soft px-4 text-[11.5px] font-bold text-accent-ink transition-colors duration-200 hover:border-accent-ring"
       >
         <Sparkles className="size-4 shrink-0" strokeWidth={2.4} />
-        <span className="truncate">Résumé du matin · {TO_DO} à traiter</span>
+        <span className="truncate">
+          Résumé du matin{demo ? ` · ${TO_DO} à traiter` : ` · ${unread} non lus`}
+        </span>
         <ChevronDown className="ml-auto size-4 shrink-0" />
       </button>
     );
@@ -190,7 +194,7 @@ function MorningSummary({
             <NumberTicker value={unread} /> non lus
           </span>
           <span className="ml-auto shrink-0 rounded-full border border-accent-ring/60 bg-surface/80 px-2 py-0.5 text-[10px] font-bold text-accent-ink">
-            {TO_DO} à traiter
+            {demo ? `${TO_DO} à traiter` : `${attachments} fichiers`}
           </span>
           <DIconButton label="Replier le résumé du matin" onClick={onToggle} className="size-7">
             <ChevronUp className="size-4" />
@@ -199,26 +203,29 @@ function MorningSummary({
 
         <p className="mt-1 line-clamp-2 text-[12.5px] leading-[1.55] font-medium text-ink-soft">
           <span className="font-bold text-ink">{unread} conversations non lues</span>, {attachments} avec des pièces
-          jointes, {encrypted} chiffrées. Camille attend un retour sur la v3 avant vendredi.
+          jointes, {encrypted} chiffrées.
+          {demo ? " Camille attend un retour sur la v3 avant vendredi." : ""}
         </p>
       </div>
 
-      <div className="relative divide-y divide-accent-ring/20 border-t border-accent-ring/20">
-        {SUMMARY_ACTIONS.map((action) => (
-          <button
-            key={action.label}
-            type="button"
-            onClick={() => onOpen(action.target)}
-            aria-label={`${action.label} — ${action.hint}`}
-            className="focus-ring flex h-9 w-full items-center gap-2.5 px-4 text-left transition-colors duration-200 hover:bg-surface/70"
-          >
-            <action.icon className="size-4 shrink-0 text-accent-ink" strokeWidth={2.4} />
-            <span className="shrink-0 text-[12px] font-bold text-ink">{action.label}</span>
-            <span className="truncate text-[10.5px] font-semibold text-ink-muted/80">{action.hint}</span>
-            <ChevronRight className="ml-auto size-3.5 shrink-0 text-ink-muted" />
-          </button>
-        ))}
-      </div>
+      {demo ? (
+        <div className="relative divide-y divide-accent-ring/20 border-t border-accent-ring/20">
+          {SUMMARY_ACTIONS.map((action) => (
+            <button
+              key={action.label}
+              type="button"
+              onClick={() => onOpen(action.target)}
+              aria-label={`${action.label} — ${action.hint}`}
+              className="focus-ring flex h-9 w-full items-center gap-2.5 px-4 text-left transition-colors duration-200 hover:bg-surface/70"
+            >
+              <action.icon className="size-4 shrink-0 text-accent-ink" strokeWidth={2.4} />
+              <span className="shrink-0 text-[12px] font-bold text-ink">{action.label}</span>
+              <span className="truncate text-[10.5px] font-semibold text-ink-muted/80">{action.hint}</span>
+              <ChevronRight className="ml-auto size-3.5 shrink-0 text-ink-muted" />
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -647,6 +654,7 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                 unread={unreadThreads}
                 attachments={attachmentThreads}
                 encrypted={encryptedThreads}
+                demo={mode === "demo"}
                 onToggle={() => setSummaryOpen(!summaryOpen)}
                 onOpen={openById}
               />

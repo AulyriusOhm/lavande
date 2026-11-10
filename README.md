@@ -24,8 +24,13 @@ schéma SQLite, correspondance des types et limites détaillées :
 
 ```bash
 scripts/mail-service.sh start   # démon local sur 127.0.0.1:8790 (données : ~/.local/share/lavande)
-npm run dev                     # http://localhost:1420/ (ou le portail https://…:8443/lavande/)
+npm run dev:portal              # portail https://…:8443/lavande/  (base /lavande/)
+npm run dev                     # ou en direct : http://localhost:1420/
 ```
+
+Le portail sert l'app sous `/lavande/` : il faut `npm run dev:portal` (base `/lavande/`), sinon Vite
+renvoie l'index avec des chemins absolus et la page reste blanche (`404` sur `/src/main.tsx`).
+
 
 Première ouverture : l'écran de connexion demande libellé, adresse, identifiant, hôtes/ports IMAP et
 SMTP, chiffrement (TLS implicite ou STARTTLS) et mot de passe. Le serveur **teste la connexion avant
