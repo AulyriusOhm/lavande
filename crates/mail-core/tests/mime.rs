@@ -121,7 +121,7 @@ fn parses_simple_text_message() {
     assert_eq!(parsed.message_id.as_deref(), Some("abc123@mail.fr"));
     assert_eq!(
         parsed.body_text.as_deref(),
-        Some("Bonjour,\r\nvoici les maquettes.\r\n")
+        Some("Bonjour,\nvoici les maquettes.")
     );
     assert!(parsed.body_html.is_none());
     assert_eq!(parsed.pgp, PgpState::None);
@@ -144,7 +144,7 @@ fn decodes_quoted_printable_body() {
     let parsed = parse_message(QUOTED_PRINTABLE).expect("parse");
     assert_eq!(
         parsed.body_text.as_deref(),
-        Some("C'est bon pour moi, j'ai signé l'avenant ce matin. On peut lancer la phase 2 dès lundi.\r\n")
+        Some("C'est bon pour moi, j'ai signé l'avenant ce matin. On peut lancer la phase 2 dès lundi.")
     );
 }
 
@@ -197,7 +197,8 @@ fn detects_pgp_states() {
 #[test]
 fn preview_is_compacted_and_truncated() {
     let parsed = parse_message(LONG_PREVIEW).expect("parse");
-    assert_eq!(parsed.preview.chars().count(), 200);
+    assert!(parsed.preview.chars().count() <= 201, "{}", parsed.preview);
+    assert!(parsed.preview.ends_with('…'));
     assert!(!parsed.preview.contains('\n'));
     assert!(!parsed.preview.contains("  "));
     assert!(parsed.preview.starts_with("aaaaaaaaaa bbbbbbbbbb"));
@@ -222,4 +223,136 @@ fn missing_threading_headers_are_empty() {
     assert!(parsed.references.is_empty());
     assert!(parsed.in_reply_to.is_none());
     assert!(parsed.attachments.is_empty());
+}
+
+fn message_of(content_type: &str, body: &str) -> Vec<u8> {
+    format!(
+        "From: promo@boutique.fr\r\nSubject: Test\r\nContent-Type: {content_type}; charset=utf-8\r\n\r\n{body}\r\n"
+    )
+    .into_bytes()
+}
+
+fn is_invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00A0}' | '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{2007}' | '\u{2009}' | '\u{202F}' | '\u{FEFF}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+    ) || (c.is_control() && c != '\n')
+}
+
+#[test]
+fn marketing_html_preview_is_readable() {
+    let html = "<p>Soldes&nbsp;d'été&nbsp;: jusqu'à&nbsp;&nbsp;40&nbsp;% de réduction sur toute la boutique</p>\n\
+         <p>Livraison offerte dès 30&nbsp;€, retours gratuits pendant trente jours, paiement en trois fois</p>\n\
+         <p>Offre extra\u{00AD}ordinaire réservée aux abonnés de la newsletter</p>";
+    let parsed = parse_message(&message_of("text/html", html)).expect("parse");
+    let preview = parsed.preview.as_str();
+    assert!(
+        preview.starts_with("Soldes d'été : jusqu'à 40 % de réduction"),
+        "{preview}"
+    );
+    assert!(preview.chars().count() <= 201, "{preview}");
+    assert!(preview.ends_with('…'), "{preview}");
+    assert!(!preview.contains("  "), "{preview}");
+    assert!(!preview.chars().any(is_invisible), "{preview}");
+    let head = preview.trim_end_matches('…');
+    let text = parsed.body_text.as_deref().expect("text");
+    let compact = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(compact.starts_with(head), "{head} / {compact}");
+    assert!(text.contains("extraordinaire"), "{text}");
+    assert!(!text.chars().any(is_invisible), "{text}");
+}
+
+#[test]
+fn zero_width_non_joiner_does_not_glue_words() {
+    let parsed = parse_message(&message_of("text/plain", "avec\u{200C}l'écran")).expect("parse");
+    assert_eq!(parsed.body_text.as_deref(), Some("avec l'écran"));
+    assert_eq!(parsed.preview, "avec l'écran");
+}
+
+#[test]
+fn decorative_separators_are_dropped() {
+    let body = "Bonjour,\r\n----\r\n•••\r\nLe devis suit.\r\n=====\r\n___\r\n";
+    let parsed = parse_message(&message_of("text/plain", body)).expect("parse");
+    assert_eq!(
+        parsed.body_text.as_deref(),
+        Some("Bonjour,\n\nLe devis suit.")
+    );
+    assert_eq!(parsed.preview, "Bonjour, Le devis suit.");
+}
+
+#[test]
+fn html_is_sanitized_at_ingestion() {
+    let html = "<html><head><script>alert('x')</script><style>p{color:red}</style></head>\
+        <body><p onclick=\"steal()\">Bonjour <b>monde</b></p>\
+        <iframe src=\"https://evil.test\">piege</iframe>\
+        <img src=\"https://track.test/p.gif\" onerror=\"alert(1)\">\
+        <a href=\"javascript:alert(1)\">lien piege</a>\
+        <a href=\"https://example.com/x\" onclick=\"x()\" style=\"color:red\" title=\"exemple\">lien</a>\
+        <form action=\"/x\"><input name=\"a\"></form>\
+        <object data=\"x.swf\"></object><svg onload=\"x()\"></svg></body></html>";
+    let parsed = parse_message(&message_of("text/html", html)).expect("parse");
+    let out = parsed.body_html.as_deref().expect("html");
+    for forbidden in [
+        "<script",
+        "<style",
+        "<iframe",
+        "<img",
+        "<form",
+        "<input",
+        "<object",
+        "<svg",
+        "javascript:",
+        "onclick",
+        "onerror",
+        "onload",
+        "style=",
+    ] {
+        assert!(!out.contains(forbidden), "{forbidden} in {out}");
+    }
+    assert!(out.contains("Bonjour <b>monde</b>"), "{out}");
+    assert!(out.contains("href=\"https://example.com/x\""), "{out}");
+    assert!(out.contains("title=\"exemple\""), "{out}");
+    assert!(out.contains("rel=\"noopener noreferrer\""), "{out}");
+    assert!(out.contains("target=\"_blank\""), "{out}");
+    assert!(out.contains("lien piege"), "{out}");
+    assert!(
+        parsed.preview.starts_with("Bonjour monde"),
+        "{}",
+        parsed.preview
+    );
+    assert!(!parsed.preview.contains("javascript"), "{}", parsed.preview);
+}
+
+#[test]
+fn image_only_html_has_no_body() {
+    let html = "<img src=\"https://track.test/pixel.gif\" width=\"1\" height=\"1\"><script>var a=1;</script>";
+    let parsed = parse_message(&message_of("text/html", html)).expect("parse");
+    assert_eq!(parsed.body_html, None);
+    assert!(parsed.body_text.as_deref().unwrap_or_default().is_empty());
+    assert!(parsed.preview.is_empty());
+}
+
+#[test]
+fn table_markup_survives_sanitizing() {
+    let html = "<table><thead><tr><th>Poste</th></tr></thead>\
+        <tbody><tr><td colspan=\"2\">Total</td><td rowspan=\"3\">TVA</td></tr></tbody></table>";
+    let parsed = parse_message(&message_of("text/html", html)).expect("parse");
+    let out = parsed.body_html.as_deref().expect("html");
+    assert!(out.contains("<table>"), "{out}");
+    assert!(out.contains("<td colspan=\"2\">Total</td>"), "{out}");
+    assert!(out.contains("<td rowspan=\"3\">TVA</td>"), "{out}");
+    assert!(parsed.preview.contains("Total"), "{}", parsed.preview);
+    assert!(parsed.preview.contains("TVA"), "{}", parsed.preview);
+    let text = parsed.body_text.as_deref().expect("texte");
+    assert!(text.contains("Poste"), "{text}");
+    assert!(!text.contains("PosteTotal"), "cellules collées : {text}");
+    assert!(!text.contains("TotalTVA"), "cellules collées : {text}");
 }

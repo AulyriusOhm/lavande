@@ -177,6 +177,7 @@ export function messageToMail(
     subject: message.subject || "(sans objet)",
     preview: message.preview || body[0] || "…",
     body,
+    html: message.body_html ?? undefined,
     time: shortTime(message.date),
     date: longDate(message.date),
     unread: message.flags.unread,

@@ -113,12 +113,17 @@ scripts/mail-test-server.sh stop      # ou `reset` (stop + start), `status`
 - Réconciliation, pas de CONDSTORE/QRESYNC : chaque synchro fait une passe métadonnées complète du
   dossier (coût linéaire en nombre de messages, comme Thunderbird sans CONDSTORE) ; les corps ne sont
   tirés que pour les nouveaux UID, par lots de 500.
-- Pas d'IDLE/push : la synchro est toujours déclenchée par l'appelant (à la demande ou par polling).
+- Push via IMAP **IDLE sur INBOX** (SSE vers le front) : un mail arrive sans clic ; les autres
+  dossiers restent à la demande.
 - Aucune suppression poussée vers le serveur : le crate supprime localement et déplace, mais n'expose
   pas `STORE \Deleted` + `EXPUNGE` côté client.
 - Un seul dossier synchronisé par appel (`move_message` réconcilie en plus sa destination) ;
   `sync_account` ne fait que INBOX + Sent ; aucun retry réseau.
-- Ni pool de connexions, ni keychain, ni PGP réel, ni flux navigateur OAuth2, ni recherche serveur.
+- HTML des mails assaini à l'ingestion (liens sûrs, **images retirées**) ; les mails purement
+  graphiques sont donc plus sobres que dans leur client d'origine.
+- OAuth2 fonctionnel mais **sans identifiant d'application embarqué** : il faut enregistrer un
+  `client_id` (Google/Microsoft) ou le fournir au service ; seul le parcours de test est validé.
+- Ni pool de connexions, ni keychain, ni PGP réel, ni recherche serveur.
 - Le démon écoute **127.0.0.1 uniquement** et n'a aucune authentification : quiconque atteint le port
   pilote les comptes. Ne l'expose pas hors loopback sans mettre une authentification devant.
 - Les mots de passe IMAP/SMTP sont stockés en clair dans `~/.local/share/lavande/accounts.json`

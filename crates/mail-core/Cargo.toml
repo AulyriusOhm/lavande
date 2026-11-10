@@ -16,6 +16,7 @@ thiserror = "1"
 tracing = "0.1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 mail-parser = "0.9"
+ammonia = "4"
 base64 = "0.22"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "time"] }
 async-imap = { version = "0.10", default-features = false, features = ["runtime-tokio"] }

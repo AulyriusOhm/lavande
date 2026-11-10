@@ -1,5 +1,7 @@
 //! MIME parsing on top of `mail-parser`.
 
+use std::collections::{HashMap, HashSet};
+
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use mail_parser::{Address as RawAddress, HeaderValue, MessageParser, MimeHeaders, PartType};
 
@@ -33,9 +35,10 @@ pub fn parse_message(raw: &[u8]) -> Result<ParsedMessage, MailError> {
         .ok_or_else(|| MailError::Mime("could not parse message".to_string()))?;
 
     let html_index = html_body_of(&message);
-    let body_html =
-        html_index.and_then(|index| message.body_html(index).map(|html| html.into_owned()));
-    let body_text = text_body_of(&message, html_index);
+    let body_html = html_index
+        .and_then(|index| message.body_html(index).map(|html| html.into_owned()))
+        .and_then(|html| sanitize_html(&html));
+    let body_text = text_body_of(&message, body_html.as_deref());
     let preview = body_text.as_deref().map(preview_of).unwrap_or_default();
 
     let references = header_texts(message.references())
@@ -87,16 +90,74 @@ fn html_body_of(message: &mail_parser::Message<'_>) -> Option<usize> {
     })
 }
 
-fn text_body_of(message: &mail_parser::Message<'_>, html_index: Option<usize>) -> Option<String> {
-    let index = (0..message.text_body_count())
-        .find(|index| {
-            matches!(
-                message.text_part(*index).map(|part| &part.body),
-                Some(PartType::Text(_))
-            )
-        })
-        .or(html_index);
-    index.and_then(|index| message.body_text(index).map(|text| text.into_owned()))
+fn text_body_of(message: &mail_parser::Message<'_>, body_html: Option<&str>) -> Option<String> {
+    let text_index = (0..message.text_body_count()).find(|index| {
+        matches!(
+            message.text_part(*index).map(|part| &part.body),
+            Some(PartType::Text(_))
+        )
+    });
+    let body = match text_index {
+        Some(index) => clean_text(&message.body_text(index)?),
+        None => clean_text(&html_to_text(body_html?)?),
+    };
+    (!body.is_empty()).then_some(body)
+}
+
+/// Repli texte du HTML assaini : les balises de bloc deviennent des sauts de
+/// ligne (sinon les cellules d'un tableau se collent), les autres disparaissent,
+/// puis le texte est débarrassé de ses caractères invisibles et de ses espaces.
+fn html_to_text(html: &str) -> Option<String> {
+    let mut text = String::with_capacity(html.len());
+    let mut in_tag = false;
+    let mut tag = String::new();
+    for character in html.chars() {
+        match character {
+            '<' => {
+                in_tag = true;
+                tag.clear();
+            }
+            '>' if in_tag => {
+                in_tag = false;
+                let name = tag
+                    .trim_start_matches('/')
+                    .split([' ', '/'])
+                    .next()
+                    .unwrap_or("");
+                if matches!(
+                    name,
+                    "p" | "br"
+                        | "div"
+                        | "tr"
+                        | "li"
+                        | "h1"
+                        | "h2"
+                        | "h3"
+                        | "h4"
+                        | "blockquote"
+                        | "pre"
+                ) {
+                    text.push('\n');
+                } else if matches!(name, "td" | "th") {
+                    text.push(' ');
+                }
+            }
+            _ if in_tag => tag.push(character),
+            _ => text.push(character),
+        }
+    }
+    let decoded = decode_entities(&text);
+    (!decoded.trim().is_empty()).then_some(decoded)
+}
+
+fn decode_entities(text: &str) -> String {
+    text.replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
 }
 
 fn pgp_state(message: &mail_parser::Message<'_>) -> PgpState {
@@ -172,11 +233,198 @@ fn to_utc(date: &mail_parser::DateTime) -> Option<DateTime<Utc>> {
     Utc.from_utc_datetime(&naive).checked_sub_signed(offset)
 }
 
-/// First `PREVIEW_LEN` characters of the text, whitespace collapsed.
-fn preview_of(text: &str) -> String {
-    compact(text).chars().take(PREVIEW_LEN).collect()
+/// Tags kept by `sanitize_html`: structure and inline emphasis only.
+const HTML_TAGS: [&str; 28] = [
+    "p",
+    "br",
+    "div",
+    "span",
+    "a",
+    "ul",
+    "ol",
+    "li",
+    "b",
+    "strong",
+    "i",
+    "em",
+    "u",
+    "s",
+    "blockquote",
+    "code",
+    "pre",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "table",
+    "thead",
+    "tbody",
+    "tr",
+    "td",
+    "th",
+    "hr",
+];
+
+/// Strips everything a mail can use to break out of the message view: only the
+/// tags of `HTML_TAGS` survive, with `href` (http/https/mailto only), `title`,
+/// `colspan` and `rowspan`. `script`/`style` keep nothing, images (tracking
+/// pixels) are dropped, `on*`/`style`/`srcset` and unknown tags lose their tag
+/// but keep their text, links get `rel="noopener noreferrer"` and
+/// `target="_blank"`. Returns `None` when no visible text is left.
+pub fn sanitize_html(html: &str) -> Option<String> {
+    let cleaned = html_sanitizer().clean(html).to_string();
+    if visible_text(&cleaned).is_empty() {
+        return None;
+    }
+    Some(cleaned.replace("<a ", "<a target=\"_blank\" "))
 }
 
-fn compact(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+fn html_sanitizer() -> ammonia::Builder<'static> {
+    let mut builder = ammonia::Builder::default();
+    builder
+        .tags(HTML_TAGS.into_iter().collect())
+        .tag_attributes(HashMap::from([
+            ("a", HashSet::from(["href"])),
+            ("td", HashSet::from(["colspan", "rowspan"])),
+            ("th", HashSet::from(["colspan", "rowspan"])),
+        ]))
+        .generic_attributes(HashSet::from(["title"]))
+        .url_schemes(HashSet::from(["http", "https", "mailto"]))
+        .link_rel(Some("noopener noreferrer"));
+    builder
+}
+
+/// Text left once the sanitized markup is reduced to its text content.
+fn visible_text(html: &str) -> String {
+    let mut text = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => {
+                in_tag = false;
+                text.push(' ');
+            }
+            _ if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+    let text = text
+        .replace("&nbsp;", " ")
+        .replace("&#160;", " ")
+        .replace("&#xa0;", " ")
+        .replace("&#xA0;", " ");
+    clean_text(&text)
+}
+
+/// Readable form of a body: zero-width and control characters go away,
+/// non-breaking spaces become spaces, decorative separator runs and
+/// bullet-only lines disappear, runs of spaces collapse. Paragraph breaks
+/// survive, one per run of blank lines.
+fn clean_text(text: &str) -> String {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut lines: Vec<String> = Vec::new();
+    for line in normalized.split('\n') {
+        let line = clean_line(line);
+        if line.is_empty() {
+            if lines.last().is_some_and(|last| !last.is_empty()) {
+                lines.push(String::new());
+            }
+        } else {
+            lines.push(line);
+        }
+    }
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    lines.join("\n")
+}
+
+fn clean_line(line: &str) -> String {
+    let mut cleaned = String::with_capacity(line.len());
+    let mut separator: Vec<char> = Vec::new();
+    let mut pending_space = false;
+    for c in line.chars().chain(std::iter::once(' ')) {
+        let c = if is_wide_space(c) { ' ' } else { c };
+        if is_zero_width(c) {
+            pending_space = true;
+            continue;
+        }
+        if is_dropped(c) {
+            continue;
+        }
+        if matches!(c, '-' | '_' | '=') {
+            separator.push(c);
+            continue;
+        }
+        if !separator.is_empty() {
+            if separator.len() >= 3 {
+                pending_space = true;
+            } else {
+                cleaned.extend(&separator);
+            }
+            separator.clear();
+        }
+        if c == ' ' {
+            pending_space = true;
+            continue;
+        }
+        if pending_space && !cleaned.is_empty() {
+            cleaned.push(' ');
+        }
+        pending_space = false;
+        cleaned.push(c);
+    }
+    if cleaned
+        .chars()
+        .all(|c| matches!(c, ' ' | '\u{2022}' | '\u{25CF}'))
+    {
+        return String::new();
+    }
+    cleaned
+}
+
+fn is_wide_space(c: char) -> bool {
+    matches!(c, '\u{00A0}' | '\u{202F}' | '\u{2007}' | '\u{2009}')
+}
+
+/// Zero-width characters that stand between words: dropping them would glue
+/// the two words, so they leave a space instead.
+fn is_zero_width(c: char) -> bool {
+    matches!(
+        c,
+        '\t' | '\u{061C}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{FEFF}'
+    )
+}
+
+fn is_dropped(c: char) -> bool {
+    matches!(c, '\u{00AD}' | '\u{034F}' | '\u{200D}') || (c.is_control() && c != '\n')
+}
+
+/// First `PREVIEW_LEN` characters of the text on a single line, truncated on a
+/// word boundary.
+fn preview_of(text: &str) -> String {
+    let compact = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    truncate_words(&compact, PREVIEW_LEN)
+}
+
+fn truncate_words(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(limit).collect();
+    let head = match head.rfind(' ') {
+        Some(index) if index > 0 => &head[..index],
+        _ => head.as_str(),
+    };
+    format!("{}…", head.trim_end())
 }

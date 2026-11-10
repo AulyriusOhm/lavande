@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use lavande_mail::tls::TlsOptions;
 use lavande_mail_api::app;
+use lavande_mail_api::events;
 use lavande_mail_api::state::AppState;
 use tokio::net::TcpListener;
 use tokio::signal;
@@ -44,6 +45,7 @@ async fn run() -> Result<(), String> {
         .map_err(|error| format!("adresse locale illisible : {error}"))?;
     tracing::info!(%address, data = %data_dir.display(), "lavande-maild écoute");
 
+    events::watch_all(&state);
     axum::serve(listener, app(state))
         .with_graceful_shutdown(shutdown())
         .await

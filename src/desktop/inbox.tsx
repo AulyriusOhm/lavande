@@ -41,6 +41,7 @@ import { BlurFade } from "@/components/ui/blur-fade";
 import { BorderBeam } from "@/components/ui/border-beam";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
+import { MailBody } from "@/components/mail-body";
 import {
   Badge,
   DButton,
@@ -800,16 +801,11 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                     </div>
                   ) : null}
 
-                  <div className="mt-6 max-w-[80ch] space-y-3.5">
-                    {mail.body.map((paragraph, index) => (
-                      <p
-                        key={index}
-                        className="text-[14.5px] leading-[1.78] font-medium whitespace-pre-line text-ink-soft"
-                      >
-                        {paragraph}
-                      </p>
-                    ))}
-                  </div>
+                  <MailBody
+                    className="mt-6 max-w-[80ch] text-[14.5px] leading-[1.78]"
+                    html={mail.html}
+                    paragraphs={mail.body}
+                  />
 
                   {previous.length > 0 ? (
                     <div className="mt-7 border-t border-line pt-4">

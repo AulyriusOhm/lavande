@@ -20,6 +20,7 @@ import type { Thread } from "@/lib/threads";
 import { cn } from "@/lib/utils";
 import { Avatar, IconButton } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
+import { MailBody } from "@/components/mail-body";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { MeshGlow } from "@/components/ui/backdrops";
 
@@ -352,16 +353,7 @@ export function MessageScreen({
         {mail.pgp !== "none" && <BlurFade delay={0.09}>{pgpBanner(mail)}</BlurFade>}
 
         <BlurFade delay={0.12}>
-          <div className="mt-5 space-y-3.5">
-            {mail.body.map((paragraph, index) => (
-              <p
-                key={index}
-                className="text-[13.5px] leading-[1.7] font-medium whitespace-pre-line text-ink-soft"
-              >
-                {paragraph}
-              </p>
-            ))}
-          </div>
+          <MailBody className="mt-5" html={mail.html} paragraphs={mail.body} />
         </BlurFade>
 
         {mail.attachments?.length ? <BlurFade delay={0.18}>{attachmentList(mail)}</BlurFade> : null}

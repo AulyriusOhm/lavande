@@ -7,6 +7,8 @@ pub mod config_file;
 pub mod discovery;
 pub mod dto;
 pub mod error;
+pub mod events;
+pub mod oauth_flow;
 pub mod routes;
 pub mod state;
 
@@ -46,6 +48,8 @@ pub fn app(state: Arc<AppState>) -> Router {
         .merge(routes::accounts::router())
         .merge(routes::discover::router())
         .merge(routes::mail::router())
+        .merge(routes::oauth::router())
+        .merge(routes::events::router())
         .layer(cors())
         .with_state(state)
 }
@@ -61,6 +65,7 @@ pub async fn serve(bind: &str, data_dir: PathBuf, tls: TlsOptions) -> Result<(),
         .await
         .map_err(|error| format!("impossible d'écouter sur {bind} : {error}"))?;
     tracing::info!(address = bind, data = %data_dir.display(), "API mail à l'écoute");
+    events::watch_all(&state);
     axum::serve(listener, app(state))
         .await
         .map_err(|error| format!("serveur arrêté : {error}"))

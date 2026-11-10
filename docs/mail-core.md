@@ -647,6 +647,10 @@ Erreurs : `{ "error": "message lisible", "kind": "config|auth|imap|smtp|tls|oaut
 | POST | `/api/accounts/{id}/flags` | `{ folder_path, uid, unread, starred }` | 204 (serveur d'abord, store ensuite) |
 | POST | `/api/accounts/{id}/move` | `{ from_path, uid, to_path }` | 204 (UID local réaligné sur celui du serveur) |
 | POST | `/api/accounts/{id}/send` | `SendRequest` | 204 |
+| POST | `/api/oauth/start` | `OAuthStartRequest` | 201 `{ session, auth_url, redirect_uri }` |
+| GET | `/api/oauth/callback?code=…&state=…` | — | page HTML autonome (jamais de jeton) |
+| GET | `/api/oauth/status?session=…` | — | `{ status: pending\|done\|failed, account_id?, error? }` |
+| GET | `/api/events` | — | flux SSE `event: mail` (`folder-updated`, rapport de synchro) |
 
 `POST /api/accounts` **teste la connexion IMAP et liste les dossiers avant d'écrire quoi que ce soit** :
 rien n'est persisté si le serveur refuse. Les corps et réponses sont les types de
@@ -685,6 +689,42 @@ tentative.
 `source` ∈ `ispdb` \| `autoconfig` \| `well_known` \| `guess`. Un domaine inconnu renvoie
 `{ "found": false, "source": null, "reason": "aucune configuration publiée pour « … »" }` — ce n'est
 pas une erreur.
+
+### OAuth2 (`/api/oauth`)
+
+Parcours « application installée » : PKCE (S256), `state` aléatoire, retour sur le **même port** que
+le démon (`http://127.0.0.1:8790/api/oauth/callback`, surchargeable par `LAVANDE_MAIL_PUBLIC_URL`).
+
+1. `POST /api/oauth/start` avec `provider` (`google`, `microsoft` ou `custom`), `email`, `label`, les
+   endpoints `imap`/`smtp` (typiquement ceux renvoyés par `/api/discover`), et `client_id`
+   (facultatif si `LAVANDE_MAIL_<PROVIDER>_CLIENT_ID` est défini ; `*_CLIENT_SECRET` de même).
+   Réponse : `{ session, auth_url, redirect_uri }`.
+2. Le client ouvre `auth_url` dans le navigateur ; l'utilisateur consent.
+3. Le fournisseur redirige le navigateur vers `redirect_uri` ; le démon échange le code
+   (`grant_type=authorization_code` + `code_verifier`), obtient le `refresh_token`, **teste la
+   connexion IMAP** (XOAUTH2 + `LIST`) puis enregistre le compte comme `POST /api/accounts`.
+   La page renvoyée est autonome (« Compte connecté » ou « Connexion refusée : … »).
+4. `GET /api/oauth/status?session=…` permet au front de suivre l'issue sans voir de jeton.
+
+Sessions en mémoire, TTL 10 minutes, `state` à usage unique. **Aucun identifiant d'application n'est
+embarqué** dans le projet : il faut enregistrer une application OAuth chez Google/Microsoft (type
+« installed app », redirection `http://127.0.0.1:8790/api/oauth/callback`) ou renseigner l'endpoint
+`custom`.
+
+### Événements (`/api/events`)
+
+La veille **IMAP IDLE** tourne dans le démon (une par compte, sur INBOX) : à chaque notification du
+serveur elle lance une réconciliation du dossier et publie un événement SSE.
+
+```text
+event: mail
+data: {"type":"folder-updated","account_id":"perso","folder_path":"INBOX",
+       "report":{"folder_path":"INBOX","inserted":1,"flags_updated":0,"removed":0,
+                 "uidvalidity_changed":false,"uidnext":1208}}
+```
+
+Le front s'y abonne (`EventSource`) et rafraîchit la liste sans clic ; le flux se reconnecte seul et
+un `keep-alive` de 20 s maintient la connexion. La veille se reconnecte 30 s après une coupure.
 
 ### Exemples de payloads
 
@@ -821,9 +861,14 @@ Variables lues par `scripts/mail-test-server.sh` : `LAVANDE_MAIL_TEST_DIR`, `…
   depuis » : chaque passage fait une passe métadonnées complète du dossier (`UID FETCH 1:* (UID FLAGS
   RFC822.SIZE)`), donc un coût linéaire en nombre de messages — le compromis de Thunderbird sans
   CONDSTORE. Les corps, eux, ne sont tirés que pour les nouveaux UID.
-- **Pas d'IDLE ni de push.** Rien n'arrive tout seul : la synchro est déclenchée par l'appelant, à la
-  demande ou par un polling applicatif à écrire. Un changement serveur n'est visible qu'après un
-  `sync_folder`.
+- **IDLE sur INBOX seulement.** La veille surveille le dossier de réception de chaque compte ; les
+  autres dossiers ne se rafraîchissent qu'à la demande, et il n'y a rien côté serveur pour pousser
+  vers un appareil éteint (pas de service de notification type UnifiedPush).
+- **Images des mails retirées.** Le HTML est assaini à l'ingestion sans `img` (pixels de tracking),
+  et sans feuille de style : le rendu est fonctionnel mais plus sobre que dans le mail d'origine.
+- **OAuth2 sans identifiant embarqué** : un `client_id` doit être enregistré (ou fourni par
+  l'environnement). Le parcours n'est validé qu'avec un fournisseur factice et GreenMail, pas contre
+  Google/Microsoft en vrai.
 - **Aucune suppression poussée vers le serveur.** Le crate sait supprimer **localement**
   (`Store::delete_message`/`delete_messages`) et déplacer (`imap::move_message`), mais il n'expose ni
   `STORE \Deleted` + `EXPUNGE` ni `UID EXPUNGE` comme opération publique : supprimer depuis le client

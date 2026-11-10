@@ -14,6 +14,7 @@ import { EVENTS, TODAY_ISO } from "@/lib/calendar";
 import type { CalendarEvent } from "@/lib/calendar";
 import { usePrefs } from "@/lib/prefs";
 import { mailApi, errorText } from "@/lib/api";
+import type { LiveEvent } from "@/lib/api";
 import type { NewAccount } from "@/lib/api";
 import {
   folderOptions as optionsOf,
@@ -79,6 +80,7 @@ export type MailStoreValue = {
   forwardMail: (mail: Mail) => void;
   sendDraft: (draft: ComposeDraft) => void;
   retryBackend: () => void;
+  refreshMailbox: () => Promise<void>;
   useDemo: () => void;
   syncFolder: () => void;
   openConnect: () => void;
@@ -156,6 +158,24 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (mode === "api") void bootstrap();
   }, [bootstrap, mode]);
+
+  // Le service pousse un événement après chaque détection IDLE : la liste se
+  // rafraîchit sans clic, et sans bloquer l'interface.
+  useEffect(() => {
+    if (mode !== "api") return;
+    const source = new EventSource(mailApi.eventsUrl());
+    source.addEventListener("mail", (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent<string>).data) as LiveEvent;
+        if (!account || payload.account_id === account) {
+          setRevision((value) => value + 1);
+        }
+      } catch {
+        setRevision((value) => value + 1);
+      }
+    });
+    return () => source.close();
+  }, [account, mode]);
 
   const retryBackend = useCallback(() => {
     if (mode === "api") void bootstrap();
@@ -739,6 +759,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       forwardMail,
       sendDraft,
       retryBackend,
+      refreshMailbox: bootstrap,
       useDemo,
       syncFolder,
       openConnect,
@@ -801,6 +822,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       askRemoveAccount,
       cancelRemoveAccount,
       confirmRemoveAccount,
+      bootstrap,
     ],
   );
 

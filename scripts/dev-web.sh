@@ -1,70 +1,66 @@
 #!/usr/bin/env bash
-# Serveur web de la maquette (Vite, base /lavande/) : c'est ce que sert le
-# portail https://…:8443/lavande/. Détaché, avec un fichier de PID.
+# Maquette servie par le portail : Vite tourne dans un conteneur détaché pour
+# survivre à la session et redémarrer au boot, comme le proxy nginx.
 #
-#   scripts/dev-web.sh start|stop|restart|status
+#   scripts/dev-web.sh start|stop|restart|logs|status
 #
-# Le portail sert l'app sous /lavande/ : le serveur doit donc tourner avec
+# Le portail sert l'app sous /lavande/ : Vite doit donc tourner avec
 # VITE_BASE=/lavande/ (`npm run dev:portal`), sinon la page reste blanche.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-readonly CACHE="$HOME/.cache/lavande"
-readonly LOG="$CACHE/web.log"
-readonly PID_FILE="$CACHE/web.pid"
-readonly URL="http://127.0.0.1:1420/lavande/"
+readonly NAME="lavande-web"
+readonly IMAGE="node:22-bookworm-slim"
+readonly PORT=1420
+readonly URL="http://127.0.0.1:${PORT}/lavande/"
 
-running_pid() {
-    [[ -f "$PID_FILE" ]] || return 1
-    local pid
-    pid="$(cat "$PID_FILE")"
-    [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && echo "$pid"
+running() {
+    [[ "$(docker inspect --format '{{.State.Running}}' "$NAME" 2>/dev/null)" == "true" ]]
 }
 
 start() {
-    if running_pid >/dev/null; then
-        echo "web déjà lancé (pid $(running_pid))"
+    if running; then
+        echo "$NAME tourne déjà"
         return 0
     fi
-    mkdir -p "$CACHE"
-    (cd "$ROOT" && setsid nohup npm run dev:portal >"$LOG" 2>&1 </dev/null & echo $! >"$PID_FILE")
+    if [[ ! -d "$ROOT/node_modules" ]]; then
+        echo "node_modules manquant, lance d'abord : npm ci" >&2
+        return 1
+    fi
+    docker rm -f "$NAME" >/dev/null 2>&1 || true
+    docker run -d --name "$NAME" --network host --restart unless-stopped \
+        -v "$ROOT:/app" -w /app \
+        -e VITE_BASE=/lavande/ \
+        "$IMAGE" npm run dev >/dev/null
     for _ in $(seq 1 100); do
         if curl -fsS --max-time 1 "$URL" >/dev/null 2>&1; then
-            echo "web écoute sur $URL (log : $LOG)"
+            echo "maquette : $URL (conteneur $NAME)"
             return 0
         fi
-        sleep 0.2
+        sleep 0.3
     done
-    echo "le serveur web n'a pas répondu, voir $LOG" >&2
-    tail -n 20 "$LOG" >&2 || true
+    echo "le serveur web n'a pas répondu" >&2
+    docker logs --tail 30 "$NAME" >&2 || true
     return 1
 }
 
 stop() {
-    local pid
-    if pid="$(running_pid)"; then
-        kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
-        sleep 1
-        kill -9 -- "-$pid" 2>/dev/null || true
-        echo "web arrêté"
-    else
-        echo "web ne tourne pas"
-    fi
-    rm -f "$PID_FILE"
+    docker rm -f "$NAME" >/dev/null 2>&1 && echo "maquette arrêtée" || echo "maquette déjà arrêtée"
 }
 
 status() {
-    if pid="$(running_pid)"; then
-        echo "web lancé (pid $pid, $URL)"
+    if running; then
+        echo "maquette lancée ($URL)"
     else
-        echo "web arrêté"
+        echo "maquette arrêtée"
     fi
 }
 
 case "${1:-}" in
     start) start ;;
     stop) stop ;;
-    restart) stop && start ;;
+    restart) stop; start ;;
+    logs) docker logs --tail "${2:-50}" "$NAME" ;;
     status) status ;;
-    *) echo "usage: $(basename "$0") start|stop|restart|status" >&2; exit 2 ;;
+    *) echo "usage: $(basename "$0") start|stop|restart|logs|status" >&2; exit 2 ;;
 esac

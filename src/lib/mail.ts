@@ -63,6 +63,7 @@ export type Mail = {
   subject: string;
   preview: string;
   body: string[];
+  html?: string;
   time: string;
   date?: string;
   unread: boolean;

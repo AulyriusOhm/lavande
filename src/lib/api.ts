@@ -142,6 +142,39 @@ export type DiscoverySource = "ispdb" | "autoconfig" | "well_known" | "guess";
 
 export type ApiDiscoveryEndpoint = ApiEndpoint & { username: string };
 
+export type ApiOAuthStart = {
+  session: string;
+  auth_url: string;
+  redirect_uri: string;
+};
+
+export type ApiOAuthStatus = {
+  status: "pending" | "done" | "failed";
+  account_id?: string;
+  error?: string;
+};
+
+export type OAuthStartInput = {
+  provider: "google" | "microsoft" | "custom";
+  email: string;
+  label: string;
+  id?: string;
+  imap: ApiEndpoint;
+  smtp: ApiEndpoint;
+  client_id?: string;
+  client_secret?: string;
+  scope?: string;
+  token_endpoint?: string;
+  auth_endpoint?: string;
+};
+
+export type LiveEvent = {
+  type: string;
+  account_id: string;
+  folder_path: string;
+  report?: { folder_path: string; inserted: number; flags_updated: number; removed: number };
+};
+
 export type ApiDiscovery = {
   found: boolean;
   source: DiscoverySource | null;
@@ -311,6 +344,14 @@ export const mailApi = {
 
   move: (id: string, input: MoveInput) =>
     request<void>(`${accountPath(id)}/move`, { method: "POST", body: input }),
+
+  oauthStart: (input: OAuthStartInput) =>
+    request<ApiOAuthStart>("/oauth/start", { method: "POST", body: input }),
+
+  oauthStatus: (session: string) =>
+    request<ApiOAuthStatus>(`/oauth/status?session=${encodeURIComponent(session)}`),
+
+  eventsUrl: () => `${BASE}/events`,
 
   send: (id: string, input: SendInput) =>
     request<void>(`${accountPath(id)}/send`, {

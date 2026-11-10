@@ -45,6 +45,7 @@ async fn add(
 
     let folders = probe(&state, &config).await?;
     state.add_account(&config, &folders)?;
+    crate::events::watch_account(&state, config.clone());
     tracing::info!(account = %config.id, folders = folders.len(), "compte ajouté");
     Ok((
         StatusCode::CREATED,

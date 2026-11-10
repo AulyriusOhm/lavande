@@ -35,6 +35,10 @@ impl ApiError {
         Self::new(StatusCode::CONFLICT, kind, message)
     }
 
+    pub fn gateway(kind: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_GATEWAY, kind, message)
+    }
+
     pub fn internal(kind: &'static str, message: impl Into<String>) -> Self {
         let error = Self::new(StatusCode::INTERNAL_SERVER_ERROR, kind, message);
         tracing::error!(kind = error.kind, message = %error.message, "erreur interne");

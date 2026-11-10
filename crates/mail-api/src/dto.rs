@@ -155,7 +155,7 @@ pub struct SyncResponse {
     pub reports: Vec<FolderReport>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct FolderReport {
     pub folder_path: String,
     pub inserted: usize,

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowLeft, Loader2, PlugZap, Radar, Server, Sparkles } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Loader2, PlugZap, Radar, Server, Sparkles } from "lucide-react";
 import { ApiError, errorText, mailApi } from "@/lib/api";
 import type { DiscoverySource, Encryption } from "@/lib/api";
 import { accountSlug } from "@/lib/mail-backend";
@@ -22,6 +22,15 @@ const LABEL = "text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercas
 const portsOf = (value: Encryption) =>
   ENCRYPTIONS.find((entry) => entry.value === value) ?? ENCRYPTIONS[0];
 
+async function waitForOAuth(session: string) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const status = await mailApi.oauthStatus(session);
+    if (status.status !== "pending") return status;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  return { status: "failed" as const, error: "délai de consentement dépassé" };
+}
+
 const ORIGIN_LABEL: Record<DiscoverySource, string> = {
   ispdb: "base Thunderbird",
   autoconfig: "configuration du domaine",
@@ -30,7 +39,7 @@ const ORIGIN_LABEL: Record<DiscoverySource, string> = {
 };
 
 export function ConnectScreen({ onClose }: { onClose?: () => void }) {
-  const { createAccount, useDemo, phase } = useMailStore();
+  const { createAccount, useDemo, phase, refreshMailbox } = useMailStore();
   const [label, setLabel] = useState("");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
@@ -44,6 +53,9 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [discovering, setDiscovering] = useState(false);
+  const [clientId, setClientId] = useState("");
+  const [oauthBusy, setOauthBusy] = useState<string | null>(null);
+  const [oauthError, setOauthError] = useState<string | null>(null);
   const [discovery, setDiscovery] = useState<{ tone: "ok" | "none"; text: string } | null>(null);
 
   const applyDiscovery = async () => {
@@ -92,6 +104,42 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
   const changeSmtpEncryption = (value: Encryption) => {
     setSmtpEncryption(value);
     setSmtpPort(String(portsOf(value).smtp));
+  };
+
+  const startOAuth = async (provider: "google" | "microsoft" | "custom") => {
+    const address = email.trim();
+    if (!address.includes("@")) {
+      setOauthError("Renseigne d'abord l'adresse e-mail.");
+      return;
+    }
+    if (!imapHost.trim() || !smtpHost.trim()) {
+      setOauthError("Détecte d'abord les serveurs (bouton sous l'adresse).");
+      return;
+    }
+    setOauthBusy(provider);
+    setOauthError(null);
+    try {
+      const started = await mailApi.oauthStart({
+        provider,
+        email: address,
+        label: label.trim() || address,
+        id: accountSlug(address),
+        imap: { host: imapHost.trim(), port: Number(imapPort), encryption: imapEncryption },
+        smtp: { host: smtpHost.trim(), port: Number(smtpPort), encryption: smtpEncryption },
+        client_id: clientId.trim() || undefined,
+      });
+      window.open(started.auth_url, "_blank", "noopener");
+      const outcome = await waitForOAuth(started.session);
+      if (outcome.status === "done") {
+        await refreshMailbox();
+        return;
+      }
+      setOauthError(outcome.error ?? "Connexion OAuth2 interrompue.");
+    } catch (failure: unknown) {
+      setOauthError(errorText(failure));
+    } finally {
+      setOauthBusy(null);
+    }
   };
 
   const submit = (event: React.FormEvent<HTMLFormElement>) => {
@@ -203,6 +251,58 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
                   </p>
                 ) : null}
               </div>
+            </div>
+            <div className="rounded-2xl border border-line bg-surface/60 p-3">
+              <p className={LABEL}>Connexion par OAuth2</p>
+              <p className="mt-1 text-[11px] leading-relaxed font-medium text-ink-muted">
+                Le consentement s'ouvre dans un nouvel onglet. Il faut un identifiant d'application
+                OAuth (client_id) enregistré chez le fournisseur : rien n'est embarqué dans Lavande.
+              </p>
+              <input
+                className={cn(FIELD, "mt-2 h-9 text-[12px]")}
+                value={clientId}
+                onChange={(event) => setClientId(event.target.value)}
+                placeholder="client_id (facultatif si configuré côté service)"
+                autoComplete="off"
+                aria-label="Identifiant d'application OAuth"
+              />
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => void startOAuth("google")}
+                  disabled={oauthBusy !== null}
+                  className="focus-ring inline-flex min-h-9 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11.5px] font-bold text-ink transition-colors hover:border-accent-ring disabled:opacity-50"
+                >
+                  {oauthBusy === "google" ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <PlugZap className="size-3.5" strokeWidth={2.4} />
+                  )}
+                  Google
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void startOAuth("microsoft")}
+                  disabled={oauthBusy !== null}
+                  className="focus-ring inline-flex min-h-9 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11.5px] font-bold text-ink transition-colors hover:border-accent-ring disabled:opacity-50"
+                >
+                  {oauthBusy === "microsoft" ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <PlugZap className="size-3.5" strokeWidth={2.4} />
+                  )}
+                  Microsoft
+                </button>
+                {oauthBusy ? (
+                  <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted">
+                    <CheckCircle2 className="size-3.5" />
+                    en attente du consentement…
+                  </span>
+                ) : null}
+              </div>
+              {oauthError ? (
+                <p className="mt-2 text-[11px] font-semibold text-rose-600">{oauthError}</p>
+              ) : null}
             </div>
             <div>
               <label htmlFor="connect-username" className={LABEL}>

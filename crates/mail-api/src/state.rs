@@ -12,6 +12,8 @@ use lavande_mail::tls::TlsOptions;
 use crate::config_file;
 use crate::discovery::{Discovery, DiscoveryEndpoints};
 use crate::error::ApiError;
+use crate::events::Events;
+use crate::oauth_flow::Sessions;
 
 pub const ACCOUNTS_FILE: &str = "accounts.json";
 pub const DATABASE_FILE: &str = "mail.db";
@@ -21,6 +23,9 @@ pub struct AppState {
     accounts_path: PathBuf,
     tls: TlsOptions,
     discovery: Discovery,
+    sessions: Sessions,
+    events: Events,
+    public_url: String,
 }
 
 impl AppState {
@@ -43,11 +48,27 @@ impl AppState {
             accounts_path: data_dir.as_ref().join(ACCOUNTS_FILE),
             tls,
             discovery: Discovery::new(endpoints)?,
+            sessions: Sessions::default(),
+            events: Events::default(),
+            public_url: env_url(),
         })
     }
 
     pub fn discovery(&self) -> &Discovery {
         &self.discovery
+    }
+
+    pub fn sessions(&self) -> &Sessions {
+        &self.sessions
+    }
+
+    pub fn events(&self) -> &Events {
+        &self.events
+    }
+
+    /// Base publique du démon, utilisée comme `redirect_uri` OAuth2.
+    pub fn public_url(&self) -> &str {
+        &self.public_url
     }
 
     pub fn tls(&self) -> &TlsOptions {
@@ -94,4 +115,17 @@ impl AppState {
         config_file::save(&self.accounts_path, &kept)?;
         Ok(true)
     }
+}
+
+fn env_url() -> String {
+    std::env::var("LAVANDE_MAIL_PUBLIC_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            let bind =
+                std::env::var("LAVANDE_MAIL_BIND").unwrap_or_else(|_| "127.0.0.1:8790".to_string());
+            format!("http://{bind}")
+        })
+        .trim_end_matches('/')
+        .to_string()
 }
