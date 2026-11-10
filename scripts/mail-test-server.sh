@@ -54,6 +54,21 @@ wait_for_port() {
     return 1
 }
 
+wait_for_tls() {
+    local port=$1 deadline=$((SECONDS + 30))
+    while ((SECONDS < deadline)); do
+        if openssl s_client -connect "127.0.0.1:${port}" -servername localhost \
+            -CAfile "$DIR/cert.pem" -verify_return_error -brief </dev/null 2>&1 \
+            | grep -q "Peer certificate"; then
+            return 0
+        fi
+        sleep 0.2
+    done
+    echo "timed out waiting for TLS on port ${port}" >&2
+    docker logs --tail 40 "$CONTAINER" >&2 || true
+    return 1
+}
+
 tls_material() {
     local dir=$1
     if [[ -f "$dir/cert.pem" && -f "$dir/key.pem" && -f "$dir/greenmail.p12" ]]; then
@@ -102,6 +117,8 @@ start() {
             "$IMAGE" >/dev/null
     fi
     wait_for_port "$IMAP_PORT"
+    wait_for_tls "$IMAPS_PORT"
+    wait_for_tls "$SMTPS_PORT"
     summary
 }
 

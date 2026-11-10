@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row, ToSql};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -185,6 +185,34 @@ impl Store {
         Ok(Some(message))
     }
 
+    /// Flags of every message of a folder, in one query.
+    pub fn flags_in_folder(
+        &self,
+        account_id: &str,
+        folder_path: &str,
+    ) -> Result<HashMap<u32, Flags>, MailError> {
+        let mut statement = self.conn.prepare(
+            "SELECT uid, unread, starred, answered FROM messages \
+             WHERE account_id = ?1 AND folder_path = ?2",
+        )?;
+        let rows = statement.query_map(params![account_id, folder_path], |row| {
+            Ok((
+                row.get::<_, u32>(0)?,
+                Flags {
+                    unread: row.get(1)?,
+                    starred: row.get(2)?,
+                    answered: row.get(3)?,
+                },
+            ))
+        })?;
+        let mut by_uid = HashMap::new();
+        for row in rows {
+            let (uid, flags) = row?;
+            by_uid.insert(uid, flags);
+        }
+        Ok(by_uid)
+    }
+
     pub fn set_flags(
         &self,
         account_id: &str,
@@ -207,6 +235,40 @@ impl Store {
         require_one(updated, "message")
     }
 
+    /// Writes many flag sets in one statement inside one transaction; returns
+    /// how many rows matched.
+    pub fn set_flags_batch(
+        &self,
+        account_id: &str,
+        folder_path: &str,
+        updates: &[(u32, Flags)],
+    ) -> Result<usize, MailError> {
+        if updates.is_empty() {
+            return Ok(0);
+        }
+        let rows = vec!["(?, ?, ?, ?)"; updates.len()].join(", ");
+        let sql = format!(
+            "WITH updates (uid, unread, starred, answered) AS (VALUES {rows}) \
+             UPDATE messages SET unread = updates.unread, starred = updates.starred, \
+             answered = updates.answered FROM updates \
+             WHERE messages.account_id = ? AND messages.folder_path = ? \
+             AND messages.uid = updates.uid"
+        );
+        let mut values: Vec<&dyn ToSql> = Vec::with_capacity(updates.len() * 4 + 2);
+        for (uid, flags) in updates {
+            values.push(uid);
+            values.push(&flags.unread);
+            values.push(&flags.starred);
+            values.push(&flags.answered);
+        }
+        values.push(&account_id);
+        values.push(&folder_path);
+        let tx = self.conn.unchecked_transaction()?;
+        let updated = tx.execute(&sql, values.as_slice())?;
+        tx.commit()?;
+        Ok(updated)
+    }
+
     pub fn set_body(
         &self,
         account_id: &str,
@@ -223,45 +285,49 @@ impl Store {
         require_one(updated, "message")
     }
 
-    pub fn move_message(
-        &self,
-        account_id: &str,
-        from_folder_path: &str,
-        uid: u32,
-        to_folder_path: &str,
-    ) -> Result<(), MailError> {
-        let tx = self.conn.unchecked_transaction()?;
-        let updated = tx.execute(
-            "UPDATE messages SET folder_path = ?4 \
-             WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
-            params![account_id, from_folder_path, uid, to_folder_path],
-        )?;
-        tx.execute(
-            "UPDATE attachments SET folder_path = ?4 \
-             WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
-            params![account_id, from_folder_path, uid, to_folder_path],
-        )?;
-        tx.commit()?;
-        require_one(updated, "message")
-    }
-
     pub fn delete_message(
         &self,
         account_id: &str,
         folder_path: &str,
         uid: u32,
     ) -> Result<(), MailError> {
+        require_one(
+            self.delete_messages(account_id, folder_path, &[uid])?,
+            "message",
+        )
+    }
+
+    /// Drops many messages and their attachments in one transaction; returns
+    /// how many messages were stored.
+    pub fn delete_messages(
+        &self,
+        account_id: &str,
+        folder_path: &str,
+        uids: &[u32],
+    ) -> Result<usize, MailError> {
+        if uids.is_empty() {
+            return Ok(0);
+        }
+        let placeholders = vec!["?"; uids.len()].join(", ");
+        let mut values: Vec<&dyn ToSql> = vec![&account_id, &folder_path];
+        values.extend(uids.iter().map(|uid| uid as &dyn ToSql));
         let tx = self.conn.unchecked_transaction()?;
         let deleted = tx.execute(
-            "DELETE FROM messages WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
-            params![account_id, folder_path, uid],
+            &format!(
+                "DELETE FROM messages WHERE account_id = ?1 AND folder_path = ?2 \
+                 AND uid IN ({placeholders})"
+            ),
+            values.as_slice(),
         )?;
         tx.execute(
-            "DELETE FROM attachments WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
-            params![account_id, folder_path, uid],
+            &format!(
+                "DELETE FROM attachments WHERE account_id = ?1 AND folder_path = ?2 \
+                 AND uid IN ({placeholders})"
+            ),
+            values.as_slice(),
         )?;
         tx.commit()?;
-        require_one(deleted, "message")
+        Ok(deleted)
     }
 
     /// Drops every message of a folder, keeping the folder row itself. Used
@@ -581,5 +647,67 @@ fn sender_label(message: &Message) -> String {
     match name.split_whitespace().next() {
         Some(first) => first.to_string(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Address, PgpState};
+
+    #[test]
+    fn delete_messages_drops_attachments() {
+        let store = Store::open_in_memory().expect("open");
+        store.migrate().expect("migrate");
+        store
+            .upsert_account("perso", "Perso", "roman@lavande.fr")
+            .expect("account");
+        store
+            .upsert_message(&Message {
+                account_id: "perso".to_string(),
+                folder_path: "INBOX".to_string(),
+                uid: 1,
+                uidvalidity: 7,
+                thread_id: "t1".to_string(),
+                message_id: Some("<m1@x>".to_string()),
+                in_reply_to: None,
+                references: Vec::new(),
+                from: Address {
+                    name: None,
+                    email: "marc@mail.fr".to_string(),
+                },
+                to: Vec::new(),
+                cc: Vec::new(),
+                subject: "Planning".to_string(),
+                date: None,
+                flags: Flags::default(),
+                size: 10,
+                pgp: PgpState::None,
+                preview: String::new(),
+                body_text: None,
+                body_html: None,
+                attachments: vec![AttachmentMeta {
+                    filename: "a.png".to_string(),
+                    mime: "image/png".to_string(),
+                    size: 4,
+                    inline: false,
+                }],
+            })
+            .expect("insert");
+        assert!(!store
+            .attachments_of("perso", "INBOX", None)
+            .expect("attachments")
+            .is_empty());
+
+        assert_eq!(
+            store
+                .delete_messages("perso", "INBOX", &[1])
+                .expect("delete"),
+            1
+        );
+        assert!(store
+            .attachments_of("perso", "INBOX", None)
+            .expect("attachments")
+            .is_empty());
     }
 }

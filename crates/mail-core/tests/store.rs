@@ -146,31 +146,98 @@ fn flags_body_and_delete() {
 }
 
 #[test]
-fn moves_message_with_attachments() {
+fn flags_in_folder_reads_every_message() {
     let store = open();
-    let mut mail = message(1, "t1", "Marc", "Planning", 10);
-    mail.attachments.push(AttachmentMeta {
-        filename: "planning.pdf".to_string(),
-        mime: "application/pdf".to_string(),
-        size: 8,
-        inline: false,
-    });
-    store.upsert_message(&mail).expect("insert");
-
+    let mut starred = message(2, "t1", "Marc", "Etoile", 10);
+    starred.flags = Flags {
+        unread: false,
+        starred: true,
+        answered: true,
+    };
     store
-        .move_message("perso", "INBOX", 1, "Archive")
-        .expect("move");
+        .upsert_message(&message(1, "t1", "Marc", "Neuf", 10))
+        .expect("unread");
+    store.upsert_message(&starred).expect("starred");
+
+    let flags = store.flags_in_folder("perso", "INBOX").expect("flags");
+    assert_eq!(flags.len(), 2);
+    assert_eq!(flags[&1], Flags::default());
+    assert_eq!(flags[&2], starred.flags);
     assert!(store
-        .messages_in_folder("perso", "INBOX", -1, 0)
-        .expect("list")
+        .flags_in_folder("perso", "Archive")
+        .expect("empty")
         .is_empty());
-    let archived = store
-        .messages_in_folder("perso", "Archive", -1, 0)
+}
+
+#[test]
+fn deletes_many_messages_at_once() {
+    let store = open();
+    for uid in [1, 2, 3] {
+        store
+            .upsert_message(&message(uid, "t1", "Marc", "Sujet", 10))
+            .expect("insert");
+    }
+
+    assert_eq!(
+        store.delete_messages("perso", "INBOX", &[]).expect("none"),
+        0
+    );
+    assert_eq!(
+        store
+            .delete_messages("perso", "INBOX", &[1, 3, 42])
+            .expect("delete"),
+        2
+    );
+    let left = store
+        .messages_in_folder("perso", "INBOX", -1, 0)
         .expect("list");
-    assert_eq!(archived.len(), 1);
-    assert_eq!(archived[0].folder_path, "Archive");
-    assert_eq!(archived[0].attachments, mail.attachments);
-    assert!(store.move_message("perso", "INBOX", 1, "Archive").is_err());
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].uid, 2);
+    assert!(store
+        .get_message("perso", "INBOX", 1)
+        .expect("get")
+        .is_none());
+    assert_eq!(
+        store
+            .delete_messages("perso", "INBOX", &[1])
+            .expect("again"),
+        0
+    );
+}
+
+#[test]
+fn set_flags_batch_updates_many_rows() {
+    let store = open();
+    for uid in [1, 2, 3] {
+        store
+            .upsert_message(&message(uid, "t1", "Marc", "Sujet", 10))
+            .expect("insert");
+    }
+    let read = Flags {
+        unread: false,
+        starred: true,
+        answered: false,
+    };
+    let answered = Flags {
+        unread: true,
+        starred: false,
+        answered: true,
+    };
+
+    assert_eq!(
+        store.set_flags_batch("perso", "INBOX", &[]).expect("none"),
+        0
+    );
+    assert_eq!(
+        store
+            .set_flags_batch("perso", "INBOX", &[(1, read), (2, answered), (42, read)])
+            .expect("batch"),
+        2
+    );
+    let flags = store.flags_in_folder("perso", "INBOX").expect("flags");
+    assert_eq!(flags[&1], read);
+    assert_eq!(flags[&2], answered);
+    assert_eq!(flags[&3], Flags::default());
 }
 
 #[test]

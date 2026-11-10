@@ -172,6 +172,53 @@ fn unique(name: &str) -> String {
     format!("{name} {nanos}")
 }
 
+async fn select(session: &mut ImapSession, folder: &str) {
+    session
+        .select(folder)
+        .await
+        .unwrap_or_else(|error| panic!("select {folder}: {error}"));
+}
+
+async fn uid_store(session: &mut ImapSession, uid: u32, query: &str) {
+    let stored = session
+        .uid_store(uid.to_string(), query)
+        .await
+        .unwrap_or_else(|error| panic!("uid store {query} on {uid}: {error}"));
+    let mut stored = Box::pin(stored);
+    while stored
+        .try_next()
+        .await
+        .unwrap_or_else(|error| panic!("uid store {query} on {uid}: {error}"))
+        .is_some()
+    {}
+}
+
+async fn uid_expunge(session: &mut ImapSession, uid: u32) {
+    let expunged = session
+        .uid_expunge(uid.to_string())
+        .await
+        .unwrap_or_else(|error| panic!("uid expunge {uid}: {error}"));
+    let mut expunged = Box::pin(expunged);
+    while expunged
+        .try_next()
+        .await
+        .unwrap_or_else(|error| panic!("uid expunge {uid}: {error}"))
+        .is_some()
+    {}
+}
+
+/// Every uid of the currently selected folder, as the server sees them.
+async fn server_uids(session: &mut ImapSession) -> Vec<u32> {
+    let fetches = session
+        .uid_fetch("1:*", "(UID)")
+        .await
+        .unwrap_or_else(|error| panic!("fetch uids: {error}"))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap_or_else(|error| panic!("fetch uids: {error}"));
+    fetches.iter().filter_map(|fetch| fetch.uid).collect()
+}
+
 #[tokio::test]
 #[ignore = "requires scripts/mail-test-server.sh start"]
 async fn implicit_tls_lists_inbox_with_role() {
@@ -240,7 +287,8 @@ async fn smtp_send_then_sync_parses_message() {
         .await,
     );
     assert_eq!(report.inserted, 0);
-    assert_eq!(report.updated, 0);
+    assert_eq!(report.flags_updated, 0);
+    assert_eq!(report.removed, 0);
 }
 
 #[tokio::test]
@@ -312,7 +360,82 @@ async fn flags_reach_the_server() {
 
 #[tokio::test]
 #[ignore = "requires scripts/mail-test-server.sh start"]
-async fn create_folder_and_archive_message() {
+async fn expunged_message_disappears_locally() {
+    let cfg = account();
+    let store = store(&cfg);
+    let subject = unique("[live-expunge] suppression");
+    send(&cfg, &subject, "corps supprime", None).await;
+    sync(&cfg, &store, INBOX).await;
+    let uid = find(&store, INBOX, &subject).uid;
+
+    let mut raw = connect(&cfg).await;
+    select(&mut raw, INBOX).await;
+    uid_store(&mut raw, uid, "+FLAGS (\\Deleted)").await;
+    uid_expunge(&mut raw, uid).await;
+
+    let report = sync(&cfg, &store, INBOX).await;
+    assert!(report.removed >= 1, "removed {}", report.removed);
+    assert!(
+        checked("inbox lookup", store.get_message(ACCOUNT, INBOX, uid)).is_none(),
+        "uid {uid} survived the server expunge"
+    );
+    let inbox = checked(
+        "inbox listing",
+        store.messages_in_folder(ACCOUNT, INBOX, -1, 0),
+    );
+    assert!(
+        inbox.iter().all(|message| message.subject != subject),
+        "'{subject}' is still in the local INBOX"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn flags_from_another_client_are_pulled() {
+    let cfg = account();
+    let store = store(&cfg);
+    let subject = unique("[live-other-client] drapeaux");
+    send(&cfg, &subject, "corps distant", None).await;
+    sync(&cfg, &store, INBOX).await;
+    let uid = find(&store, INBOX, &subject).uid;
+    assert!(
+        find(&store, INBOX, &subject).flags.unread,
+        "the fresh message is already read locally"
+    );
+
+    let mut raw = connect(&cfg).await;
+    select(&mut raw, INBOX).await;
+    uid_store(&mut raw, uid, "+FLAGS (\\Seen \\Flagged)").await;
+
+    let report = sync(&cfg, &store, INBOX).await;
+    assert!(
+        report.flags_updated >= 1,
+        "flags_updated {}",
+        report.flags_updated
+    );
+    let stored = checked("inbox lookup", store.get_message(ACCOUNT, INBOX, uid))
+        .unwrap_or_else(|| panic!("uid {uid} vanished"));
+    assert!(!stored.flags.unread, "the local copy stayed unread");
+    assert!(stored.flags.starred, "the local copy lost the star");
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn unchanged_folder_reports_nothing() {
+    let cfg = account();
+    let store = store(&cfg);
+    sync(&cfg, &store, INBOX).await;
+
+    let report = sync(&cfg, &store, INBOX).await;
+    assert_eq!(report.inserted, 0, "{report:?}");
+    assert_eq!(report.flags_updated, 0, "{report:?}");
+    assert_eq!(report.removed, 0, "{report:?}");
+    assert!(!report.uidvalidity_changed, "{report:?}");
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn move_keeps_store_in_step_with_server() {
     let cfg = account();
     let store = store(&cfg);
     let subject = unique("[live-archive] deplacement");
@@ -348,42 +471,47 @@ async fn create_folder_and_archive_message() {
         checked("inbox lookup", store.get_message(ACCOUNT, INBOX, uid)).is_none(),
         "uid {uid} is still in INBOX"
     );
-    let archived = checked("archive lookup", store.get_message(ACCOUNT, "Archive", uid))
-        .unwrap_or_else(|| panic!("uid {uid} is not in Archive"));
-    assert_eq!(archived.subject, subject);
-
-    checked(
-        "fetch body",
-        imap::fetch_body(&mut session, &store, ACCOUNT, "Archive", uid).await,
+    let inbox = checked(
+        "inbox listing",
+        store.messages_in_folder(ACCOUNT, INBOX, -1, 0),
     );
-    let archived = checked("archive lookup", store.get_message(ACCOUNT, "Archive", uid))
-        .unwrap_or_else(|| panic!("uid {uid} vanished from Archive"));
+    assert!(
+        inbox.iter().all(|message| message.subject != subject),
+        "'{subject}' is still in the local INBOX"
+    );
+
+    let archived = find(&store, "Archive", &subject);
     assert!(
         archived
             .body_text
             .as_deref()
             .is_some_and(|text| text.contains("corps archive")),
-        "Archive message has no body: {:?}",
+        "the reconciled Archive copy has no body: {:?}",
         archived.body_text
     );
+    checked(
+        "fetch body",
+        imap::fetch_body(&mut session, &store, ACCOUNT, "Archive", archived.uid).await,
+    );
 
-    let mut fresh = connect(&cfg).await;
-    fresh
-        .select("Archive")
-        .await
-        .unwrap_or_else(|error| panic!("select Archive: {error}"));
-    let fetches = fresh
-        .uid_fetch(uid.to_string(), "(BODY.PEEK[])")
-        .await
-        .unwrap_or_else(|error| panic!("fetch uid {uid} on Archive: {error}"))
-        .try_collect::<Vec<_>>()
-        .await
-        .unwrap_or_else(|error| panic!("fetch uid {uid} on Archive: {error}"));
-    let raw = fetches
-        .iter()
-        .find_map(|fetch| fetch.body())
-        .unwrap_or_else(|| panic!("a fresh session does not see uid {uid} in Archive"));
-    assert!(String::from_utf8_lossy(raw).contains(&subject));
+    let mut raw = connect(&cfg).await;
+    select(&mut raw, "Archive").await;
+    let server = server_uids(&mut raw).await;
+    assert!(
+        server.contains(&archived.uid),
+        "local Archive holds uid {} while the server exposes {server:?}",
+        archived.uid
+    );
+    for message in checked(
+        "archive listing",
+        store.messages_in_folder(ACCOUNT, "Archive", -1, 0),
+    ) {
+        assert!(
+            server.contains(&message.uid),
+            "local Archive holds uid {} the server does not expose ({server:?})",
+            message.uid
+        );
+    }
 }
 
 #[tokio::test]

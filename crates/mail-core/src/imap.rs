@@ -3,6 +3,7 @@
 //! Every network operation takes an already authenticated session: the caller
 //! opens and closes it, there is no pool and no automatic reconnection.
 
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -35,10 +36,13 @@ pub type ImapSession = Session<TlsStream<TcpStream>>;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SyncReport {
     pub inserted: usize,
-    pub updated: usize,
+    pub flags_updated: usize,
+    pub removed: usize,
     pub uidvalidity_changed: bool,
     pub uidnext: u32,
 }
+
+const BODY_BATCH: usize = 500;
 
 /// Opens a TLS connection and authenticates against the webpki roots.
 pub async fn connect(cfg: &AccountConfig) -> Result<ImapSession, MailError> {
@@ -173,18 +177,27 @@ pub async fn list_folders(
     Ok(folders)
 }
 
-/// Syncs one folder: full re-read when `UIDVALIDITY` changed, incremental
-/// `FETCH` from the last known uid otherwise.
-///
-/// The whole body is fetched in one pass (`BODY.PEEK[]`) so every message goes
-/// through the single `mime::parse_message` path; fetching flags first and
-/// bodies on demand is a later optimisation.
+/// Syncs one folder against the server state.
 pub async fn sync_folder(
     session: &mut ImapSession,
     store: &Store,
     account_id: &str,
     folder_path: &str,
     mapping: &FolderMapping,
+) -> Result<SyncReport, MailError> {
+    reconcile(session, store, account_id, folder_path, Some(mapping)).await
+}
+
+/// Brings one folder in step with the server: one metadata pass decides what
+/// vanished, what changed flags and what is new; bodies are then pulled for the
+/// new uids only, in batches. `mapping` only names the role of a folder the
+/// store has never seen.
+async fn reconcile(
+    session: &mut ImapSession,
+    store: &Store,
+    account_id: &str,
+    folder_path: &str,
+    mapping: Option<&FolderMapping>,
 ) -> Result<SyncReport, MailError> {
     let mailbox = session.select(folder_path).await.map_err(imap_error)?;
     let uidvalidity = uidvalidity_of(&mailbox, account_id)?;
@@ -197,78 +210,53 @@ pub async fn sync_folder(
     if uidvalidity_changed {
         store.clear_folder(account_id, folder_path)?;
     }
-    let start = match (&stored, uidvalidity_changed) {
-        (Some(folder), false) => folder.uidnext.max(1),
-        _ => 1,
-    };
+
+    let local = store.flags_in_folder(account_id, folder_path)?;
+    let server = server_state(session).await?;
+
+    let vanished: Vec<u32> = local
+        .keys()
+        .filter(|uid| !server.contains_key(uid))
+        .copied()
+        .collect();
+    let mut changed = Vec::new();
+    let mut new_uids = Vec::new();
+    for (uid, (flags, _)) in &server {
+        match local.get(uid) {
+            Some(known) if known != flags => changed.push((*uid, *flags)),
+            Some(_) => {}
+            None => new_uids.push(*uid),
+        }
+    }
+    changed.sort_unstable_by_key(|(uid, _)| *uid);
+    new_uids.sort_unstable();
 
     let mut report = SyncReport {
         uidvalidity_changed,
         uidnext,
+        removed: store.delete_messages(account_id, folder_path, &vanished)?,
+        flags_updated: store.set_flags_batch(account_id, folder_path, &changed)?,
         ..SyncReport::default()
     };
 
-    if start < uidnext {
-        let fetches: Vec<Fetch> = session
-            .uid_fetch(format!("{start}:*"), "(UID FLAGS RFC822.SIZE BODY.PEEK[])")
-            .await
-            .map_err(imap_error)?
-            .try_collect()
-            .await
-            .map_err(imap_error)?;
-
-        for fetch in fetches {
-            let (Some(uid), Some(raw)) = (fetch.uid, fetch.body()) else {
-                continue;
-            };
-            let parsed = mime::parse_message(raw)?;
-            let thread_id = threading::thread_id(
-                account_id,
-                &parsed.subject,
-                parsed.message_id.as_deref(),
-                parsed.in_reply_to.as_deref(),
-                &parsed.references,
-            );
-            let message = Message {
-                account_id: account_id.to_string(),
-                folder_path: folder_path.to_string(),
-                uid,
-                uidvalidity,
-                thread_id,
-                message_id: parsed.message_id,
-                in_reply_to: parsed.in_reply_to,
-                references: parsed.references,
-                from: parsed.from,
-                to: parsed.to,
-                cc: parsed.cc,
-                subject: parsed.subject,
-                date: parsed.date,
-                flags: flags_of(&fetch),
-                size: fetch.size.unwrap_or(raw.len() as u32),
-                pgp: parsed.pgp,
-                preview: parsed.preview,
-                body_text: parsed.body_text,
-                body_html: parsed.body_html,
-                attachments: parsed.attachments,
-            };
-
-            if store.get_message(account_id, folder_path, uid)?.is_some() {
-                report.updated += 1;
-            } else {
-                report.inserted += 1;
-            }
-            store.upsert_message(&message)?;
-            if let Some(message_id) = &message.message_id {
-                store.relink_replies(account_id, message_id, &message.thread_id)?;
-            }
-        }
+    for batch in new_uids.chunks(BODY_BATCH) {
+        report.inserted += import_bodies(
+            session,
+            store,
+            account_id,
+            folder_path,
+            uidvalidity,
+            batch,
+            &server,
+        )
+        .await?;
     }
 
     let role = stored
         .as_ref()
         .map(|folder| folder.role)
         .filter(|role| *role != FolderRole::Other)
-        .or_else(|| mapped_role(mapping, folder_path))
+        .or_else(|| mapping.and_then(|mapping| mapped_role(mapping, folder_path)))
         .unwrap_or(FolderRole::Other);
     store.upsert_folder(&Folder {
         account_id: account_id.to_string(),
@@ -280,6 +268,96 @@ pub async fn sync_folder(
         last_sync_at: Some(Utc::now()),
     })?;
     Ok(report)
+}
+
+/// `UID FETCH 1:* (UID FLAGS RFC822.SIZE)`: the whole folder in one round trip.
+async fn server_state(session: &mut ImapSession) -> Result<HashMap<u32, (Flags, u32)>, MailError> {
+    let fetches: Vec<Fetch> = session
+        .uid_fetch("1:*", "(UID FLAGS RFC822.SIZE)")
+        .await
+        .map_err(imap_error)?
+        .try_collect()
+        .await
+        .map_err(imap_error)?;
+    Ok(fetches
+        .iter()
+        .filter_map(|fetch| {
+            Some((
+                fetch.uid?,
+                (flags_of(fetch), fetch.size.unwrap_or_default()),
+            ))
+        })
+        .collect())
+}
+
+/// Reads and stores the bodies of `uids` only. A uid the server answers
+/// without a body is skipped, not fatal.
+async fn import_bodies(
+    session: &mut ImapSession,
+    store: &Store,
+    account_id: &str,
+    folder_path: &str,
+    uidvalidity: u32,
+    uids: &[u32],
+    server: &HashMap<u32, (Flags, u32)>,
+) -> Result<usize, MailError> {
+    let selector = uids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let fetches: Vec<Fetch> = session
+        .uid_fetch(selector, "(UID BODY.PEEK[])")
+        .await
+        .map_err(imap_error)?
+        .try_collect()
+        .await
+        .map_err(imap_error)?;
+
+    let mut inserted = 0;
+    for fetch in fetches {
+        let (Some(uid), Some(raw)) = (fetch.uid, fetch.body()) else {
+            continue;
+        };
+        let Some((flags, size)) = server.get(&uid) else {
+            continue;
+        };
+        let parsed = mime::parse_message(raw)?;
+        let message = Message {
+            account_id: account_id.to_string(),
+            folder_path: folder_path.to_string(),
+            uid,
+            uidvalidity,
+            thread_id: threading::thread_id(
+                account_id,
+                &parsed.subject,
+                parsed.message_id.as_deref(),
+                parsed.in_reply_to.as_deref(),
+                &parsed.references,
+            ),
+            message_id: parsed.message_id,
+            in_reply_to: parsed.in_reply_to,
+            references: parsed.references,
+            from: parsed.from,
+            to: parsed.to,
+            cc: parsed.cc,
+            subject: parsed.subject,
+            date: parsed.date,
+            flags: *flags,
+            size: *size,
+            pgp: parsed.pgp,
+            preview: parsed.preview,
+            body_text: parsed.body_text,
+            body_html: parsed.body_html,
+            attachments: parsed.attachments,
+        };
+        store.upsert_message(&message)?;
+        if let Some(message_id) = &message.message_id {
+            store.relink_replies(account_id, message_id, &message.thread_id)?;
+        }
+        inserted += 1;
+    }
+    Ok(inserted)
 }
 
 /// Re-reads one message body and stores it.
@@ -367,7 +445,8 @@ pub async fn set_flags(
 }
 
 /// `UID MOVE` when the server has the capability, `UID COPY` + `\Deleted` +
-/// `UID EXPUNGE` otherwise, then the local move.
+/// `UID EXPUNGE` otherwise. The source row is dropped, then the destination is
+/// reconciled so it carries the uid the server actually gave the message.
 pub async fn move_message(
     session: &mut ImapSession,
     store: &Store,
@@ -396,7 +475,9 @@ pub async fn move_message(
         let mut expunged = Box::pin(expunged);
         while expunged.try_next().await.map_err(imap_error)?.is_some() {}
     }
-    store.move_message(account_id, from_path, uid, to_path)
+    store.delete_message(account_id, from_path, uid)?;
+    reconcile(session, store, account_id, to_path, None).await?;
+    Ok(())
 }
 
 async fn store_flags(

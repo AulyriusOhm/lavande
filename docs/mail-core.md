@@ -12,7 +12,7 @@ contrat des commandes à écrire.
 | Fait | Ne fait pas |
 | --- | --- |
 | Connexion IMAP TLS implicite ou STARTTLS, auth mot de passe ou XOAUTH2 | Pas de pool de connexions, pas de reconnexion automatique : l'appelant ouvre et ferme la session |
-| `LIST` + `STATUS` pour les dossiers, `FETCH` incrémental par UID | Pas de keychain : les secrets vivent dans `AccountConfig`, en mémoire (et en clair dans le JSON IPC) |
+| `LIST` + `STATUS` pour les dossiers, réconciliation par dossier : une passe métadonnées `UID FETCH 1:*`, corps seulement pour les UID nouveaux | Pas de keychain : les secrets vivent dans `AccountConfig`, en mémoire (et en clair dans le JSON IPC) |
 | Envoi SMTP (lettre) avec pièces jointes, texte + HTML | Pas de PGP réel : `PgpState` ne fait que détecter `multipart/signed` et `multipart/encrypted` |
 | Parsing MIME complet (encodage de transfert, RFC 2047, pièces jointes, aperçu) | Pas de flux navigateur OAuth2 : seul l'échange *refresh token* → *access token* existe |
 | Threading déterministe par `References` / `In-Reply-To` / sujet normalisé | Pas d'IDLE ni de push : la synchro est toujours déclenchée par l'appelant |
@@ -32,7 +32,7 @@ crates/mail-core/
 │   ├── threading.rs      # thread_id, split_ids, normalize_subject
 │   ├── store/mod.rs      # Store (rusqlite)
 │   ├── store/schema.sql  # schéma embarqué (include_str!)
-│   ├── imap.rs           # session, dossiers, sync, flags, move
+│   ├── imap.rs           # session, dossiers, réconciliation, flags, move
 │   ├── smtp.rs           # envoi
 │   ├── oauth.rs          # refresh token + XOAUTH2
 │   ├── sync.rs           # sync_account (niveau compte)
@@ -160,8 +160,9 @@ pub enum MailError {
 ```
 
 `Display` produit déjà une phrase préfixée : côté Tauri, `error.to_string()` suffit comme message
-lisible. `Store::set_flags`/`set_body`/`move_message`/`delete_message` renvoient
-`InvalidData("<quoi> not found")` quand aucune ligne n'est touchée.
+lisible. `Store::set_flags`/`set_body`/`delete_message` renvoient
+`InvalidData("<quoi> not found")` quand aucune ligne n'est touchée ; les variantes batch
+(`set_flags_batch`, `delete_messages`) rendent un compte (`0` si rien ne correspond).
 
 ### MIME (`mime.rs`)
 
@@ -225,7 +226,7 @@ même repli d'accents via `fold_accents` (visible en `pub(crate)`).
 pub type ImapSession = async_imap::Session<TlsStream<TcpStream>>;
 
 pub struct SyncReport {
-    pub inserted: usize, pub updated: usize,
+    pub inserted: usize, pub flags_updated: usize, pub removed: usize,
     pub uidvalidity_changed: bool, pub uidnext: u32,
 }
 
@@ -274,13 +275,27 @@ Comportements à connaître :
   `MailError::Auth`.
 - `list_folders` ignore les dossiers `NoSelect`, fait un `STATUS (UIDVALIDITY UIDNEXT)` par dossier
   (une requête par dossier, pas de batch) et remplit `role` via `config::folder_role`.
-- `sync_folder` sélectionne le dossier, lit `UIDVALIDITY`/`UIDNEXT` de la mailbox (erreur
-  `MailError::Imap` si le serveur ne les expose pas). Si le `UIDVALIDITY` stocké diffère →
-  `store.clear_folder` puis relecture complète (`start = 1`). Sinon `start = folder.uidnext.max(1)`.
-  Puis un seul `UID FETCH start:* (UID FLAGS RFC822.SIZE BODY.PEEK[])` : **le corps entier est
-  téléchargé pour chaque nouveau message**, tout passe par `mime::parse_message`, et chaque message
-  inséré déclenche `store.relink_replies` sur son `Message-ID`. Enfin `store.upsert_folder` avec
-  `last_sync_at = now()`.
+- `sync_folder` **réconcilie** le dossier avec l'état serveur : la fonction publique délègue au
+  helper privé `reconcile` (qui prend un `Option<&FolderMapping>` : `None` = aucune découverte de
+  rôle, cas de `move_message`). Étapes :
+  1. `SELECT` du dossier, puis `UIDVALIDITY` et `UIDNEXT` lus sur la mailbox (erreur `MailError::Imap`
+     si le serveur ne les expose pas).
+  2. `store.get_folder` : si le `UIDVALIDITY` stocké diffère → `store.clear_folder` (messages et
+     pièces jointes du dossier vidés, la ligne `folders` survit) et `uidvalidity_changed = true`.
+  3. `store.flags_in_folder` : les flags de tous les messages locaux du dossier, **une requête**.
+  4. **Une seule** passe métadonnées `UID FETCH 1:* (UID FLAGS RFC822.SIZE)` → `uid -> (Flags, size)`
+     pour tout le dossier, sans aucun corps.
+  5. Trois ensembles : *disparus* (local − serveur) → `store.delete_messages` ; *flags différents*
+     (présents des deux côtés, `Flags` inégaux) → `store.set_flags_batch` ; *nouveaux UID*
+     (serveur − local) → téléchargement.
+  6. Les corps ne sont demandés que pour les nouveaux UID, **par lots de 500** (`BODY_BATCH`) :
+     `UID FETCH uid1,…,uidN (UID BODY.PEEK[])`, puis `mime::parse_message`, `store.upsert_message`
+     et `store.relink_replies` sur le `Message-ID`. Un UID que le serveur rend sans corps est ignoré,
+     pas fatal.
+  7. `store.upsert_folder` avec `uidvalidity`, `uidnext` et `last_sync_at = now()`.
+  Coût réseau : `SELECT` + la passe métadonnées (linéaire en nombre de messages du dossier) +
+  ⌈nouveaux / 500⌉ requêtes de corps ; un dossier inchangé ne coûte que la passe métadonnées, sans
+  un octet de corps. `SyncReport` ne compte que les lignes réellement touchées.
 - Le `role` stocké est conservé s'il n'est pas `Other`, sinon déduit de `FolderMapping`, sinon
   `Other`.
 - `fetch_body` = `UID FETCH <uid> (BODY.PEEK[])` puis `store.set_body` (ne touche ni les drapeaux ni
@@ -288,8 +303,11 @@ Comportements à connaître :
 - `set_flags` ne pousse que `\Seen` (inversé depuis `unread`) et `\Flagged` ; `\Answered` est lu
   mais **jamais écrit**. Deux `UID STORE` séparés : `+FLAGS` puis `-FLAGS`.
 - `move_message` : `UID MOVE` si la capacité `MOVE` est annoncée, sinon `UID COPY` +
-  `+FLAGS (\Deleted)` + `UID EXPUNGE`, puis `store.move_message` (qui déplace aussi les pièces
-  jointes). L'UID distant est supposé conservé (voir Limites).
+  `+FLAGS (\Deleted)` + `UID EXPUNGE` (le flux d'`EXPUNGE` est consommé jusqu'au bout). Côté base, la
+  ligne source est **supprimée** (`store.delete_message`) et le dossier destination est **réconcilié**
+  (`reconcile(…, None)`) : la ligne locale de la destination est réinsérée avec l'UID réellement
+  attribué par le serveur (GreenMail réattribue l'UID au `MOVE`, vérifié en réseau), corps compris.
+  Aucun UID n'est supposé conservé, aucune ligne n'est déplacée à la main.
 - `create_folder` : un dossier déjà existant n'est pas une erreur (détection par le mot `exist` dans
   le message d'erreur).
 
@@ -375,19 +393,25 @@ impl Store {
     pub fn get_message(
         &self, account_id: &str, folder_path: &str, uid: u32,
     ) -> Result<Option<Message>, MailError>;
+    pub fn flags_in_folder(
+        &self, account_id: &str, folder_path: &str,
+    ) -> Result<HashMap<u32, Flags>, MailError>;
     pub fn set_flags(
         &self, account_id: &str, folder_path: &str, uid: u32, flags: &Flags,
     ) -> Result<(), MailError>;
+    pub fn set_flags_batch(
+        &self, account_id: &str, folder_path: &str, updates: &[(u32, Flags)],
+    ) -> Result<usize, MailError>;
     pub fn set_body(
         &self, account_id: &str, folder_path: &str, uid: u32,
         text: Option<&str>, html: Option<&str>,
     ) -> Result<(), MailError>;
-    pub fn move_message(
-        &self, account_id: &str, from_folder_path: &str, uid: u32, to_folder_path: &str,
-    ) -> Result<(), MailError>;
     pub fn delete_message(
         &self, account_id: &str, folder_path: &str, uid: u32,
     ) -> Result<(), MailError>;
+    pub fn delete_messages(
+        &self, account_id: &str, folder_path: &str, uids: &[u32],
+    ) -> Result<usize, MailError>;
     pub fn clear_folder(&self, account_id: &str, folder_path: &str) -> Result<usize, MailError>;
     pub fn relink_replies(
         &self, account_id: &str, message_id: &str, thread_id: &str,
@@ -414,6 +438,19 @@ Détails :
   ancien. `preview` = `"Prénom : aperçu"` sauf si le dossier a le rôle `Sent` (aperçu brut, sans
   participants). `encrypted` compte les `PgpState::Encrypted`, `attachments` la somme des pièces
   jointes.
+- `flags_in_folder` : `SELECT uid, unread, starred, answered … WHERE account_id = ?1 AND
+  folder_path = ?2`, **une requête** → `HashMap<uid, Flags>` du dossier (vide si rien).
+- `set_flags_batch` : une seule instruction `WITH updates (uid, unread, starred, answered) AS
+  (VALUES …) UPDATE messages … FROM updates`, dans une transaction `unchecked_transaction`; rend le
+  nombre de lignes touchées, `&[]` → `0` (aucune requête).
+- `delete_messages` : messages **et** pièces jointes du dossier pour les UID donnés, une transaction;
+  rend le nombre de **messages** supprimés, `uids` vide → `0`. `delete_message` y délègue (`&[uid]`)
+  et remonte `InvalidData("message not found")` si la ligne n'existait pas.
+- **Pas de déplacement de ligne dans le Store** : déplacer la ligne avec l'UID source donnait un UID
+  faux. Le déplacement vit dans `imap::move_message`, qui supprime la source et réconcilie la
+  destination.
+- Un `#[cfg(test)] mod tests` interne couvre `delete_messages` (les pièces jointes du message
+  supprimé disparaissent aussi).
 - `relink_replies` rattache à `thread_id` tous les messages du compte dont `in_reply_to = message_id`
   ou dont le JSON `references` contient `message_id` (`instr(...) > 0`, donc correspondance de
   sous-chaîne).
@@ -511,13 +548,18 @@ CREATE INDEX IF NOT EXISTS idx_messages_thread
 - `thread_id` est **matérialisé sur la ligne message** (pas de table de threads). Il est calculé une
   fois, à l'insertion, par `threading::thread_id`; un message arrivé avant son parent est rattaché
   après coup par `relink_replies` (appelé à chaque insertion qui porte un `Message-ID`).
-- `folders` porte l'état de synchro : `uidnext` = prochain UID à demander, `last_sync_at` = dernier
+- `folders` porte l'état de synchro : `uidnext` = `UIDNEXT` annoncé par le serveur au dernier
+  passage (valeur informative : la réconciliation ne repart pas de là), `last_sync_at` = dernier
   passage réussi. `migrate` ne touche pas aux données, `user_version = 1` sert de garde.
+- **La base reflète l'état serveur après chaque synchro.** Disparitions (UID absent côté serveur)
+  supprimées par `delete_messages`, flags alignés par `set_flags_batch`, nouveaux UID insérés;
+  `UIDVALIDITY` changé → `clear_folder` puis réinsertion complète. Corollaire : un UID stocké sans
+  contrepartie serveur est un état transitoire, pas un état stable.
 - `messages` n'a **pas de contrainte de clé étrangère** vers `accounts`/`folders` (aucun
   `REFERENCES`) ; `foreign_keys=ON` est donc décoratif aujourd'hui. Supprimer un compte ne supprime
-  rien : `delete_message` / `clear_folder` sont les seules suppressions.
-- Les pièces jointes sont dans une table séparée, indexées par `idx` (ordre MIME), supprimées et
-  déplacées en même temps que leur message (transactions `unchecked_transaction`).
+  rien : `delete_message` / `delete_messages` / `clear_folder` sont les seules suppressions.
+- Les pièces jointes sont dans une table séparée, indexées par `idx` (ordre MIME), remplacées avec
+  leur message par `upsert_message` et supprimées avec lui (transactions `unchecked_transaction`).
 - `references`, `from`, `to`, `cc` sont du JSON texte (`from_json` tolère la chaîne vide → `Default`).
 - Les threads ne sont pas stockés : `threads_in_folder` les recalcule à chaque lecture.
 
@@ -584,11 +626,11 @@ snake_case/lowercase par serde). Toutes retournent `Result<T, String>` avec
 | --- | --- | --- | --- |
 | `add_account` | `AccountConfig` | `AccountSummary` | `AccountConfig::validate` → `Store::upsert_account` (+ `sync_account` si synchro demandée) |
 | `list_accounts` | — | `Vec<AccountSummary>` | *(à ajouter : `Store::list_accounts`)* |
-| `sync_folder` | `{ account_id, folder_path }` | `SyncReport` | `imap::connect_with` → `imap::sync_folder` |
+| `sync_folder` | `{ account_id, folder_path }` | `SyncReport` | `imap::connect_with` → `imap::sync_folder` (réconciliation complète du dossier : suppressions, flags, nouveaux corps) |
 | `list_threads` | `{ account_id, folder_path }` | `Vec<Thread>` | `Store::threads_in_folder` (+ `thread_key` côté bridge) |
 | `get_message` | `{ account_id, folder_path, uid, fetch_body? }` | `Message` | `Store::get_message`, puis `imap::fetch_body` si le corps manque |
 | `set_flags` | `{ account_id, folder_path, uid, unread, starred }` | `()` | `imap::set_flags` puis `Store::set_flags` |
-| `move_message` | `{ account_id, from_path, uid, to_path }` | `()` | `imap::move_message` (fait le move local) |
+| `move_message` | `{ account_id, from_path, uid, to_path }` | `()` | `imap::move_message` (supprime la ligne source, réconcilie la destination : l'UID local devient celui du serveur) |
 | `send_message` | `{ account_id, message: OutgoingMessageDto }` | `()` | `smtp::send_with` |
 
 ### Signatures (non implémentées)
@@ -669,7 +711,7 @@ Variante OAuth2 (`auth`) :
 `sync_folder` (sortie) :
 
 ```json
-{ "inserted": 42, "updated": 0, "uidvalidity_changed": false, "uidnext": 1207 }
+{ "inserted": 42, "flags_updated": 3, "removed": 1, "uidvalidity_changed": false, "uidnext": 1207 }
 ```
 
 `list_threads` (sortie, tronquée) :
@@ -741,7 +783,7 @@ chevrons** (`mime.rs` les nettoie) : ce sont ces valeurs qu'il faut réinjecter 
 | `list_threads` | `Store` |
 | `get_message` | `Store` (`get_message` renvoie `Ok(None)` quand l'UID est absent : à traduire en erreur lisible côté commande), `Imap`, `Mime` |
 | `set_flags` | `Auth`, `Imap`, `Store` (`InvalidData("message not found")`) |
-| `move_message` | `Auth`, `Imap` (pas de `MOVE`/`COPY`, dossier cible absent), `Store` |
+| `move_message` | `Auth`, `Imap` (pas de `MOVE`/`COPY`, dossier cible absent), `Mime` (corps illisible pendant la réconciliation de la destination), `Store` |
 | `send_message` | `Smtp` (`"no recipient"`, refus serveur), `Tls`, `OAuth`, `Config` |
 
 Rappel : `Display` fournit déjà `"imap error: …"`, `"auth error: …"`, etc. Le front peut afficher
@@ -807,9 +849,10 @@ comportement actuel est strictement inchangé (et `npm run build` reste vert san
 
 ## Tests
 
-### Hors-ligne (41 tests, `cargo test -p lavande-mail`)
+### Hors-ligne (44 tests, `cargo test -p lavande-mail`)
 
-Aucun `#[cfg(test)] mod tests` dans `src/` : tout est dans `tests/`, sans réseau.
+Presque tout est dans `tests/`, sans réseau ; le seul `#[cfg(test)] mod tests` de `src/` est dans
+`store/mod.rs` (suppression des pièces jointes par `delete_messages`).
 
 | Fichier | Tests | Couverture |
 | --- | --- | --- |
@@ -817,8 +860,9 @@ Aucun `#[cfg(test)] mod tests` dans `src/` : tout est dans `tests/`, sans résea
 | `tests/mime.rs` | 11 | message texte simple, quoted-printable, repli HTML → texte, préférence `text/plain`, métadonnées de pièces jointes, `PgpState`, aperçu compacté/tronqué, en-têtes de threading, en-têtes absents |
 | `tests/threading.rs` | 7 | `References` prioritaire, repli `In-Reply-To`, repli sujet (préfixes + accents), isolation par compte, `Message-ID` de repli, `split_ids` |
 | `tests/oauth.rs` | 4 | payload XOAUTH2, cache de l'access token, rafraîchissement après expiration, message d'erreur lisible sans secret (serveur HTTP local) |
-| `tests/store.rs` | 10 | upsert idempotent, flags/corps/suppression, move avec pièces jointes, tri `date DESC` + pagination, agrégation des threads, absence de préfixe expéditeur dans `Sent`, migration rejouable, relecture des dossiers, `relink_replies`, `clear_folder` |
-| `tests/live.rs` | 6 | réseau, `#[ignore]` (voir ci-dessous) |
+| `tests/store.rs` | 12 | upsert idempotent, flags/corps/`delete_message`, `flags_in_folder`, `delete_messages` (vide → 0, UID inconnus ignorés, pièces jointes emportées), `set_flags_batch` (même sémantique), tri `date DESC` + pagination, agrégation des threads, absence de préfixe expéditeur dans `Sent`, migration rejouable, relecture des dossiers, `relink_replies`, `clear_folder` |
+| `src/store/mod.rs` (`mod tests`) | 1 | `delete_messages` supprime aussi les pièces jointes du message |
+| `tests/live.rs` | 9 | réseau, `#[ignore]` (voir ci-dessous) |
 
 Sur cette machine (pas de compilateur C système, `rusqlite`/`ring` en ont besoin) :
 
@@ -829,7 +873,7 @@ export CXX=/home/roman/.local/opt/lavande-cc/c++
 npm run mail:test          # cargo test -p lavande-mail
 ```
 
-### Réseau (`tests/live.rs`, 6 scénarios, ignorés par défaut)
+### Réseau (`tests/live.rs`, 9 scénarios, ignorés par défaut)
 
 ```sh
 scripts/mail-test-server.sh start      # conteneur lavande-mail-test (GreenMail)
@@ -846,9 +890,12 @@ généré par le script dans `$LAVANDE_MAIL_TEST_DIR` (défaut `~/.cache/lavande
 | Test | Ce qu'il valide |
 | --- | --- |
 | `implicit_tls_lists_inbox_with_role` | TLS implicite + `LIST` + `STATUS` : l'INBOX est trouvée et porte le rôle `Inbox` |
-| `smtp_send_then_sync_parses_message` | envoi SMTP réel, puis `sync_folder` insère le message (`inserted >= 1`), `from`/`unread`/`preview`/`thread_id` corrects ; un second sync n'insère ni ne met à jour rien (`inserted == 0`, `updated == 0`) |
+| `smtp_send_then_sync_parses_message` | envoi SMTP réel, puis `sync_folder` insère le message (`inserted >= 1`), `from`/`unread`/`preview`/`thread_id` corrects ; un second sync ne change rien (`inserted`, `flags_updated` et `removed` à 0) |
 | `flags_reach_the_server` | `set_flags` pousse bien `\Seen` + `\Flagged` (relus par une session neuve via `fetch_flags`), puis le retrait de l'étoile est effectif |
-| `create_folder_and_archive_message` | `create_folder` deux fois (idempotent), `move_message` INBOX → Archive (capacité `MOVE`), `fetch_body` sur le message déplacé, et une session neuve voit bien l'UID dans Archive |
+| `flags_from_another_client_are_pulled` | flags modifiés côté serveur par une session brute (`+FLAGS (\Seen \Flagged)`) : la synchro suivante les ramène (`flags_updated >= 1`, `unread == false`, `starred == true`) sans retélécharger le message |
+| `expunged_message_disappears_locally` | message expurgé côté serveur (`+FLAGS (\Deleted)` + `UID EXPUNGE`) : la synchro suivante le supprime en base (`removed >= 1`, `get_message` → `None`, absent du listing) |
+| `unchanged_folder_reports_nothing` | deux synchros d'affilée sans changement : `inserted`, `flags_updated` et `removed` à 0 et `uidvalidity_changed == false` (la réconciliation est idempotente) |
+| `move_keeps_store_in_step_with_server` | `create_folder` deux fois (idempotent), `move_message` INBOX → Archive (capacité `MOVE`) : la ligne INBOX disparaît, la ligne Archive réapparaît **avec l'UID réattribué par le serveur** et son corps, `fetch_body` fonctionne dessus, et une session neuve confirme que tous les UID locaux d'Archive existent côté serveur |
 | `reply_joins_the_thread` | une réponse (`In-Reply-To` + `References` = `Message-ID` du parent) rejoint le thread du parent : `thread_id` identique, un seul thread de `count == 2` |
 | `xoauth2_authenticates_with_refresh_token` | échange refresh token contre un endpoint HTTP local (mock), puis `AUTHENTICATE XOAUTH2` (SASL-IR) sur GreenMail |
 
@@ -870,25 +917,27 @@ Variables lues par `scripts/mail-test-server.sh` : `LAVANDE_MAIL_TEST_DIR`, `…
 - **STARTTLS non testé.** GreenMail ne l'annonce pas ; seul le TLS implicite est validé en réseau. Le
   chemin `Encryption::StartTls` existe dans `connect_with` mais aucun test ne l'exécute, et
   `Tls::Required` côté SMTP n'est pas couvert non plus.
-- **Les drapeaux des messages déjà synchronisés ne sont jamais rafraîchis.** `sync_folder` repart de
-  `folder.uidnext` : tout UID déjà connu est ignoré, donc un message lu/étoilé depuis un autre client
-  garde ses flags locaux jusqu'à un `fetch_flags` explicite. Pas de CONDSTORE/QRESYNC.
-- **Aucune détection des suppressions serveur.** Un message effacé ailleurs reste en base et reste
-  affiché. `Store::delete_message` n'a d'ailleurs **aucun** équivalent IMAP dans le crate : supprimer
-  localement ne supprime rien sur le serveur.
-- **`move_message` suppose que le serveur conserve l'UID** au déplacement (vrai sur GreenMail). Ce
-  n'est pas garanti par la RFC 6851 : `COPYUID` (et `UIDPLUS`) est à exploiter plus tard pour
-  connaître le nouvel UID. Le repli `COPY` + `\Deleted` + `EXPUNGE` a le même défaut.
+- **Pas de CONDSTORE/QRESYNC.** Sans `HIGHESTMODSEQ`, la synchro ne peut pas demander « ce qui a changé
+  depuis » : chaque passage fait une passe métadonnées complète du dossier (`UID FETCH 1:* (UID FLAGS
+  RFC822.SIZE)`), donc un coût linéaire en nombre de messages — le compromis de Thunderbird sans
+  CONDSTORE. Les corps, eux, ne sont tirés que pour les nouveaux UID.
+- **Pas d'IDLE ni de push.** Rien n'arrive tout seul : la synchro est déclenchée par l'appelant, à la
+  demande ou par un polling applicatif à écrire. Un changement serveur n'est visible qu'après un
+  `sync_folder`.
+- **Aucune suppression poussée vers le serveur.** Le crate sait supprimer **localement**
+  (`Store::delete_message`/`delete_messages`) et déplacer (`imap::move_message`), mais il n'expose ni
+  `STORE \Deleted` + `EXPUNGE` ni `UID EXPUNGE` comme opération publique : supprimer depuis le client
+  ne supprime rien côté serveur (et la ligne locale reviendra à la synchro suivante).
 - **Pas de reprise réseau.** Aucun retry, aucun timeout applicatif sur `TcpStream::connect`, pas de
   reconnexion : une coupure remonte en `MailError::Imap`/`Io` et l'appelant doit réessayer.
 - **Un seul dossier par appel de `sync_folder`.** `sync_account` se limite à `Inbox` + `Sent` ; les
   autres dossiers (Archive, Trash, Spam, dossiers personnels) ne sont synchronisés que si on les
-  demande un par un.
-- **Corps complet à chaque nouveau message.** `sync_folder` télécharge `BODY.PEEK[]` en une passe :
-  simple et correct, mais coûteux sur une grosse boîte. Optimisation prévue : flags d'abord, corps à
-  la demande (`fetch_body` le permet déjà).
-- **Pas de pool, pas de keychain, pas de PGP réel, pas de flux navigateur OAuth2, pas d'IDLE/push,
-  pas de recherche serveur.** Voir la vue d'ensemble.
+  demande un par un. `move_message` en réconcilie un second (la destination).
+- **Corps complet à chaque nouveau message.** Les nouveaux UID sont téléchargés en entier
+  (`BODY.PEEK[]`, lots de 500) : simple et correct, mais coûteux sur une grosse boîte. Optimisation
+  prévue : métadonnées d'abord, corps à la demande (`fetch_body` le permet déjà).
+- **Pas de pool, pas de keychain, pas de PGP réel, pas de flux navigateur OAuth2, pas de recherche
+  serveur.** Voir la vue d'ensemble.
 - **`Store` incomplet pour l'IPC** : ni `list_accounts`, ni liste des dossiers d'un compte, ni
   suppression de compte.
 - **`OutgoingMessage`/`OutgoingAttachment` ne sont pas `Deserialize`** : le DTO Tauri est à écrire

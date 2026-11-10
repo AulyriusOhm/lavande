@@ -14,7 +14,7 @@ composants inspirés de [Magic UI](https://magicui.design/docs/components).
 ## Implémentation (périmètre Mails)
 
 Le moteur mail Rust existe : crate **`crates/mail-core`** (package `lavande-mail`, lib `lavande_mail`).
-Il **compile et passe ses tests** (41 tests hors-ligne + 6 tests réseau contre un GreenMail jetable),
+Il **compile et passe ses tests** (44 tests hors-ligne + 9 tests réseau contre un GreenMail jetable),
 mais il **n'est branché ni au front ni à Tauri** : `src-tauri/src/lib.rs` n'a aucune commande et le
 front lit toujours les fixtures de `src/lib/mail.ts`. Contrat d'intégration, schéma SQLite, table de
 correspondance avec le front et limites détaillées : **[`docs/mail-core.md`](./docs/mail-core.md)**.
@@ -28,7 +28,7 @@ crates/mail-core/
 │   ├── mime.rs           # parsing RFC 5322 / MIME, aperçu, pièces jointes
 │   ├── threading.rs      # thread_id déterministe (References → In-Reply-To → sujet)
 │   ├── store/mod.rs      # Store SQLite (+ store/schema.sql embarqué)
-│   ├── imap.rs           # TLS/STARTTLS, dossiers, sync incrémentale, flags, move
+│   ├── imap.rs           # TLS/STARTTLS, dossiers, réconciliation, flags, move
 │   ├── smtp.rs           # envoi (lettre), pièces jointes
 │   ├── oauth.rs          # refresh token + XOAUTH2
 │   ├── sync.rs           # sync_account (INBOX + Sent)
@@ -46,32 +46,35 @@ export PATH=/home/roman/.local/opt/lavande-cc:$PATH
 export CC=/home/roman/.local/opt/lavande-cc/cc
 export CXX=/home/roman/.local/opt/lavande-cc/c++
 
-npm run mail:test          # cargo test -p lavande-mail          (41 tests, aucun réseau)
+npm run mail:test          # cargo test -p lavande-mail          (44 tests, aucun réseau)
 npm run mail:fmt           # cargo fmt --all -- --check
 npm run mail:clippy        # cargo clippy -p lavande-mail --all-targets -- -D warnings
 ```
 
 ### Tests réseau (GreenMail)
 
-6 scénarios réels (TLS implicite, envoi SMTP puis sync, flags, création de dossier + déplacement,
-réponse qui rejoint son thread, XOAUTH2), ignorés par défaut par `cargo test`.
+9 scénarios réels (TLS implicite, envoi SMTP puis sync, flags poussés puis rapatriés depuis un autre
+client, message expurgé côté serveur, dossier inchangé, déplacement INBOX → Archive avec UID
+réattribué, réponse qui rejoint son thread, XOAUTH2), ignorés par défaut par `cargo test`.
 
 ```bash
 scripts/mail-test-server.sh start     # conteneur lavande-mail-test, certificat auto-signé
-npm run mail:test:live                # 6 tests, --test-threads=1 obligatoire
+npm run mail:test:live                # 9 tests, --test-threads=1 obligatoire
 scripts/mail-test-server.sh stop      # ou `reset` (stop + start), `status`
 ```
 
 ### Limites (courte liste)
 
 - STARTTLS non testé : seul le TLS implicite est validé (GreenMail ne l'annonce pas).
-- Les drapeaux des messages déjà synchronisés ne sont pas rafraîchis lors d'un sync ultérieur.
-- Les messages supprimés côté serveur ne sont pas détectés (ils restent visibles localement).
-- `move_message` suppose que l'UID est conservé au déplacement (vrai sur GreenMail, pas garanti
-  ailleurs ; `COPYUID` à exploiter plus tard) ; aucun retry réseau.
-- Un seul dossier synchronisé par appel ; `sync_account` ne fait que INBOX + Sent.
-- Ni pool de connexions, ni keychain, ni PGP réel, ni flux navigateur OAuth2, ni IDLE/push, ni
-  recherche serveur.
+- Réconciliation, pas de CONDSTORE/QRESYNC : chaque synchro fait une passe métadonnées complète du
+  dossier (coût linéaire en nombre de messages, comme Thunderbird sans CONDSTORE) ; les corps ne sont
+  tirés que pour les nouveaux UID, par lots de 500.
+- Pas d'IDLE/push : la synchro est toujours déclenchée par l'appelant (à la demande ou par polling).
+- Aucune suppression poussée vers le serveur : le crate supprime localement et déplace, mais n'expose
+  pas `STORE \Deleted` + `EXPUNGE` côté client.
+- Un seul dossier synchronisé par appel (`move_message` réconcilie en plus sa destination) ;
+  `sync_account` ne fait que INBOX + Sent ; aucun retry réseau.
+- Ni pool de connexions, ni keychain, ni PGP réel, ni flux navigateur OAuth2, ni recherche serveur.
 
 ## Dépôt
 
