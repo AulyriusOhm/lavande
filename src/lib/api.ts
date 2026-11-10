@@ -194,7 +194,10 @@ export class ApiError extends Error {
   }
 }
 
-const BASE = `${import.meta.env.BASE_URL}api`;
+const inShell = typeof window !== "undefined" && ("isTauri" in window || "__TAURI_INTERNALS__" in window);
+
+/** Dans la coquille Tauri (desktop/mobile) le démon est embarqué sur la boucle locale. */
+const BASE = inShell ? "http://127.0.0.1:8790/api" : `${import.meta.env.BASE_URL}api`;
 const SHORT_TIMEOUT = 15_000;
 const LONG_TIMEOUT = 180_000;
 

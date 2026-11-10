@@ -268,7 +268,11 @@ function PhoneApp() {
   }
 
   if (mode === "api" && phase === "empty") {
-    return <ConnectScreen />;
+    return (
+      <div className="h-full w-full pt-[env(safe-area-inset-top,0px)]">
+        <ConnectScreen />
+      </div>
+    );
   }
 
   return (
