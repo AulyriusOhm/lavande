@@ -1,55 +1,142 @@
 import { useState } from "react";
-import { ChevronLeft, ChevronRight, Clock, Mail, MapPin, Plus, Users } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { CalendarCheck, ChevronLeft, ChevronRight, Clock, Mail, MapPin, Plus, Users } from "lucide-react";
 import type { CalendarEvent } from "@/lib/calendar";
-import { CURRENT_MONTH, CURRENT_YEAR, MONTH_LABEL, TODAY_DATE, WEEKDAYS, monthGrid } from "@/lib/calendar";
+import {
+  CURRENT_MONTH,
+  CURRENT_YEAR,
+  TODAY_ISO,
+  WEEKDAYS,
+  capitalizeFirst,
+  conflictingIds,
+  daysInMonth,
+  isoDay,
+  monthGrid,
+  monthLabel,
+} from "@/lib/calendar";
 import { TONES } from "@/lib/mail";
 import { cn } from "@/lib/utils";
+import { AnimatedGradientText } from "@/components/ui/animated-text";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 
 const DATE_FMT = new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+const SHORT_FMT = new Intl.DateTimeFormat("fr-FR", { weekday: "short", day: "numeric", month: "long" });
+const FULL_FMT = new Intl.DateTimeFormat("fr-FR", {
+  weekday: "long",
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+});
 
-export function CalendarScreen({ events: allEvents }: { events: CalendarEvent[] }) {
-  const [selected, setSelected] = useState(TODAY_DATE);
-  const cells = monthGrid();
-  const withEvents = new Set(allEvents.map((event) => event.day));
-  const events = allEvents
-    .filter((event) => event.day === selected)
-    .sort((a, b) => a.start.localeCompare(b.start));
-  const label = DATE_FMT
-    .format(new Date(CURRENT_YEAR, CURRENT_MONTH, selected))
-    .replace(/[\u202f\u00a0]/g, " ");
+const fullDate = (iso: string) =>
+  capitalizeFirst(FULL_FMT.format(new Date(`${iso}T12:00:00`)).replace(/[\u202f\u00a0]/g, " "));
+
+export function CalendarScreen({
+  events: allEvents,
+  onNewEvent,
+  onOpenMail,
+  onSelectedDateChange,
+  availableMailIds,
+}: {
+  events: CalendarEvent[];
+  onNewEvent?: (date: string) => void;
+  onOpenMail?: (event: CalendarEvent) => void;
+  onSelectedDateChange?: (date: string) => void;
+  availableMailIds?: Set<string>;
+}) {
+  const [view, setView] = useState({ year: CURRENT_YEAR, month: CURRENT_MONTH });
+  const [selected, setSelected] = useState(TODAY_ISO);
+
+  const pick = (date: string) => {
+    setSelected(date);
+    onSelectedDateChange?.(date);
+  };
+
+  const cells = monthGrid(view.year, view.month);
+  const counts = new Map<string, number>();
+  for (const event of allEvents) counts.set(event.date, (counts.get(event.date) ?? 0) + 1);
+  const conflicts = conflictingIds(allEvents);
+  const events = allEvents.filter((event) => event.date === selected).sort((a, b) => a.start.localeCompare(b.start));
+  const label = capitalizeFirst(DATE_FMT.format(new Date(`${selected}T12:00:00`)).replace(/[\u202f\u00a0]/g, " "));
+  const shortLabel = SHORT_FMT.format(new Date(`${selected}T12:00:00`)).replace(/[\u202f\u00a0]/g, " ");
+
+  const shiftMonth = (delta: number) => {
+    const next = new Date(view.year, view.month + delta, 1);
+    const year = next.getFullYear();
+    const month = next.getMonth();
+    const day = Math.min(Number(selected.slice(8)), daysInMonth(year, month));
+    setView({ year, month });
+    pick(isoDay(year, month, day));
+  };
+
+  const goToday = () => {
+    setView({ year: CURRENT_YEAR, month: CURRENT_MONTH });
+    pick(TODAY_ISO);
+  };
 
   return (
     <div className="relative h-full overflow-y-auto no-scrollbar pb-32">
       <MeshGlow className="h-56" />
 
       <header className="relative px-5 pt-4">
-        <p className="text-[10.5px] font-bold tracking-[0.18em] text-ink-muted uppercase">Lavande · Calendrier</p>
-        <div className="mt-1.5 flex items-center justify-between">
-          <h1 className="text-[27px] leading-none font-extrabold tracking-[-0.035em] text-ink capitalize">
-            {MONTH_LABEL}
-          </h1>
-          <div className="flex items-center gap-1">
+        <div className="flex items-end justify-between gap-2">
+          <div className="flex min-w-0 items-baseline gap-2.5">
+            <h1 className="whitespace-nowrap text-[34px] leading-[0.95] font-extrabold tracking-[-0.045em] max-[379px]:text-[30px]">
+              <AnimatedGradientText className="-mb-[0.14em] pb-[0.14em]">
+                {monthLabel(view.month)}
+              </AnimatedGradientText>
+            </h1>
+            <span className="shrink-0 rounded-full bg-accent-soft px-2.5 py-1 text-[12px] font-extrabold text-accent-ink">
+              {view.year}
+            </span>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
             <button
               type="button"
+              onClick={() => shiftMonth(-1)}
               aria-label="Mois précédent"
-              className="grid size-8 place-items-center rounded-full border border-line bg-surface text-ink-soft"
+              className="grid size-11 place-items-center rounded-full border border-line bg-surface text-ink-soft transition-colors hover:border-accent-ring"
             >
               <ChevronLeft className="size-4" />
             </button>
             <button
               type="button"
+              onClick={() => shiftMonth(1)}
               aria-label="Mois suivant"
-              className="grid size-8 place-items-center rounded-full border border-line bg-surface text-ink-soft"
+              className="grid size-11 place-items-center rounded-full border border-line bg-surface text-ink-soft transition-colors hover:border-accent-ring"
             >
               <ChevronRight className="size-4" />
             </button>
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-7 gap-1 rounded-[26px] border border-line bg-surface p-3">
+        <AnimatePresence initial={false}>
+          {selected !== TODAY_ISO && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+              className="overflow-hidden"
+            >
+              <div className="flex items-center justify-between gap-2 pt-3">
+                <button
+                  type="button"
+                  onClick={goToday}
+                  className="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-accent-ring bg-accent-soft px-3 text-[11.5px] font-bold text-accent-ink transition-colors hover:border-accent hover:bg-accent-soft/70 active:scale-95"
+                >
+                  <CalendarCheck className="size-3.5" strokeWidth={2.4} />
+                  Aujourd'hui
+                </button>
+                <span className="text-[11px] font-semibold text-ink-muted">{shortLabel}</span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <div className="mt-4 -mx-4 grid grid-cols-7 gap-1 rounded-[26px] border border-line bg-surface p-2 max-[360px]:-mx-5 max-[360px]:gap-0 max-[360px]:p-0">
           {WEEKDAYS.map((day, index) => (
             <span
               key={index}
@@ -60,28 +147,34 @@ export function CalendarScreen({ events: allEvents }: { events: CalendarEvent[] 
           ))}
           {cells.map((day, index) => {
             if (day === null) return <span key={`empty-${index}`} />;
-            const isToday = day === TODAY_DATE;
-            const isSelected = day === selected;
+            const date = isoDay(view.year, view.month, day);
+            const isToday = date === TODAY_ISO;
+            const isSelected = date === selected;
+            const count = counts.get(date) ?? 0;
             return (
               <button
-                key={day}
+                key={date}
                 type="button"
-                onClick={() => setSelected(day)}
+                onClick={() => pick(date)}
+                aria-pressed={isSelected}
+                aria-label={`${fullDate(date)} — ${
+                  count === 0 ? "aucun événement" : `${count} événement${count > 1 ? "s" : ""}`
+                }`}
                 className={cn(
-                  "relative grid aspect-square place-items-center rounded-xl text-[12.5px] font-semibold transition-colors",
+                  "relative grid min-h-11 place-items-center rounded-xl text-[12.5px] font-semibold transition-colors",
                   isSelected
-                    ? "bg-accent text-white shadow-[0_6px_18px_-8px_var(--accent)]"
+                    ? "bg-accent text-accent-contrast shadow-[0_6px_18px_-8px_var(--accent)]"
                     : isToday
                       ? "bg-accent-soft text-accent-ink"
                       : "text-ink-soft hover:bg-surface-2",
                 )}
               >
                 {day}
-                {withEvents.has(day) && (
+                {counts.has(date) && (
                   <span
                     className={cn(
                       "absolute bottom-1 size-1 rounded-full",
-                      isSelected ? "bg-white/80" : "bg-accent",
+                      isSelected ? "bg-accent-contrast/80" : "bg-accent",
                     )}
                   />
                 )}
@@ -92,66 +185,100 @@ export function CalendarScreen({ events: allEvents }: { events: CalendarEvent[] 
       </header>
 
       <div className="mt-6 flex items-baseline justify-between px-5">
-        <h2 className="text-[13px] font-bold text-ink capitalize">{label}</h2>
+        <h2 className="text-[13px] font-bold text-ink">{label}</h2>
         <span className="text-[11px] font-medium text-ink-muted">
           {events.length} événement{events.length > 1 ? "s" : ""}
         </span>
       </div>
 
       <div className="mt-3 space-y-2 px-4">
-        {events.map((event, index) => (
-          <BlurFade key={event.id} delay={0.05 * index} yOffset={10}>
-            <div className="flex gap-3">
-              <div className="w-11 shrink-0 pt-1 text-right">
-                <p className="text-[11.5px] font-bold text-ink">{event.start}</p>
-                <p className="text-[10px] font-medium text-ink-muted">{event.end}</p>
-              </div>
-              <div
-                className={cn(
-                  "min-w-0 flex-1 rounded-2xl border border-line bg-surface p-3",
-                  "border-l-[3px]",
-                )}
-                style={{ borderLeftColor: `var(--accent)` }}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <p className="text-[13px] leading-tight font-bold text-ink">{event.title}</p>
-                  {event.fromMail && (
-                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-bold text-accent-ink">
-                      <Mail className="size-2.5" />
-                      mail
-                    </span>
-                  )}
+        {events.map((event, index) => {
+          const conflict = conflicts.has(event.id);
+          const openable =
+            onOpenMail && event.mailId && (!availableMailIds || availableMailIds.has(event.mailId))
+              ? () => onOpenMail(event)
+              : undefined;
+          return (
+            <BlurFade key={event.id} delay={0.05 * index} yOffset={10}>
+              <div className="flex gap-3">
+                <div className="w-11 shrink-0 pt-1 text-right">
+                  <p className="text-[11.5px] font-bold whitespace-nowrap text-ink">{event.start}</p>
+                  <p className="text-[10px] font-medium whitespace-nowrap text-ink-muted">{event.end}</p>
                 </div>
-                {event.location && (
-                  <p className="mt-1 flex items-center gap-1 text-[11px] font-medium text-ink-muted">
-                    <MapPin className="size-3" />
-                    {event.location}
-                  </p>
-                )}
-                {event.attendees?.length ? (
-                  <div className="mt-2 flex items-center gap-1.5">
-                    <Users className="size-3 text-ink-muted" />
-                    {event.attendees.map((person) => (
-                      <span
-                        key={person}
-                        className={cn(
-                          "grid size-5 place-items-center rounded-full bg-gradient-to-br text-[8.5px] font-black",
-                          TONES[person.length % TONES.length],
-                        )}
-                      >
-                        {person
-                          .split(" ")
-                          .map((part) => part[0])
-                          .join("")
-                          .slice(0, 2)}
-                      </span>
-                    ))}
+                <div
+                  role={openable ? "button" : undefined}
+                  tabIndex={openable ? 0 : undefined}
+                  onClick={openable}
+                  onKeyDown={
+                    openable
+                      ? (keyEvent) => {
+                          if (keyEvent.key === "Enter" || keyEvent.key === " ") {
+                            keyEvent.preventDefault();
+                            openable();
+                          }
+                        }
+                      : undefined
+                  }
+                  className={cn(
+                    "min-w-0 flex-1 rounded-2xl border border-line bg-surface p-3 border-l-[3px]",
+                    openable && "cursor-pointer transition-colors hover:border-accent-ring/70",
+                  )}
+                  style={{ borderLeftColor: `var(--accent)` }}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-[13px] leading-tight font-bold text-ink">{event.title}</p>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {conflict && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-red-500/12 px-2 py-0.5 text-[10px] font-extrabold text-red-700 dark:text-red-300">
+                          En conflit
+                        </span>
+                      )}
+                      {event.fromMail && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-bold text-accent-ink">
+                          <Mail className="size-2.5" />
+                          mail
+                        </span>
+                      )}
+                    </div>
                   </div>
-                ) : null}
+                  {event.location && (
+                    <p className="mt-1 flex items-center gap-1 text-[11px] font-medium text-ink-muted">
+                      <MapPin className="size-3" />
+                      {event.location}
+                    </p>
+                  )}
+                  <div className="mt-2 flex items-center gap-1.5">
+                    {event.calendar && (
+                      <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[9.5px] font-bold text-ink-soft">
+                        {event.calendar}
+                      </span>
+                    )}
+                    {event.attendees?.length ? (
+                      <div className="flex items-center gap-1.5">
+                        <Users className="size-3 text-ink-muted" />
+                        {event.attendees.map((person) => (
+                          <span
+                            key={person}
+                            className={cn(
+                              "grid size-5 place-items-center rounded-full bg-gradient-to-br text-[8.5px] font-black",
+                              TONES[person.length % TONES.length],
+                            )}
+                          >
+                            {person
+                              .split(" ")
+                              .map((part) => part[0])
+                              .join("")
+                              .slice(0, 2)}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
               </div>
-            </div>
-          </BlurFade>
-        ))}
+            </BlurFade>
+          );
+        })}
 
         {events.length === 0 && (
           <p className="px-5 py-10 text-center text-[12.5px] font-medium text-ink-muted">
@@ -161,7 +288,13 @@ export function CalendarScreen({ events: allEvents }: { events: CalendarEvent[] 
       </div>
 
       <div className="mt-5 px-5">
-        <ShimmerButton size="md" className="w-full" shimmerDuration={5}>
+        <ShimmerButton
+          size="md"
+          className="w-full"
+          shimmerDuration={5}
+          onClick={onNewEvent ? () => onNewEvent(selected) : undefined}
+          disabled={!onNewEvent}
+        >
           <Plus className="size-4" />
           Créer un événement
         </ShimmerButton>

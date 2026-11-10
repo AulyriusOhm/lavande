@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { animate, motion, useMotionValue, useSpring, useTransform } from "motion/react";
-import { Archive, ChevronDown, ChevronUp, Inbox, Plus, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2 } from "lucide-react";
+import { Archive, ChevronDown, ChevronUp, Inbox, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2 } from "lucide-react";
 import type { FolderId, Mail } from "@/lib/mail";
 import { FOLDERS, folderLabel } from "@/lib/mail";
 import { ACCOUNTS, ALL_ACCOUNTS, accountById } from "@/lib/accounts";
@@ -27,6 +27,8 @@ export function InboxScreen({
   onSearch,
   onMailAction,
   onReply,
+  onNotSpam,
+  onRestore,
 }: {
   mails: Mail[];
   account: string;
@@ -38,15 +40,18 @@ export function InboxScreen({
   onSearch: () => void;
   onMailAction: (kind: "delete" | "archive" | "read", mail: Mail) => void;
   onReply: (mail: Mail) => void;
+  onNotSpam?: (mail: Mail) => void;
+  onRestore?: (mail: Mail) => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [compact, setCompact] = useState(false);
-  const [sizes, setSizes] = useState({ hero: 0, card: 0 });
+  const [sizes, setSizes] = useState({ hero: 0, card: 0, bar: 0 });
 
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const heroRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
 
   const raw = useMotionValue(0);
   const progress = useSpring(raw, { stiffness: 200, damping: 28, mass: 0.9 });
@@ -58,7 +63,7 @@ export function InboxScreen({
   const cardBody = useTransform(progress, [0, 0.45], [1, 0]);
   const barOpacity = useTransform(progress, [0.55, 0.95], [0, 1]);
   const barY = useTransform(progress, [0.55, 0.95], [-14, 0]);
-  const barSpace = useTransform(progress, [0.5, 1], [0, 60]);
+  const barSpace = useTransform(progress, [0.5, 1], [0, sizes.bar + 14]);
   const cardCompact = useTransform(progress, [0.35, 0.85], [0, 1]);
   const cardExpand = useTransform(progress, [0, 0.35], [1, 0]);
 
@@ -67,6 +72,7 @@ export function InboxScreen({
       setSizes({
         hero: heroRef.current?.offsetHeight ?? 0,
         card: cardRef.current?.offsetHeight ?? 0,
+        bar: barRef.current?.offsetHeight ?? 0,
       });
     measure();
     window.addEventListener("resize", measure);
@@ -99,6 +105,7 @@ export function InboxScreen({
   const unreadCount = scoped.filter((mail) => mail.unread).length;
   const starredCount = scoped.filter((mail) => mail.starred).length;
   const encryptedCount = scoped.filter((mail) => mail.pgp === "encrypted").length;
+  const attachmentMails = scoped.filter((mail) => mail.attachments?.length).length;
   const current = accountById(account);
 
   const visible = scoped.filter((mail) => {
@@ -169,8 +176,14 @@ export function InboxScreen({
               <span className="text-[11.5px] font-bold text-ink">
                 {current ? current.label : "Tous les comptes"}
               </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-1.5 py-0.5 text-[10.5px] font-bold text-accent-ink">
+              <span
+                aria-hidden
+                className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-1.5 py-0.5 text-[10.5px] font-bold text-accent-ink"
+              >
                 <NumberTicker value={unreadCount} /> non lus
+              </span>
+              <span className="sr-only">
+                {unreadCount} conversation{unreadCount > 1 ? "s" : ""} non lue{unreadCount > 1 ? "s" : ""}
               </span>
               <ChevronDown className="size-3.5 text-ink-muted" />
             </button>
@@ -179,61 +192,68 @@ export function InboxScreen({
 
         <motion.div style={{ height: barSpace }} />
 
-        <motion.div
-          style={{ height: cardHeight }}
-          className="relative mx-5 overflow-hidden rounded-[26px] bg-accent-soft ring-1 ring-accent-ring/40"
-        >
-          <BorderBeam duration={9} />
+        {folder === "inbox" && (
+          <>
+            <motion.div
+              style={{ height: cardHeight }}
+              className="relative mx-5 overflow-hidden rounded-[26px] bg-accent-soft ring-1 ring-accent-ring/40"
+            >
+              <BorderBeam duration={9} />
 
-          <motion.button
-            type="button"
-            onClick={collapse}
-            aria-label="Réduire le résumé"
-            style={{ opacity: cardExpand }}
-            className={cn(
-              "absolute top-2.5 right-2.5 z-10 grid size-7 place-items-center rounded-full bg-surface/80 text-accent-ink",
-              compact && "pointer-events-none",
-            )}
-          >
-            <ChevronUp className="size-3.5" />
-          </motion.button>
+              <motion.button
+                type="button"
+                onClick={collapse}
+                aria-label="Réduire le résumé"
+                style={{ opacity: cardExpand }}
+                className={cn(
+                  "absolute top-2.5 right-2.5 z-10 grid size-7 place-items-center rounded-full bg-surface/80 text-accent-ink",
+                  compact && "pointer-events-none",
+                )}
+              >
+                <ChevronUp className="size-3.5" />
+              </motion.button>
 
-          <motion.div ref={cardRef} style={{ opacity: cardBody }} className="p-4">
-            <div className="flex items-center gap-2">
-              <span className="grid size-6 place-items-center rounded-full bg-accent/15">
-                <Sparkles className="size-3.5 text-accent-ink" strokeWidth={2.4} />
-              </span>
-              <p className="text-[10.5px] font-bold tracking-[0.14em] text-accent-ink uppercase">Résumé du matin</p>
-            </div>
-            <p className="mt-2 text-[12.5px] leading-relaxed font-medium text-ink">
-              <span className="font-bold">3 messages</span> attendent une réponse. Camille veut un retour sur les
-              maquettes v3 avant vendredi.
-            </p>
-            <div className="mt-3 flex gap-1.5">
-              <span className="rounded-full bg-surface px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
-                2 pièces jointes
-              </span>
-              <span className="rounded-full bg-surface px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
-                1 chiffré
-              </span>
-            </div>
-          </motion.div>
+              <motion.div ref={cardRef} style={{ opacity: cardBody }} className="p-4">
+                <div className="flex items-center gap-2">
+                  <span className="grid size-6 place-items-center rounded-full bg-accent/15">
+                    <Sparkles className="size-3.5 text-accent-ink" strokeWidth={2.4} />
+                  </span>
+                  <p className="text-[10.5px] font-bold tracking-[0.14em] text-accent-ink uppercase">Résumé du matin</p>
+                </div>
+                <p className="mt-2 text-[12.5px] leading-relaxed font-medium text-ink">
+                  <span className="font-bold">
+                    {unreadCount} message{unreadCount > 1 ? "s" : ""} non lu{unreadCount > 1 ? "s" : ""}
+                  </span>{" "}
+                  dans ta boîte de réception. Camille veut un retour sur les maquettes v3 avant vendredi.
+                </p>
+                <div className="mt-3 flex gap-1.5">
+                  <span className="rounded-full bg-surface px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
+                    {attachmentMails} mail{attachmentMails > 1 ? "s" : ""} avec pièce
+                    {attachmentMails > 1 ? "s" : ""} jointe{attachmentMails > 1 ? "s" : ""}
+                  </span>
+                  <span className="rounded-full bg-surface px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
+                    {encryptedCount} chiffré{encryptedCount > 1 ? "s" : ""}
+                  </span>
+                </div>
+              </motion.div>
 
-          <motion.button
-            type="button"
-            onClick={expand}
-            aria-label="Réafficher le résumé du matin"
-            style={{ opacity: cardCompact }}
-            className="absolute inset-0 flex w-full items-center gap-2 px-4 text-left"
-          >
-            <Sparkles className="size-3.5 shrink-0 text-accent-ink" strokeWidth={2.4} />
-            <p className="truncate text-[11px] font-bold text-accent-ink">Résumé du matin</p>
-            <span className="shrink-0 rounded-full bg-surface px-2 py-0.5 text-[10px] font-bold text-accent-ink">
-              3 à traiter
-            </span>
-            <ChevronDown className="ml-auto size-3.5 shrink-0 text-accent-ink/70" />
-          </motion.button>
-        </motion.div>
+              <motion.button
+                type="button"
+                onClick={expand}
+                aria-label="Réafficher le résumé du matin"
+                style={{ opacity: cardCompact }}
+                className="absolute inset-0 flex w-full items-center gap-2 px-4 text-left"
+              >
+                <Sparkles className="size-3.5 shrink-0 text-accent-ink" strokeWidth={2.4} />
+                <p className="truncate text-[11px] font-bold text-accent-ink">Résumé du matin</p>
+                <span className="shrink-0 rounded-full bg-surface px-2 py-0.5 text-[10px] font-bold text-accent-ink">
+                  {unreadCount} non lus
+                </span>
+                <ChevronDown className="ml-auto size-3.5 shrink-0 text-accent-ink/70" />
+              </motion.button>
+            </motion.div>
+          </>
+        )}
 
         <div className="mt-5 flex gap-2 overflow-x-auto px-5 pb-1 no-scrollbar">
           <Chip active={filter === "all"} onClick={() => setFilter("all")}>
@@ -242,34 +262,46 @@ export function InboxScreen({
           <Chip active={filter === "unread"} onClick={() => setFilter("unread")}>
             Non lus
             <span
+              aria-hidden
               className={cn(
                 "rounded-full px-1.5 text-[10px] font-bold",
-                filter === "unread" ? "bg-white/25 text-white" : "bg-accent-soft text-accent-ink",
+                filter === "unread" ? "bg-accent-contrast/25 text-accent-contrast" : "bg-accent-soft text-accent-ink",
               )}
             >
               {unreadCount}
+            </span>
+            <span className="sr-only">
+              {unreadCount} conversation{unreadCount > 1 ? "s" : ""} non lue{unreadCount > 1 ? "s" : ""}
             </span>
           </Chip>
           <Chip active={filter === "starred"} onClick={() => setFilter("starred")}>
             Étoilés
             <span
+              aria-hidden
               className={cn(
                 "rounded-full px-1.5 text-[10px] font-bold",
-                filter === "starred" ? "bg-white/25 text-white" : "bg-accent-soft text-accent-ink",
+                filter === "starred" ? "bg-accent-contrast/25 text-accent-contrast" : "bg-accent-soft text-accent-ink",
               )}
             >
               {starredCount}
+            </span>
+            <span className="sr-only">
+              {starredCount} conversation{starredCount > 1 ? "s" : ""} étoilée{starredCount > 1 ? "s" : ""}
             </span>
           </Chip>
           <Chip active={filter === "encrypted"} onClick={() => setFilter("encrypted")}>
             Chiffrés
             <span
+              aria-hidden
               className={cn(
                 "rounded-full px-1.5 text-[10px] font-bold",
-                filter === "encrypted" ? "bg-white/25 text-white" : "bg-accent-soft text-accent-ink",
+                filter === "encrypted" ? "bg-accent-contrast/25 text-accent-contrast" : "bg-accent-soft text-accent-ink",
               )}
             >
               {encryptedCount}
+            </span>
+            <span className="sr-only">
+              {encryptedCount} conversation{encryptedCount > 1 ? "s" : ""} chiffrée{encryptedCount > 1 ? "s" : ""}
             </span>
           </Chip>
         </div>
@@ -287,17 +319,30 @@ export function InboxScreen({
               onArchive={() => onMailAction("archive", mail)}
               onToggleRead={() => onMailAction("read", mail)}
               onReply={() => onReply(mail)}
+              onNotSpam={onNotSpam ? () => onNotSpam(mail) : undefined}
+              onRestore={onRestore ? () => onRestore(mail) : undefined}
             />
           ))}
           {visible.length === 0 && (
-            <p className="px-6 py-12 text-center text-[13px] font-medium text-ink-muted">
-              Rien ici pour le moment.
-            </p>
+            <div className="px-6 py-12 text-center">
+              <p className="text-[13px] font-medium text-ink-muted">Rien ici pour le moment.</p>
+              {filter !== "all" && (
+                <button
+                  type="button"
+                  onClick={() => setFilter("all")}
+                  className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-2 text-[12px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+                >
+                  <RotateCcw className="size-3.5" />
+                  Réinitialiser le filtre
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>
 
       <motion.div
+        ref={barRef}
         style={{ opacity: barOpacity, y: barY }}
         className={cn("absolute inset-x-0 top-0 z-30", compact ? "" : "pointer-events-none")}
       >
@@ -305,7 +350,7 @@ export function InboxScreen({
           <IconButton
             aria-label="Ouvrir les dossiers"
             onClick={onOpenFolders}
-            className="size-9 bg-accent-soft text-accent-ink hover:bg-accent-soft"
+            className="bg-accent-soft text-accent-ink hover:bg-accent-soft"
           >
             <Inbox className="size-[18px]" strokeWidth={2.2} />
           </IconButton>
@@ -316,10 +361,10 @@ export function InboxScreen({
               {mails.filter((mail) => mail.folder === "spam" && mail.unread).length} spam
             </p>
           </div>
-          <IconButton aria-label="Rechercher" onClick={onSearch} className="size-8">
+          <IconButton aria-label="Rechercher" onClick={onSearch}>
             <Search className="size-4" />
           </IconButton>
-          <IconButton aria-label="Changer de compte" onClick={onOpenAccounts} className="size-8">
+          <IconButton aria-label="Changer de compte" onClick={onOpenAccounts}>
             <span
               className="grid size-5 place-items-center rounded-full text-[8px] font-black text-white"
               style={{ backgroundColor: current?.color ?? "var(--accent)" }}
@@ -375,7 +420,11 @@ export function AccountSwitchSheet({
         {rows.map((row) => {
           const isActive = row.id === active;
           const unread = mails.filter(
-            (mail) => mail.unread && (row.id === ALL_ACCOUNTS || mail.account === row.id),
+            (mail) =>
+              mail.unread &&
+              mail.folder !== "spam" &&
+              mail.folder !== "trash" &&
+              (row.id === ALL_ACCOUNTS || mail.account === row.id),
           ).length;
           return (
             <button
@@ -401,7 +450,7 @@ export function AccountSwitchSheet({
                 <span className="block truncate text-[11px] font-medium text-ink-muted">{row.email}</span>
               </span>
               {unread > 0 && (
-                <span className="rounded-full bg-accent px-2 py-0.5 text-[10.5px] font-bold text-white">
+                <span className="rounded-full bg-accent px-2 py-0.5 text-[10.5px] font-bold text-accent-contrast">
                   {unread}
                 </span>
               )}
@@ -484,7 +533,7 @@ export function MailboxSheet({
               <span className="min-w-0 flex-1 truncate text-[13px] font-bold text-ink">{entry.label}</span>
               <span className="shrink-0 text-[10.5px] font-semibold text-ink-muted">{items.length}</span>
               {unread > 0 && (
-                <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-[10.5px] font-bold text-white">
+                <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-[10.5px] font-bold text-accent-contrast">
                   {unread}
                 </span>
               )}
