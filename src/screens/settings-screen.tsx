@@ -9,14 +9,17 @@ import {
   Moon,
   Palette,
   PenLine,
+  Plus,
   RotateCcw,
   Sun,
+  Trash2,
   Type,
   Users,
 } from "lucide-react";
 import { ACCENT_PRESETS, useTheme } from "@/lib/theme";
 import { SWIPE_ACTIONS, mergeFlags, usePrefs } from "@/lib/prefs";
-import { ACCOUNTS, ALL_ACCOUNTS } from "@/lib/accounts";
+import { ALL_ACCOUNTS } from "@/lib/accounts";
+import { useMailStore } from "@/lib/store";
 import { MCP_SERVERS, mcpCounts } from "@/lib/mcp";
 import type { Mail } from "@/lib/mail";
 import { cn } from "@/lib/utils";
@@ -47,6 +50,7 @@ export function SettingsScreen({
   onOpenMcp: () => void;
 }) {
   const { accent, dark, brand, setAccent, setDark, reset } = useTheme();
+  const { accounts, mode, openConnect, askRemoveAccount } = useMailStore();
   const {
     swipeLeft,
     swipeRight,
@@ -88,10 +92,20 @@ export function SettingsScreen({
 
       <BlurFade delay={0.05}>
         <Card className="mx-5 mt-5 flex items-center gap-3 p-3.5">
-          <Avatar name="Roman" size={48} rounded="rounded-2xl" tone={0} />
+          <Avatar
+            name={accounts.find((entry) => entry.id === account)?.label ?? "Compte"}
+            size={48}
+            rounded="rounded-2xl"
+            tone={0}
+          />
           <div className="min-w-0 flex-1 leading-tight">
-            <p className="truncate text-[14px] font-bold text-ink">Roman</p>
-            <p className="truncate text-[11.5px] font-medium text-ink-muted">roman@lavande.mail</p>
+            <p className="truncate text-[14px] font-bold text-ink">
+              {accounts.find((entry) => entry.id === account)?.label ?? "Tous les comptes"}
+            </p>
+            <p className="truncate text-[11.5px] font-medium text-ink-muted">
+              {accounts.find((entry) => entry.id === account)?.email ??
+                `${accounts.length} compte${accounts.length > 1 ? "s" : ""}`}
+            </p>
           </div>
           <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent-soft px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
             <PenLine className="size-3" />
@@ -100,37 +114,59 @@ export function SettingsScreen({
         </Card>
       </BlurFade>
 
-      <SectionTitle hint={`${ACCOUNTS.length} comptes`}>Comptes</SectionTitle>
+      <SectionTitle hint={`${accounts.length} compte${accounts.length > 1 ? "s" : ""}`}>Comptes</SectionTitle>
       <BlurFade delay={0.08}>
         <Card className="mx-5 divide-y divide-line/80 overflow-hidden">
-          {ACCOUNTS.map((item) => (
-            <button
+          {accounts.map((item) => (
+            <div
               key={item.id}
-              type="button"
-              onClick={onOpenAccounts}
               className={cn(
-                "focus-row flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-surface-2/70",
+                "flex items-center gap-1 pr-1.5 transition-colors",
                 item.id === account && "bg-accent-soft/40",
               )}
             >
-              <span
-                className="grid size-8 shrink-0 place-items-center rounded-xl text-[11px] font-black text-white"
-                style={{ backgroundColor: item.color }}
+              <button
+                type="button"
+                onClick={onOpenAccounts}
+                className="focus-row flex min-w-0 flex-1 items-center gap-3 py-3 pr-1 pl-3.5 text-left transition-colors hover:bg-surface-2/70"
               >
-                {item.label[0]}
-              </span>
-              <span className="min-w-0 flex-1 leading-tight">
-                <span className="block truncate text-[12.5px] font-bold text-ink">{item.label}</span>
-                <span className="block truncate text-[10.5px] font-medium text-ink-muted">{item.email}</span>
-              </span>
-              {unreadFor(item.id) > 0 && (
-                <span className="rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent-ink">
-                  {unreadFor(item.id)}
+                <span
+                  className="grid size-8 shrink-0 place-items-center rounded-xl text-[11px] font-black text-white"
+                  style={{ backgroundColor: item.color }}
+                >
+                  {item.label[0]}
                 </span>
+                <span className="min-w-0 flex-1 leading-tight">
+                  <span className="block truncate text-[12.5px] font-bold text-ink">{item.label}</span>
+                  <span className="block truncate text-[10.5px] font-medium text-ink-muted">{item.email}</span>
+                </span>
+                {unreadFor(item.id) > 0 && (
+                  <span className="rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent-ink">
+                    {unreadFor(item.id)}
+                  </span>
+                )}
+                <ChevronRight className="size-4 shrink-0 text-ink-muted" />
+              </button>
+              {mode === "api" && (
+                <button
+                  type="button"
+                  aria-label={`Retirer le compte ${item.label}`}
+                  onClick={() => askRemoveAccount(item)}
+                  className="focus-ring grid size-9 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-rose-500/10 hover:text-rose-600"
+                >
+                  <Trash2 className="size-3.5" />
+                </button>
               )}
-              <ChevronRight className="size-4 shrink-0 text-ink-muted" />
-            </button>
+            </div>
           ))}
+          <Row
+            icon={<Plus className="size-4" />}
+            label="Ajouter un compte"
+            hint="IMAP + SMTP · connexion testée par le service local"
+            onClick={openConnect}
+          >
+            <ChevronRight className="size-4 text-ink-muted" />
+          </Row>
           <Row
             icon={<Users className="size-4" />}
             label="Boîte unifiée"

@@ -16,6 +16,7 @@ import {
   Moon,
   Paperclip,
   PenLine,
+  RefreshCw,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -25,11 +26,11 @@ import {
   Trash2,
   type LucideIcon,
 } from "lucide-react";
-import type { FolderId, Mail } from "@/lib/mail";
-import { FOLDERS, folderLabel } from "@/lib/mail";
+import type { FolderId } from "@/lib/mail";
+import { folderLabel } from "@/lib/mail";
 import type { Thread } from "@/lib/threads";
 import { threadsInFolder } from "@/lib/threads";
-import { ACCOUNTS, ALL_ACCOUNTS, accountById } from "@/lib/accounts";
+import { ALL_ACCOUNTS } from "@/lib/accounts";
 import { MY_KEY, PGP_STATE, keyState } from "@/lib/pgp";
 import { useMailStore } from "@/lib/store";
 import { useEscapeLayer } from "@/desktop/escape";
@@ -49,8 +50,6 @@ import {
   Kbd,
   PaneTitle,
   SectionLabel,
-  Surface,
-  TextInput,
 } from "@/desktop/ui";
 
 type Filter = "all" | "unread" | "starred" | "encrypted" | "attachments";
@@ -74,18 +73,20 @@ const FILTER_MATCH: Record<Filter, (thread: Thread) => boolean> = {
 const FOLDER_ICONS: Record<FolderId, LucideIcon> = {
   inbox: Inbox,
   sent: Forward,
+  drafts: PenLine,
   archive: Archive,
   spam: ShieldCheck,
   trash: Trash2,
+  other: Inbox,
 };
 
-const ACCOUNT_TONE: Record<Mail["account"], "accent" | "sky" | "rose"> = {
+const ACCOUNT_TONE: Record<string, "accent" | "sky" | "rose"> = {
   perso: "accent",
   pro: "sky",
   gmail: "rose",
 };
 
-const EMPTY_ACCOUNT = { label: "", email: "", provider: "" };
+const accountTone = (id: string): "accent" | "sky" | "rose" => ACCOUNT_TONE[id] ?? "accent";
 
 const TO_DO = 3;
 
@@ -246,6 +247,7 @@ function ThreadRow({
   onNotSpam: () => void;
 }) {
   const mail = thread.primary;
+  const { accountById } = useMailStore();
   const account = accountById(mail.account);
   const sender = mail.folder === "sent" && mail.to ? `À ${mail.to}` : mail.name;
   const name =
@@ -311,7 +313,7 @@ function ThreadRow({
               >
                 {name}
               </p>
-              {account ? <Badge tone={ACCOUNT_TONE[mail.account]}>{account.label}</Badge> : null}
+              {account ? <Badge tone={accountTone(mail.account)}>{account.label}</Badge> : null}
               {mail.pgp === "encrypted" ? (
                 <Lock className="size-3.5 shrink-0 text-emerald-600" strokeWidth={2.6} />
               ) : mail.pgp === "signed" ? (
@@ -371,6 +373,13 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
   const {
     mails,
     account,
+    accounts,
+    mode,
+    syncing,
+    syncFolder,
+    folderOptions,
+    openConnect,
+    accountById,
     folder,
     openMail,
     openThread,
@@ -384,19 +393,14 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
     closeMessage,
     replyTo,
     forwardMail,
-    notify,
   } = useMailStore();
   const { dark, setDark } = useTheme();
   const [filter, setFilter] = useState<Filter>("all");
   const [summaryOpen, setSummaryOpen] = useState(true);
-  const [addOpen, setAddOpen] = useState(false);
-  const [form, setForm] = useState(EMPTY_ACCOUNT);
   const [collapsedPrevious, setCollapsedPrevious] = useState<string[]>([]);
 
-  useEscapeLayer(addOpen || Boolean(openMail), () => {
-    if (addOpen) setAddOpen(false);
-    else closeMessage();
-  });
+  useEscapeLayer(Boolean(openMail), () => closeMessage());
+
 
   const threads = threadsInFolder(mails, folder, account);
   const visible = threads.filter(FILTER_MATCH[filter]);
@@ -419,13 +423,6 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
   const openById = (id: string) => {
     const mail = mails.find((entry) => entry.id === id);
     if (mail) openMessage(mail);
-  };
-
-  const submitAccount = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    notify("Compte ajouté — maquette");
-    setForm(EMPTY_ACCOUNT);
-    setAddOpen(false);
   };
 
   const pgpState = keyState(MY_KEY);
@@ -517,14 +514,16 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
 
               <SectionLabel className="mt-4 mb-1.5 px-2.5">Comptes</SectionLabel>
               <div className="space-y-0.5">
-                <RailItem
-                  active={account === ALL_ACCOUNTS}
-                  onClick={() => setAccount(ALL_ACCOUNTS)}
-                  label="Tous les comptes"
-                  count={unreadFor(ALL_ACCOUNTS)}
-                  icon={<span className="size-2 rounded-full bg-accent" />}
-                />
-                {ACCOUNTS.map((entry) => (
+                {mode === "demo" && (
+                  <RailItem
+                    active={account === ALL_ACCOUNTS}
+                    onClick={() => setAccount(ALL_ACCOUNTS)}
+                    label="Tous les comptes"
+                    count={unreadFor(ALL_ACCOUNTS)}
+                    icon={<span className="size-2 rounded-full bg-accent" />}
+                  />
+                )}
+                {accounts.map((entry) => (
                   <RailItem
                     key={entry.id}
                     active={account === entry.id}
@@ -536,7 +535,7 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                 ))}
                 <button
                   type="button"
-                  onClick={() => setAddOpen(true)}
+                  onClick={openConnect}
                   className="focus-ring flex h-9 w-full items-center gap-2.5 rounded-[11px] px-2.5 text-[12.5px] font-semibold text-ink-muted transition-colors duration-200 hover:bg-surface-2 hover:text-ink"
                 >
                   <span className="grid w-4 shrink-0 place-items-center">
@@ -548,7 +547,7 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
 
               <SectionLabel className="mt-4 mb-1.5 px-2.5">Dossiers</SectionLabel>
               <div className="space-y-0.5">
-                {FOLDERS.map((entry) => {
+                {folderOptions.map((entry) => {
                   const Icon = FOLDER_ICONS[entry.id];
                   return (
                     <RailItem
@@ -594,19 +593,30 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
 
         <section className="flex min-h-0 flex-col border-r border-line">
           <div className="shrink-0 px-4 pt-4 pb-2">
-            <PaneTitle
-              hint={
-                folder === "inbox" ? (
-                  <>
-                    <NumberTicker value={unreadCount} /> non lus
-                  </>
-                ) : (
-                  `${visible.length} conversation${visible.length > 1 ? "s" : ""}`
-                )
-              }
-            >
-              {folderLabel(folder)}
-            </PaneTitle>
+            <div className="flex items-center gap-2">
+              <PaneTitle
+                hint={
+                  folder === "inbox" ? (
+                    <>
+                      <NumberTicker value={unreadCount} /> non lus
+                    </>
+                  ) : (
+                    `${visible.length} conversation${visible.length > 1 ? "s" : ""}`
+                  )
+                }
+              >
+                {folderLabel(folder)}
+              </PaneTitle>
+              <DIconButton
+                label={syncing ? "Synchronisation en cours" : "Synchroniser le dossier"}
+                onClick={syncFolder}
+                disabled={syncing}
+                className="ml-auto"
+              >
+                <RefreshCw className={cn("size-4", syncing && "animate-spin")} />
+              </DIconButton>
+            </div>
+
 
             <button
               type="button"
@@ -664,10 +674,12 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
               <div className="px-3 py-8">
                 <EmptyState
                   icon={<MailIcon className="size-5" />}
-                  title="Aucun message ici"
+                  title="Aucun message"
                   hint={
                     filter === "all"
-                      ? "Cette boîte est vide pour le compte sélectionné."
+                      ? mode === "api"
+                        ? "Ce dossier est vide. Synchronise pour récupérer les messages du serveur."
+                        : "Cette boîte est vide pour le compte sélectionné."
                       : "Aucune conversation ne correspond à ce filtre."
                   }
                 />
@@ -676,6 +688,14 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                     <DButton size="sm" variant="ghost" onClick={() => setFilter("all")}>
                       <RotateCcw className="size-3.5" />
                       Réinitialiser le filtre
+                    </DButton>
+                  </div>
+                ) : null}
+                {filter === "all" && mode === "api" ? (
+                  <div className="mt-3 flex justify-center">
+                    <DButton size="sm" variant="soft" onClick={syncFolder} disabled={syncing}>
+                      <RefreshCw className={cn("size-3.5", syncing && "animate-spin")} />
+                      Synchroniser
                     </DButton>
                   </div>
                 ) : null}
@@ -733,7 +753,7 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                           {mail.folder === "sent" ? "Moi" : mail.name}
                         </p>
                         {accountById(mail.account) ? (
-                          <Badge tone={ACCOUNT_TONE[mail.account]}>{accountById(mail.account)?.label}</Badge>
+                          <Badge tone={accountTone(mail.account)}>{accountById(mail.account)?.label}</Badge>
                         ) : null}
                       </div>
                       <p className="mt-0.5 truncate text-[12px] font-medium text-ink-muted">
@@ -823,7 +843,7 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                                   <span className="flex items-center gap-1.5">
                                     <span className="truncate text-[12.5px] font-bold text-ink">{who}</span>
                                     {accountById(message.account) ? (
-                                      <Badge tone={ACCOUNT_TONE[message.account]}>
+                                      <Badge tone={accountTone(message.account)}>
                                         {accountById(message.account)?.label}
                                       </Badge>
                                     ) : null}
@@ -877,50 +897,6 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
           )}
         </section>
       </div>
-
-      {addOpen ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Ajouter un compte"
-          className="absolute inset-0 z-40 grid place-items-center bg-ink/25 p-6"
-        >
-          <Surface className="w-[330px] p-5 shadow-[0_30px_70px_-40px_var(--accent)]">
-            <form onSubmit={submitAccount} className="space-y-2.5">
-              <SectionLabel>Ajouter un compte</SectionLabel>
-              <TextInput
-                aria-label="Libellé"
-                placeholder="Libellé — ex. Travail"
-                value={form.label}
-                onChange={(event) => setForm({ ...form, label: event.target.value })}
-                required
-              />
-              <TextInput
-                aria-label="Adresse e-mail"
-                type="email"
-                placeholder="prenom@exemple.fr"
-                value={form.email}
-                onChange={(event) => setForm({ ...form, email: event.target.value })}
-                required
-              />
-              <TextInput
-                aria-label="Fournisseur"
-                placeholder="Fournisseur — IMAP, OAuth…"
-                value={form.provider}
-                onChange={(event) => setForm({ ...form, provider: event.target.value })}
-              />
-              <div className="flex gap-2 pt-1">
-                <DButton type="button" variant="ghost" className="flex-1" onClick={() => setAddOpen(false)}>
-                  Annuler
-                </DButton>
-                <DButton type="submit" variant="primary" className="flex-1">
-                  Ajouter
-                </DButton>
-              </div>
-            </form>
-          </Surface>
-        </div>
-      ) : null}
     </>
   );
 }

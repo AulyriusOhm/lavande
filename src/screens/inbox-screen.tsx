@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { animate, motion, useMotionValue, useSpring, useTransform } from "motion/react";
-import { Archive, ChevronDown, ChevronUp, Inbox, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2 } from "lucide-react";
+import { Archive, ChevronDown, ChevronUp, Inbox, Loader2, PenLine, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2 } from "lucide-react";
 import type { FolderId, Mail } from "@/lib/mail";
-import { FOLDERS, folderLabel } from "@/lib/mail";
+import { folderLabel } from "@/lib/mail";
 import { threadsInFolder } from "@/lib/threads";
-import { ACCOUNTS, ALL_ACCOUNTS, accountById } from "@/lib/accounts";
+import { ALL_ACCOUNTS } from "@/lib/accounts";
+import { useMailStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Avatar, Chip, IconButton } from "@/components/ui/primitives";
 import { AnimatedGradientText } from "@/components/ui/animated-text";
@@ -47,6 +48,8 @@ export function InboxScreen({
   const [filter, setFilter] = useState<Filter>("all");
   const [compact, setCompact] = useState(false);
   const [sizes, setSizes] = useState({ hero: 0, card: 0, bar: 0 });
+  const { mode, syncing, syncFolder, threadsLoading, accountById } = useMailStore();
+
 
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -153,8 +156,13 @@ export function InboxScreen({
                 <IconButton aria-label="Rechercher" onClick={onSearch}>
                   <Search className="size-4" />
                 </IconButton>
-                <IconButton aria-label="Rafraîchir">
-                  <RefreshCw className="size-4" />
+                <IconButton
+                  aria-label={syncing ? "Synchronisation en cours" : "Synchroniser le dossier"}
+                  aria-busy={syncing}
+                  onClick={syncFolder}
+                  disabled={syncing}
+                >
+                  <RefreshCw className={cn("size-4", syncing && "animate-spin")} />
                 </IconButton>
               </div>
             </div>
@@ -224,7 +232,9 @@ export function InboxScreen({
                   <span className="font-bold">
                     {unreadCount} conversation{unreadCount > 1 ? "s" : ""} non lue{unreadCount > 1 ? "s" : ""}
                   </span>{" "}
-                  dans ta boîte de réception. Camille veut un retour sur les maquettes v3 avant vendredi.
+                  {mode === "api"
+                    ? `dans « ${folderLabel(folder)} ».`
+                    : "dans ta boîte de réception. Camille veut un retour sur les maquettes v3 avant vendredi."}
                 </p>
                 <div className="mt-3 flex gap-1.5">
                   <span className="rounded-full bg-surface px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
@@ -323,9 +333,22 @@ export function InboxScreen({
               onRestore={onRestore ? () => onRestore(thread.primary) : undefined}
             />
           ))}
-          {visible.length === 0 && (
+          {threadsLoading && visible.length === 0 && (
+            <div className="flex items-center justify-center gap-2 px-6 py-10 text-[12px] font-semibold text-ink-muted">
+              <Loader2 className="size-4 animate-spin" />
+              Chargement des messages…
+            </div>
+          )}
+          {visible.length === 0 && !threadsLoading && (
             <div className="px-6 py-12 text-center">
-              <p className="text-[13px] font-medium text-ink-muted">Rien ici pour le moment.</p>
+              <p className="text-[13px] font-bold text-ink">Aucun message</p>
+              <p className="mt-1 text-[11.5px] leading-relaxed font-medium text-ink-muted">
+                {filter !== "all"
+                  ? "Aucune conversation ne correspond à ce filtre."
+                  : mode === "api"
+                    ? "Ce dossier est vide. Lance une synchronisation pour récupérer les messages du serveur."
+                    : "Rien ici pour le moment."}
+              </p>
               {filter !== "all" && (
                 <button
                   type="button"
@@ -334,6 +357,17 @@ export function InboxScreen({
                 >
                   <RotateCcw className="size-3.5" />
                   Réinitialiser le filtre
+                </button>
+              )}
+              {filter === "all" && mode === "api" && (
+                <button
+                  type="button"
+                  onClick={syncFolder}
+                  disabled={syncing}
+                  className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-accent px-3.5 py-2 text-[12px] font-bold text-accent-contrast transition-colors disabled:opacity-50"
+                >
+                  <RefreshCw className={cn("size-3.5", syncing && "animate-spin")} />
+                  Synchroniser
                 </button>
               )}
             </div>
@@ -389,22 +423,28 @@ export function AccountSwitchSheet({
   onSelect: (id: string) => void;
   onClose: () => void;
 }) {
+  const { accounts, mode, openConnect } = useMailStore();
   const rows = [
-    {
-      id: ALL_ACCOUNTS,
-      label: "Tous les comptes",
-      email: `${mails.length} messages`,
-      color: "var(--accent)",
-      glyph: "∀",
-    },
-    ...ACCOUNTS.map((account) => ({
+    ...(mode === "demo"
+      ? [
+          {
+            id: ALL_ACCOUNTS,
+            label: "Tous les comptes",
+            email: `${mails.length} messages`,
+            color: "var(--accent)",
+            glyph: "∀",
+          },
+        ]
+      : []),
+    ...accounts.map((account) => ({
       id: account.id,
       label: account.label,
       email: account.email,
       color: account.color,
-      glyph: account.label[0],
+      glyph: account.label[0] ?? "?",
     })),
   ];
+
 
   return (
     <div className="flex h-full flex-col">
@@ -460,6 +500,10 @@ export function AccountSwitchSheet({
 
         <button
           type="button"
+          onClick={() => {
+            onClose();
+            openConnect();
+          }}
           className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-line py-3 text-[12.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
         >
           <Plus className="size-4" />
@@ -473,9 +517,11 @@ export function AccountSwitchSheet({
 const FOLDER_ICONS = {
   inbox: Inbox,
   sent: Send,
+  drafts: PenLine,
   archive: Archive,
   spam: ShieldAlert,
   trash: Trash2,
+  other: Inbox,
 } as const;
 
 export function MailboxSheet({
@@ -491,7 +537,9 @@ export function MailboxSheet({
   onSelect: (id: FolderId) => void;
   onClose: () => void;
 }) {
+  const { mode, folderOptions } = useMailStore();
   const scope = account === ALL_ACCOUNTS ? mails : mails.filter((mail) => mail.account === account);
+
 
   return (
     <div className="flex h-full flex-col">
@@ -504,7 +552,7 @@ export function MailboxSheet({
       </div>
 
       <div className="flex-1 space-y-1 overflow-y-auto no-scrollbar px-3 pb-4">
-        {FOLDERS.map((entry) => {
+        {folderOptions.map((entry) => {
           const Icon = FOLDER_ICONS[entry.id];
           const items = scope.filter((mail) => mail.folder === entry.id);
           const unread = items.filter((mail) => mail.unread).length;
@@ -531,7 +579,9 @@ export function MailboxSheet({
                 <Icon className="size-4" />
               </span>
               <span className="min-w-0 flex-1 truncate text-[13px] font-bold text-ink">{entry.label}</span>
-              <span className="shrink-0 text-[10.5px] font-semibold text-ink-muted">{items.length}</span>
+              {(mode === "demo" || isActive) && (
+                <span className="shrink-0 text-[10.5px] font-semibold text-ink-muted">{items.length}</span>
+              )}
               {unread > 0 && (
                 <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-[10.5px] font-bold text-accent-contrast">
                   {unread}

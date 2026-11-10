@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/mail-core"]
+members = ["crates/mail-core", "crates/mail-api"]
 exclude = ["src-tauri"]
 resolver = "2"
 

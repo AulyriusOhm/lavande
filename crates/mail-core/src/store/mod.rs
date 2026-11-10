@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
+use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Row, ToSql};
@@ -18,7 +20,7 @@ const MESSAGE_COLUMNS: &str = "account_id, folder_path, uid, uidvalidity, thread
      answered, size, pgp, preview, body_text, body_html";
 
 pub struct Store {
-    conn: Connection,
+    conn: Mutex<Connection>,
 }
 
 impl Store {
@@ -33,25 +35,33 @@ impl Store {
     fn from_connection(conn: Connection) -> Result<Self, MailError> {
         conn.pragma_update(None, "foreign_keys", true)?;
         let _ = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get::<_, String>(0));
-        Ok(Self { conn })
+        conn.busy_timeout(Duration::from_secs(5))?;
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    fn conn(&self) -> Result<MutexGuard<'_, Connection>, MailError> {
+        self.conn
+            .lock()
+            .map_err(|_| MailError::Lock("verrou de la base locale empoisonné".to_string()))
     }
 
     /// Applies pending migrations. Idempotent.
     pub fn migrate(&self) -> Result<(), MailError> {
-        let version: i64 = self
-            .conn
-            .pragma_query_value(None, "user_version", |row| row.get(0))?;
+        let conn = self.conn()?;
+        let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
         tracing::debug!(version, target = SCHEMA_VERSION, "mail store migration");
         if version < SCHEMA_VERSION {
-            self.conn.execute_batch(SCHEMA)?;
-            self.conn
-                .pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            conn.execute_batch(SCHEMA)?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(())
     }
 
     pub fn upsert_account(&self, id: &str, label: &str, email: &str) -> Result<(), MailError> {
-        self.conn.execute(
+        let conn = self.conn()?;
+        conn.execute(
             "INSERT INTO accounts (id, label, email) VALUES (?1, ?2, ?3) \
              ON CONFLICT(id) DO UPDATE SET label = excluded.label, email = excluded.email",
             params![id, label, email],
@@ -60,7 +70,8 @@ impl Store {
     }
 
     pub fn upsert_folder(&self, folder: &Folder) -> Result<(), MailError> {
-        self.conn.execute(
+        let conn = self.conn()?;
+        conn.execute(
             "INSERT INTO folders (account_id, path, name, role, uidvalidity, uidnext, last_sync_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
              ON CONFLICT(account_id, path) DO UPDATE SET name = excluded.name, \
@@ -80,32 +91,64 @@ impl Store {
     }
 
     pub fn get_folder(&self, account_id: &str, path: &str) -> Result<Option<Folder>, MailError> {
-        self.conn
-            .query_row(
-                "SELECT account_id, path, name, role, uidvalidity, uidnext, last_sync_at \
-                 FROM folders WHERE account_id = ?1 AND path = ?2",
-                params![account_id, path],
-                |row| {
-                    Ok(FolderRow {
-                        account_id: row.get(0)?,
-                        path: row.get(1)?,
-                        name: row.get(2)?,
-                        role: row.get(3)?,
-                        uidvalidity: row.get(4)?,
-                        uidnext: row.get(5)?,
-                        last_sync_at: row.get(6)?,
-                    })
-                },
-            )
-            .optional()?
-            .map(FolderRow::into_folder)
-            .transpose()
+        let conn = self.conn()?;
+        get_folder_on(&conn, account_id, path)
+    }
+
+    /// Every folder known for one account, by path.
+    pub fn list_folders(&self, account_id: &str) -> Result<Vec<Folder>, MailError> {
+        let conn = self.conn()?;
+        let mut statement = conn.prepare(
+            "SELECT account_id, path, name, role, uidvalidity, uidnext, last_sync_at \
+             FROM folders WHERE account_id = ?1 ORDER BY path",
+        )?;
+        let rows = statement.query_map(params![account_id], FolderRow::read)?;
+        let mut folders = Vec::new();
+        for row in rows {
+            folders.push(row?.into_folder()?);
+        }
+        Ok(folders)
+    }
+
+    /// Every account as `(id, label, email)`, in insertion order.
+    pub fn list_accounts(&self) -> Result<Vec<(String, String, String)>, MailError> {
+        let conn = self.conn()?;
+        let mut statement = conn.prepare("SELECT id, label, email FROM accounts ORDER BY rowid")?;
+        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        let mut accounts = Vec::new();
+        for row in rows {
+            accounts.push(row?);
+        }
+        Ok(accounts)
+    }
+
+    /// Drops an account and every row stored under it in one transaction;
+    /// returns how many rows were deleted, `0` when the account is unknown.
+    pub fn delete_account(&self, account_id: &str) -> Result<usize, MailError> {
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
+        let mut deleted = tx.execute(
+            "DELETE FROM messages WHERE account_id = ?1",
+            params![account_id],
+        )?;
+        deleted += tx.execute(
+            "DELETE FROM attachments WHERE account_id = ?1",
+            params![account_id],
+        )?;
+        deleted += tx.execute(
+            "DELETE FROM folders WHERE account_id = ?1",
+            params![account_id],
+        )?;
+        deleted += tx.execute("DELETE FROM accounts WHERE id = ?1", params![account_id])?;
+        tx.commit()?;
+        Ok(deleted)
     }
 
     /// Inserts or replaces a message and its attachments. Idempotent per
     /// `(account_id, folder_path, uid)`.
     pub fn upsert_message(&self, message: &Message) -> Result<(), MailError> {
-        let tx = self.conn.unchecked_transaction()?;
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
         tx.execute(
             "INSERT OR REPLACE INTO messages (account_id, folder_path, uid, uidvalidity, \
              thread_id, message_id, in_reply_to, references_json, from_json, to_json, cc_json, \
@@ -166,12 +209,12 @@ impl Store {
         folder_path: &str,
         uid: u32,
     ) -> Result<Option<Message>, MailError> {
+        let conn = self.conn()?;
         let sql = format!(
             "SELECT {MESSAGE_COLUMNS} FROM messages \
              WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3"
         );
-        let row = self
-            .conn
+        let row = conn
             .query_row(
                 &sql,
                 params![account_id, folder_path, uid],
@@ -180,7 +223,7 @@ impl Store {
             .optional()?;
         let Some(row) = row else { return Ok(None) };
         let mut message = row.into_message()?;
-        let mut attachments = self.attachments_of(account_id, folder_path, Some(uid))?;
+        let mut attachments = attachments_of_on(&conn, account_id, folder_path, Some(uid))?;
         message.attachments = attachments.remove(&uid).unwrap_or_default();
         Ok(Some(message))
     }
@@ -191,7 +234,8 @@ impl Store {
         account_id: &str,
         folder_path: &str,
     ) -> Result<HashMap<u32, Flags>, MailError> {
-        let mut statement = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut statement = conn.prepare(
             "SELECT uid, unread, starred, answered FROM messages \
              WHERE account_id = ?1 AND folder_path = ?2",
         )?;
@@ -220,7 +264,8 @@ impl Store {
         uid: u32,
         flags: &Flags,
     ) -> Result<(), MailError> {
-        let updated = self.conn.execute(
+        let conn = self.conn()?;
+        let updated = conn.execute(
             "UPDATE messages SET unread = ?4, starred = ?5, answered = ?6 \
              WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
             params![
@@ -246,6 +291,7 @@ impl Store {
         if updates.is_empty() {
             return Ok(0);
         }
+        let conn = self.conn()?;
         let rows = vec!["(?, ?, ?, ?)"; updates.len()].join(", ");
         let sql = format!(
             "WITH updates (uid, unread, starred, answered) AS (VALUES {rows}) \
@@ -263,7 +309,7 @@ impl Store {
         }
         values.push(&account_id);
         values.push(&folder_path);
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = conn.unchecked_transaction()?;
         let updated = tx.execute(&sql, values.as_slice())?;
         tx.commit()?;
         Ok(updated)
@@ -277,7 +323,8 @@ impl Store {
         text: Option<&str>,
         html: Option<&str>,
     ) -> Result<(), MailError> {
-        let updated = self.conn.execute(
+        let conn = self.conn()?;
+        let updated = conn.execute(
             "UPDATE messages SET body_text = ?4, body_html = ?5 \
              WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
             params![account_id, folder_path, uid, text, html],
@@ -291,8 +338,9 @@ impl Store {
         folder_path: &str,
         uid: u32,
     ) -> Result<(), MailError> {
+        let conn = self.conn()?;
         require_one(
-            self.delete_messages(account_id, folder_path, &[uid])?,
+            delete_messages_on(&conn, account_id, folder_path, &[uid])?,
             "message",
         )
     }
@@ -305,35 +353,15 @@ impl Store {
         folder_path: &str,
         uids: &[u32],
     ) -> Result<usize, MailError> {
-        if uids.is_empty() {
-            return Ok(0);
-        }
-        let placeholders = vec!["?"; uids.len()].join(", ");
-        let mut values: Vec<&dyn ToSql> = vec![&account_id, &folder_path];
-        values.extend(uids.iter().map(|uid| uid as &dyn ToSql));
-        let tx = self.conn.unchecked_transaction()?;
-        let deleted = tx.execute(
-            &format!(
-                "DELETE FROM messages WHERE account_id = ?1 AND folder_path = ?2 \
-                 AND uid IN ({placeholders})"
-            ),
-            values.as_slice(),
-        )?;
-        tx.execute(
-            &format!(
-                "DELETE FROM attachments WHERE account_id = ?1 AND folder_path = ?2 \
-                 AND uid IN ({placeholders})"
-            ),
-            values.as_slice(),
-        )?;
-        tx.commit()?;
-        Ok(deleted)
+        let conn = self.conn()?;
+        delete_messages_on(&conn, account_id, folder_path, uids)
     }
 
     /// Drops every message of a folder, keeping the folder row itself. Used
     /// when the server announces a new `UIDVALIDITY`.
     pub fn clear_folder(&self, account_id: &str, folder_path: &str) -> Result<usize, MailError> {
-        let tx = self.conn.unchecked_transaction()?;
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
         let deleted = tx.execute(
             "DELETE FROM messages WHERE account_id = ?1 AND folder_path = ?2",
             params![account_id, folder_path],
@@ -354,7 +382,8 @@ impl Store {
         message_id: &str,
         thread_id: &str,
     ) -> Result<usize, MailError> {
-        let updated = self.conn.execute(
+        let conn = self.conn()?;
+        let updated = conn.execute(
             "UPDATE messages SET thread_id = ?3 WHERE account_id = ?1 \
              AND (in_reply_to = ?2 OR instr(references_json, ?2) > 0)",
             params![account_id, message_id, thread_id],
@@ -370,25 +399,8 @@ impl Store {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Message>, MailError> {
-        let sql = format!(
-            "SELECT {MESSAGE_COLUMNS} FROM messages \
-             WHERE account_id = ?1 AND folder_path = ?2 \
-             ORDER BY date DESC, uid DESC LIMIT ?3 OFFSET ?4"
-        );
-        let mut statement = self.conn.prepare(&sql)?;
-        let rows = statement.query_map(
-            params![account_id, folder_path, limit, offset],
-            MessageRow::read,
-        )?;
-        let mut messages = Vec::new();
-        for row in rows {
-            messages.push(row?.into_message()?);
-        }
-        let mut attachments = self.attachments_of(account_id, folder_path, None)?;
-        for message in &mut messages {
-            message.attachments = attachments.remove(&message.uid).unwrap_or_default();
-        }
-        Ok(messages)
+        let conn = self.conn()?;
+        messages_in_folder_on(&conn, account_id, folder_path, limit, offset)
     }
 
     /// Threads of a folder, newest activity first. `unread`, `preview` and
@@ -398,13 +410,13 @@ impl Store {
         account_id: &str,
         folder_path: &str,
     ) -> Result<Vec<Thread>, MailError> {
-        let sent = self
-            .get_folder(account_id, folder_path)?
+        let conn = self.conn()?;
+        let sent = get_folder_on(&conn, account_id, folder_path)?
             .map(|folder| folder.role == FolderRole::Sent)
             .unwrap_or(false);
 
         let mut groups: HashMap<String, Vec<Message>> = HashMap::new();
-        for message in self.messages_in_folder(account_id, folder_path, -1, 0)? {
+        for message in messages_in_folder_on(&conn, account_id, folder_path, -1, 0)? {
             groups
                 .entry(message.thread_id.clone())
                 .or_default()
@@ -467,36 +479,111 @@ impl Store {
         });
         Ok(threads)
     }
+}
 
-    fn attachments_of(
-        &self,
-        account_id: &str,
-        folder_path: &str,
-        uid: Option<u32>,
-    ) -> Result<HashMap<u32, Vec<AttachmentMeta>>, MailError> {
-        let mut statement = self.conn.prepare(
-            "SELECT uid, filename, mime, size, inline FROM attachments \
-             WHERE account_id = ?1 AND folder_path = ?2 AND (?3 IS NULL OR uid = ?3) \
-             ORDER BY uid, idx",
-        )?;
-        let rows = statement.query_map(params![account_id, folder_path, uid], |row| {
-            Ok((
-                row.get::<_, u32>(0)?,
-                AttachmentMeta {
-                    filename: row.get(1)?,
-                    mime: row.get(2)?,
-                    size: row.get::<_, i64>(3)? as u64,
-                    inline: row.get(4)?,
-                },
-            ))
-        })?;
-        let mut attachments: HashMap<u32, Vec<AttachmentMeta>> = HashMap::new();
-        for row in rows {
-            let (uid, attachment) = row?;
-            attachments.entry(uid).or_default().push(attachment);
-        }
-        Ok(attachments)
+fn get_folder_on(
+    conn: &Connection,
+    account_id: &str,
+    path: &str,
+) -> Result<Option<Folder>, MailError> {
+    conn.query_row(
+        "SELECT account_id, path, name, role, uidvalidity, uidnext, last_sync_at \
+         FROM folders WHERE account_id = ?1 AND path = ?2",
+        params![account_id, path],
+        FolderRow::read,
+    )
+    .optional()?
+    .map(FolderRow::into_folder)
+    .transpose()
+}
+
+fn messages_in_folder_on(
+    conn: &Connection,
+    account_id: &str,
+    folder_path: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<Message>, MailError> {
+    let sql = format!(
+        "SELECT {MESSAGE_COLUMNS} FROM messages \
+         WHERE account_id = ?1 AND folder_path = ?2 \
+         ORDER BY date DESC, uid DESC LIMIT ?3 OFFSET ?4"
+    );
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement.query_map(
+        params![account_id, folder_path, limit, offset],
+        MessageRow::read,
+    )?;
+    let mut messages = Vec::new();
+    for row in rows {
+        messages.push(row?.into_message()?);
     }
+    let mut attachments = attachments_of_on(conn, account_id, folder_path, None)?;
+    for message in &mut messages {
+        message.attachments = attachments.remove(&message.uid).unwrap_or_default();
+    }
+    Ok(messages)
+}
+
+fn attachments_of_on(
+    conn: &Connection,
+    account_id: &str,
+    folder_path: &str,
+    uid: Option<u32>,
+) -> Result<HashMap<u32, Vec<AttachmentMeta>>, MailError> {
+    let mut statement = conn.prepare(
+        "SELECT uid, filename, mime, size, inline FROM attachments \
+         WHERE account_id = ?1 AND folder_path = ?2 AND (?3 IS NULL OR uid = ?3) \
+         ORDER BY uid, idx",
+    )?;
+    let rows = statement.query_map(params![account_id, folder_path, uid], |row| {
+        Ok((
+            row.get::<_, u32>(0)?,
+            AttachmentMeta {
+                filename: row.get(1)?,
+                mime: row.get(2)?,
+                size: row.get::<_, i64>(3)? as u64,
+                inline: row.get(4)?,
+            },
+        ))
+    })?;
+    let mut attachments: HashMap<u32, Vec<AttachmentMeta>> = HashMap::new();
+    for row in rows {
+        let (uid, attachment) = row?;
+        attachments.entry(uid).or_default().push(attachment);
+    }
+    Ok(attachments)
+}
+
+fn delete_messages_on(
+    conn: &Connection,
+    account_id: &str,
+    folder_path: &str,
+    uids: &[u32],
+) -> Result<usize, MailError> {
+    if uids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders = vec!["?"; uids.len()].join(", ");
+    let mut values: Vec<&dyn ToSql> = vec![&account_id, &folder_path];
+    values.extend(uids.iter().map(|uid| uid as &dyn ToSql));
+    let tx = conn.unchecked_transaction()?;
+    let deleted = tx.execute(
+        &format!(
+            "DELETE FROM messages WHERE account_id = ?1 AND folder_path = ?2 \
+             AND uid IN ({placeholders})"
+        ),
+        values.as_slice(),
+    )?;
+    tx.execute(
+        &format!(
+            "DELETE FROM attachments WHERE account_id = ?1 AND folder_path = ?2 \
+             AND uid IN ({placeholders})"
+        ),
+        values.as_slice(),
+    )?;
+    tx.commit()?;
+    Ok(deleted)
 }
 
 struct FolderRow {
@@ -510,6 +597,18 @@ struct FolderRow {
 }
 
 impl FolderRow {
+    fn read(row: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            account_id: row.get(0)?,
+            path: row.get(1)?,
+            name: row.get(2)?,
+            role: row.get(3)?,
+            uidvalidity: row.get(4)?,
+            uidnext: row.get(5)?,
+            last_sync_at: row.get(6)?,
+        })
+    }
+
     fn into_folder(self) -> Result<Folder, MailError> {
         Ok(Folder {
             account_id: self.account_id,
@@ -694,10 +793,11 @@ mod tests {
                 }],
             })
             .expect("insert");
-        assert!(!store
-            .attachments_of("perso", "INBOX", None)
-            .expect("attachments")
-            .is_empty());
+        assert!(
+            !attachments_of_on(&store.conn().expect("lock"), "perso", "INBOX", None)
+                .expect("attachments")
+                .is_empty()
+        );
 
         assert_eq!(
             store
@@ -705,9 +805,16 @@ mod tests {
                 .expect("delete"),
             1
         );
-        assert!(store
-            .attachments_of("perso", "INBOX", None)
-            .expect("attachments")
-            .is_empty());
+        assert!(
+            attachments_of_on(&store.conn().expect("lock"), "perso", "INBOX", None)
+                .expect("attachments")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn store_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Store>();
     }
 }

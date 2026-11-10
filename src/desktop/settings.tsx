@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { motion } from "motion/react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -20,16 +19,14 @@ import {
   ShieldCheck,
   Sun,
   Terminal,
-  X,
+  Trash2,
 } from "lucide-react";
-import { ACCOUNTS } from "@/lib/accounts";
 import { CONTACT_KEYS, MY_KEY, PGP_STATE, isExpired, keyState } from "@/lib/pgp";
 import { MCP_LOG, MCP_SCOPES, MCP_SERVERS, mcpCounts } from "@/lib/mcp";
 import type { McpLogEntry } from "@/lib/mcp";
 import { mergeFlags, usePrefs } from "@/lib/prefs";
 import { ACCENT_PRESETS, useTheme } from "@/lib/theme";
 import { useMailStore } from "@/lib/store";
-import { useEscapeLayer } from "@/desktop/escape";
 import { cn } from "@/lib/utils";
 import { Avatar, Switch, ToggleRow } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
@@ -37,7 +34,6 @@ import { NumberTicker } from "@/components/ui/number-ticker";
 import {
   Badge,
   DButton,
-  DIconButton,
   PaneTitle,
   SectionLabel,
   Surface,
@@ -49,8 +45,6 @@ const TRUST_LABEL = { ultimate: "ultime", full: "complète", marginal: "marginal
 const KEY_TONE = { valid: "green", expired: "amber", revoked: "rose", invalid: "rose" } as const;
 
 const SCOPE_TONE = { lecture: "neutral", écriture: "amber", signature: "green" } as const;
-
-const LABEL = "block text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase";
 
 const SECTIONS = [
   { id: "comptes", label: "Comptes" },
@@ -88,10 +82,9 @@ export function DesktopSettings() {
     mcpEnabled,
     setMcpEnabled,
   } = usePrefs();
-  const { notify } = useMailStore();
+  const { notify, accounts, mode, openConnect, askRemoveAccount } = useMailStore();
   const [active, setActive] = useState<SectionId>("comptes");
   const [hex, setHex] = useState(accent);
-  const [adding, setAdding] = useState(false);
   const [openServer, setOpenServer] = useState<string | null>(null);
 
   useEffect(() => setHex(accent), [accent]);
@@ -162,10 +155,10 @@ export function DesktopSettings() {
             </nav>
 
             <div className="min-w-0 flex-1 space-y-7">
-              <Block id="comptes" label="Comptes" hint={`${ACCOUNTS.length} comptes`}>
+              <Block id="comptes" label="Comptes" hint={`${accounts.length} compte${accounts.length > 1 ? "s" : ""}`}>
                 <BlurFade delay={0.04}>
                   <div className="grid gap-3 md:grid-cols-2">
-                    {ACCOUNTS.map((item, index) => (
+                    {accounts.map((item, index) => (
                       <Surface key={item.id} className="p-3.5">
                         <div className="flex items-center gap-2.5">
                           <span
@@ -189,11 +182,23 @@ export function DesktopSettings() {
                             {item.synced}
                           </span>
                         </div>
+                        {mode === "api" && (
+                          <div className="mt-2 flex justify-end">
+                            <DButton
+                              variant="danger"
+                              size="sm"
+                              onClick={() => askRemoveAccount(item)}
+                            >
+                              <Trash2 className="size-3.5" />
+                              Retirer
+                            </DButton>
+                          </div>
+                        )}
                       </Surface>
                     ))}
                     <button
                       type="button"
-                      onClick={() => setAdding(true)}
+                      onClick={openConnect}
                       className="focus-ring flex min-h-[88px] items-center justify-center gap-2 rounded-[26px] border border-dashed border-line bg-surface/60 text-[12px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
                     >
                       <Plus className="size-4" strokeWidth={3} />
@@ -598,7 +603,6 @@ export function DesktopSettings() {
         </div>
       </div>
 
-      {adding ? <AddAccountDialog onClose={() => setAdding(false)} /> : null}
     </div>
   );
 }
@@ -622,102 +626,5 @@ function Block({
       </div>
       <div className="mt-2.5">{children}</div>
     </section>
-  );
-}
-
-function AddAccountDialog({ onClose }: { onClose: () => void }) {
-  const { notify } = useMailStore();
-  const [label, setLabel] = useState("");
-  const [email, setEmail] = useState("");
-  const [provider, setProvider] = useState("");
-
-  useEscapeLayer(true, onClose);
-
-  const valid = label.trim().length > 0 && email.trim().length > 0;
-
-  const submit = () => {
-    if (!valid) return;
-    setLabel("");
-    setEmail("");
-    setProvider("");
-    notify("Compte ajouté — maquette");
-    onClose();
-  };
-
-  return (
-    <div className="absolute inset-0 z-40 grid place-items-center px-6">
-      <button
-        type="button"
-        aria-label="Fermer la fenêtre"
-        onClick={onClose}
-        className="absolute inset-0 cursor-default bg-ink/25 backdrop-blur-[2px]"
-      />
-      <motion.div
-        role="dialog"
-        aria-modal
-        aria-label="Ajouter un compte"
-        initial={{ opacity: 0, y: 10, scale: 0.97 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-        className="relative w-[460px] max-w-full rounded-[26px] border border-line bg-surface p-5 shadow-[0_44px_96px_-48px_var(--accent)]"
-      >
-        <div className="flex items-baseline justify-between gap-3">
-          <h2 className="text-[19px] leading-tight font-extrabold tracking-[-0.035em] text-ink">
-            Ajouter un compte
-          </h2>
-          <DIconButton label="Fermer" className="size-8" onClick={onClose}>
-            <X className="size-4" />
-          </DIconButton>
-        </div>
-
-        <label htmlFor="account-label" className={cn(LABEL, "mt-3")}>
-          Libellé
-        </label>
-        <TextInput
-          id="account-label"
-          autoFocus
-          className="mt-1.5"
-          value={label}
-          placeholder="Perso"
-          onChange={(event) => setLabel(event.target.value)}
-        />
-
-        <label htmlFor="account-email" className={cn(LABEL, "mt-4")}>
-          E-mail
-        </label>
-        <TextInput
-          id="account-email"
-          type="email"
-          className="mt-1.5"
-          value={email}
-          placeholder="nom@domaine.fr"
-          onChange={(event) => setEmail(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") submit();
-          }}
-        />
-
-        <label htmlFor="account-provider" className={cn(LABEL, "mt-4")}>
-          Fournisseur
-        </label>
-        <TextInput
-          id="account-provider"
-          className="mt-1.5"
-          value={provider}
-          placeholder="IMAP · OVH"
-          onChange={(event) => setProvider(event.target.value)}
-        />
-
-        <div className="mt-5 flex items-center justify-end gap-2">
-          <DButton variant="plain" onClick={onClose}>
-            Annuler
-          </DButton>
-          <DButton variant="primary" onClick={submit} disabled={!valid}>
-            <Check className="size-4" strokeWidth={3} />
-            Ajouter
-          </DButton>
-        </div>
-      </motion.div>
-    </div>
   );
 }

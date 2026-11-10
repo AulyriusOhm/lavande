@@ -13,11 +13,33 @@ composants inspirés de [Magic UI](https://magicui.design/docs/components).
 
 ## Implémentation (périmètre Mails)
 
-Le moteur mail Rust existe : crate **`crates/mail-core`** (package `lavande-mail`, lib `lavande_mail`).
-Il **compile et passe ses tests** (44 tests hors-ligne + 9 tests réseau contre un GreenMail jetable),
-mais il **n'est branché ni au front ni à Tauri** : `src-tauri/src/lib.rs` n'a aucune commande et le
-front lit toujours les fixtures de `src/lib/mail.ts`. Contrat d'intégration, schéma SQLite, table de
-correspondance avec le front et limites détaillées : **[`docs/mail-core.md`](./docs/mail-core.md)**.
+Le moteur mail Rust existe : crate **`crates/mail-core`** (package `lavande-mail`, lib `lavande_mail`),
+exposé en HTTP local par **`crates/mail-api`** (binaire `lavande-maild`). Le front s'y branche :
+`src/lib/api.ts` + `src/lib/mail-backend.ts`, écran de connexion, dossiers et fils réels, flags,
+déplacement et envoi. Le mode maquette reste disponible (`VITE_MAIL_BACKEND=demo`). Contrat HTTP,
+schéma SQLite, correspondance des types et limites détaillées :
+**[`docs/mail-core.md`](./docs/mail-core.md)**.
+
+### Lancer l'app avec le backend
+
+```bash
+scripts/mail-service.sh start   # démon local sur 127.0.0.1:8790 (données : ~/.local/share/lavande)
+npm run dev                     # http://localhost:1420/ (ou le portail https://…:8443/lavande/)
+```
+
+Première ouverture : l'écran de connexion demande libellé, adresse, identifiant, hôtes/ports IMAP et
+SMTP, chiffrement (TLS implicite ou STARTTLS) et mot de passe. Le serveur **teste la connexion avant
+d'enregistrer** quoi que ce soit. Sans démon joignable, un bandeau explique comment le démarrer et
+propose la démo.
+
+Pour essayer sans vraie boîte : `scripts/mail-test-server.sh start`, puis connecte
+`roman@lavande.test` / `secret` en IMAP `localhost:3993`, SMTP `localhost:3465`, TLS implicite — le
+démon doit faire confiance au certificat de test :
+
+```bash
+LAVANDE_MAIL_EXTRA_ROOTS=$HOME/.cache/lavande/mail-test/cert.pem scripts/mail-service.sh restart
+```
+
 
 ```
 crates/mail-core/
@@ -75,6 +97,10 @@ scripts/mail-test-server.sh stop      # ou `reset` (stop + start), `status`
 - Un seul dossier synchronisé par appel (`move_message` réconcilie en plus sa destination) ;
   `sync_account` ne fait que INBOX + Sent ; aucun retry réseau.
 - Ni pool de connexions, ni keychain, ni PGP réel, ni flux navigateur OAuth2, ni recherche serveur.
+- Le démon écoute **127.0.0.1 uniquement** et n'a aucune authentification : quiconque atteint le port
+  pilote les comptes. Ne l'expose pas hors loopback sans mettre une authentification devant.
+- Les mots de passe IMAP/SMTP sont stockés en clair dans `~/.local/share/lavande/accounts.json`
+  (permissions 0600) : pas encore de trousseau système.
 
 ## Dépôt
 

@@ -10,6 +10,8 @@ export type ComposeDraft = {
   pgpEncrypt: boolean;
   pgpSign: boolean;
   threadId?: string;
+  inReplyTo?: string;
+  references?: string[];
 };
 
 export function insertAt<T>(list: T[], index: number, item: T) {

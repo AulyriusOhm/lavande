@@ -23,6 +23,8 @@ import { ComposeScreen } from "@/screens/compose-screen";
 import { PgpScreen } from "@/screens/pgp-screen";
 import { DotPattern, MeshGlow } from "@/components/ui/backdrops";
 import { Notice } from "@/components/ui/notice";
+import { AccountRemoveDialog, BackendBanner, BackendLoading } from "@/components/backend-status";
+import { ConnectScreen } from "@/screens/connect-screen";
 import { DesktopApp } from "@/desktop/desktop-shell";
 
 const OVERLAY_STATE = { lavandeOverlay: true };
@@ -117,6 +119,10 @@ function PhoneApp() {
     replyTo,
     forwardMail,
     sendDraft,
+    mode,
+    phase,
+    connectOpen,
+    closeConnect,
   } = useMailStore();
   const order = useMemo<TabId[]>(
     () =>
@@ -151,6 +157,7 @@ function PhoneApp() {
   }, [order, tab]);
 
   const layers: [boolean, () => void][] = [
+    [connectOpen, closeConnect],
     [composeOpen, minimizeCompose],
     [eventDraftOpen, () => setEventDraftOpen(false)],
     [taskDraftOpen, () => setTaskDraftOpen(false)],
@@ -256,8 +263,17 @@ function PhoneApp() {
     else if (dx > 55 && index > 0) changeTab(order[index - 1]);
   };
 
+  if (mode === "api" && phase === "loading") {
+    return <BackendLoading />;
+  }
+
+  if (mode === "api" && phase === "empty") {
+    return <ConnectScreen />;
+  }
+
   return (
     <div className="relative flex h-full flex-col overflow-hidden pt-[env(safe-area-inset-top,0px)] sm:pt-7">
+      <BackendBanner />
       <div
         className="relative flex-1 overflow-hidden"
         onPointerDown={onPointerDown}
@@ -653,6 +669,21 @@ function PhoneApp() {
         </AnimatePresence>
 
         <AnimatePresence>
+          {connectOpen && (
+            <motion.div
+              key="connect"
+              className="absolute inset-0 z-[60] bg-canvas"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ type: "spring", stiffness: 340, damping: 34 }}
+            >
+              <ConnectScreen onClose={closeConnect} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
           {composeOpen && (
             <motion.div key="compose" className="absolute inset-0 z-[45]" initial={false}>
               <motion.div
@@ -684,6 +715,7 @@ function PhoneApp() {
       </div>
 
       <Notice notice={notices[0] ?? null} onClose={dismissNotice} />
+      <AccountRemoveDialog />
     </div>
   );
 }

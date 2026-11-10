@@ -451,3 +451,76 @@ fn clear_folder_empties_one_folder_only() {
         .expect("folder")
         .is_some());
 }
+
+#[test]
+fn list_accounts_returns_id_label_email() {
+    let store = open();
+    store
+        .upsert_account("travail", "Travail", "roman@lavande.mail")
+        .expect("second account");
+
+    let accounts = store.list_accounts().expect("accounts");
+    assert_eq!(
+        accounts,
+        vec![
+            (
+                "perso".to_string(),
+                "Perso".to_string(),
+                "roman@lavande.fr".to_string()
+            ),
+            (
+                "travail".to_string(),
+                "Travail".to_string(),
+                "roman@lavande.mail".to_string()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn list_folders_returns_known_folders() {
+    let store = open();
+    let paths: Vec<String> = store
+        .list_folders("perso")
+        .expect("folders")
+        .into_iter()
+        .map(|folder| folder.path)
+        .collect();
+    assert_eq!(paths, vec!["Archive", "INBOX", "Sent"]);
+    assert!(store.list_folders("absent").expect("folders").is_empty());
+}
+
+#[test]
+fn delete_account_drops_every_row() {
+    let store = open();
+    let mut mail = message(1, "t1", "Marc", "Planning", 10);
+    mail.attachments = vec![AttachmentMeta {
+        filename: "planning.pdf".to_string(),
+        mime: "application/pdf".to_string(),
+        size: 8,
+        inline: false,
+    }];
+    store.upsert_message(&mail).expect("message");
+    let mut sent = message(9, "t2", "Roman", "Reponse", 11);
+    sent.folder_path = "Sent".to_string();
+    store.upsert_message(&sent).expect("sent");
+
+    assert_eq!(store.delete_account("perso").expect("delete"), 7);
+    assert!(store.list_accounts().expect("accounts").is_empty());
+    assert!(store.list_folders("perso").expect("folders").is_empty());
+    assert!(store
+        .messages_in_folder("perso", "INBOX", -1, 0)
+        .expect("inbox")
+        .is_empty());
+    assert!(store
+        .messages_in_folder("perso", "Sent", -1, 0)
+        .expect("sent")
+        .is_empty());
+}
+
+#[test]
+fn delete_unknown_account_is_not_an_error() {
+    let store = open();
+    assert_eq!(store.delete_account("absent").expect("delete"), 0);
+    assert_eq!(store.list_accounts().expect("accounts").len(), 1);
+}

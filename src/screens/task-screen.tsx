@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ArrowLeft, ArrowUpRight, Check, ChevronRight, Clock, Mail, Pencil, Plus, Trash2 } from "lucide-react";
 import type { Mail as MailType } from "@/lib/mail";
-import { accountById } from "@/lib/accounts";
+import { useMailStore } from "@/lib/store";
 import type { Task, TaskState } from "@/lib/tasks";
 import { TASK_STATES, dueToneFor, formatDueDate, stateMeta } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
@@ -45,6 +45,7 @@ export function TaskScreen({
   onDelete?: () => void;
 }) {
   const meta = stateMeta(task.state);
+  const { accountById } = useMailStore();
   const done = task.state === "done";
   const subtasks = task.subtasks ?? [];
   const doneCount = subtasks.filter((subtask) => subtask.done).length;

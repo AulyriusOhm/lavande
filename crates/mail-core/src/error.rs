@@ -6,6 +6,8 @@ use thiserror::Error;
 pub enum MailError {
     #[error("store error: {0}")]
     Store(#[from] rusqlite::Error),
+    #[error("store lock error: {0}")]
+    Lock(String),
     #[error("mime error: {0}")]
     Mime(String),
     #[error("io error: {0}")]

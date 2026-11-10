@@ -1,5 +1,5 @@
 import { Archive, CornerUpLeft, MailOpen, RotateCcw, ShieldCheck, Star, Trash2 } from "lucide-react";
-import { accountById } from "@/lib/accounts";
+import { useMailStore } from "@/lib/store";
 import type { Thread } from "@/lib/threads";
 import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/primitives";
@@ -36,6 +36,7 @@ export function ThreadRow({
   showAccount?: boolean;
 }) {
   const mail = thread.primary;
+  const { accountById } = useMailStore();
   const account = accountById(mail.account);
   const senderName = mail.folder === "sent" && mail.to ? `À ${mail.to}` : mail.name;
   const displayName =
