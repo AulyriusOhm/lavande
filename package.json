@@ -8,7 +8,10 @@
     "dev:portal": "VITE_BASE=/lavande/ vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "android:init": "tauri android init && node scripts/patch-android.mjs",
+    "android:build": "bash scripts/build-android-release.sh",
+    "android:build:debug": "node scripts/patch-android.mjs && tauri android build --debug --apk"
   },
   "dependencies": {
     "clsx": "^2.1.1",

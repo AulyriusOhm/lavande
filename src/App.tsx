@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { BatteryFull, PenLine, Signal, Wifi } from "lucide-react";
 import { ThemeProvider, useTheme } from "@/lib/theme";
@@ -9,35 +9,57 @@ import { cn } from "@/lib/utils";
 import { insertAt } from "@/lib/draft";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { Dock, TABS, type TabId } from "@/components/dock";
-import { AccountSwitchSheet, InboxScreen, MailboxSheet } from "@/screens/inbox-screen";
+import { AccountSwitchSheet, InboxScreen as InboxView, MailboxSheet } from "@/screens/inbox-screen";
 import { SearchScreen } from "@/screens/search-screen";
-import { CalendarScreen } from "@/screens/calendar-screen";
+import { CalendarScreen as CalendarView } from "@/screens/calendar-screen";
 import { McpScreen } from "@/screens/mcp-screen";
-import { PlanningScreen } from "@/screens/planning-screen";
+import { PlanningScreen as PlanningView } from "@/screens/planning-screen";
 import { TaskScreen } from "@/screens/task-screen";
 import { NewTaskSheet, createTask } from "@/screens/new-task-sheet";
 import { NewEventSheet } from "@/screens/new-event-sheet";
-import { SettingsScreen } from "@/screens/settings-screen";
+import { SettingsScreen as SettingsView } from "@/screens/settings-screen";
 import { MessageScreen } from "@/screens/message-screen";
 import { ComposeScreen } from "@/screens/compose-screen";
 import { PgpScreen } from "@/screens/pgp-screen";
 import { DotPattern, MeshGlow } from "@/components/ui/backdrops";
 import { Notice } from "@/components/ui/notice";
-import { DesktopApp } from "@/desktop/desktop-shell";
+import type { CalendarEvent } from "@/lib/calendar";
+import { isNativeShell } from "@/lib/native";
+
+const InboxScreen = memo(InboxView);
+const CalendarScreen = memo(CalendarView);
+const PlanningScreen = memo(PlanningView);
+const SettingsScreen = memo(SettingsView);
+const DesktopShell = lazy(() =>
+  import("@/desktop/desktop-shell").then((module) => ({ default: module.DesktopApp })),
+);
 
 const OVERLAY_STATE = { lavandeOverlay: true };
 
 export default function App() {
   const desktop = new URLSearchParams(window.location.search).has("desktop");
+  const native = !desktop && isNativeShell();
 
   return (
     <MotionConfig reducedMotion="user">
       <ThemeProvider>
         <PrefsProvider>
-          <MailStoreProvider>{desktop ? <DesktopApp /> : <Stage />}</MailStoreProvider>
+          <MailStoreProvider>
+          <Suspense fallback={<div className="h-full w-full bg-canvas" />}>
+            {desktop ? <DesktopShell /> : native ? <NativeShell /> : <Stage />}
+          </Suspense>
+        </MailStoreProvider>
         </PrefsProvider>
       </ThemeProvider>
     </MotionConfig>
+  );
+}
+
+function NativeShell() {
+  return (
+    <div className="relative h-full w-full overflow-hidden bg-canvas native-shell">
+      <PhoneApp native />
+    </div>
   );
 }
 
@@ -77,7 +99,7 @@ function StatusBar() {
   );
 }
 
-function PhoneApp() {
+function PhoneApp({ native }: { native?: boolean }) {
   const prefs = usePrefs();
   const { calendarEnabled, planningEnabled } = prefs;
   const {
@@ -145,6 +167,7 @@ function PhoneApp() {
 
   const index = Math.max(order.indexOf(tab), 0);
   const last = order.length - 1;
+
 
   useEffect(() => {
     if (!order.includes(tab)) setTab("inbox");
@@ -239,6 +262,34 @@ function PhoneApp() {
     setMovingTask(null);
   }, []);
 
+  const openAccounts = useCallback(() => setAccountsOpen(true), []);
+  const openFolders = useCallback(() => setFoldersOpen(true), []);
+  const openSearch = useCallback(() => setSearchOpen(true), []);
+  const openPgp = useCallback(() => setPgpOpen(true), []);
+  const openMcp = useCallback(() => setMcpOpen(true), []);
+  const openTaskDraft = useCallback(() => setTaskDraftOpen(true), []);
+  const openTask = useCallback((task: Task) => setDetail({ task }), []);
+  const openSuggestion = useCallback(
+    (suggestion: MailSuggestion) =>
+      setDetail({ task: taskFromSuggestion(suggestion, "sugg-" + suggestion.id), suggestion }),
+    [],
+  );
+  const openEventDraft = useCallback(
+    (date?: string) => {
+      if (date) setSelectedDate(date);
+      setEventDraftOpen(true);
+    },
+    [setSelectedDate],
+  );
+  const openMailFromEvent = useCallback(
+    (event: CalendarEvent) => {
+      const mail = mails.find((entry) => entry.id === event.mailId);
+      if (mail) openMessage(mail);
+    },
+    [mails, openMessage],
+  );
+  const availableMailIds = useMemo(() => new Set(mails.map((mail) => mail.id)), [mails]);
+
   const endGesture = (event: React.PointerEvent) => {
     const state = gesture.current;
     gesture.current = null;
@@ -257,7 +308,12 @@ function PhoneApp() {
   };
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden pt-[env(safe-area-inset-top,0px)] sm:pt-7">
+    <div
+      className={cn(
+        "relative flex h-full flex-col overflow-hidden",
+        !native && "pt-[env(safe-area-inset-top,0px)] sm:pt-7",
+      )}
+    >
       <div
         className="relative flex-1 overflow-hidden"
         onPointerDown={onPointerDown}
@@ -280,11 +336,11 @@ function PhoneApp() {
                   mails={mails}
                   account={account}
                   folder={folder}
-                  onOpenAccounts={() => setAccountsOpen(true)}
-                  onOpenFolders={() => setFoldersOpen(true)}
+                  onOpenAccounts={openAccounts}
+                  onOpenFolders={openFolders}
                   onOpen={openMessage}
                   onToggleStar={toggleStar}
-                  onSearch={() => setSearchOpen(true)}
+                  onSearch={openSearch}
                   onMailAction={mailAction}
                   onReply={replyTo}
                   onNotSpam={moveToInbox}
@@ -294,15 +350,9 @@ function PhoneApp() {
               {id === "calendar" && (
                 <CalendarScreen
                   events={events}
-                  availableMailIds={new Set(mails.map((mail) => mail.id))}
-                  onNewEvent={(date) => {
-                    if (date) setSelectedDate(date);
-                    setEventDraftOpen(true);
-                  }}
-                  onOpenMail={(event) => {
-                    const mail = mails.find((entry) => entry.id === event.mailId);
-                    if (mail) openMessage(mail);
-                  }}
+                  availableMailIds={availableMailIds}
+                  onNewEvent={openEventDraft}
+                  onOpenMail={openMailFromEvent}
                   onSelectedDateChange={setSelectedDate}
                 />
               )}
@@ -313,14 +363,9 @@ function PhoneApp() {
                   suggestions={suggestions}
                   onAddSuggestion={addSuggestion}
                   onDismissSuggestion={dismissSuggestion}
-                  onOpenTask={(task) => setDetail({ task })}
-                  onOpenSuggestion={(suggestion) =>
-                    setDetail({
-                      task: taskFromSuggestion(suggestion, "sugg-" + suggestion.id),
-                      suggestion,
-                    })
-                  }
-                  onNewTask={() => setTaskDraftOpen(true)}
+                  onOpenTask={openTask}
+                  onOpenSuggestion={openSuggestion}
+                  onNewTask={openTaskDraft}
                   movingTask={movingTask}
                   onMovingChange={setMovingTask}
                 />
@@ -329,9 +374,9 @@ function PhoneApp() {
                 <SettingsScreen
                   mails={mails}
                   account={account}
-                  onOpenAccounts={() => setAccountsOpen(true)}
-                  onOpenPgp={() => setPgpOpen(true)}
-                  onOpenMcp={() => setMcpOpen(true)}
+                  onOpenAccounts={openAccounts}
+                  onOpenPgp={openPgp}
+                  onOpenMcp={openMcp}
                 />
               )}
             </div>

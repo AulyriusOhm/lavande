@@ -3,13 +3,14 @@
 Client mail **PC + Android**, front en React/Vite/Tailwind, shell natif **Rust + Tauri v2**,
 composants inspirés de [Magic UI](https://magicui.design/docs/components).
 
-> **État actuel : maquette de design (mobile first).** Aucun backend mail, aucune
+> **État actuel : maquette de design (mobile first) + coquille Android.** Aucun backend mail, aucune
 > authentification : les données sont des fixtures dans `src/lib/mail.ts`.
 >
 > 🎨 **Intentions de design, palette, motion et arbitrages : [`DESIGN.md`](./DESIGN.md).**
 >
 > Deux maquettes navigables, mêmes fixtures et même design system : **mobile** sur `/lavande/`
-> (cadre téléphone) et **PC** sur `/lavande/?desktop`.
+> (cadre téléphone) et **PC** sur `/lavande/?desktop`. La coquille native **Android** reprend la
+> maquette mobile en plein écran, toujours sans backend ([`docs/android.md`](./docs/android.md)).
 
 ## Dépôt
 
@@ -110,6 +111,27 @@ Chaque vue est adressable : `?desktop#inbox`, `#calendar`, `#planning`, `#settin
 `⌘K` / `Ctrl+K` ouvre la recherche, `Échap` ferme la couche supérieure (recherche, dialogue,
 panneau de tâche, message). Les deux maquettes partagent `src/lib/store.tsx` et `src/lib/*` :
 archivage, annulations, tâches, rendez-vous et brouillons se comportent à l'identique.
+
+## APK Android
+
+La maquette mobile tourne aussi en coquille **Tauri v2** : plein écran, sans cadre téléphone ni barre
+de statut factice (`NativeShell` dans `src/App.tsx`). Toujours sans backend, mêmes fixtures.
+
+| Étape | Commande |
+| --- | --- |
+| Environnement (JDK 21, SDK, NDK) | `source scripts/android-env.sh` |
+| Projet Gradle | `npm run android:init` |
+| **APK de production** (release, arm64, signé) | `npm run android:build` |
+| APK de débogage (inspecteur WebView, **lent**) | `npm run android:build:debug` |
+
+APK : `dist/android/Lavande.apk`, installation `adb install -r`. Le build release n'est pas cosmétique :
+en debug, la WebView active l'inspecteur V8 et le rendu devient saccadé sur téléphone.
+
+Le rendu natif s'aperçoit aussi dans un navigateur avec `?app` :
+`https://plasma.int.lanro.eu:8443/lavande/?app`.
+
+Prérequis détaillés, `scripts/patch-android.mjs` (insets, thème, icône) et limites connues :
+[`docs/android.md`](./docs/android.md).
 
 ## Design system
 

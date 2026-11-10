@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="lavande" gradientUnits="userSpaceOnUse" x1="162.3" y1="-93.7" x2="861.7" y2="1117.7">
+      <stop offset="0" stop-color="#bda9ff"/>
+      <stop offset="0.55" stop-color="#8b7cf6"/>
+      <stop offset="1" stop-color="#6d5ce0"/>
+    </linearGradient>
+    <linearGradient id="reflet" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="560">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" rx="266" ry="266" fill="url(#lavande)"/>
+  <rect x="0" y="0" width="1024" height="1024" rx="266" ry="266" fill="url(#reflet)"/>
+  <path d="M382 232 H482 V692 H642 V792 H382 Z" fill="#ffffff"/>
+</svg>
