@@ -1,7 +1,21 @@
-import { useState } from "react";
-import { Check, Image, Link2, Lock, Minus, Paperclip, Send, ShieldCheck, Smile, X } from "lucide-react";
+import { useMemo, useState } from "react";
+import {
+  Check,
+  Image,
+  Link2,
+  Lock,
+  Minus,
+  Paperclip,
+  Send,
+  ShieldCheck,
+  Sparkles,
+  WandSparkles,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ACCOUNTS } from "@/lib/accounts";
+import { composeReply, replySuggestions, rewriteBody, userPart, type ReplySuggestion } from "@/lib/assist";
+import { ReplySuggestSheet, RewriteSheet } from "@/screens/assist-sheet";
 import { IconButton } from "@/components/ui/primitives";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 
@@ -61,6 +75,14 @@ export function ComposeScreen({
   const [confirmSend, setConfirmSend] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const [sent, setSent] = useState(false);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [rewriteOpen, setRewriteOpen] = useState(false);
+
+  const suggestions = useMemo(
+    () => replySuggestions({ subject: draft.subject, to: draft.to, body: draft.body }),
+    [draft.subject, draft.to, draft.body],
+  );
+  const isReply = /^re\s*:/i.test(draft.subject) || /a écrit\s*:/.test(draft.body);
 
   const update = (patch: Partial<ComposeDraft>) => {
     const next = { ...draft, ...patch };
@@ -101,6 +123,19 @@ export function ComposeScreen({
     onClose();
   };
 
+  const applySuggestion = (suggestion: ReplySuggestion) => {
+    const rest = draft.body.trimStart();
+    update({
+      body:
+        draft.body.trim() === ""
+          ? suggestion.text
+          : rest.startsWith("---")
+            ? suggestion.text + "\n\n" + rest
+            : suggestion.text + "\n\n" + draft.body,
+    });
+    setSuggestOpen(false);
+  };
+
   return (
     <div className="flex h-full flex-col bg-canvas">
       <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-line" />
@@ -110,6 +145,11 @@ export function ComposeScreen({
         </IconButton>
         <h2 className="text-[15px] font-bold tracking-tight text-ink">{title}</h2>
         <div className="ml-auto flex items-center gap-1">
+          {onMinimize && (
+            <IconButton aria-label="Réduire le brouillon" onClick={onMinimize}>
+              <Minus className="size-4.5" />
+            </IconButton>
+          )}
           <IconButton aria-label="Joindre">
             <Paperclip className="size-4.5" />
           </IconButton>
@@ -351,25 +391,50 @@ export function ComposeScreen({
             {sent ? <Check className="size-4" /> : <Send className="size-4" />}
             {sent ? "Envoyé" : "Envoyer"}
           </ShimmerButton>
+          {isReply && (
+            <button
+              type="button"
+              aria-haspopup="dialog"
+              aria-label="Suggestion de réponse"
+              title="Suggestion de réponse"
+              onClick={() => setSuggestOpen(true)}
+              className="grid size-11 shrink-0 place-items-center rounded-full border border-accent-ring bg-accent-soft text-accent-ink transition-transform active:scale-95"
+            >
+              <Sparkles className="size-4.5" />
+            </button>
+          )}
           <button
             type="button"
-            className="grid size-11 place-items-center rounded-full border border-line bg-surface text-ink-soft"
-            aria-label="Emoji"
+            aria-haspopup="dialog"
+            aria-label="Corriger ou reformuler le message"
+            title="Corriger / reformuler"
+            disabled={!userPart(draft.body).trim() || sent}
+            onClick={() => setRewriteOpen(true)}
+            className="grid size-11 shrink-0 place-items-center rounded-full border border-line bg-surface text-ink-soft transition-transform active:scale-95 disabled:pointer-events-none disabled:opacity-40"
           >
-            <Smile className="size-4.5" />
-          </button>
-          <button
-            type="button"
-            onClick={onMinimize ?? onClose}
-            className={cn(
-              "grid size-11 place-items-center rounded-full border border-line bg-surface text-ink-soft",
-            )}
-            aria-label="Réduire"
-          >
-            <Minus className="size-4.5" />
+            <WandSparkles className="size-4.5" />
           </button>
         </div>
       </div>
+
+      <ReplySuggestSheet
+        open={suggestOpen}
+        suggestions={suggestions}
+        generate={(brief) =>
+          composeReply({ subject: draft.subject, to: draft.to, body: draft.body, brief })
+        }
+        onPick={applySuggestion}
+        onClose={() => setSuggestOpen(false)}
+      />
+      <RewriteSheet
+        open={rewriteOpen}
+        body={draft.body}
+        onApply={(id) => {
+          update({ body: rewriteBody(id, draft.body) });
+          setRewriteOpen(false);
+        }}
+        onClose={() => setRewriteOpen(false)}
+      />
     </div>
   );
 }

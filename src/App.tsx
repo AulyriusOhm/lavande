@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { BatteryFull, PenLine, Signal, Wifi } from "lucide-react";
 import { ThemeProvider, useTheme } from "@/lib/theme";
@@ -28,7 +28,6 @@ import { PgpScreen } from "@/screens/pgp-screen";
 import { DotPattern, MeshGlow } from "@/components/ui/backdrops";
 import { Notice, type NoticeData } from "@/components/ui/notice";
 
-const ORDER: TabId[] = TABS.map((tab) => tab.id);
 const OVERLAY_STATE = { lavandeOverlay: true };
 
 function insertAt<T>(list: T[], index: number, item: T) {
@@ -110,8 +109,18 @@ function StatusBar() {
 }
 
 function PhoneApp() {
+  const prefs = usePrefs();
+  const { calendarEnabled, planningEnabled } = prefs;
+  const order = useMemo<TabId[]>(
+    () =>
+      TABS.filter((tab) =>
+        tab.id === "calendar" ? calendarEnabled : tab.id === "planning" ? planningEnabled : true,
+      ).map((tab) => tab.id),
+    [calendarEnabled, planningEnabled],
+  );
+
   const [tab, setTab] = useState<TabId>(
-    () => ORDER.find((id) => id === window.location.hash.slice(1)) ?? "inbox",
+    () => order.find((id) => id === window.location.hash.slice(1)) ?? "inbox",
   );
   const [mails, setMails] = useState<Mail[]>(MAILS);
   const [account, setAccount] = useState<string>(ALL_ACCOUNTS);
@@ -139,10 +148,13 @@ function PhoneApp() {
   const [dragging, setDragging] = useState(false);
   const gesture = useRef<{ x: number; y: number; axis: "x" | "y" | null } | null>(null);
 
-  const index = ORDER.indexOf(tab);
-  const last = ORDER.length - 1;
-  const prefs = usePrefs();
+  const index = Math.max(order.indexOf(tab), 0);
+  const last = order.length - 1;
   const noticeId = useRef(0);
+
+  useEffect(() => {
+    if (!order.includes(tab)) setTab("inbox");
+  }, [order, tab]);
 
   const notify = useCallback((message: string, action?: { label: string; run: () => void }) => {
     noticeId.current += 1;
@@ -497,8 +509,8 @@ function PhoneApp() {
     const dx = event.clientX - state.x;
     setDragX(0);
 
-    if (dx < -55 && index < last) changeTab(ORDER[index + 1]);
-    else if (dx > 55 && index > 0) changeTab(ORDER[index - 1]);
+    if (dx < -55 && index < last) changeTab(order[index + 1]);
+    else if (dx > 55 && index > 0) changeTab(order[index - 1]);
   };
 
   return (
@@ -518,65 +530,69 @@ function PhoneApp() {
           )}
           style={{ transform: `translate3d(calc(${-index * 100}% + ${dragX}px), 0, 0)` }}
         >
-          <div className="h-full w-full shrink-0">
-            <InboxScreen
-              mails={mails}
-              account={account}
-              folder={folder}
-              onOpenAccounts={() => setAccountsOpen(true)}
-              onOpenFolders={() => setFoldersOpen(true)}
-              onOpen={openMessage}
-              onToggleStar={toggleStar}
-              onSearch={() => setSearchOpen(true)}
-              onMailAction={handleMailAction}
-              onReply={replyTo}
-              onNotSpam={moveToInbox}
-              onRestore={restoreMail}
-            />
-          </div>
-          <div className="h-full w-full shrink-0">
-            <CalendarScreen
-              events={events}
-              availableMailIds={new Set(mails.map((mail) => mail.id))}
-              onNewEvent={(date) => {
-                if (date) setSelectedDate(date);
-                setEventDraftOpen(true);
-              }}
-              onOpenMail={(event) => {
-                const mail = mails.find((entry) => entry.id === event.mailId);
-                if (mail) openMessage(mail);
-              }}
-              onSelectedDateChange={setSelectedDate}
-            />
-          </div>
-          <div className="h-full w-full shrink-0">
-            <PlanningScreen
-              tasks={tasks}
-              setTasks={setTasks}
-              suggestions={suggestions}
-              onAddSuggestion={addSuggestion}
-              onDismissSuggestion={dismissSuggestion}
-              onOpenTask={(task) => setDetail({ task })}
-              onOpenSuggestion={(suggestion) =>
-                setDetail({
-                  task: suggestionTask(suggestion, "sugg-" + suggestion.id),
-                  suggestion,
-                })
-              }
-              onNewTask={() => setTaskDraftOpen(true)}
-              movingTask={movingTask}
-              onMovingChange={setMovingTask}
-            />
-          </div>
-          <div className="h-full w-full shrink-0">
-            <SettingsScreen
-              mails={mails}
-              account={account}
-              onOpenAccounts={() => setAccountsOpen(true)}
-              onOpenPgp={() => setPgpOpen(true)}
-              onOpenMcp={() => setMcpOpen(true)}
-            />
-          </div>
+          {order.map((id) => (
+            <div key={id} className="h-full w-full shrink-0">
+              {id === "inbox" && (
+                <InboxScreen
+                  mails={mails}
+                  account={account}
+                  folder={folder}
+                  onOpenAccounts={() => setAccountsOpen(true)}
+                  onOpenFolders={() => setFoldersOpen(true)}
+                  onOpen={openMessage}
+                  onToggleStar={toggleStar}
+                  onSearch={() => setSearchOpen(true)}
+                  onMailAction={handleMailAction}
+                  onReply={replyTo}
+                  onNotSpam={moveToInbox}
+                  onRestore={restoreMail}
+                />
+              )}
+              {id === "calendar" && (
+                <CalendarScreen
+                  events={events}
+                  availableMailIds={new Set(mails.map((mail) => mail.id))}
+                  onNewEvent={(date) => {
+                    if (date) setSelectedDate(date);
+                    setEventDraftOpen(true);
+                  }}
+                  onOpenMail={(event) => {
+                    const mail = mails.find((entry) => entry.id === event.mailId);
+                    if (mail) openMessage(mail);
+                  }}
+                  onSelectedDateChange={setSelectedDate}
+                />
+              )}
+              {id === "planning" && (
+                <PlanningScreen
+                  tasks={tasks}
+                  setTasks={setTasks}
+                  suggestions={suggestions}
+                  onAddSuggestion={addSuggestion}
+                  onDismissSuggestion={dismissSuggestion}
+                  onOpenTask={(task) => setDetail({ task })}
+                  onOpenSuggestion={(suggestion) =>
+                    setDetail({
+                      task: suggestionTask(suggestion, "sugg-" + suggestion.id),
+                      suggestion,
+                    })
+                  }
+                  onNewTask={() => setTaskDraftOpen(true)}
+                  movingTask={movingTask}
+                  onMovingChange={setMovingTask}
+                />
+              )}
+              {id === "settings" && (
+                <SettingsScreen
+                  mails={mails}
+                  account={account}
+                  onOpenAccounts={() => setAccountsOpen(true)}
+                  onOpenPgp={() => setPgpOpen(true)}
+                  onOpenMcp={() => setMcpOpen(true)}
+                />
+              )}
+            </div>
+          ))}
         </div>
 
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-28 bg-gradient-to-t from-canvas via-canvas/80 to-transparent" />

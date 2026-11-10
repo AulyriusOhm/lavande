@@ -20,6 +20,8 @@ export type Prefs = {
   pgpSign: boolean;
   attachPublicKey: boolean;
   mcpConfirmSend: boolean;
+  calendarEnabled: boolean;
+  planningEnabled: boolean;
   mcpEnabled: Record<string, boolean>;
 };
 
@@ -30,6 +32,8 @@ const DEFAULTS: Prefs = {
   pgpSign: true,
   attachPublicKey: false,
   mcpConfirmSend: true,
+  calendarEnabled: true,
+  planningEnabled: true,
   mcpEnabled: {},
 };
 
@@ -39,6 +43,8 @@ type PrefsContextValue = Prefs & {
   setPgpSign: (value: boolean) => void;
   setAttachPublicKey: (value: boolean) => void;
   setMcpConfirmSend: (value: boolean) => void;
+  setCalendarEnabled: (value: boolean) => void;
+  setPlanningEnabled: (value: boolean) => void;
   setMcpEnabled: (serverId: string, value: boolean) => void;
 };
 
@@ -74,6 +80,8 @@ function read(): Prefs {
     pgpSign: asBoolean(stored.pgpSign, DEFAULTS.pgpSign),
     attachPublicKey: asBoolean(stored.attachPublicKey, DEFAULTS.attachPublicKey),
     mcpConfirmSend: asBoolean(stored.mcpConfirmSend, DEFAULTS.mcpConfirmSend),
+    calendarEnabled: asBoolean(stored.calendarEnabled, DEFAULTS.calendarEnabled),
+    planningEnabled: asBoolean(stored.planningEnabled, DEFAULTS.planningEnabled),
     mcpEnabled: asFlags(stored.mcpEnabled),
   };
 }
@@ -98,6 +106,8 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
   const setPgpSign = useCallback((value: boolean) => patch("pgpSign", value), [patch]);
   const setAttachPublicKey = useCallback((value: boolean) => patch("attachPublicKey", value), [patch]);
   const setMcpConfirmSend = useCallback((value: boolean) => patch("mcpConfirmSend", value), [patch]);
+  const setCalendarEnabled = useCallback((value: boolean) => patch("calendarEnabled", value), [patch]);
+  const setPlanningEnabled = useCallback((value: boolean) => patch("planningEnabled", value), [patch]);
   const setMcpEnabled = useCallback(
     (serverId: string, value: boolean) =>
       setPrefs((current) => ({
@@ -115,9 +125,21 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setPgpSign,
       setAttachPublicKey,
       setMcpConfirmSend,
+      setCalendarEnabled,
+      setPlanningEnabled,
       setMcpEnabled,
     }),
-    [prefs, setSwipe, setPgpEncrypt, setPgpSign, setAttachPublicKey, setMcpConfirmSend, setMcpEnabled],
+    [
+      prefs,
+      setSwipe,
+      setPgpEncrypt,
+      setPgpSign,
+      setAttachPublicKey,
+      setMcpConfirmSend,
+      setCalendarEnabled,
+      setPlanningEnabled,
+      setMcpEnabled,
+    ],
   );
 
   return <PrefsContext.Provider value={value}>{children}</PrefsContext.Provider>;

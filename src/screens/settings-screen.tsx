@@ -2,8 +2,10 @@ import { useState } from "react";
 import {
   Bell,
   Blocks,
+  CalendarDays,
   ChevronRight,
   KeyRound,
+  ListChecks,
   Moon,
   Palette,
   PenLine,
@@ -45,7 +47,16 @@ export function SettingsScreen({
   onOpenMcp: () => void;
 }) {
   const { accent, dark, brand, setAccent, setDark, reset } = useTheme();
-  const { swipeLeft, swipeRight, setSwipe, mcpEnabled } = usePrefs();
+  const {
+    swipeLeft,
+    swipeRight,
+    setSwipe,
+    mcpEnabled,
+    calendarEnabled,
+    planningEnabled,
+    setCalendarEnabled,
+    setPlanningEnabled,
+  } = usePrefs();
   const [notifications, setNotifications] = useState(true);
   const [preview, setPreview] = useState<PreviewMode>("unlocked");
   const [autoSync, setAutoSync] = useState(true);
@@ -205,6 +216,29 @@ export function SettingsScreen({
             </span>
           </div>
         </Card>
+      </BlurFade>
+
+      <SectionTitle>Modules</SectionTitle>
+      <BlurFade delay={0.15}>
+        <Card className="mx-5 divide-y divide-line/80 overflow-hidden">
+          <ToggleRow
+            icon={<CalendarDays className="size-4" />}
+            label="Calendrier"
+            hint="Onglet Agenda, rendez-vous et disponibilités"
+            checked={calendarEnabled}
+            onChange={setCalendarEnabled}
+          />
+          <ToggleRow
+            icon={<ListChecks className="size-4" />}
+            label="Planification"
+            hint="Onglet Planif., tâches et suggestions issues des mails"
+            checked={planningEnabled}
+            onChange={setPlanningEnabled}
+          />
+        </Card>
+        <p className="mt-2 px-5 text-[10.5px] leading-relaxed font-medium text-ink-muted">
+          Un module désactivé disparaît du dock et du balayage horizontal. Tes données restent en place.
+        </p>
       </BlurFade>
 
       <SectionTitle>Sécurité</SectionTitle>

@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { CalendarDays, CalendarPlus, Inbox, ListChecks, PenLine, Plus, Settings2 } from "lucide-react";
+import { usePrefs } from "@/lib/prefs";
 import { cn } from "@/lib/utils";
 
 export const TABS = [
@@ -24,6 +25,10 @@ export function Dock({
   onNewTask: () => void;
   onNewEvent: () => void;
 }) {
+  const { calendarEnabled, planningEnabled } = usePrefs();
+  const tabs = TABS.filter((tab) =>
+    tab.id === "calendar" ? calendarEnabled : tab.id === "planning" ? planningEnabled : true,
+  );
   const fab =
     active === "settings"
       ? null
@@ -40,7 +45,7 @@ export function Dock({
           "glass shadow-[0_20px_45px_-20px_var(--accent)]",
         )}
       >
-        {TABS.map((tab) => {
+        {tabs.map((tab) => {
           const isActive = active === tab.id;
           const Icon = tab.icon;
           return (
