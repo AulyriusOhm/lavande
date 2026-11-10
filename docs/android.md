@@ -204,3 +204,7 @@ Les tâches et suggestions se synchronisent entre appareils via le serveur `serv
 
 Le jeton, les enveloppes de clés et les documents chiffrés restent dans le `localStorage` de la WebView :
 l'app est utilisable hors ligne, les mutations s'empilent et partent à la prochaine synchro.
+
+Le serveur écoute sur `127.0.0.1:8787` par défaut : depuis un téléphone il doit être joignable sur le LAN,
+donc lancer avec `LAVANDE_SYNC_BIND_ADDR=0.0.0.0:8787 cargo run` (et ouvrir le port 8787 dans le pare-feu).
+Sans HTTPS, le TLS n'est pas exigé : l'enveloppe et les ops sont déjà chiffrées côté client.
