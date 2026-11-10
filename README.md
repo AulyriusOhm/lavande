@@ -4,7 +4,9 @@ Client mail **PC + Android**, front en React/Vite/Tailwind, shell natif **Rust +
 composants inspirés de [Magic UI](https://magicui.design/docs/components).
 
 > **État actuel : maquette de design (mobile first).** Aucun backend mail, aucune
-> authentification : les données sont des fixtures dans `src/lib/mail.ts`.
+> authentification mail : les données sont des fixtures dans `src/lib/mail.ts`. La **synchronisation
+> E2EE de la planification** existe en revanche (serveur `server/` + client `src/lib/sync/`, protocole
+> dans [`docs/SYNC.md`](./docs/SYNC.md), e2e `npm run e2e`).
 >
 > 🎨 **Intentions de design, palette, motion et arbitrages : [`DESIGN.md`](./DESIGN.md).**
 >
@@ -38,6 +40,7 @@ Le nom de marque suit le thème : **Lavande** en clair, **Orchidée** en sombre
 | Styles | Tailwind CSS v4 (`@theme inline`, tokens CSS) |
 | Animations | `motion` (ex-Framer Motion) |
 | Icônes | `lucide-react` |
+| Synchronisation planification | serveur Rust `server/` (axum + PostgreSQL, zéro connaissance) + client `src/lib/sync/` (`@noble/*`), E2EE |
 
 ## Démarrer
 
@@ -163,5 +166,5 @@ recherche, réglages, mode sombre avec accent rose, et la vue bureau (cadre tél
    puis `npm run tauri dev`.
 2. Android : `rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android`,
    SDK + NDK Android, `npm run tauri android init`.
-3. Backend Rust : IMAP/SMTP (`async-imap`, `lettre`), store local chiffré (SQLite + SQLCipher),
-   OAuth2 (Gmail/Outlook).
+3. Backend mail Rust : IMAP/SMTP (`async-imap`, `lettre`), store local chiffré (SQLite + SQLCipher),
+   OAuth2 (Gmail/Outlook) — la synchronisation de la planification est déjà en place (`server/`, `docs/SYNC.md`).
