@@ -32,6 +32,7 @@ import { useMailStore } from "@/lib/store";
 import { useEscapeLayer } from "@/desktop/escape";
 import { cn } from "@/lib/utils";
 import { Avatar, Switch, ToggleRow } from "@/components/ui/primitives";
+import { SyncSettings } from "@/components/sync-settings";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import {
@@ -57,6 +58,7 @@ const SECTIONS = [
   { id: "apparence", label: "Apparence" },
   { id: "modules", label: "Modules" },
   { id: "securite", label: "Sécurité" },
+  { id: "synchronisation", label: "Synchronisation" },
   { id: "assistant", label: "Serveurs MCP" },
   { id: "apropos", label: "À propos" },
 ] as const;
@@ -447,6 +449,10 @@ export function DesktopSettings() {
                     );
                   })}
                 </Surface>
+              </Block>
+
+              <Block id="synchronisation" label="Synchronisation" hint="chiffré de bout en bout">
+                <SyncSettings variant="desktop" />
               </Block>
 
               <Block

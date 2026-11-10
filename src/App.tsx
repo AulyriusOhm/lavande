@@ -8,6 +8,7 @@ import { sortTasks, taskFromSuggestion } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import { insertAt } from "@/lib/draft";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
+import { PlanningProvider } from "@/lib/planning-store";
 import { Dock, TABS, type TabId } from "@/components/dock";
 import { AccountSwitchSheet, InboxScreen, MailboxSheet } from "@/screens/inbox-screen";
 import { SearchScreen } from "@/screens/search-screen";
@@ -34,7 +35,9 @@ export default function App() {
     <MotionConfig reducedMotion="user">
       <ThemeProvider>
         <PrefsProvider>
-          <MailStoreProvider>{desktop ? <DesktopApp /> : <Stage />}</MailStoreProvider>
+          <PlanningProvider>
+            <MailStoreProvider>{desktop ? <DesktopApp /> : <Stage />}</MailStoreProvider>
+          </PlanningProvider>
         </PrefsProvider>
       </ThemeProvider>
     </MotionConfig>

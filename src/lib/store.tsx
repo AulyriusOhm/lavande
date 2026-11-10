@@ -7,11 +7,11 @@ import { MAILS, folderLabel } from "@/lib/mail";
 import type { FolderId, Mail } from "@/lib/mail";
 import { threadOf } from "@/lib/threads";
 import type { Thread } from "@/lib/threads";
-import { MAIL_SUGGESTIONS, TASKS, sortTasks, taskFromSuggestion } from "@/lib/tasks";
 import type { MailSuggestion, Task } from "@/lib/tasks";
 import { EVENTS, TODAY_ISO } from "@/lib/calendar";
 import type { CalendarEvent } from "@/lib/calendar";
 import { usePrefs } from "@/lib/prefs";
+import { usePlanning } from "@/lib/planning-store";
 
 export type MailStoreValue = {
   mails: Mail[];
@@ -58,11 +58,11 @@ const MailStoreContext = createContext<MailStoreValue | null>(null);
 
 export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const prefs = usePrefs();
+  const planning = usePlanning();
+  const { tasks, suggestions, setTasks } = planning;
   const [mails, setMails] = useState<Mail[]>(MAILS);
   const [account, setAccount] = useState<string>(ALL_ACCOUNTS);
   const [folder, setFolder] = useState<FolderId>("inbox");
-  const [tasks, setTasks] = useState<Task[]>(() => sortTasks(TASKS));
-  const [suggestions, setSuggestions] = useState<MailSuggestion[]>(MAIL_SUGGESTIONS);
   const [events, setEvents] = useState<CalendarEvent[]>(EVENTS);
   const [selectedDate, setSelectedDate] = useState(TODAY_ISO);
   const [openMail, setOpenMail] = useState<Mail | null>(null);
@@ -91,44 +91,21 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
   const addSuggestion = useCallback(
     (suggestion: MailSuggestion) => {
-      const id = "s-" + suggestion.id;
-      const index = suggestions.findIndex((entry) => entry.id === suggestion.id);
-      setTasks((current) =>
-        current.some((task) => task.id === id)
-          ? current
-          : sortTasks([taskFromSuggestion(suggestion, id), ...current]),
-      );
-      setSuggestions((current) => current.filter((entry) => entry.id !== suggestion.id));
+      planning.addSuggestion(suggestion);
       notify("Tâche ajoutée à la planification", {
         label: "Annuler",
-        run: () => {
-          setTasks((current) => current.filter((task) => task.id !== id));
-          setSuggestions((current) =>
-            current.some((entry) => entry.id === suggestion.id)
-              ? current
-              : insertAt(current, index, suggestion),
-          );
-        },
+        run: () => planning.unpromote(suggestion),
       });
     },
-    [notify, suggestions],
+    [notify, planning],
   );
 
   const dismissSuggestion = useCallback(
     (suggestion: MailSuggestion) => {
-      const index = suggestions.findIndex((entry) => entry.id === suggestion.id);
-      setSuggestions((current) => current.filter((entry) => entry.id !== suggestion.id));
-      notify("Suggestion masquée", {
-        label: "Annuler",
-        run: () =>
-          setSuggestions((current) =>
-            current.some((entry) => entry.id === suggestion.id)
-              ? current
-              : insertAt(current, index, suggestion),
-          ),
-      });
+      planning.dismissSuggestion(suggestion);
+      notify("Suggestion masquée");
     },
-    [notify, suggestions],
+    [notify, planning],
   );
 
   const mailAction = useCallback(

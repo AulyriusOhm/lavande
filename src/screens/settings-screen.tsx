@@ -21,6 +21,7 @@ import { MCP_SERVERS, mcpCounts } from "@/lib/mcp";
 import type { Mail } from "@/lib/mail";
 import { cn } from "@/lib/utils";
 import { Avatar, Card, SectionTitle, ToggleRow } from "@/components/ui/primitives";
+import { SyncSettings } from "@/components/sync-settings";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { AnimatedGradientText } from "@/components/ui/animated-text";
@@ -308,6 +309,13 @@ export function SettingsScreen({
             onChange={setAutoSync}
           />
         </Card>
+      </BlurFade>
+
+      <SectionTitle hint="chiffré de bout en bout">Synchronisation</SectionTitle>
+      <BlurFade delay={0.165}>
+        <div className="mx-5">
+          <SyncSettings variant="mobile" />
+        </div>
       </BlurFade>
 
       <SectionTitle>Gestes des mails</SectionTitle>
