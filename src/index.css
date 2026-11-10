@@ -1,0 +1,136 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --canvas: #fbfaff;
+  --surface: #ffffff;
+  --surface-2: #f6f3fd;
+  --ink: #1b1523;
+  --ink-soft: #6b6478;
+  --ink-muted: #a49db0;
+  --line: #ece8f5;
+  --shadow-color: 265 40% 55%;
+
+  --accent: #8b7cf6;
+  --accent-soft: color-mix(in oklab, var(--accent) 12%, white);
+  --accent-ring: color-mix(in oklab, var(--accent) 34%, white);
+  --accent-ink: color-mix(in oklab, var(--accent) 58%, #241b3a);
+}
+
+.dark {
+  --canvas: #0e0c13;
+  --surface: #16131f;
+  --surface-2: #1d1929;
+  --ink: #f4f1fa;
+  --ink-soft: #a8a1b8;
+  --ink-muted: #726b80;
+  --line: #2a2438;
+  --shadow-color: 265 60% 4%;
+
+  --accent-soft: color-mix(in oklab, var(--accent) 24%, #16131f);
+  --accent-ring: color-mix(in oklab, var(--accent) 45%, #16131f);
+  --accent-ink: color-mix(in oklab, var(--accent) 55%, white);
+}
+
+@theme inline {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-muted: var(--ink-muted);
+  --color-line: var(--line);
+
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ring: var(--accent-ring);
+  --color-accent-ink: var(--accent-ink);
+
+  --radius-4xl: 2rem;
+  --radius-5xl: 2.5rem;
+}
+
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    background: var(--canvas);
+    color: var(--ink);
+    overscroll-behavior: none;
+  }
+
+  ::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility glass {
+  background: color-mix(in oklab, var(--surface) 72%, transparent);
+  backdrop-filter: blur(20px) saturate(180%);
+}
+
+@utility safe-bottom {
+  padding-bottom: max(env(safe-area-inset-bottom), 0px);
+}
+
+@keyframes shimmer-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(200%);
+  }
+}
+
+@keyframes shiny-text {
+  0% {
+    background-position: 100% 0;
+  }
+  55%,
+  100% {
+    background-position: 0% 0;
+  }
+}
+
+@keyframes gradient-pan {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+@keyframes float-soft {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}

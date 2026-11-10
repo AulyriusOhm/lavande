@@ -1,0 +1,505 @@
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { animate, motion, useMotionValue, useSpring, useTransform } from "motion/react";
+import { Archive, ChevronDown, ChevronUp, Inbox, Plus, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2 } from "lucide-react";
+import type { FolderId, Mail } from "@/lib/mail";
+import { FOLDERS, folderLabel } from "@/lib/mail";
+import { ACCOUNTS, ALL_ACCOUNTS, accountById } from "@/lib/accounts";
+import { cn } from "@/lib/utils";
+import { Avatar, Chip, IconButton } from "@/components/ui/primitives";
+import { AnimatedGradientText } from "@/components/ui/animated-text";
+import { BorderBeam } from "@/components/ui/border-beam";
+import { NumberTicker } from "@/components/ui/number-ticker";
+import { MeshGlow } from "@/components/ui/backdrops";
+import { MailRow } from "@/components/mail-row";
+
+type Filter = "all" | "unread" | "starred" | "encrypted";
+
+const INTRO_HOLD_MS = 2000;
+
+export function InboxScreen({
+  mails,
+  account,
+  folder,
+  onOpenAccounts,
+  onOpenFolders,
+  onOpen,
+  onToggleStar,
+  onSearch,
+  onMailAction,
+  onReply,
+}: {
+  mails: Mail[];
+  account: string;
+  folder: FolderId;
+  onOpenAccounts: () => void;
+  onOpenFolders: () => void;
+  onOpen: (mail: Mail) => void;
+  onToggleStar: (id: string) => void;
+  onSearch: () => void;
+  onMailAction: (kind: "delete" | "archive" | "read", mail: Mail) => void;
+  onReply: (mail: Mail) => void;
+}) {
+  const [filter, setFilter] = useState<Filter>("all");
+  const [compact, setCompact] = useState(false);
+  const [sizes, setSizes] = useState({ hero: 0, card: 0 });
+
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const heroRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  const raw = useMotionValue(0);
+  const progress = useSpring(raw, { stiffness: 200, damping: 28, mass: 0.9 });
+
+  const heroHeight = useTransform(progress, [0, 0.7], [sizes.hero, 0]);
+  const heroOpacity = useTransform(progress, [0, 0.45], [1, 0]);
+  const heroScale = useTransform(progress, [0, 1], [1, 0.96]);
+  const cardHeight = useTransform(progress, [0, 0.9], [sizes.card, 50]);
+  const cardBody = useTransform(progress, [0, 0.45], [1, 0]);
+  const barOpacity = useTransform(progress, [0.55, 0.95], [0, 1]);
+  const barY = useTransform(progress, [0.55, 0.95], [-14, 0]);
+  const barSpace = useTransform(progress, [0.5, 1], [0, 60]);
+  const cardCompact = useTransform(progress, [0.35, 0.85], [0, 1]);
+  const cardExpand = useTransform(progress, [0, 0.35], [1, 0]);
+
+  useLayoutEffect(() => {
+    const measure = () =>
+      setSizes({
+        hero: heroRef.current?.offsetHeight ?? 0,
+        card: cardRef.current?.offsetHeight ?? 0,
+      });
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+
+  const collapse = useCallback(() => {
+    setCompact(true);
+    animate(raw, 1, { duration: 0.9, ease: [0.22, 1, 0.36, 1] });
+  }, [raw]);
+
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      raw.set(1);
+      setCompact(true);
+      return;
+    }
+
+    const timer = window.setTimeout(collapse, INTRO_HOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [collapse, raw]);
+
+  const expand = () => {
+    setCompact(false);
+    animate(raw, 0, { duration: 0.7, ease: [0.22, 1, 0.36, 1] });
+  };
+
+  const inFolder = mails.filter((mail) => mail.folder === folder);
+  const scoped = account === ALL_ACCOUNTS ? inFolder : inFolder.filter((mail) => mail.account === account);
+  const unreadCount = scoped.filter((mail) => mail.unread).length;
+  const starredCount = scoped.filter((mail) => mail.starred).length;
+  const encryptedCount = scoped.filter((mail) => mail.pgp === "encrypted").length;
+  const current = accountById(account);
+
+  const visible = scoped.filter((mail) => {
+    if (filter === "unread") return mail.unread;
+    if (filter === "starred") return mail.starred;
+    if (filter === "encrypted") return mail.pgp === "encrypted";
+    return true;
+  });
+
+  return (
+    <div className="relative h-full">
+      <div ref={scrollRef} className="h-full overflow-y-auto no-scrollbar pb-32">
+        <MeshGlow className="h-56" />
+
+        <motion.div style={{ height: heroHeight, opacity: heroOpacity }} className="overflow-hidden">
+          <motion.div ref={heroRef} style={{ scale: heroScale }} className="origin-top px-5 pt-4">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-2.5">
+                <IconButton
+                  aria-label="Ouvrir les dossiers"
+                  onClick={onOpenFolders}
+                  className="size-9 bg-accent-soft text-accent-ink hover:bg-accent-soft"
+                >
+                  <Inbox className="size-[18px]" strokeWidth={2.2} />
+                </IconButton>
+                <Avatar
+                  name="Roman"
+                  size={40}
+                  rounded="rounded-full"
+                  className="ring-2 ring-accent-ring ring-offset-2 ring-offset-canvas"
+                />
+                <h1 className="text-[24px] leading-[1.05] font-extrabold tracking-[-0.035em] text-ink">
+                  {folder === "inbox" ? (
+                    <>
+                      Boîte de
+                      <br />
+                      <AnimatedGradientText>réception</AnimatedGradientText>
+                    </>
+                  ) : (
+                    <AnimatedGradientText>{folderLabel(folder)}</AnimatedGradientText>
+                  )}
+                </h1>
+              </div>
+              <div className="flex items-center gap-1">
+                <IconButton aria-label="Rechercher" onClick={onSearch}>
+                  <Search className="size-4" />
+                </IconButton>
+                <IconButton aria-label="Rafraîchir">
+                  <RefreshCw className="size-4" />
+                </IconButton>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={onOpenAccounts}
+              className={cn(
+                "mt-2.5 mb-4 inline-flex items-center gap-2 rounded-full border border-line bg-surface py-1 pr-2.5 pl-1",
+                "text-left transition-colors hover:border-accent-ring",
+              )}
+            >
+              <span
+                className="grid size-6 place-items-center rounded-full text-[9px] font-black text-white"
+                style={{ backgroundColor: current?.color ?? "var(--accent)" }}
+              >
+                {current ? current.label[0] : "∀"}
+              </span>
+              <span className="text-[11.5px] font-bold text-ink">
+                {current ? current.label : "Tous les comptes"}
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-1.5 py-0.5 text-[10.5px] font-bold text-accent-ink">
+                <NumberTicker value={unreadCount} /> non lus
+              </span>
+              <ChevronDown className="size-3.5 text-ink-muted" />
+            </button>
+          </motion.div>
+        </motion.div>
+
+        <motion.div style={{ height: barSpace }} />
+
+        <motion.div
+          style={{ height: cardHeight }}
+          className="relative mx-5 overflow-hidden rounded-[26px] bg-accent-soft ring-1 ring-accent-ring/40"
+        >
+          <BorderBeam duration={9} />
+
+          <motion.button
+            type="button"
+            onClick={collapse}
+            aria-label="Réduire le résumé"
+            style={{ opacity: cardExpand }}
+            className={cn(
+              "absolute top-2.5 right-2.5 z-10 grid size-7 place-items-center rounded-full bg-surface/80 text-accent-ink",
+              compact && "pointer-events-none",
+            )}
+          >
+            <ChevronUp className="size-3.5" />
+          </motion.button>
+
+          <motion.div ref={cardRef} style={{ opacity: cardBody }} className="p-4">
+            <div className="flex items-center gap-2">
+              <span className="grid size-6 place-items-center rounded-full bg-accent/15">
+                <Sparkles className="size-3.5 text-accent-ink" strokeWidth={2.4} />
+              </span>
+              <p className="text-[10.5px] font-bold tracking-[0.14em] text-accent-ink uppercase">Résumé du matin</p>
+            </div>
+            <p className="mt-2 text-[12.5px] leading-relaxed font-medium text-ink">
+              <span className="font-bold">3 messages</span> attendent une réponse. Camille veut un retour sur les
+              maquettes v3 avant vendredi.
+            </p>
+            <div className="mt-3 flex gap-1.5">
+              <span className="rounded-full bg-surface px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
+                2 pièces jointes
+              </span>
+              <span className="rounded-full bg-surface px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
+                1 chiffré
+              </span>
+            </div>
+          </motion.div>
+
+          <motion.button
+            type="button"
+            onClick={expand}
+            aria-label="Réafficher le résumé du matin"
+            style={{ opacity: cardCompact }}
+            className="absolute inset-0 flex w-full items-center gap-2 px-4 text-left"
+          >
+            <Sparkles className="size-3.5 shrink-0 text-accent-ink" strokeWidth={2.4} />
+            <p className="truncate text-[11px] font-bold text-accent-ink">Résumé du matin</p>
+            <span className="shrink-0 rounded-full bg-surface px-2 py-0.5 text-[10px] font-bold text-accent-ink">
+              3 à traiter
+            </span>
+            <ChevronDown className="ml-auto size-3.5 shrink-0 text-accent-ink/70" />
+          </motion.button>
+        </motion.div>
+
+        <div className="mt-5 flex gap-2 overflow-x-auto px-5 pb-1 no-scrollbar">
+          <Chip active={filter === "all"} onClick={() => setFilter("all")}>
+            Tous
+          </Chip>
+          <Chip active={filter === "unread"} onClick={() => setFilter("unread")}>
+            Non lus
+            <span
+              className={cn(
+                "rounded-full px-1.5 text-[10px] font-bold",
+                filter === "unread" ? "bg-white/25 text-white" : "bg-accent-soft text-accent-ink",
+              )}
+            >
+              {unreadCount}
+            </span>
+          </Chip>
+          <Chip active={filter === "starred"} onClick={() => setFilter("starred")}>
+            Étoilés
+            <span
+              className={cn(
+                "rounded-full px-1.5 text-[10px] font-bold",
+                filter === "starred" ? "bg-white/25 text-white" : "bg-accent-soft text-accent-ink",
+              )}
+            >
+              {starredCount}
+            </span>
+          </Chip>
+          <Chip active={filter === "encrypted"} onClick={() => setFilter("encrypted")}>
+            Chiffrés
+            <span
+              className={cn(
+                "rounded-full px-1.5 text-[10px] font-bold",
+                filter === "encrypted" ? "bg-white/25 text-white" : "bg-accent-soft text-accent-ink",
+              )}
+            >
+              {encryptedCount}
+            </span>
+          </Chip>
+        </div>
+
+        <div className="mt-3 space-y-1 px-1">
+          {visible.map((mail, index) => (
+            <MailRow
+              key={mail.id}
+              mail={mail}
+              delay={Math.min(0.4, 0.16 + index * 0.05)}
+              showAccount={account === ALL_ACCOUNTS}
+              onOpen={() => onOpen(mail)}
+              onToggleStar={() => onToggleStar(mail.id)}
+              onDelete={() => onMailAction("delete", mail)}
+              onArchive={() => onMailAction("archive", mail)}
+              onToggleRead={() => onMailAction("read", mail)}
+              onReply={() => onReply(mail)}
+            />
+          ))}
+          {visible.length === 0 && (
+            <p className="px-6 py-12 text-center text-[13px] font-medium text-ink-muted">
+              Rien ici pour le moment.
+            </p>
+          )}
+        </div>
+      </div>
+
+      <motion.div
+        style={{ opacity: barOpacity, y: barY }}
+        className={cn("absolute inset-x-0 top-0 z-30", compact ? "" : "pointer-events-none")}
+      >
+        <div className="glass flex items-center gap-2.5 border-b border-line/70 px-4 pt-2.5 pb-2">
+          <IconButton
+            aria-label="Ouvrir les dossiers"
+            onClick={onOpenFolders}
+            className="size-9 bg-accent-soft text-accent-ink hover:bg-accent-soft"
+          >
+            <Inbox className="size-[18px]" strokeWidth={2.2} />
+          </IconButton>
+          <div className="min-w-0 flex-1 leading-tight">
+            <p className="truncate text-[12.5px] font-bold text-ink">{folderLabel(folder)}</p>
+            <p className="truncate text-[10px] font-semibold text-ink-muted">
+              {scoped.length} message{scoped.length > 1 ? "s" : ""} · {unreadCount} non lus ·{" "}
+              {mails.filter((mail) => mail.folder === "spam" && mail.unread).length} spam
+            </p>
+          </div>
+          <IconButton aria-label="Rechercher" onClick={onSearch} className="size-8">
+            <Search className="size-4" />
+          </IconButton>
+          <IconButton aria-label="Changer de compte" onClick={onOpenAccounts} className="size-8">
+            <span
+              className="grid size-5 place-items-center rounded-full text-[8px] font-black text-white"
+              style={{ backgroundColor: current?.color ?? "var(--accent)" }}
+            >
+              {current ? current.label[0] : "∀"}
+            </span>
+          </IconButton>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+export function AccountSwitchSheet({
+  mails,
+  active,
+  onSelect,
+  onClose,
+}: {
+  mails: Mail[];
+  active: string;
+  onSelect: (id: string) => void;
+  onClose: () => void;
+}) {
+  const rows = [
+    {
+      id: ALL_ACCOUNTS,
+      label: "Tous les comptes",
+      email: `${mails.length} messages`,
+      color: "var(--accent)",
+      glyph: "∀",
+    },
+    ...ACCOUNTS.map((account) => ({
+      id: account.id,
+      label: account.label,
+      email: account.email,
+      color: account.color,
+      glyph: account.label[0],
+    })),
+  ];
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-line" />
+      <div className="flex items-baseline justify-between px-5 pt-3 pb-2">
+        <h2 className="text-[15px] font-bold tracking-tight text-ink">Comptes</h2>
+        <button type="button" onClick={onClose} className="text-[11.5px] font-bold text-accent-ink">
+          Fermer
+        </button>
+      </div>
+
+      <div className="flex-1 space-y-1.5 overflow-y-auto no-scrollbar px-3 pb-4">
+        {rows.map((row) => {
+          const isActive = row.id === active;
+          const unread = mails.filter(
+            (mail) => mail.unread && (row.id === ALL_ACCOUNTS || mail.account === row.id),
+          ).length;
+          return (
+            <button
+              key={row.id}
+              type="button"
+              onClick={() => {
+                onSelect(row.id);
+                onClose();
+              }}
+              className={cn(
+                "flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors",
+                isActive ? "bg-accent-soft ring-1 ring-accent-ring/60" : "hover:bg-surface-2",
+              )}
+            >
+              <span
+                className="grid size-9 shrink-0 place-items-center rounded-xl text-[12px] font-black text-white"
+                style={{ backgroundColor: row.color }}
+              >
+                {row.glyph}
+              </span>
+              <span className="min-w-0 flex-1 leading-tight">
+                <span className="block truncate text-[13px] font-bold text-ink">{row.label}</span>
+                <span className="block truncate text-[11px] font-medium text-ink-muted">{row.email}</span>
+              </span>
+              {unread > 0 && (
+                <span className="rounded-full bg-accent px-2 py-0.5 text-[10.5px] font-bold text-white">
+                  {unread}
+                </span>
+              )}
+            </button>
+          );
+        })}
+
+        <button
+          type="button"
+          className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-line py-3 text-[12.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+        >
+          <Plus className="size-4" />
+          Ajouter un compte
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const FOLDER_ICONS = {
+  inbox: Inbox,
+  sent: Send,
+  archive: Archive,
+  spam: ShieldAlert,
+  trash: Trash2,
+} as const;
+
+export function MailboxSheet({
+  mails,
+  account,
+  folder,
+  onSelect,
+  onClose,
+}: {
+  mails: Mail[];
+  account: string;
+  folder: FolderId;
+  onSelect: (id: FolderId) => void;
+  onClose: () => void;
+}) {
+  const scope = account === ALL_ACCOUNTS ? mails : mails.filter((mail) => mail.account === account);
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-line" />
+      <div className="flex items-baseline justify-between px-5 pt-3 pb-2">
+        <h2 className="text-[15px] font-bold tracking-tight text-ink">Dossiers</h2>
+        <button type="button" onClick={onClose} className="text-[11.5px] font-bold text-accent-ink">
+          Fermer
+        </button>
+      </div>
+
+      <div className="flex-1 space-y-1 overflow-y-auto no-scrollbar px-3 pb-4">
+        {FOLDERS.map((entry) => {
+          const Icon = FOLDER_ICONS[entry.id];
+          const items = scope.filter((mail) => mail.folder === entry.id);
+          const unread = items.filter((mail) => mail.unread).length;
+          const isActive = entry.id === folder;
+          return (
+            <button
+              key={entry.id}
+              type="button"
+              onClick={() => {
+                onSelect(entry.id);
+                onClose();
+              }}
+              className={cn(
+                "flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors",
+                isActive ? "bg-accent-soft ring-1 ring-accent-ring/60" : "hover:bg-surface-2",
+              )}
+            >
+              <span
+                className={cn(
+                  "grid size-8 shrink-0 place-items-center rounded-xl",
+                  isActive ? "bg-surface text-accent-ink" : "bg-surface-2 text-ink-soft",
+                )}
+              >
+                <Icon className="size-4" />
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[13px] font-bold text-ink">{entry.label}</span>
+              <span className="shrink-0 text-[10.5px] font-semibold text-ink-muted">{items.length}</span>
+              {unread > 0 && (
+                <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-[10.5px] font-bold text-white">
+                  {unread}
+                </span>
+              )}
+            </button>
+          );
+        })}
+
+        <button
+          type="button"
+          className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-line py-3 text-[12.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+        >
+          <Plus className="size-4" />
+          Nouveau dossier
+        </button>
+      </div>
+    </div>
+  );
+}
