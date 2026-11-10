@@ -1,0 +1,703 @@
+import { useEffect, useState } from "react";
+import { motion } from "motion/react";
+import { Check, EyeOff, Mail, Plus, Trash2, X } from "lucide-react";
+import type { Mail as MailType } from "@/lib/mail";
+import type { MailSuggestion, Task, TaskState } from "@/lib/tasks";
+import {
+  TASK_STATES,
+  dueToneFor,
+  formatDueDate,
+  isoToday,
+  sortTasks,
+  stateMeta,
+  taskFromSuggestion,
+} from "@/lib/tasks";
+import { capitalizeFirst } from "@/lib/calendar";
+import { insertAt } from "@/lib/draft";
+import { useMailStore } from "@/lib/store";
+import { useEscapeLayer } from "@/desktop/escape";
+import { cn } from "@/lib/utils";
+import { Badge, DButton, DChip, DIconButton, PaneTitle, SectionLabel, TextArea, TextInput } from "@/desktop/ui";
+import { BorderBeam } from "@/components/ui/border-beam";
+import { Avatar } from "@/components/ui/primitives";
+import { createTask } from "@/screens/new-task-sheet";
+
+type Tone = "rose" | "amber" | "neutral";
+
+const DUE_TONE: Record<Task["dueTone"], Tone> = {
+  late: "rose",
+  soon: "amber",
+  soft: "neutral",
+  none: "neutral",
+};
+
+const LABEL = "block text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase";
+const FIELD = "mt-1.5";
+
+type Selection = { kind: "task"; id: string } | { kind: "suggestion"; suggestion: MailSuggestion } | null;
+
+export function DesktopPlanning({ onNewTask }: { onNewTask: () => void }) {
+  const { tasks, setTasks, suggestions, addSuggestion, dismissSuggestion, notify, openMessage, mails } =
+    useMailStore();
+  const [selection, setSelection] = useState<Selection>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [over, setOver] = useState<TaskState | null>(null);
+
+  const openTasks = tasks.filter((task) => task.state !== "done").length;
+  const selectedTask = selection?.kind === "task" ? tasks.find((task) => task.id === selection.id) : undefined;
+  const selectedSuggestion = selection?.kind === "suggestion" ? selection.suggestion : undefined;
+  const linkedMail = selectedTask?.mailId
+    ? (mails.find((mail) => mail.id === selectedTask.mailId) ?? null)
+    : null;
+
+  useEscapeLayer(Boolean(selection), () => setSelection(null));
+
+  const changeState = (id: string, state: TaskState) => {
+    setTasks((current) => sortTasks(current.map((task) => (task.id === id ? { ...task, state } : task))));
+  };
+
+  const patchTask = (id: string, changes: Partial<Task>) => {
+    setTasks((current) => current.map((task) => (task.id === id ? { ...task, ...changes } : task)));
+  };
+
+  const removeTask = (task: Task) => {
+    const index = tasks.findIndex((entry) => entry.id === task.id);
+    setTasks((current) => current.filter((entry) => entry.id !== task.id));
+    setSelection(null);
+    notify("Tâche supprimée", {
+      label: "Annuler",
+      run: () =>
+        setTasks((current) =>
+          current.some((entry) => entry.id === task.id) ? current : insertAt(current, index, task),
+        ),
+    });
+  };
+
+  const drop = (event: React.DragEvent<HTMLElement>, state: TaskState) => {
+    event.preventDefault();
+    setOver(null);
+    const id = event.dataTransfer.getData("text/plain") || dragging;
+    setDragging(null);
+    const task = tasks.find((entry) => entry.id === id);
+    if (!task || task.state === state) return;
+    const previous = task.state;
+    changeState(task.id, state);
+    notify(`Tâche déplacée · ${stateMeta(state).label}`, {
+      label: "Annuler",
+      run: () => changeState(task.id, previous),
+    });
+  };
+
+  return (
+    <div className="relative flex h-full flex-col overflow-hidden pb-[104px]">
+      <header className="flex items-center justify-between gap-4 px-6 pt-5">
+        <PaneTitle hint={`${openTasks} ouvertes`}>Planification</PaneTitle>
+        <div className="flex items-center gap-2">
+          {suggestions.length > 0 ? (
+            <span className="inline-flex h-8 items-center rounded-full bg-accent-soft px-2.5 text-[11px] font-bold text-accent-ink tabular-nums">
+              {suggestions.length} suggestions
+            </span>
+          ) : null}
+          <DButton variant="primary" size="sm" onClick={onNewTask}>
+            <Plus className="size-3.5" strokeWidth={3} />
+            Nouvelle tâche
+          </DButton>
+        </div>
+      </header>
+
+      {suggestions.length > 0 ? (
+        <div className="mt-4 flex shrink-0 gap-3 overflow-x-auto px-6 pb-1">
+          {suggestions.map((suggestion, index) => (
+            <article
+              key={suggestion.id}
+              data-testid="suggestion-card"
+              className="relative w-[272px] shrink-0 rounded-[20px] border border-dashed border-accent-ring/70 bg-accent-soft/40 p-3"
+            >
+              {index === 0 ? <BorderBeam /> : null}
+              <button
+                type="button"
+                onClick={() => setSelection({ kind: "suggestion", suggestion })}
+                className="focus-ring block w-full cursor-pointer text-left"
+              >
+                <span className="flex items-center gap-1.5">
+                  <Badge tone="accent">mail</Badge>
+                  <span className="truncate text-[11px] font-bold text-ink">{suggestion.from}</span>
+                </span>
+                <span className="mt-1 block truncate text-[10.5px] font-medium text-ink-muted">
+                  {suggestion.subject}
+                </span>
+                <span className="mt-1.5 block text-[12.5px] leading-tight font-bold text-ink">
+                  {suggestion.proposal}
+                </span>
+                <span className="mt-1.5 flex items-center gap-1.5">
+                  <Badge tone={DUE_TONE[suggestion.dueTone]}>{suggestion.due}</Badge>
+                  <span className="text-[10px] font-semibold text-ink-muted">échéance déduite</span>
+                </span>
+              </button>
+              <div className="mt-2 flex items-center gap-1.5">
+                <DButton
+                  size="sm"
+                  variant="soft"
+                  onClick={() => addSuggestion(suggestion)}
+                  aria-label={`Ajouter : ${suggestion.proposal}`}
+                >
+                  <Plus className="size-3.5" strokeWidth={3} />
+                  Ajouter
+                </DButton>
+                <DIconButton
+                  label="Masquer la suggestion"
+                  className="size-8"
+                  onClick={() => dismissSuggestion(suggestion)}
+                >
+                  <EyeOff className="size-3.5" />
+                </DIconButton>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="mt-4 grid min-h-0 flex-1 grid-cols-5 gap-4 px-6">
+        {TASK_STATES.map((state) => {
+          const columnTasks = tasks.filter((task) => task.state === state.id);
+          return (
+            <section
+              key={state.id}
+              aria-label={state.label}
+              data-testid={`column-${state.id}`}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setOver(state.id);
+              }}
+              onDragLeave={() => setOver((current) => (current === state.id ? null : current))}
+              onDrop={(event) => drop(event, state.id)}
+              className={cn(
+                "flex min-h-0 flex-col rounded-[22px] border p-2.5 transition-colors duration-200",
+                over === state.id
+                  ? "border-accent-ring bg-accent-soft/60"
+                  : "border-line bg-surface-2/40",
+              )}
+            >
+              <div className="flex items-center gap-1.5 px-1 pb-2">
+                <span className={cn("size-2 rounded-full", state.dot)} />
+                <SectionLabel className="tracking-[0.1em]">{state.label}</SectionLabel>
+                <span className="ml-auto rounded-full bg-surface px-1.5 py-0.5 text-[10px] font-bold text-ink-muted tabular-nums">
+                  {columnTasks.length}
+                </span>
+              </div>
+              <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-0.5">
+                {columnTasks.map((task) => (
+                  <TaskCard
+                    key={task.id}
+                    task={task}
+                    dragging={dragging === task.id}
+                    onOpen={() => setSelection({ kind: "task", id: task.id })}
+                    onDragStart={(event) => {
+                      event.dataTransfer.setData("text/plain", task.id);
+                      event.dataTransfer.effectAllowed = "move";
+                      setDragging(task.id);
+                    }}
+                    onDragEnd={() => {
+                      setDragging(null);
+                      setOver(null);
+                    }}
+                  />
+                ))}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+
+      {selectedTask ? (
+        <TaskDetail
+          key={selectedTask.id}
+          task={selectedTask}
+          mail={linkedMail}
+          onClose={() => setSelection(null)}
+          onStateChange={(state) => changeState(selectedTask.id, state)}
+          onPatch={(changes) => patchTask(selectedTask.id, changes)}
+          onDelete={() => removeTask(selectedTask)}
+          onOpenMail={(mail) => {
+            openMessage(mail);
+            setSelection(null);
+          }}
+        />
+      ) : null}
+
+      {selectedSuggestion ? (
+        <SuggestionDetail
+          suggestion={selectedSuggestion}
+          onClose={() => setSelection(null)}
+          onAdd={() => {
+            addSuggestion(selectedSuggestion);
+            setSelection(null);
+          }}
+          onDismiss={() => {
+            dismissSuggestion(selectedSuggestion);
+            setSelection(null);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function TaskCard({
+  task,
+  dragging,
+  onOpen,
+  onDragStart,
+  onDragEnd,
+}: {
+  task: Task;
+  dragging: boolean;
+  onOpen: () => void;
+  onDragStart: (event: React.DragEvent<HTMLButtonElement>) => void;
+  onDragEnd: () => void;
+}) {
+  const done = task.state === "done";
+  const subtasks = task.subtasks ?? [];
+  const doneCount = subtasks.filter((subtask) => subtask.done).length;
+
+  return (
+    <button
+      type="button"
+      draggable
+      data-testid="task-card"
+      data-task-id={task.id}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onClick={onOpen}
+      className={cn(
+        "focus-ring w-full cursor-grab rounded-[16px] border border-line bg-surface p-2.5 text-left transition-shadow duration-200 active:cursor-grabbing",
+        dragging ? "opacity-60 shadow-[0_16px_34px_-20px_var(--accent)]" : "hover:border-accent-ring/70",
+      )}
+    >
+      <span className="flex items-start gap-1.5">
+        <span
+          className={cn(
+            "min-w-0 flex-1 text-[12.5px] leading-tight font-bold",
+            done ? "text-ink-muted line-through" : "text-ink",
+          )}
+        >
+          {task.title}
+        </span>
+        {task.mailId ? <Mail className="mt-0.5 size-3 shrink-0 text-ink-muted" /> : null}
+      </span>
+      <span className="mt-1 block truncate text-[11px] font-medium text-ink-muted">{task.meta}</span>
+      {typeof task.progress === "number" ? (
+        <span
+          role="progressbar"
+          aria-label={`Progression de ${task.title}`}
+          aria-valuenow={task.progress}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          className="mt-1.5 block h-1 overflow-hidden rounded-full bg-surface-2"
+        >
+          <span
+            className="block h-full rounded-full bg-accent"
+            style={{ width: `${task.progress}%` }}
+          />
+        </span>
+      ) : null}
+      <span className="mt-1.5 flex items-center gap-1.5">
+        <Badge tone={DUE_TONE[task.dueTone]}>{task.due}</Badge>
+        {subtasks.length > 0 ? (
+          <span className="text-[10px] font-bold text-ink-muted tabular-nums">
+            {doneCount}/{subtasks.length}
+          </span>
+        ) : null}
+      </span>
+    </button>
+  );
+}
+
+function Panel({
+  label,
+  onClose,
+  children,
+}: {
+  label: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <motion.aside
+      initial={{ x: 430 }}
+      animate={{ x: 0 }}
+      transition={{ type: "spring", stiffness: 340, damping: 34 }}
+      className="absolute inset-y-0 right-0 z-[25] flex w-[430px] flex-col border-l border-line bg-surface shadow-[-34px_0_80px_-56px_var(--accent)]"
+    >
+      <div className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-3">
+        <SectionLabel>{label}</SectionLabel>
+        <DIconButton label="Fermer le panneau" className="ml-auto size-8" onClick={onClose}>
+          <X className="size-4" />
+        </DIconButton>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-3.5 pb-[104px]">{children}</div>
+    </motion.aside>
+  );
+}
+
+function TaskDetail({
+  task,
+  mail,
+  onClose,
+  onStateChange,
+  onPatch,
+  onDelete,
+  onOpenMail,
+}: {
+  task: Task;
+  mail: MailType | null;
+  onClose: () => void;
+  onStateChange: (state: TaskState) => void;
+  onPatch: (changes: Partial<Task>) => void;
+  onDelete: () => void;
+  onOpenMail: (mail: MailType) => void;
+}) {
+  const [title, setTitle] = useState(task.title);
+  const subtasks = task.subtasks ?? [];
+  const doneCount = subtasks.filter((subtask) => subtask.done).length;
+
+  const setDue = (value: string) => {
+    onPatch(
+      value
+        ? { dueDate: value, due: formatDueDate(value), dueTone: dueToneFor(value) }
+        : { dueDate: undefined, due: "sans échéance", dueTone: "none" },
+    );
+  };
+
+  const toggleSubtask = (index: number) => {
+    onPatch({
+      subtasks: subtasks.map((subtask, position) =>
+        position === index ? { ...subtask, done: !subtask.done } : subtask,
+      ),
+    });
+  };
+
+  return (
+    <Panel label="Tâche" onClose={onClose}>
+      <div className="flex flex-wrap gap-1.5">
+        {TASK_STATES.map((state) => {
+          const active = state.id === task.state;
+          return (
+            <DChip key={state.id} active={active} onClick={() => onStateChange(state.id)}>
+              <span
+                className={cn("size-1.5 rounded-full", active ? "bg-accent-contrast/80" : state.dot)}
+              />
+              {state.label}
+            </DChip>
+          );
+        })}
+      </div>
+
+      <label className={cn(LABEL, "mt-4")} htmlFor="desk-task-title">
+        Intitulé
+      </label>
+      <TextInput
+        id="desk-task-title"
+        className={FIELD}
+        value={title}
+        onChange={(event) => {
+          setTitle(event.target.value);
+          if (event.target.value.trim()) onPatch({ title: event.target.value });
+        }}
+        onBlur={() => {
+          if (!title.trim()) setTitle(task.title);
+          else if (title !== title.trim()) {
+            setTitle(title.trim());
+            onPatch({ title: title.trim() });
+          }
+        }}
+      />
+
+      <label className={cn(LABEL, "mt-4")} htmlFor="desk-task-due">
+        Échéance
+      </label>
+      <div className={cn(FIELD, "flex items-center gap-2")}>
+        <TextInput
+          id="desk-task-due"
+          type="date"
+          className="min-w-0 flex-1"
+          value={task.dueDate ?? ""}
+          onChange={(event) => setDue(event.target.value)}
+        />
+        <Badge tone={DUE_TONE[task.dueTone]}>{task.due}</Badge>
+      </div>
+      <p className="mt-1.5 text-[10.5px] font-semibold text-ink-muted">
+        {task.dueDate ? capitalizeFirst(formatDueDate(task.dueDate)) : "Aucune échéance"}
+      </p>
+
+      <label className={cn(LABEL, "mt-4")} htmlFor="desk-task-description">
+        Description
+      </label>
+      <TextArea
+        id="desk-task-description"
+        className={cn(FIELD, "h-24")}
+        value={task.description ?? ""}
+        placeholder="Contexte, liens, points bloquants…"
+        onChange={(event) => onPatch({ description: event.target.value || undefined })}
+      />
+
+      {subtasks.length > 0 ? (
+        <>
+          <div className="mt-4 flex items-baseline justify-between">
+            <SectionLabel>Sous-tâches</SectionLabel>
+            <span className="text-[10px] font-bold text-ink-muted tabular-nums">
+              {doneCount}/{subtasks.length}
+            </span>
+          </div>
+          <div className="mt-2 space-y-1.5">
+            {subtasks.map((subtask, index) => (
+              <button
+                key={subtask.title}
+                type="button"
+                onClick={() => toggleSubtask(index)}
+                aria-pressed={subtask.done}
+                className="focus-ring flex w-full items-center gap-2.5 rounded-[16px] border border-line bg-surface px-2.5 py-2 text-left transition-colors hover:border-accent-ring/70"
+              >
+                <span
+                  className={cn(
+                    "grid size-4 shrink-0 place-items-center rounded-md border-2 transition-colors",
+                    subtask.done
+                      ? "border-accent bg-accent text-accent-contrast"
+                      : "border-accent-ring/70",
+                  )}
+                >
+                  {subtask.done ? <Check className="size-2.5" strokeWidth={3.5} /> : null}
+                </span>
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-[12px] font-semibold",
+                    subtask.done ? "text-ink-muted line-through" : "text-ink",
+                  )}
+                >
+                  {subtask.title}
+                </span>
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
+
+      {mail ? (
+        <>
+          <SectionLabel className="mt-4">Mail lié</SectionLabel>
+          <div className="mt-2 overflow-hidden rounded-[18px] border border-line bg-surface">
+            <div className="flex items-start gap-2.5 px-3 pt-2.5">
+              <Avatar name={mail.name} tone={mail.tone} size={32} />
+              <div className="min-w-0 flex-1 leading-tight">
+                <p className="truncate text-[12px] font-bold text-ink">{mail.name}</p>
+                <p className="truncate text-[10px] font-medium text-ink-muted">{mail.time}</p>
+              </div>
+            </div>
+            <p className="mt-2 px-3 text-[12px] font-bold text-ink">{mail.subject}</p>
+            <p className="mt-1 line-clamp-2 px-3 text-[11px] leading-relaxed font-medium text-ink-muted">
+              {mail.preview}
+            </p>
+            <button
+              type="button"
+              onClick={() => onOpenMail(mail)}
+              className="focus-ring mt-2.5 flex w-full items-center gap-2 border-t border-line bg-accent-soft/50 px-3 py-2.5 text-left text-[11.5px] font-extrabold text-accent-ink transition-colors hover:bg-accent-soft"
+            >
+              <Mail className="size-3.5" />
+              Ouvrir le mail
+            </button>
+          </div>
+        </>
+      ) : null}
+
+      <DButton variant="danger" className="mt-5 w-full" onClick={onDelete}>
+        <Trash2 className="size-3.5" />
+        Supprimer
+      </DButton>
+    </Panel>
+  );
+}
+
+function SuggestionDetail({
+  suggestion,
+  onClose,
+  onAdd,
+  onDismiss,
+}: {
+  suggestion: MailSuggestion;
+  onClose: () => void;
+  onAdd: () => void;
+  onDismiss: () => void;
+}) {
+  const task = taskFromSuggestion(suggestion, `sugg-${suggestion.id}`);
+
+  return (
+    <Panel label="Suggestion issue d'un mail" onClose={onClose}>
+      <div className="rounded-[18px] border border-dashed border-accent-ring/70 bg-accent-soft/40 p-3">
+        <div className="flex items-center gap-2">
+          <Avatar name={suggestion.from} tone={suggestion.tone} size={30} />
+          <div className="min-w-0 flex-1 leading-tight">
+            <p className="truncate text-[12px] font-bold text-ink">{suggestion.from}</p>
+            <p className="truncate text-[10.5px] font-medium text-ink-muted">{suggestion.subject}</p>
+          </div>
+          <Badge tone={DUE_TONE[suggestion.dueTone]}>{task.due}</Badge>
+        </div>
+        <p className="mt-3 text-[13.5px] leading-tight font-extrabold tracking-[-0.02em] text-ink">
+          {task.title}
+        </p>
+        <p className="mt-1.5 text-[11.5px] leading-relaxed font-medium text-ink-soft">
+          {task.description}
+        </p>
+        <p className="mt-2 text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">{task.meta}</p>
+      </div>
+
+      <DButton variant="primary" className="mt-4 w-full" onClick={onAdd}>
+        <Plus className="size-4" strokeWidth={3} />
+        Ajouter à la planification
+      </DButton>
+      <DButton variant="ghost" className="mt-2 w-full" onClick={onDismiss}>
+        <EyeOff className="size-3.5" />
+        Ignorer
+      </DButton>
+    </Panel>
+  );
+}
+
+export function NewTaskDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { setTasks, notify } = useMailStore();
+  if (!open) return null;
+
+  const submit = (task: Task) => {
+    setTasks((current) => createTask(current, task));
+    notify("Tâche créée");
+    onClose();
+  };
+
+  return <NewTaskForm onCreate={submit} onClose={onClose} />;
+}
+
+function NewTaskForm({ onCreate, onClose }: { onCreate: (task: Task) => void; onClose: () => void }) {
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [state, setState] = useState<TaskState>("todo");
+  const [dueDate, setDueDate] = useState(isoToday(1));
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  const valid = title.trim().length > 0;
+
+  const submit = () => {
+    if (!valid) return;
+    onCreate({
+      id: `t-${Date.now()}`,
+      title: title.trim(),
+      meta: "manuel",
+      state,
+      due: dueDate ? formatDueDate(dueDate) : "sans échéance",
+      dueTone: dueDate ? dueToneFor(dueDate) : "none",
+      dueDate: dueDate || undefined,
+      description: description.trim() || undefined,
+    });
+  };
+
+  return (
+    <div className="absolute inset-0 z-40 grid place-items-center">
+      <button
+        type="button"
+        aria-label="Fermer la fenêtre"
+        onClick={onClose}
+        className="absolute inset-0 cursor-default bg-ink/25 backdrop-blur-[2px]"
+      />
+      <motion.div
+        role="dialog"
+        aria-modal
+        aria-label="Nouvelle tâche"
+        initial={{ opacity: 0, y: 10, scale: 0.97 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+        className="relative w-[520px] rounded-[26px] border border-line bg-surface p-5 shadow-[0_44px_96px_-48px_var(--accent)]"
+      >
+        <div className="flex items-baseline justify-between gap-3">
+          <h2 className="text-[19px] leading-tight font-extrabold tracking-[-0.035em] text-ink">
+            Nouvelle tâche
+          </h2>
+          <DIconButton label="Fermer" className="size-8" onClick={onClose}>
+            <X className="size-4" />
+          </DIconButton>
+        </div>
+
+        <label className={cn(LABEL, "mt-3")} htmlFor="new-task-title">
+          Intitulé
+        </label>
+        <TextInput
+          id="new-task-title"
+          autoFocus
+          className={FIELD}
+          value={title}
+          placeholder="Relancer Marc pour les accès serveur"
+          onChange={(event) => setTitle(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") submit();
+          }}
+        />
+
+        <label className={cn(LABEL, "mt-4")} htmlFor="new-task-due">
+          Échéance
+        </label>
+        <div className={cn(FIELD, "flex items-center gap-2")}>
+          <TextInput
+            id="new-task-due"
+            type="date"
+            className="min-w-0 flex-1"
+            value={dueDate}
+            onChange={(event) => setDueDate(event.target.value)}
+          />
+          <span className="shrink-0 rounded-full bg-surface-2 px-2.5 py-1 text-[10.5px] font-bold text-ink-soft">
+            {dueDate ? formatDueDate(dueDate) : "sans échéance"}
+          </span>
+        </div>
+
+        <p className={cn(LABEL, "mt-4")}>État</p>
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {TASK_STATES.map((entry) => {
+            const active = entry.id === state;
+            return (
+              <DChip key={entry.id} active={active} onClick={() => setState(entry.id)}>
+                <span
+                  className={cn("size-1.5 rounded-full", active ? "bg-accent-contrast/80" : entry.dot)}
+                />
+                {entry.label}
+              </DChip>
+            );
+          })}
+        </div>
+
+        <label className={cn(LABEL, "mt-4")} htmlFor="new-task-description">
+          Description
+        </label>
+        <TextArea
+          id="new-task-description"
+          className={cn(FIELD, "h-20")}
+          value={description}
+          placeholder="Contexte, liens, pièces jointes…"
+          onChange={(event) => setDescription(event.target.value)}
+        />
+
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <DButton variant="plain" onClick={onClose}>
+            Annuler
+          </DButton>
+          <DButton variant="primary" onClick={submit} disabled={!valid}>
+            <Check className="size-4" strokeWidth={3} />
+            Créer la tâche
+          </DButton>
+        </div>
+      </motion.div>
+    </div>
+  );
+}

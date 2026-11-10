@@ -222,6 +222,19 @@ export function dueToneFor(iso: string): Task["dueTone"] {
 
 const DUE_ORDER: Record<Task["dueTone"], number> = { late: 0, soon: 1, soft: 2, none: 3 };
 
+export function taskFromSuggestion(suggestion: MailSuggestion, id: string): Task {
+  return {
+    id,
+    title: suggestion.proposal,
+    meta: "mail · " + suggestion.from,
+    state: "todo",
+    due: suggestion.due,
+    dueTone: suggestion.dueTone,
+    description: suggestion.description,
+    mailId: suggestion.mailId,
+  };
+}
+
 export function sortTasks(tasks: Task[]) {
   return [...tasks].sort((a, b) => {
     if (a.state === "done" && b.state !== "done") return 1;

@@ -409,6 +409,12 @@ export function SettingsScreen({
           >
             Réinitialiser le thème
           </button>
+          <a
+            href="?desktop"
+            className="focus-ring mt-2 flex min-h-11 items-center justify-center rounded-full text-[11.5px] font-bold text-accent-ink transition-colors hover:bg-accent-soft"
+          >
+            Voir la maquette PC →
+          </a>
         </div>
       </BlurFade>
     </div>

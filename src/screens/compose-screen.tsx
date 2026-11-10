@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { ComposeDraft } from "@/lib/draft";
 import {
   Check,
   Image,
@@ -19,17 +20,7 @@ import { ReplySuggestSheet, RewriteSheet } from "@/screens/assist-sheet";
 import { IconButton } from "@/components/ui/primitives";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 
-export type ComposeDraft = {
-  to: string;
-  cc: string;
-  cci: string;
-  subject: string;
-  body: string;
-  account: string;
-  pgpEncrypt: boolean;
-  pgpSign: boolean;
-  threadId?: string;
-};
+export type { ComposeDraft };
 
 const EMAIL = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]{2,}$/;
 const DEFAULT_ACCOUNT = ACCOUNTS[0].id;

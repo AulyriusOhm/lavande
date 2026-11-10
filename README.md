@@ -7,6 +7,9 @@ composants inspirés de [Magic UI](https://magicui.design/docs/components).
 > authentification : les données sont des fixtures dans `src/lib/mail.ts`.
 >
 > 🎨 **Intentions de design, palette, motion et arbitrages : [`DESIGN.md`](./DESIGN.md).**
+>
+> Deux maquettes navigables, mêmes fixtures et même design system : **mobile** sur `/lavande/`
+> (cadre téléphone) et **PC** sur `/lavande/?desktop`.
 
 ## Dépôt
 
@@ -84,6 +87,30 @@ remesurées au `resize`). `prefers-reduced-motion` → tout est déjà replié a
 Le bloc « LAVANDE / roman@lavande.mail » a été retiré : le titre est à côté de l'avatar, le nom,
 le compte et les non-lus sont dans la puce de compte et dans la barre.
 
+## Maquette PC (`?desktop`)
+
+La même application en géométrie bureau : `/lavande/?desktop`, le mobile restant sur `/lavande/`.
+Mêmes fixtures, même store (`src/lib/store.tsx`), mêmes règles d'annulation — seule la mise en page change.
+
+| Zone | Choix PC |
+| --- | --- |
+| Navigation | **dock flottant** comme sur mobile : 4 destinations + action contextuelle (Écrire / RDV / Tâche), recherche `⌘K` |
+| Boîte | **3 colonnes** : comptes + dossiers (248 px) · fils (420 px) · lecteur large. Résumé du matin en carte pleine largeur, actions au survol, fil antérieur déplié, actions du message dans une barre d'outils (aucune pastille flottante) |
+| Agenda | grille du mois **navigable** qui remplit la hauteur (précédent / suivant / Aujourd'hui) + colonne du jour de 440 px, événements liés aux mails, création avec détection de conflit |
+| Planif. | **kanban 5 colonnes** avec glisser-déposer, bandeau de suggestions issues des mails, panneau de tâche éditable (sous-tâches, mail lié, suppression annulable) |
+| Réglages | sections desktop : comptes, apparence (accent + aperçu), modules, PGP, serveurs MCP, à propos. Les gestes tactiles ne sont pas exposés sur PC |
+| Recherche | overlay global `⌘K` : recherches récentes, contacts fréquents, résultats multi-comptes |
+| Rédaction | fenêtre flottante en bas à droite qui réutilise l'écran de rédaction mobile (assistants, PGP, pièces jointes) ; brouillon minimisable |
+
+Le dock reste la seule navigation permanente : aucun rail fixe, le contenu passe dessous.
+Les actions de ligne (archiver, supprimer, étoiler, lu / non lu) apparaissent au survol à la place
+des gestes tactiles ; les préférences de gestes restent dans les réglages, marquées « tactile ».
+
+Chaque vue est adressable : `?desktop#inbox`, `#calendar`, `#planning`, `#settings`.
+`⌘K` / `Ctrl+K` ouvre la recherche, `Échap` ferme la couche supérieure (recherche, dialogue,
+panneau de tâche, message). Les deux maquettes partagent `src/lib/store.tsx` et `src/lib/*` :
+archivage, annulations, tâches, rendez-vous et brouillons se comportent à l'identique.
+
 ## Design system
 
 - Fond **blanc lavande** (`--canvas: #fbfaff`), surfaces blanches, encre violet-noir.
@@ -117,8 +144,9 @@ Swipe horizontal entre les 4 onglets (`#inbox`, `#calendar`, `#planning`, `#sett
 
 ## Accès
 
-- **`https://plasma.int.lanro.eu:8443/lavande/`** — TLS valide (wildcard `*.int.lanro.eu`),
-  DNS interne déjà en place. Portail des projets sur `/`.
+- **`https://plasma.int.lanro.eu:8443/lavande/`** — maquette mobile, TLS valide
+  (wildcard `*.int.lanro.eu`), DNS interne déjà en place. Portail des projets sur `/`.
+- **`https://plasma.int.lanro.eu:8443/lavande/?desktop`** — maquette PC.
 - `https://10.1.50.10:8443/lavande/` — même service si le nom ne résout pas.
 - `http://10.1.50.10:1420/lavande/` — dev server Vite direct, sans TLS.
 - Tout reste sur le LAN, rien n'est exposé vers l'extérieur. Le portail est le conteneur

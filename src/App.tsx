@@ -3,14 +3,11 @@ import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { BatteryFull, PenLine, Signal, Wifi } from "lucide-react";
 import { ThemeProvider, useTheme } from "@/lib/theme";
 import { PrefsProvider, usePrefs } from "@/lib/prefs";
-import type { Mail } from "@/lib/mail";
-import { MAILS, folderLabel } from "@/lib/mail";
-import { threadOf } from "@/lib/threads";
-import { ACCOUNTS, ALL_ACCOUNTS } from "@/lib/accounts";
 import type { MailSuggestion, Task } from "@/lib/tasks";
-import { MAIL_SUGGESTIONS, TASKS, sortTasks } from "@/lib/tasks";
-import type { FolderId } from "@/lib/mail";
+import { sortTasks, taskFromSuggestion } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
+import { insertAt } from "@/lib/draft";
+import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { Dock, TABS, type TabId } from "@/components/dock";
 import { AccountSwitchSheet, InboxScreen, MailboxSheet } from "@/screens/inbox-screen";
 import { SearchScreen } from "@/screens/search-screen";
@@ -20,52 +17,24 @@ import { PlanningScreen } from "@/screens/planning-screen";
 import { TaskScreen } from "@/screens/task-screen";
 import { NewTaskSheet, createTask } from "@/screens/new-task-sheet";
 import { NewEventSheet } from "@/screens/new-event-sheet";
-import { EVENTS, TODAY_ISO, type CalendarEvent } from "@/lib/calendar";
 import { SettingsScreen } from "@/screens/settings-screen";
 import { MessageScreen } from "@/screens/message-screen";
-import { ComposeScreen, type ComposeDraft } from "@/screens/compose-screen";
+import { ComposeScreen } from "@/screens/compose-screen";
 import { PgpScreen } from "@/screens/pgp-screen";
 import { DotPattern, MeshGlow } from "@/components/ui/backdrops";
-import { Notice, type NoticeData } from "@/components/ui/notice";
+import { Notice } from "@/components/ui/notice";
+import { DesktopApp } from "@/desktop/desktop-shell";
 
 const OVERLAY_STATE = { lavandeOverlay: true };
 
-function insertAt<T>(list: T[], index: number, item: T) {
-  const at = index < 0 ? list.length : index;
-  return [...list.slice(0, at), item, ...list.slice(at)];
-}
-
-function firstRecipient(value: string) {
-  return value.split(/[\s,;]+/).filter(Boolean)[0] ?? "";
-}
-
-function emptyDraft(draft: ComposeDraft) {
-  return !draft.to.trim() && !draft.cc.trim() && !draft.cci.trim() && !draft.subject.trim() && !draft.body.trim();
-}
-
-function baseDraft(account: string, pgpEncrypt: boolean, pgpSign: boolean, threadId?: string): ComposeDraft {
-  return { to: "", cc: "", cci: "", subject: "", body: "", account, pgpEncrypt, pgpSign, threadId };
-}
-
-function suggestionTask(suggestion: MailSuggestion, id: string): Task {
-  return {
-    id,
-    title: suggestion.proposal,
-    meta: "mail · " + suggestion.from,
-    state: "todo",
-    due: suggestion.due,
-    dueTone: suggestion.dueTone,
-    description: suggestion.description,
-    mailId: suggestion.mailId,
-  };
-}
-
 export default function App() {
+  const desktop = new URLSearchParams(window.location.search).has("desktop");
+
   return (
     <MotionConfig reducedMotion="user">
       <ThemeProvider>
         <PrefsProvider>
-          <Stage />
+          <MailStoreProvider>{desktop ? <DesktopApp /> : <Stage />}</MailStoreProvider>
         </PrefsProvider>
       </ThemeProvider>
     </MotionConfig>
@@ -111,6 +80,44 @@ function StatusBar() {
 function PhoneApp() {
   const prefs = usePrefs();
   const { calendarEnabled, planningEnabled } = prefs;
+  const {
+    mails,
+    account,
+    folder,
+    tasks,
+    suggestions,
+    events,
+    selectedDate,
+    openMail,
+    openThread,
+    notices,
+    composeOpen,
+    composeDraft,
+    composeTitle,
+    resumeCompose,
+    setAccount,
+    setFolder,
+    setTasks,
+    setEvents,
+    setSelectedDate,
+    setComposeDraft,
+    notify,
+    dismissNotice,
+    toggleStar,
+    mailAction,
+    moveToInbox,
+    restoreMail,
+    addSuggestion,
+    dismissSuggestion,
+    openMessage,
+    closeMessage,
+    openComposer,
+    minimizeCompose,
+    closeCompose,
+    replyTo,
+    forwardMail,
+    sendDraft,
+  } = useMailStore();
   const order = useMemo<TabId[]>(
     () =>
       TABS.filter((tab) =>
@@ -122,26 +129,14 @@ function PhoneApp() {
   const [tab, setTab] = useState<TabId>(
     () => order.find((id) => id === window.location.hash.slice(1)) ?? "inbox",
   );
-  const [mails, setMails] = useState<Mail[]>(MAILS);
-  const [account, setAccount] = useState<string>(ALL_ACCOUNTS);
-  const [openMail, setOpenMail] = useState<Mail | null>(null);
-  const [composeOpen, setComposeOpen] = useState(false);
-  const [composeDraft, setComposeDraft] = useState<ComposeDraft | null>(null);
-  const [composeTitle, setComposeTitle] = useState("Nouveau message");
-  const [selectedDate, setSelectedDate] = useState(TODAY_ISO);
   const [searchOpen, setSearchOpen] = useState(false);
   const [pgpOpen, setPgpOpen] = useState(false);
   const [accountsOpen, setAccountsOpen] = useState(false);
   const [foldersOpen, setFoldersOpen] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
-  const [tasks, setTasks] = useState<Task[]>(() => sortTasks(TASKS));
-  const [suggestions, setSuggestions] = useState<MailSuggestion[]>(MAIL_SUGGESTIONS);
   const [detail, setDetail] = useState<{ task: Task; suggestion?: MailSuggestion } | null>(null);
   const [taskDraftOpen, setTaskDraftOpen] = useState(false);
   const [eventDraftOpen, setEventDraftOpen] = useState(false);
-  const [events, setEvents] = useState<CalendarEvent[]>(EVENTS);
-  const [folder, setFolder] = useState<FolderId>("inbox");
-  const [notices, setNotices] = useState<NoticeData[]>([]);
   const [movingTask, setMovingTask] = useState<Task | null>(null);
 
   const [dragX, setDragX] = useState(0);
@@ -150,267 +145,10 @@ function PhoneApp() {
 
   const index = Math.max(order.indexOf(tab), 0);
   const last = order.length - 1;
-  const noticeId = useRef(0);
 
   useEffect(() => {
     if (!order.includes(tab)) setTab("inbox");
   }, [order, tab]);
-
-  const notify = useCallback((message: string, action?: { label: string; run: () => void }) => {
-    noticeId.current += 1;
-    const entry = { id: noticeId.current, message, actionLabel: action?.label, onAction: action?.run };
-    setNotices((current) => [...current, entry]);
-  }, []);
-
-  const dismissNotice = useCallback(() => setNotices((current) => current.slice(1)), []);
-
-  const changeTab = useCallback((next: TabId) => {
-    setTab(next);
-    setMovingTask(null);
-  }, []);
-
-  const toggleStar = useCallback((id: string) => {
-    setMails((current) =>
-      current.map((mail) => (mail.id === id ? { ...mail, starred: !mail.starred } : mail)),
-    );
-    setOpenMail((current) =>
-      current && current.id === id ? { ...current, starred: !current.starred } : current,
-    );
-  }, []);
-
-  const addSuggestion = useCallback(
-    (suggestion: MailSuggestion) => {
-      const id = "s-" + suggestion.id;
-      const index = suggestions.findIndex((entry) => entry.id === suggestion.id);
-      setTasks((current) =>
-        current.some((task) => task.id === id)
-          ? current
-          : sortTasks([suggestionTask(suggestion, id), ...current]),
-      );
-      setSuggestions((current) => current.filter((entry) => entry.id !== suggestion.id));
-      notify("Tâche ajoutée à la planification", {
-        label: "Annuler",
-        run: () => {
-          setTasks((current) => current.filter((task) => task.id !== id));
-          setSuggestions((current) =>
-            current.some((entry) => entry.id === suggestion.id)
-              ? current
-              : insertAt(current, index, suggestion),
-          );
-        },
-      });
-    },
-    [notify, suggestions],
-  );
-
-  const dismissSuggestion = useCallback(
-    (suggestion: MailSuggestion) => {
-      const index = suggestions.findIndex((entry) => entry.id === suggestion.id);
-      setSuggestions((current) => current.filter((entry) => entry.id !== suggestion.id));
-      notify("Suggestion masquée", {
-        label: "Annuler",
-        run: () =>
-          setSuggestions((current) =>
-            current.some((entry) => entry.id === suggestion.id)
-              ? current
-              : insertAt(current, index, suggestion),
-          ),
-      });
-    },
-    [notify, suggestions],
-  );
-
-  const handleMailAction = useCallback(
-    (kind: "delete" | "archive" | "read", mail: Mail) => {
-      if (kind === "read") {
-        setMails((current) =>
-          current.map((entry) => (entry.id === mail.id ? { ...entry, unread: !entry.unread } : entry)),
-        );
-        return;
-      }
-
-      const index = mails.findIndex((entry) => entry.id === mail.id);
-
-      if (kind === "delete" && mail.folder === "trash") {
-        setMails((current) => current.filter((entry) => entry.id !== mail.id));
-        notify("Message supprimé", {
-          label: "Annuler",
-          run: () =>
-            setMails((current) =>
-              current.some((entry) => entry.id === mail.id) ? current : insertAt(current, index, mail),
-            ),
-        });
-        return;
-      }
-
-      const target: FolderId = kind === "delete" ? "trash" : "archive";
-      const previous = mail.folder;
-      setMails((current) =>
-        current.map((entry) =>
-          entry.id === mail.id ? { ...entry, folder: target, previousFolder: previous } : entry,
-        ),
-      );
-      notify(target === "trash" ? "Message déplacé vers la corbeille" : "Message archivé", {
-        label: "Annuler",
-        run: () =>
-          setMails((current) =>
-            current.map((entry) =>
-              entry.id === mail.id ? { ...entry, folder: previous, previousFolder: mail.previousFolder } : entry,
-            ),
-          ),
-      });
-    },
-    [mails, notify],
-  );
-
-  const openMessage = useCallback((mail: Mail) => {
-    setOpenMail({ ...mail, unread: false });
-    setMails((current) => current.map((item) => (item.id === mail.id ? { ...item, unread: false } : item)));
-  }, []);
-
-  const moveToInbox = useCallback(
-    (mail: Mail) => {
-      const previous = mail.folder;
-      setMails((current) =>
-        current.map((entry) =>
-          entry.id === mail.id ? { ...entry, folder: "inbox", previousFolder: undefined } : entry,
-        ),
-      );
-      notify("Message déplacé vers la boîte de réception", {
-        label: "Annuler",
-        run: () =>
-          setMails((current) =>
-            current.map((entry) => (entry.id === mail.id ? { ...entry, folder: previous } : entry)),
-          ),
-      });
-    },
-    [notify],
-  );
-
-  const restoreMail = useCallback(
-    (mail: Mail) => {
-      const from = mail.folder;
-      const target: FolderId = mail.previousFolder ?? "inbox";
-      setMails((current) =>
-        current.map((entry) =>
-          entry.id === mail.id ? { ...entry, folder: target, previousFolder: undefined } : entry,
-        ),
-      );
-      notify(`Message restauré · ${folderLabel(target)}`, {
-        label: "Annuler",
-        run: () =>
-          setMails((current) =>
-            current.map((entry) =>
-              entry.id === mail.id
-                ? { ...entry, folder: from, previousFolder: mail.previousFolder }
-                : entry,
-            ),
-          ),
-      });
-    },
-    [notify],
-  );
-
-  const minimizeCompose = useCallback(() => setComposeOpen(false), []);
-
-  const closeCompose = useCallback(() => {
-    setComposeOpen(false);
-    setComposeDraft(null);
-  }, []);
-
-  const blankDraft = useCallback(
-    () => baseDraft(account === ALL_ACCOUNTS ? ACCOUNTS[0].id : account, prefs.pgpEncrypt, prefs.pgpSign),
-    [account, prefs.pgpEncrypt, prefs.pgpSign],
-  );
-
-  const startBlankDraft = useCallback(() => {
-    setComposeDraft(blankDraft());
-    setComposeTitle("Nouveau message");
-    setComposeOpen(true);
-  }, [blankDraft]);
-
-  const openComposer = useCallback(() => {
-    if (composeOpen) return;
-    if (composeDraft && !emptyDraft(composeDraft)) {
-      notify("Abandonner le brouillon actuel ?", { label: "Abandonner", run: startBlankDraft });
-      return;
-    }
-    startBlankDraft();
-  }, [composeDraft, composeOpen, notify, startBlankDraft]);
-
-  const replyTo = useCallback(
-    (mail: Mail) => {
-      const quoted = mail.body
-        .join("\n")
-        .split("\n")
-        .map((line) => (line ? `> ${line}` : ">"))
-        .join("\n");
-      setComposeDraft({
-        ...baseDraft(mail.account, prefs.pgpEncrypt, prefs.pgpSign, mail.threadId ?? mail.id),
-        to: mail.email,
-        subject: /^re\s*:/i.test(mail.subject.trim()) ? mail.subject : `Re: ${mail.subject}`,
-        body: `\n\n---\nLe ${mail.date ?? mail.time}, ${mail.name} a écrit :\n${quoted}`,
-      });
-      setComposeTitle("Répondre");
-      setComposeOpen(true);
-    },
-    [prefs.pgpEncrypt, prefs.pgpSign],
-  );
-
-  const forwardMail = useCallback(
-    (mail: Mail) => {
-      setComposeDraft({
-        ...baseDraft(mail.account, prefs.pgpEncrypt, prefs.pgpSign),
-        subject: /^tr\s*:/i.test(mail.subject.trim()) ? mail.subject : `Tr: ${mail.subject}`,
-        body: `\n\n--- Message transféré ---\nDe : ${mail.name} <${mail.email}>\nDate : ${
-          mail.date ?? mail.time
-        }\nObjet : ${mail.subject}\n\n${mail.body.join("\n")}`,
-      });
-      setComposeTitle("Transférer");
-      setComposeOpen(true);
-    },
-    [prefs.pgpEncrypt, prefs.pgpSign],
-  );
-
-  const sendDraft = useCallback(
-    (draft: ComposeDraft) => {
-      const sender = ACCOUNTS.find((entry) => entry.id === draft.account) ?? ACCOUNTS[0];
-      const now = new Date();
-      const time = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-      const body = draft.body.split("\n").filter((line) => line.trim() !== "");
-      const preview = body.find((line) => line.trim() !== "---" && !line.startsWith(">")) ?? "";
-      const mail: Mail = {
-        id: `sent-${now.getTime()}`,
-        account: sender.id as Mail["account"],
-        folder: "sent",
-        threadId: draft.threadId,
-        name: sender.label,
-        email: sender.email,
-        subject: draft.subject.trim() || "(sans objet)",
-        to: firstRecipient([draft.to, draft.cc, draft.cci].filter(Boolean).join(",")) || undefined,
-        preview,
-        body,
-        time,
-        date: `${new Intl.DateTimeFormat("fr-FR", {
-          weekday: "long",
-          day: "numeric",
-          month: "long",
-          year: "numeric",
-        }).format(now)} · ${time}`,
-        unread: false,
-        starred: false,
-        pgp: draft.pgpEncrypt ? "encrypted" : draft.pgpSign ? "signed" : "none",
-        tone: sender.tone,
-      };
-      setMails((current) => [mail, ...current]);
-      setComposeOpen(false);
-      setComposeDraft(null);
-      notify("Message envoyé");
-    },
-    [notify],
-  );
-
-  const openThread = openMail ? threadOf(mails, openMail) : undefined;
 
   const layers: [boolean, () => void][] = [
     [composeOpen, minimizeCompose],
@@ -419,7 +157,7 @@ function PhoneApp() {
     [accountsOpen, () => setAccountsOpen(false)],
     [foldersOpen, () => setFoldersOpen(false)],
     [Boolean(movingTask), () => setMovingTask(null)],
-    [Boolean(openMail), () => setOpenMail(null)],
+    [Boolean(openMail), () => closeMessage()],
     [Boolean(detail), () => setDetail(null)],
     [pgpOpen, () => setPgpOpen(false)],
     [mcpOpen, () => setMcpOpen(false)],
@@ -496,6 +234,11 @@ function PhoneApp() {
     setDragX(blocking ? dx * 0.25 : dx);
   };
 
+  const changeTab = useCallback((next: TabId) => {
+    setTab(next);
+    setMovingTask(null);
+  }, []);
+
   const endGesture = (event: React.PointerEvent) => {
     const state = gesture.current;
     gesture.current = null;
@@ -542,7 +285,7 @@ function PhoneApp() {
                   onOpen={openMessage}
                   onToggleStar={toggleStar}
                   onSearch={() => setSearchOpen(true)}
-                  onMailAction={handleMailAction}
+                  onMailAction={mailAction}
                   onReply={replyTo}
                   onNotSpam={moveToInbox}
                   onRestore={restoreMail}
@@ -573,7 +316,7 @@ function PhoneApp() {
                   onOpenTask={(task) => setDetail({ task })}
                   onOpenSuggestion={(suggestion) =>
                     setDetail({
-                      task: suggestionTask(suggestion, "sugg-" + suggestion.id),
+                      task: taskFromSuggestion(suggestion, "sugg-" + suggestion.id),
                       suggestion,
                     })
                   }
@@ -609,7 +352,7 @@ function PhoneApp() {
           <div className="pointer-events-none absolute inset-x-0 bottom-[calc(env(safe-area-inset-bottom,0px)+9.5rem)] z-[44] flex justify-center px-4">
             <button
               type="button"
-              onClick={() => setComposeOpen(true)}
+              onClick={resumeCompose}
               className="pointer-events-auto inline-flex min-h-11 items-center gap-2 rounded-full border border-line px-4 text-[11.5px] font-bold text-accent-ink glass shadow-[0_14px_34px_-20px_var(--accent)] transition-transform duration-200 active:scale-95"
             >
               <PenLine className="size-3.5" strokeWidth={2.4} />
@@ -630,25 +373,25 @@ function PhoneApp() {
             >
               <MessageScreen
                 thread={openThread}
-                onClose={() => setOpenMail(null)}
+                onClose={() => closeMessage()}
                 onToggleStar={() => toggleStar(openMail.id)}
                 onReply={replyTo}
                 onForward={forwardMail}
                 onArchive={(mail) => {
-                  handleMailAction("archive", mail);
-                  setOpenMail(null);
+                  mailAction("archive", mail);
+                  closeMessage();
                 }}
                 onDelete={(mail) => {
-                  handleMailAction("delete", mail);
-                  setOpenMail(null);
+                  mailAction("delete", mail);
+                  closeMessage();
                 }}
                 onNotSpam={(mail) => {
                   moveToInbox(mail);
-                  setOpenMail(null);
+                  closeMessage();
                 }}
                 onRestore={(mail) => {
                   restoreMail(mail);
-                  setOpenMail(null);
+                  closeMessage();
                 }}
               />
             </motion.div>
@@ -783,7 +526,7 @@ function PhoneApp() {
                 mails={mails}
                 onOpen={openMessage}
                 onToggleStar={toggleStar}
-                onMailAction={handleMailAction}
+                onMailAction={mailAction}
                 onReply={replyTo}
                 onNotSpam={moveToInbox}
                 onRestore={restoreMail}

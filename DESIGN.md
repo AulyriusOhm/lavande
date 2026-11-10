@@ -113,6 +113,19 @@ elle ne mérite pas une place permanente dans le dock, alors que « Planificatio
 rendez-vous dans l'agenda, une tâche dans la planification, **rien** dans les réglages (le dock se
 referme alors en largeur, avec un ressort).
 
+**Sur PC, la même grammaire, une autre géométrie.** Le dock flottant reste la seule navigation
+permanente, mais les vues s'ouvrent en largeur : la boîte tient en trois colonnes (comptes et
+dossiers · fils · lecteur), la planification devient un kanban à cinq colonnes, l'agenda remplit la
+hauteur avec la navigation de mois et une colonne de jour, la rédaction devient une fenêtre flottante.
+Rien n'est dupliqué côté données : les deux maquettes partagent `src/lib/store.tsx`, donc archivage,
+annulations, tâches, rendez-vous et brouillons sont identiques.
+
+Trois écarts assumés, dictés par l'espace disponible : les actions de ligne passent du geste au
+survol ; le lecteur range ses actions dans une **barre d'outils pleine largeur** (jamais de pastille
+flottante à côté du dock) ; le fil antérieur est **déplié par défaut** au lieu d'être une pile de
+lignes repliées. Le résumé du matin y devient une carte pleine largeur du rail de lecture (phrase de
+synthèse + trois actions), et les réglages de gestes tactiles ne sont pas exposés sur PC.
+
 ## 6. Le mouvement, règle par règle
 
 | Situation | Animation | Intention |
@@ -150,9 +163,10 @@ savoir dans quoi on lit avant de lire.
 
 **Planification** — le modèle a **5 états** (À faire · En cours · En attente · À valider · Fait), mais
 l'affichage mobile est une **liste filtrée par état**, pas un kanban : trois colonnes sur 390 px ne se
-lisent pas. Sur PC, les mêmes données s'affichent en colonnes. Les **suggestions issues des mails**
-arrivent en tête de liste, avec le `+` à la place de la case à cocher, l'objet du mail d'origine et
-l'échéance déduite — on ajoute une tâche d'un tap, on ouvre le détail d'un tap sur la ligne.
+lisent pas. Sur PC, les mêmes données s'affichent en **cinq colonnes** avec glisser-déposer. Les
+**suggestions issues des mails** arrivent en bandeau au-dessus du kanban, avec le `+` à la place de
+la case à cocher, l'objet du mail d'origine et l'échéance déduite — on ajoute une tâche d'un clic,
+le panneau de détail s'ouvre d'un clic sur la carte.
 
 **Agenda** — grille du mois réellement calculée, sélection au tap, colonne horaire, badge « mail » quand
 l'événement vient d'un message. Le rendez-vous se crée depuis le bouton flottant.
@@ -164,6 +178,10 @@ réglages, pas des destinations quotidiennes.
 ## 8. Décisions assumées
 
 - **Pas de barre d'onglets pleine largeur** : le dock flottant laisse voir le contenu passer dessous.
+- **Pas de barre latérale fixe sur PC** : le dock flottant reste la navigation, comme sur mobile ;
+  seuls les comptes et dossiers de la boîte occupent une colonne, parce qu'ils font partie du contenu.
+- **Une seule source de données pour deux maquettes** : l'état vit dans `src/lib/store.tsx`, pas dans
+  les écrans. Une action (archiver, annuler, envoyer) se comporte pareil des deux côtés.
 - **Le résumé IA n'est pas une carte permanente** : il se replie en pastille. Un encart fixe mangeait
   la moitié de l'écran — c'est le reproche qui a déclenché le repli.
 - **MCP hors du dock** : c'est de l'infrastructure, pas un usage quotidien. Il vit dans les réglages.
@@ -176,13 +194,14 @@ réglages, pas des destinations quotidiennes.
 
 - Aucune donnée réelle : tout est en mémoire, l'état repart au rechargement (sauf thème, accent et
   préférences de gestes, persistés en `localStorage`). Le brouillon est uniquement conservé pendant la session.
-- Pas de vue bureau (2 colonnes liste + lecteur) : le cadre téléphone est un choix de présentation.
+- La vue bureau existe (`?desktop`) mais reste une maquette : hors `⌘K` et `Échap`, pas de raccourcis
+  clavier, pas de colonnes redimensionnables, pas de glisser-déposer de fichiers.
 - Les actions destructrices proposent une annulation temporaire, sans persistance après rechargement.
 - Pas d'états vides soignés partout, pas de mode hors-ligne, pas d'internationalisation.
 
 ## 10. Suite
 
-1. Vue bureau/tablette (liste + lecteur, colonnes du kanban).
+1. Affiner la vue bureau : raccourcis clavier (j/k, archiver, répondre), colonnes ajustables.
 2. Valider sur appareils réels les safe areas, le clavier, les tailles de texte et les cibles ≥ 44 px.
 3. Brancher les vraies données (IMAP/OAuth) puis remplacer les fixtures sans toucher aux composants.
 4. Persister les brouillons et les annulations, et compléter les annonces `aria-live` des changements d'état.
