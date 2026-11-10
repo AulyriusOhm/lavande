@@ -3,6 +3,7 @@ import { animate, motion, useMotionValue, useSpring, useTransform } from "motion
 import { Archive, ChevronDown, ChevronUp, Inbox, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2 } from "lucide-react";
 import type { FolderId, Mail } from "@/lib/mail";
 import { FOLDERS, folderLabel } from "@/lib/mail";
+import { threadsInFolder } from "@/lib/threads";
 import { ACCOUNTS, ALL_ACCOUNTS, accountById } from "@/lib/accounts";
 import { cn } from "@/lib/utils";
 import { Avatar, Chip, IconButton } from "@/components/ui/primitives";
@@ -10,7 +11,7 @@ import { AnimatedGradientText } from "@/components/ui/animated-text";
 import { BorderBeam } from "@/components/ui/border-beam";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { MeshGlow } from "@/components/ui/backdrops";
-import { MailRow } from "@/components/mail-row";
+import { ThreadRow } from "@/components/thread-row";
 
 type Filter = "all" | "unread" | "starred" | "encrypted";
 
@@ -100,18 +101,17 @@ export function InboxScreen({
     animate(raw, 0, { duration: 0.7, ease: [0.22, 1, 0.36, 1] });
   };
 
-  const inFolder = mails.filter((mail) => mail.folder === folder);
-  const scoped = account === ALL_ACCOUNTS ? inFolder : inFolder.filter((mail) => mail.account === account);
-  const unreadCount = scoped.filter((mail) => mail.unread).length;
-  const starredCount = scoped.filter((mail) => mail.starred).length;
-  const encryptedCount = scoped.filter((mail) => mail.pgp === "encrypted").length;
-  const attachmentMails = scoped.filter((mail) => mail.attachments?.length).length;
+  const threads = threadsInFolder(mails, folder, account);
+  const unreadCount = threads.filter((thread) => thread.unread > 0).length;
+  const starredCount = threads.filter((thread) => thread.starred).length;
+  const encryptedCount = threads.filter((thread) => thread.encrypted > 0).length;
+  const attachmentThreads = threads.filter((thread) => thread.attachments > 0).length;
   const current = accountById(account);
 
-  const visible = scoped.filter((mail) => {
-    if (filter === "unread") return mail.unread;
-    if (filter === "starred") return mail.starred;
-    if (filter === "encrypted") return mail.pgp === "encrypted";
+  const visible = threads.filter((thread) => {
+    if (filter === "unread") return thread.unread > 0;
+    if (filter === "starred") return thread.starred;
+    if (filter === "encrypted") return thread.encrypted > 0;
     return true;
   });
 
@@ -222,14 +222,14 @@ export function InboxScreen({
                 </div>
                 <p className="mt-2 text-[12.5px] leading-relaxed font-medium text-ink">
                   <span className="font-bold">
-                    {unreadCount} message{unreadCount > 1 ? "s" : ""} non lu{unreadCount > 1 ? "s" : ""}
+                    {unreadCount} conversation{unreadCount > 1 ? "s" : ""} non lue{unreadCount > 1 ? "s" : ""}
                   </span>{" "}
                   dans ta boîte de réception. Camille veut un retour sur les maquettes v3 avant vendredi.
                 </p>
                 <div className="mt-3 flex gap-1.5">
                   <span className="rounded-full bg-surface px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
-                    {attachmentMails} mail{attachmentMails > 1 ? "s" : ""} avec pièce
-                    {attachmentMails > 1 ? "s" : ""} jointe{attachmentMails > 1 ? "s" : ""}
+                    {attachmentThreads} conversation{attachmentThreads > 1 ? "s" : ""} avec pièce
+                    {attachmentThreads > 1 ? "s" : ""} jointe{attachmentThreads > 1 ? "s" : ""}
                   </span>
                   <span className="rounded-full bg-surface px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
                     {encryptedCount} chiffré{encryptedCount > 1 ? "s" : ""}
@@ -307,20 +307,20 @@ export function InboxScreen({
         </div>
 
         <div className="mt-3 space-y-1 px-1">
-          {visible.map((mail, index) => (
-            <MailRow
-              key={mail.id}
-              mail={mail}
+          {visible.map((thread, index) => (
+            <ThreadRow
+              key={thread.id}
+              thread={thread}
               delay={Math.min(0.4, 0.16 + index * 0.05)}
               showAccount={account === ALL_ACCOUNTS}
-              onOpen={() => onOpen(mail)}
-              onToggleStar={() => onToggleStar(mail.id)}
-              onDelete={() => onMailAction("delete", mail)}
-              onArchive={() => onMailAction("archive", mail)}
-              onToggleRead={() => onMailAction("read", mail)}
-              onReply={() => onReply(mail)}
-              onNotSpam={onNotSpam ? () => onNotSpam(mail) : undefined}
-              onRestore={onRestore ? () => onRestore(mail) : undefined}
+              onOpen={() => onOpen(thread.primary)}
+              onToggleStar={() => onToggleStar(thread.primary.id)}
+              onDelete={() => onMailAction("delete", thread.primary)}
+              onArchive={() => onMailAction("archive", thread.primary)}
+              onToggleRead={() => onMailAction("read", thread.primary)}
+              onReply={() => onReply(thread.primary)}
+              onNotSpam={onNotSpam ? () => onNotSpam(thread.primary) : undefined}
+              onRestore={onRestore ? () => onRestore(thread.primary) : undefined}
             />
           ))}
           {visible.length === 0 && (
@@ -357,7 +357,7 @@ export function InboxScreen({
           <div className="min-w-0 flex-1 leading-tight">
             <p className="truncate text-[12.5px] font-bold text-ink">{folderLabel(folder)}</p>
             <p className="truncate text-[10px] font-semibold text-ink-muted">
-              {scoped.length} message{scoped.length > 1 ? "s" : ""} · {unreadCount} non lus ·{" "}
+              {threads.length} conversation{threads.length > 1 ? "s" : ""} · {unreadCount} non lues ·{" "}
               {mails.filter((mail) => mail.folder === "spam" && mail.unread).length} spam
             </p>
           </div>

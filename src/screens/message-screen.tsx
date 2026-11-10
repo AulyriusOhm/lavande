@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowLeft,
   Archive,
@@ -15,6 +16,7 @@ import {
 } from "lucide-react";
 import type { Mail } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
+import type { Thread } from "@/lib/threads";
 import { cn } from "@/lib/utils";
 import { Avatar, IconButton } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
@@ -22,7 +24,7 @@ import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { MeshGlow } from "@/components/ui/backdrops";
 
 export function MessageScreen({
-  mail,
+  thread,
   onClose,
   onToggleStar,
   onReply,
@@ -32,7 +34,7 @@ export function MessageScreen({
   onNotSpam,
   onRestore,
 }: {
-  mail: Mail;
+  thread: Thread;
   onClose: () => void;
   onToggleStar: () => void;
   onReply: (mail: Mail) => void;
@@ -43,12 +45,70 @@ export function MessageScreen({
   onRestore?: (mail: Mail) => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [hint, setHint] = useState<{ mailId: string; file: string } | null>(null);
-  const hintFile = hint?.mailId === mail.id ? hint.file : null;
 
-  const inSpam = mail.folder === "spam";
-  const inTrash = mail.folder === "trash";
-  const inArchive = mail.folder === "archive";
+  const mail = thread.primary;
+  const previous = thread.messages.slice(0, -1);
+  const oldest = thread.messages[0];
+  const folderMail = thread.messages.find((message) => message.folder !== "sent") ?? mail;
+  const inSpam = folderMail.folder === "spam";
+  const inTrash = folderMail.folder === "trash";
+  const inArchive = folderMail.folder === "archive";
+
+  const pgpBanner = (message: Mail) =>
+    message.pgp === "none" ? null : (
+      <div className="mt-3 flex items-center gap-2 rounded-2xl bg-accent-soft/80 px-3 py-2">
+        {message.pgp === "encrypted" ? (
+          <Lock className="size-3.5 shrink-0 text-accent-ink" strokeWidth={2.6} />
+        ) : (
+          <ShieldCheck className="size-3.5 shrink-0 text-emerald-700 dark:text-emerald-300" strokeWidth={2.6} />
+        )}
+        <p className="text-[10.5px] leading-snug font-semibold text-accent-ink">
+          {message.pgp === "encrypted"
+            ? "Chiffré avec ta clé publique · déchiffré localement par le trousseau"
+            : "Signature PGP vérifiée sur la clé de l'expéditeur"}
+        </p>
+      </div>
+    );
+
+  const attachmentList = (message: Mail) => {
+    if (!message.attachments?.length) return null;
+    const hintFile = hint?.mailId === message.id ? hint.file : null;
+
+    return (
+      <div className="mt-4 space-y-2">
+        {message.attachments.map((file) => (
+          <button
+            key={file.name}
+            type="button"
+            onClick={() => setHint({ mailId: message.id, file: file.name })}
+            aria-label={`${file.name} — téléchargement non disponible dans la maquette`}
+            className="flex w-full items-center gap-3 rounded-2xl border border-line bg-surface px-3 py-2.5 text-left transition-colors hover:border-accent-ring"
+          >
+            <span className="grid size-9 place-items-center rounded-xl bg-accent-soft text-accent-ink">
+              <Paperclip className="size-4" />
+            </span>
+            <span className="min-w-0 flex-1 leading-tight">
+              <span className="block truncate text-[12.5px] font-bold text-ink">{file.name}</span>
+              <span className="block text-[11px] text-ink-muted">{file.size}</span>
+            </span>
+            <Download className="size-4 text-ink-muted" />
+          </button>
+        ))}
+        <p role="status" aria-live="polite" className="px-1 text-[10.5px] leading-snug font-medium text-ink-muted">
+          {hintFile
+            ? `Maquette : « ${hintFile} » n'est pas téléchargeable ici. Le téléchargement sera géré par le trousseau / le stockage système.`
+            : "Aucun fichier n'est réellement téléchargé depuis cette maquette."}
+        </p>
+      </div>
+    );
+  };
+
+  const participantTones = thread.participants.map(
+    (name) => thread.messages.find((message) => message.name === name)?.tone ?? 0,
+  );
 
   return (
     <div className="relative flex h-full flex-col bg-canvas">
@@ -107,21 +167,137 @@ export function MessageScreen({
         <BlurFade yOffset={6}>
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="rounded-full bg-accent-soft px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
-              {folderLabel(mail.folder)}
+              {folderLabel(folderMail.folder)}
             </span>
-            {mail.attachments?.length ? (
+            {thread.attachments > 0 ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-[10.5px] font-semibold text-ink-soft">
                 <Paperclip className="size-3" />
-                {mail.attachments.length} pièce{mail.attachments.length > 1 ? "s" : ""} jointe
-                {mail.attachments.length > 1 ? "s" : ""}
+                {thread.attachments} pièce{thread.attachments > 1 ? "s" : ""} jointe
+                {thread.attachments > 1 ? "s" : ""}
               </span>
             ) : null}
           </div>
 
           <h1 className="mt-3 text-[22px] leading-[1.25] font-extrabold tracking-[-0.02em] text-ink">
-            {mail.subject}
+            {thread.subject}
           </h1>
         </BlurFade>
+
+        {thread.count > 1 && (
+          <BlurFade delay={0.04}>
+            <button
+              type="button"
+              onClick={() => setHistoryOpen((value) => !value)}
+              aria-expanded={historyOpen}
+              aria-label={
+                historyOpen
+                  ? "Replier les messages antérieurs"
+                  : `Déplier les ${previous.length} message${previous.length > 1 ? "s" : ""} antérieur${
+                      previous.length > 1 ? "s" : ""
+                    }`
+              }
+              className="mt-3 flex w-full items-center gap-3 rounded-2xl border border-line bg-surface-2/70 px-3 py-2.5 text-left"
+            >
+              <span className="flex shrink-0 items-center">
+                {thread.participants.slice(0, 2).map((name, index) => (
+                  <Avatar
+                    key={name}
+                    name={name}
+                    tone={participantTones[index]}
+                    size={28}
+                    rounded="rounded-full"
+                    className={index > 0 ? "-ml-2 ring-2 ring-surface-2" : undefined}
+                  />
+                ))}
+              </span>
+              <span className="min-w-0 flex-1 leading-tight">
+                <span className="block text-[12.5px] font-bold text-ink">
+                  {previous.length} message{previous.length > 1 ? "s" : ""} antérieur
+                  {previous.length > 1 ? "s" : ""}
+                </span>
+                <span className="block truncate text-[10.5px] font-medium text-ink-muted">
+                  {thread.participants.join(", ")} · depuis {oldest.time.toLowerCase()}
+                </span>
+              </span>
+              <ChevronDown
+                className={cn(
+                  "size-4 shrink-0 text-ink-muted transition-transform duration-300",
+                  historyOpen && "rotate-180",
+                )}
+              />
+            </button>
+
+            <AnimatePresence initial={false}>
+              {historyOpen && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                  className="overflow-hidden"
+                >
+                  <div className="mt-2 space-y-1.5">
+                    {previous.map((message) => {
+                      const expanded = expandedId === message.id;
+                      return (
+                        <div
+                          key={message.id}
+                          className="overflow-hidden rounded-2xl border border-line bg-surface"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => setExpandedId(expanded ? null : message.id)}
+                            aria-expanded={expanded}
+                            aria-label={
+                              expanded
+                                ? `Replier le message de ${message.name}`
+                                : `Afficher le message de ${message.name}`
+                            }
+                            className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left"
+                          >
+                            <Avatar name={message.name} tone={message.tone} size={34} rounded="rounded-full" />
+                            <span className="min-w-0 flex-1 leading-tight">
+                              <span className="block truncate text-[12px] font-bold text-ink">
+                                {message.folder === "sent" ? "Moi" : message.name} · {message.time}
+                              </span>
+                              <span className="block truncate text-[11.5px] text-ink-muted">{message.body[0]}</span>
+                            </span>
+                            <ChevronDown
+                              className={cn(
+                                "size-3.5 shrink-0 text-ink-muted transition-transform",
+                                expanded && "rotate-180",
+                              )}
+                            />
+                          </button>
+
+                          <AnimatePresence initial={false}>
+                            {expanded && (
+                              <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: "auto", opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                                className="overflow-hidden"
+                              >
+                                <div className="px-3 pb-3">
+                                  {pgpBanner(message)}
+                                  <p className="mt-2 text-[13px] leading-[1.7] font-medium whitespace-pre-line text-ink-soft">
+                                    {message.body.join("\n")}
+                                  </p>
+                                  {attachmentList(message)}
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </BlurFade>
+        )}
 
         <BlurFade delay={0.06}>
           <div className="mt-4 flex items-center gap-3">
@@ -145,7 +321,7 @@ export function MessageScreen({
                 />
               </span>
               <span className="block truncate text-[11.5px] font-medium text-ink-muted">
-                à moi · {mail.time}
+                {mail.folder === "sent" ? `à ${mail.to ?? "destinataire"}` : "à moi"} · {mail.time}
               </span>
             </button>
             <IconButton aria-label="Répondre" onClick={() => onReply(mail)} className="bg-accent-soft text-accent-ink">
@@ -173,22 +349,7 @@ export function MessageScreen({
           )}
         </BlurFade>
 
-        {mail.pgp !== "none" && (
-          <BlurFade delay={0.09}>
-            <div className="mt-3 flex items-center gap-2 rounded-2xl bg-accent-soft/80 px-3 py-2">
-              {mail.pgp === "encrypted" ? (
-                <Lock className="size-3.5 shrink-0 text-accent-ink" strokeWidth={2.6} />
-              ) : (
-                <ShieldCheck className="size-3.5 shrink-0 text-emerald-700 dark:text-emerald-300" strokeWidth={2.6} />
-              )}
-              <p className="text-[10.5px] leading-snug font-semibold text-accent-ink">
-                {mail.pgp === "encrypted"
-                  ? "Chiffré avec ta clé publique · déchiffré localement par le trousseau"
-                  : "Signature PGP vérifiée sur la clé de l'expéditeur"}
-              </p>
-            </div>
-          </BlurFade>
-        )}
+        {mail.pgp !== "none" && <BlurFade delay={0.09}>{pgpBanner(mail)}</BlurFade>}
 
         <BlurFade delay={0.12}>
           <div className="mt-5 space-y-3.5">
@@ -203,35 +364,7 @@ export function MessageScreen({
           </div>
         </BlurFade>
 
-        {mail.attachments?.length ? (
-          <BlurFade delay={0.18}>
-            <div className="mt-6 space-y-2">
-              {mail.attachments.map((file) => (
-                <button
-                  key={file.name}
-                  type="button"
-                  onClick={() => setHint({ mailId: mail.id, file: file.name })}
-                  aria-label={`${file.name} — téléchargement non disponible dans la maquette`}
-                  className="flex w-full items-center gap-3 rounded-2xl border border-line bg-surface px-3 py-2.5 text-left transition-colors hover:border-accent-ring"
-                >
-                  <span className="grid size-9 place-items-center rounded-xl bg-accent-soft text-accent-ink">
-                    <Paperclip className="size-4" />
-                  </span>
-                  <span className="min-w-0 flex-1 leading-tight">
-                    <span className="block truncate text-[12.5px] font-bold text-ink">{file.name}</span>
-                    <span className="block text-[11px] text-ink-muted">{file.size}</span>
-                  </span>
-                  <Download className="size-4 text-ink-muted" />
-                </button>
-              ))}
-              <p role="status" aria-live="polite" className="px-1 text-[10.5px] leading-snug font-medium text-ink-muted">
-                {hintFile
-                  ? `Maquette : « ${hintFile} » n'est pas téléchargeable ici. Le téléchargement sera géré par le trousseau / le stockage système.`
-                  : "Aucun fichier n'est réellement téléchargé depuis cette maquette."}
-              </p>
-            </div>
-          </BlurFade>
-        ) : null}
+        {mail.attachments?.length ? <BlurFade delay={0.18}>{attachmentList(mail)}</BlurFade> : null}
       </div>
 
       <div className="relative border-t border-line/80 px-5 py-3 glass safe-bottom sm:pb-5">

@@ -5,6 +5,7 @@ import { ThemeProvider, useTheme } from "@/lib/theme";
 import { PrefsProvider, usePrefs } from "@/lib/prefs";
 import type { Mail } from "@/lib/mail";
 import { MAILS, folderLabel } from "@/lib/mail";
+import { threadOf } from "@/lib/threads";
 import { ACCOUNTS, ALL_ACCOUNTS } from "@/lib/accounts";
 import type { MailSuggestion, Task } from "@/lib/tasks";
 import { MAIL_SUGGESTIONS, TASKS, sortTasks } from "@/lib/tasks";
@@ -43,8 +44,8 @@ function emptyDraft(draft: ComposeDraft) {
   return !draft.to.trim() && !draft.cc.trim() && !draft.cci.trim() && !draft.subject.trim() && !draft.body.trim();
 }
 
-function baseDraft(account: string, pgpEncrypt: boolean, pgpSign: boolean): ComposeDraft {
-  return { to: "", cc: "", cci: "", subject: "", body: "", account, pgpEncrypt, pgpSign };
+function baseDraft(account: string, pgpEncrypt: boolean, pgpSign: boolean, threadId?: string): ComposeDraft {
+  return { to: "", cc: "", cci: "", subject: "", body: "", account, pgpEncrypt, pgpSign, threadId };
 }
 
 function suggestionTask(suggestion: MailSuggestion, id: string): Task {
@@ -333,7 +334,7 @@ function PhoneApp() {
         .map((line) => (line ? `> ${line}` : ">"))
         .join("\n");
       setComposeDraft({
-        ...baseDraft(mail.account, prefs.pgpEncrypt, prefs.pgpSign),
+        ...baseDraft(mail.account, prefs.pgpEncrypt, prefs.pgpSign, mail.threadId ?? mail.id),
         to: mail.email,
         subject: /^re\s*:/i.test(mail.subject.trim()) ? mail.subject : `Re: ${mail.subject}`,
         body: `\n\n---\nLe ${mail.date ?? mail.time}, ${mail.name} a écrit :\n${quoted}`,
@@ -370,6 +371,7 @@ function PhoneApp() {
         id: `sent-${now.getTime()}`,
         account: sender.id as Mail["account"],
         folder: "sent",
+        threadId: draft.threadId,
         name: sender.label,
         email: sender.email,
         subject: draft.subject.trim() || "(sans objet)",
@@ -395,6 +397,8 @@ function PhoneApp() {
     },
     [notify],
   );
+
+  const openThread = openMail ? threadOf(mails, openMail) : undefined;
 
   const layers: [boolean, () => void][] = [
     [composeOpen, minimizeCompose],
@@ -599,7 +603,7 @@ function PhoneApp() {
         )}
 
         <AnimatePresence>
-          {openMail && (
+          {openMail && openThread && (
             <motion.div
               key="message"
               className="absolute inset-0 z-[36] bg-canvas"
@@ -609,7 +613,7 @@ function PhoneApp() {
               transition={{ type: "spring", stiffness: 340, damping: 34 }}
             >
               <MessageScreen
-                mail={openMail}
+                thread={openThread}
                 onClose={() => setOpenMail(null)}
                 onToggleStar={() => toggleStar(openMail.id)}
                 onReply={replyTo}

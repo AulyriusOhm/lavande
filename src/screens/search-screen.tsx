@@ -2,12 +2,13 @@ import { useMemo, useState } from "react";
 import { RotateCcw, Search, X } from "lucide-react";
 import type { Mail } from "@/lib/mail";
 import { RECENT_SEARCHES, mailMatches, normalize } from "@/lib/mail";
+import { buildThreads } from "@/lib/threads";
 import { useTheme } from "@/lib/theme";
 import { Avatar, Chip } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { ShinyText } from "@/components/ui/animated-text";
 import { MeshGlow } from "@/components/ui/backdrops";
-import { MailRow } from "@/components/mail-row";
+import { ThreadRow } from "@/components/thread-row";
 
 const CONTACTS = [
   { name: "Camille Rousseau", email: "camille@studio-lilas.fr", tone: 0 },
@@ -81,6 +82,12 @@ export function SearchScreen({
       return true;
     });
   }, [mails, scope, trimmed]);
+
+  const threads = useMemo(() => {
+    if (scope === "Contacts") return [];
+    const ids = new Set(results.map((mail) => mail.id));
+    return buildThreads(mails).filter((thread) => thread.messages.some((message) => ids.has(message.id)));
+  }, [mails, results, scope]);
 
   const contacts = useMemo(() => {
     const needle = normalize(trimmed);
@@ -245,19 +252,19 @@ export function SearchScreen({
             </div>
           ) : (
             <div className="space-y-1">
-              {results.map((mail, index) => (
-                <MailRow
-                  key={mail.id}
-                  mail={mail}
+              {threads.map((thread, index) => (
+                <ThreadRow
+                  key={thread.id}
+                  thread={thread}
                   delay={index * 0.04}
-                  onOpen={() => onOpen(mail)}
-                  onToggleStar={() => onToggleStar(mail.id)}
-                  onDelete={() => onMailAction("delete", mail)}
-                  onArchive={() => onMailAction("archive", mail)}
-                  onToggleRead={() => onMailAction("read", mail)}
-                  onReply={() => onReply(mail)}
-                  onNotSpam={onNotSpam ? () => onNotSpam(mail) : undefined}
-                  onRestore={onRestore ? () => onRestore(mail) : undefined}
+                  onOpen={() => onOpen(thread.primary)}
+                  onToggleStar={() => onToggleStar(thread.primary.id)}
+                  onDelete={() => onMailAction("delete", thread.primary)}
+                  onArchive={() => onMailAction("archive", thread.primary)}
+                  onToggleRead={() => onMailAction("read", thread.primary)}
+                  onReply={() => onReply(thread.primary)}
+                  onNotSpam={onNotSpam ? () => onNotSpam(thread.primary) : undefined}
+                  onRestore={onRestore ? () => onRestore(thread.primary) : undefined}
                 />
               ))}
             </div>

@@ -14,6 +14,7 @@ export type ComposeDraft = {
   account: string;
   pgpEncrypt: boolean;
   pgpSign: boolean;
+  threadId?: string;
 };
 
 const EMAIL = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]{2,}$/;
