@@ -120,6 +120,14 @@ hauteur avec la navigation de mois et une colonne de jour, la rédaction devient
 Rien n'est dupliqué côté données : les deux maquettes partagent `src/lib/store.tsx`, donc archivage,
 annulations, tâches, rendez-vous et brouillons sont identiques.
 
+**Sur Android, la maquette devient l'app.** Le cadre téléphone et la fausse barre de statut disparaissent
+(`NativeShell` dans `src/App.tsx`) : la même UI occupe l'écran. En haut, une marge **fixe** de 44 px — la
+hauteur d'une barre de statut ou d'une encoche change trop d'une marque à l'autre pour être mesurée. En bas,
+les tokens `--safe-bottom` et `--ime-bottom` (défaut `0px`) remplacent `env(safe-area-inset-*)`, que la
+WebView Android laisse à 0 : un pont Kotlin les remplit en px CSS, clavier compris. Les polices sont
+embarquées (Plus Jakarta Sans, deux `@font-face` locaux, licence OFL) — aucune requête Google Fonts — et
+l'icône est un monogramme L dans le dégradé de l'accent par défaut, pas un logo séparé.
+
 Trois écarts assumés, dictés par l'espace disponible : les actions de ligne passent du geste au
 survol ; le lecteur range ses actions dans une **barre d'outils pleine largeur** (jamais de pastille
 flottante à côté du dock) ; le fil antérieur est **déplié par défaut** au lieu d'être une pile de

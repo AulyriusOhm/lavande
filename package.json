@@ -10,7 +10,10 @@
     "test": "vitest run",
     "e2e": "node scripts/e2e-sync.mjs",
     "preview": "vite preview --host 0.0.0.0",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "android:init": "tauri android init && node scripts/patch-android.mjs",
+    "android:build": "bash scripts/build-android-release.sh",
+    "android:build:debug": "node scripts/patch-android.mjs && tauri android build --debug --apk"
   },
   "dependencies": {
     "@noble/ciphers": "^2.4.0",
