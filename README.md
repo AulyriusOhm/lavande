@@ -11,6 +11,68 @@ composants inspirés de [Magic UI](https://magicui.design/docs/components).
 > Deux maquettes navigables, mêmes fixtures et même design system : **mobile** sur `/lavande/`
 > (cadre téléphone) et **PC** sur `/lavande/?desktop`.
 
+## Implémentation (périmètre Mails)
+
+Le moteur mail Rust existe : crate **`crates/mail-core`** (package `lavande-mail`, lib `lavande_mail`).
+Il **compile et passe ses tests** (41 tests hors-ligne + 6 tests réseau contre un GreenMail jetable),
+mais il **n'est branché ni au front ni à Tauri** : `src-tauri/src/lib.rs` n'a aucune commande et le
+front lit toujours les fixtures de `src/lib/mail.ts`. Contrat d'intégration, schéma SQLite, table de
+correspondance avec le front et limites détaillées : **[`docs/mail-core.md`](./docs/mail-core.md)**.
+
+```
+crates/mail-core/
+├── Cargo.toml            # lavande-mail / lib lavande_mail
+├── src/
+│   ├── model.rs          # Message, Thread, Folder, Flags, AttachmentMeta, PgpState
+│   ├── config.rs         # AccountConfig, AuthConfig, Endpoint, Encryption, FolderMapping
+│   ├── mime.rs           # parsing RFC 5322 / MIME, aperçu, pièces jointes
+│   ├── threading.rs      # thread_id déterministe (References → In-Reply-To → sujet)
+│   ├── store/mod.rs      # Store SQLite (+ store/schema.sql embarqué)
+│   ├── imap.rs           # TLS/STARTTLS, dossiers, sync incrémentale, flags, move
+│   ├── smtp.rs           # envoi (lettre), pièces jointes
+│   ├── oauth.rs          # refresh token + XOAUTH2
+│   ├── sync.rs           # sync_account (INBOX + Sent)
+│   └── tls.rs            # racines de confiance supplémentaires
+└── tests/                # config, mime, threading, oauth, store (hors-ligne) · live (réseau)
+```
+
+### Tests hors-ligne
+
+Sur cette machine il n'y a **pas de compilateur C système** (`rusqlite`/`ring` en ont besoin) : on
+passe par le `cc` local avant de lancer cargo.
+
+```bash
+export PATH=/home/roman/.local/opt/lavande-cc:$PATH
+export CC=/home/roman/.local/opt/lavande-cc/cc
+export CXX=/home/roman/.local/opt/lavande-cc/c++
+
+npm run mail:test          # cargo test -p lavande-mail          (41 tests, aucun réseau)
+npm run mail:fmt           # cargo fmt --all -- --check
+npm run mail:clippy        # cargo clippy -p lavande-mail --all-targets -- -D warnings
+```
+
+### Tests réseau (GreenMail)
+
+6 scénarios réels (TLS implicite, envoi SMTP puis sync, flags, création de dossier + déplacement,
+réponse qui rejoint son thread, XOAUTH2), ignorés par défaut par `cargo test`.
+
+```bash
+scripts/mail-test-server.sh start     # conteneur lavande-mail-test, certificat auto-signé
+npm run mail:test:live                # 6 tests, --test-threads=1 obligatoire
+scripts/mail-test-server.sh stop      # ou `reset` (stop + start), `status`
+```
+
+### Limites (courte liste)
+
+- STARTTLS non testé : seul le TLS implicite est validé (GreenMail ne l'annonce pas).
+- Les drapeaux des messages déjà synchronisés ne sont pas rafraîchis lors d'un sync ultérieur.
+- Les messages supprimés côté serveur ne sont pas détectés (ils restent visibles localement).
+- `move_message` suppose que l'UID est conservé au déplacement (vrai sur GreenMail, pas garanti
+  ailleurs ; `COPYUID` à exploiter plus tard) ; aucun retry réseau.
+- Un seul dossier synchronisé par appel ; `sync_account` ne fait que INBOX + Sent.
+- Ni pool de connexions, ni keychain, ni PGP réel, ni flux navigateur OAuth2, ni IDLE/push, ni
+  recherche serveur.
+
 ## Dépôt
 
 - Gitea : **https://git.lanro.eu/Roman/lavande** (branche `main`)

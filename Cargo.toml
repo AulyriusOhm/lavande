@@ -1,0 +1,10 @@
+[workspace]
+members = ["crates/mail-core"]
+exclude = ["src-tauri"]
+resolver = "2"
+
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0

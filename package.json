@@ -8,7 +8,11 @@
     "dev:portal": "VITE_BASE=/lavande/ vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "mail:fmt": "cargo fmt --all -- --check",
+    "mail:clippy": "cargo clippy -p lavande-mail --all-targets -- -D warnings",
+    "mail:test": "cargo test -p lavande-mail",
+    "mail:test:live": "MAIL_TEST_TLS_DIR=$HOME/.cache/lavande/mail-test cargo test -p lavande-mail --test live -- --ignored --test-threads=1"
   },
   "dependencies": {
     "clsx": "^2.1.1",
