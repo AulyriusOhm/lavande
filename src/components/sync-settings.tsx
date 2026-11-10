@@ -7,9 +7,31 @@ import type { SyncDevice } from "@/lib/sync/client";
 import type { SyncPhase } from "@/lib/sync/engine";
 import { cn } from "@/lib/utils";
 import { Badge, DButton, DIconButton, SectionLabel, Surface, TextInput } from "@/desktop/ui";
+import { Switch } from "@/components/ui/primitives";
+import { isNativeShell } from "@/lib/native";
 
 const DEFAULT_SERVER = "http://127.0.0.1:8787";
+const SERVER_KEY = "lavande.sync.serverUrl";
+const NATIVE_HINT = "http://192.168.1.x:8787";
 const PAIR_POLL_MS = 2000;
+
+function initialServerUrl(): string {
+  const fallback = isNativeShell() ? "" : DEFAULT_SERVER;
+  try {
+    const saved = window.localStorage.getItem(SERVER_KEY);
+    return saved === null || saved === "" ? fallback : saved;
+  } catch {
+    return fallback;
+  }
+}
+
+function rememberServer(url: string): void {
+  try {
+    window.localStorage.setItem(SERVER_KEY, url);
+  } catch {
+    return;
+  }
+}
 
 const PHASE: Record<SyncPhase, { label: string; tone: "neutral" | "amber" | "sky" | "green" | "rose" }> = {
   unconfigured: { label: "Non configuré", tone: "neutral" },
@@ -47,7 +69,7 @@ export function SyncSettings({ variant = "mobile" }: { variant?: "mobile" | "des
 
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER);
+  const [serverUrl, setServerUrl] = useState(initialServerUrl);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [devices, setDevices] = useState<SyncDevice[]>([]);
@@ -57,6 +79,7 @@ export function SyncSettings({ variant = "mobile" }: { variant?: "mobile" | "des
 
   const account = engine.getState().account;
   const own = engine.getState().device;
+  const autoSync = engine.getState().autoSync;
 
   const run = useCallback(async (key: string, action: () => Promise<void>) => {
     setBusy(key);
@@ -102,13 +125,17 @@ export function SyncSettings({ variant = "mobile" }: { variant?: "mobile" | "des
 
   const create = () =>
     run("create", async () => {
-      await engine.createAccount({ serverUrl: serverUrl.trim(), email: email.trim(), password });
+      const url = serverUrl.trim();
+      await engine.createAccount({ serverUrl: url, email: email.trim(), password });
+      rememberServer(url);
       setPassword("");
     });
 
   const login = () =>
     run("login", async () => {
-      await engine.loginAccount({ serverUrl: serverUrl.trim(), email: email.trim(), password });
+      const url = serverUrl.trim();
+      await engine.loginAccount({ serverUrl: url, email: email.trim(), password });
+      rememberServer(url);
       setPassword("");
     });
 
@@ -176,6 +203,14 @@ export function SyncSettings({ variant = "mobile" }: { variant?: "mobile" | "des
         </div>
         {sync.error !== undefined ? <p className={errorText}>{sync.error}</p> : null}
         {error !== null ? <p className={errorText}>{error}</p> : null}
+        <div className="mt-2.5 flex items-center justify-between gap-3 border-t border-line/70 pt-2.5">
+          <span className={cn("font-semibold text-ink-muted", small)}>Synchro automatique (30 s)</span>
+          <Switch
+            checked={autoSync}
+            label="Synchro automatique"
+            onChange={(value) => engine.setAutoSync(value)}
+          />
+        </div>
       </Surface>
 
       {!configured ? (
@@ -187,7 +222,7 @@ export function SyncSettings({ variant = "mobile" }: { variant?: "mobile" | "des
                 aria-label="URL du serveur"
                 className={field}
                 value={serverUrl}
-                placeholder={DEFAULT_SERVER}
+                placeholder={isNativeShell() ? NATIVE_HINT : DEFAULT_SERVER}
                 onChange={(event) => setServerUrl(event.target.value)}
               />
               <TextInput

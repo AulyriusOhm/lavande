@@ -4,6 +4,13 @@ use sqlx::postgres::PgConnectOptions;
 use std::{env, str::FromStr};
 
 const PREFIX: &str = "LAVANDE_SYNC_";
+const APP_ORIGINS: [&str; 5] = [
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "tauri://localhost",
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+];
 const DEFAULT_DATABASE_URL: &str = "postgres://lavande:lavande@127.0.0.1:55432/lavande_sync";
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8787";
 
@@ -58,20 +65,26 @@ impl Config {
 }
 
 fn origins() -> Result<Vec<HeaderValue>> {
-    raw("CORS_ORIGINS")
-        .map(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .filter(|origin| !origin.is_empty())
-                .map(|origin| {
-                    HeaderValue::from_str(origin).with_context(|| {
-                        format!("LAVANDE_SYNC_CORS_ORIGINS : origine invalide {origin}")
-                    })
-                })
-                .collect()
+    let mut origins: Vec<HeaderValue> = APP_ORIGINS
+        .iter()
+        .map(|origin| {
+            HeaderValue::from_str(origin)
+                .with_context(|| format!("origine d'application invalide : {origin}"))
         })
-        .unwrap_or_else(|| Ok(Vec::new()))
+        .collect::<Result<_>>()?;
+
+    if let Some(value) = raw("CORS_ORIGINS") {
+        for origin in value.split(',').map(str::trim).filter(|o| !o.is_empty()) {
+            let header = HeaderValue::from_str(origin).with_context(|| {
+                format!("LAVANDE_SYNC_CORS_ORIGINS : origine invalide {origin}")
+            })?;
+            if !origins.contains(&header) {
+                origins.push(header);
+            }
+        }
+    }
+
+    Ok(origins)
 }
 
 fn raw(name: &str) -> Option<String> {

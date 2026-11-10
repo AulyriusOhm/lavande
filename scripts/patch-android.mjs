@@ -119,6 +119,18 @@ function patchThemes(source) {
   );
 }
 
+function patchManifest(source) {
+  const pattern = /<application\b[^>]*>/;
+  if (!pattern.test(source)) throw new Error("balise <application> introuvable dans AndroidManifest.xml");
+  return source.replace(pattern, (tag) => {
+    if (tag.includes('android:usesCleartextTraffic="true"')) return tag;
+    if (tag.includes("android:usesCleartextTraffic")) {
+      return tag.replace(/android:usesCleartextTraffic="[^"]*"/, 'android:usesCleartextTraffic="true"');
+    }
+    return tag.replace("<application", '<application\n        android:usesCleartextTraffic="true"');
+  });
+}
+
 const ADAPTIVE_ICON = `<?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/ic_launcher_background" />
@@ -171,6 +183,11 @@ for (const file of mainActivities) {
 }
 
 await patchFile(path.join(resValuesDir, "colors.xml"), patchColors, "res/values/colors.xml");
+await patchFile(
+  path.join(appDir, "AndroidManifest.xml"),
+  patchManifest,
+  "AndroidManifest.xml (cleartext pour le serveur de synchro LAN)",
+);
 await patchFile(path.join(resValuesDir, "themes.xml"), patchThemes, "res/values/themes.xml");
 await patchFile(
   path.join(appDir, "res", "values-night", "themes.xml"),

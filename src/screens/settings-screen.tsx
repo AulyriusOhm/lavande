@@ -9,7 +9,6 @@ import {
   Moon,
   Palette,
   PenLine,
-  RotateCcw,
   Sun,
   Type,
   Users,
@@ -60,7 +59,6 @@ export function SettingsScreen({
   } = usePrefs();
   const [notifications, setNotifications] = useState(true);
   const [preview, setPreview] = useState<PreviewMode>("unlocked");
-  const [autoSync, setAutoSync] = useState(true);
   const enabled = mergeFlags(
     Object.fromEntries(MCP_SERVERS.map((server) => [server.id, server.status === "connected"])),
     mcpEnabled,
@@ -301,13 +299,6 @@ export function SettingsScreen({
               Les messages chiffrés ne sont jamais inclus en clair dans la notification push.
             </p>
           </div>
-          <ToggleRow
-            icon={<RotateCcw className="size-4" />}
-            label="Synchro automatique"
-            hint={autoSync ? "Toutes les 5 min" : "Synchronisation manuelle"}
-            checked={autoSync}
-            onChange={setAutoSync}
-          />
         </Card>
       </BlurFade>
 

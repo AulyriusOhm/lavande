@@ -187,6 +187,20 @@ le dock est visible, c'est le premier suspect.
 - **Bouton retour Android = historique WebView** : chaque couche ouverte pousse un état d'historique
   (`pushState` dans `src/App.tsx`), donc retour ferme la couche du dessus (message, feuille, overlay) ;
   sans couche ouverte, il sort de l'app.
-- **Pas de backend** : fixtures uniquement, état perdu au redémarrage (sauf thème, accent et préférences
-  de gestes en `localStorage`).
+- **Pas de backend mail** : fixtures uniquement (sauf la planification, synchronisée — voir ci-dessous) ;
+  thème, accent, préférences de gestes et documents de planification en `localStorage`.
 - Pas de build release signé, pas de `--split-per-abi`, pas de CI Android.
+
+## Synchronisation de la planification (APK)
+
+Les tâches et suggestions se synchronisent entre appareils via le serveur `server/` (protocole E2EE :
+[`SYNC.md`](./SYNC.md)). Côté APK, trois points sont indispensables et déjà en place :
+
+| Point | Réglage |
+| --- | --- |
+| Origine WebView autorisée côté serveur | `http://tauri.localhost`, `https://tauri.localhost`, `tauri://localhost` sont dans les origines CORS par défaut (`server/src/config.rs`) |
+| HTTP en clair vers le serveur LAN | `scripts/patch-android.mjs` pose `android:usesCleartextTraffic="true"` dans `AndroidManifest.xml` ; sans ça, Android bloque `http://192.168.x.x:8787` |
+| URL du serveur | champ **Réglages → Synchronisation → URL du serveur** : `127.0.0.1` n'a pas de sens sur un téléphone, il faut l'adresse LAN de la machine qui héberge le serveur. La dernière URL saisie est mémorisée |
+
+Le jeton, les enveloppes de clés et les documents chiffrés restent dans le `localStorage` de la WebView :
+l'app est utilisable hors ligne, les mutations s'empilent et partent à la prochaine synchro.
