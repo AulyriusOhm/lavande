@@ -14,6 +14,9 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     allowedHosts: true,
+    watch: {
+      ignored: ["**/.plasma/**", "**/src-tauri/**", "**/server/**", "**/dist/**"],
+    },
   },
   clearScreen: false,
 });
