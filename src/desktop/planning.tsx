@@ -18,6 +18,7 @@ import { useMailStore } from "@/lib/store";
 import { useEscapeLayer } from "@/desktop/escape";
 import { cn } from "@/lib/utils";
 import { Badge, DButton, DChip, DIconButton, PaneTitle, SectionLabel, TextArea, TextInput } from "@/desktop/ui";
+import { SyncBadge } from "@/components/sync-badge";
 import { BorderBeam } from "@/components/ui/border-beam";
 import { Avatar } from "@/components/ui/primitives";
 import { createTask } from "@/screens/new-task-sheet";
@@ -36,7 +37,7 @@ const FIELD = "mt-1.5";
 
 type Selection = { kind: "task"; id: string } | { kind: "suggestion"; suggestion: MailSuggestion } | null;
 
-export function DesktopPlanning({ onNewTask }: { onNewTask: () => void }) {
+export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => void; onOpenSync: () => void }) {
   const { tasks, setTasks, suggestions, addSuggestion, dismissSuggestion, notify, openMessage, mails } =
     useMailStore();
   const [selection, setSelection] = useState<Selection>(null);
@@ -93,6 +94,7 @@ export function DesktopPlanning({ onNewTask }: { onNewTask: () => void }) {
       <header className="flex items-center justify-between gap-4 px-6 pt-5">
         <PaneTitle hint={`${openTasks} ouvertes`}>Planification</PaneTitle>
         <div className="flex items-center gap-2">
+          <SyncBadge onOpen={onOpenSync} />
           {suggestions.length > 0 ? (
             <span className="inline-flex h-8 items-center rounded-full bg-accent-soft px-2.5 text-[11px] font-bold text-accent-ink tabular-nums">
               {suggestions.length} suggestions

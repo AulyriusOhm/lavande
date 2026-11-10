@@ -61,6 +61,7 @@ export type SyncEngine = {
   syncNow(): Promise<void>;
   emitLocal(kind: EntityKind, id: string, patch: Record<string, unknown>, op?: "upsert" | "delete"): void;
   readOnly(kind: EntityKind, id: string): boolean;
+  canEmit(): boolean;
   setAutoSync(value: boolean): void;
   createAccount(input: { serverUrl: string; email: string; password: string }): Promise<void>;
   loginAccount(input: { serverUrl: string; email: string; password: string }): Promise<void>;
@@ -337,6 +338,11 @@ export function createSyncEngine(storage: SyncStorage, options: SyncEngineOption
     return run;
   }
 
+  function canEmit(): boolean {
+    const state = storage.read();
+    return state.account !== undefined && resolveDek(state) !== null;
+  }
+
   function readOnly(kind: EntityKind, id: string): boolean {
     if (phase === "read_only") return true;
     return storage.read().docs[docKey(kind, id)]?.readOnly === true;
@@ -581,6 +587,7 @@ export function createSyncEngine(storage: SyncStorage, options: SyncEngineOption
     syncNow,
     emitLocal,
     readOnly,
+    canEmit,
     setAutoSync,
     createAccount,
     loginAccount,

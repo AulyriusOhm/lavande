@@ -9,6 +9,7 @@ import { SwipeAction } from "@/components/ui/swipe-action";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { AnimatedGradientText } from "@/components/ui/animated-text";
+import { SyncBadge } from "@/components/sync-badge";
 
 type Filter = TaskState | "all" | "suggestion";
 
@@ -33,6 +34,7 @@ export function PlanningScreen({
   onNewTask,
   movingTask,
   onMovingChange,
+  onOpenSync,
 }: {
   tasks: Task[];
   setTasks: React.Dispatch<React.SetStateAction<Task[]>>;
@@ -44,6 +46,7 @@ export function PlanningScreen({
   onNewTask?: () => void;
   movingTask?: Task | null;
   onMovingChange?: (task: Task | null) => void;
+  onOpenSync?: () => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [localMoving, setLocalMoving] = useState<Task | null>(null);
@@ -140,9 +143,12 @@ export function PlanningScreen({
               <h1 className="text-[26px] leading-none font-extrabold tracking-[-0.035em] text-ink">
                 <AnimatedGradientText>Planification</AnimatedGradientText>
               </h1>
-              <span className="shrink-0 text-[11px] font-semibold text-ink-muted">
-                <NumberTicker value={tasks.filter((task) => task.state !== "done").length} /> ouvertes
-              </span>
+              <div className="flex shrink-0 items-center gap-2">
+                <SyncBadge onOpen={onOpenSync} />
+                <span className="text-[11px] font-semibold text-ink-muted">
+                  <NumberTicker value={tasks.filter((task) => task.state !== "done").length} /> ouvertes
+                </span>
+              </div>
             </div>
           </motion.header>
         </motion.div>

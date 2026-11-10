@@ -176,12 +176,22 @@ lisent pas. Sur PC, les mêmes données s'affichent en **cinq colonnes** avec gl
 la case à cocher, l'objet du mail d'origine et l'échéance déduite — on ajoute une tâche d'un clic,
 le panneau de détail s'ouvre d'un clic sur la carte.
 
+C'est **la seule donnée qui quitte l'appareil**, donc c'est la seule qui affiche son état : une
+**pastille dans l'en-tête**, à côté du compteur de tâches ouvertes — point coloré + un mot
+(`À jour`, `3 en attente`, `Hors ligne`, `Lecture seule`, `Locale` si aucun compte n'est configuré).
+Un tap mène aux réglages de synchronisation. Le point porte la couleur d'état (vert · ambre · rose),
+le texte porte le nombre : on doit comprendre en un regard latéral si ce qu'on vient de cocher est
+déjà parti ailleurs.
+
 **Agenda** — grille du mois réellement calculée, sélection au tap, colonne horaire, badge « mail » quand
 l'événement vient d'un message. Le rendez-vous se crée depuis le bouton flottant.
 
 **Réglages** — l'accent se choisit en couleur **et** en aperçu ; les gestes (glisser à gauche / à
 droite) se configurent par direction ; PGP et MCP sont des vues poussées, pas des onglets : ce sont des
-réglages, pas des destinations quotidiennes.
+réglages, pas des destinations quotidiennes. **Synchronisation** y vit aussi, en une seule carte d'état
+(badge de phase, opérations en attente, dernière synchro, bouton manuel, interrupteur 30 s) suivie des
+deux seuls formulaires qui existent : créer ou connecter un compte, appairer un appareil. Pas de
+vocabulaire cryptographique à l'écran — « code d'appairage » et « empreinte » suffisent.
 
 ## 8. Décisions assumées
 
@@ -197,11 +207,22 @@ réglages, pas des destinations quotidiennes.
   (suggestions de mails). Un paragraphe qui décrit l'écran est un aveu d'échec de l'interface.
 - **Fixtures réalistes** : noms, sujets, pièces jointes et états PGP crédibles — on ne juge pas un
   design sur du lorem ipsum.
+- **Pas de bandeau de synchronisation** : un bandeau permanent vole une ligne de contenu et un bandeau
+  conditionnel clignote ; une pastille dans l'en-tête de la seule vue concernée suffit, et le détail
+  reste dans les réglages. Pas de spinner plein écran non plus : la mutation est **optimiste**, l'état
+  se voit, le réseau se rattrape en arrière-plan.
+- **Une synchronisation qui ne se raconte pas** : aucun écran ne parle de clés, d'enveloppes ou d'horloge
+  logique. Ce qui est chiffré de bout en bout se dit une fois, dans les réglages, en une phrase.
 
 ## 9. Limites connues (maquette)
 
-- Aucune donnée réelle : tout est en mémoire, l'état repart au rechargement (sauf thème, accent et
-  préférences de gestes, persistés en `localStorage`). Le brouillon est uniquement conservé pendant la session.
+- Aucune donnée mail réelle : les messages sont des fixtures en mémoire. Thème, accent, préférences de
+  gestes **et documents de planification** persistent en `localStorage` ; le brouillon est conservé
+  pendant la session.
+- La planification se synchronise vraiment (serveur `server/`, chiffré de bout en bout), mais il faut
+  un serveur joignable : sans compte configuré la pastille affiche `Locale` et tout reste sur l'appareil.
+  Les conflits se résolvent au dernier écrivain par champ — deux appareils hors ligne qui modifient le
+  même champ gardent la modification la plus récente, l'autre est perdue sans dialogue.
 - La vue bureau existe (`?desktop`) mais reste une maquette : hors `⌘K` et `Échap`, pas de raccourcis
   clavier, pas de colonnes redimensionnables, pas de glisser-déposer de fichiers.
 - Les actions destructrices proposent une annulation temporaire, sans persistance après rechargement.
@@ -211,5 +232,7 @@ réglages, pas des destinations quotidiennes.
 
 1. Affiner la vue bureau : raccourcis clavier (j/k, archiver, répondre), colonnes ajustables.
 2. Valider sur appareils réels les safe areas, le clavier, les tailles de texte et les cibles ≥ 44 px.
-3. Brancher les vraies données (IMAP/OAuth) puis remplacer les fixtures sans toucher aux composants.
+3. Brancher les vraies données mail (IMAP/OAuth) puis remplacer les fixtures sans toucher aux composants.
 4. Persister les brouillons et les annulations, et compléter les annonces `aria-live` des changements d'état.
+5. Donner un état vide et une explication à `read_only` (client plus ancien que le serveur) : aujourd'hui
+   la pastille le signale, mais rien n'indique quoi faire.

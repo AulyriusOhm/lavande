@@ -371,6 +371,7 @@ function PhoneApp({ native }: { native?: boolean }) {
                   onNewTask={openTaskDraft}
                   movingTask={movingTask}
                   onMovingChange={setMovingTask}
+                  onOpenSync={() => changeTab("settings")}
                 />
               )}
               {id === "settings" && (

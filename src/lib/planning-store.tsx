@@ -221,7 +221,7 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
 
   const emit = useCallback(
     (kind: "task" | "suggestion", id: string, patch: Record<string, unknown>, op: "upsert" | "delete" = "upsert") => {
-      if (engine.getStatus().phase === "unconfigured") {
+      if (!engine.canEmit()) {
         applyLocal(kind, id, patch, op);
         return;
       }

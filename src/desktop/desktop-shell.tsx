@@ -63,7 +63,9 @@ export function DesktopApp() {
       <main className="relative min-h-0 flex-1">
         {view === "inbox" && <DesktopInbox onOpenSearch={() => setSearchOpen(true)} />}
         {view === "calendar" && <DesktopCalendar onNewEvent={() => setNewEventOpen(true)} />}
-        {view === "planning" && <DesktopPlanning onNewTask={() => setNewTaskOpen(true)} />}
+        {view === "planning" && (
+          <DesktopPlanning onNewTask={() => setNewTaskOpen(true)} onOpenSync={() => changeView("settings")} />
+        )}
         {view === "settings" && <DesktopSettings />}
       </main>
 
