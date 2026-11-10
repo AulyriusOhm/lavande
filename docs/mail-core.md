@@ -615,241 +615,139 @@ Côté front : `src/lib/mail.ts` (`Mail`, `FolderId`, `PgpState`, `TONES`) et `s
   recherche serveur ; il faudra soit charger puis filtrer (comportement actuel), soit ajouter un
   `SEARCH` IMAP au crate.
 
-## Contrat des futures commandes Tauri
+## Contrat HTTP du démon local (implémenté)
 
-**Aucune de ces commandes n'est implémentée.** Payloads en JSON **snake_case** (les types du crate
-dérivent `Serialize`/`Deserialize`; `Encryption`, `FolderRole`, `PgpState` sont renommés en
-snake_case/lowercase par serde). Toutes retournent `Result<T, String>` avec
-`Err(MailError::to_string())`.
+Le crate `crates/mail-api` (binaire `lavande-maild`, lib `lavande_mail_api`) expose le moteur en JSON
+sur la boucle locale. Le front l'appelle via `/api` (proxy Vite en développement, nginx du portail
+sinon), la coquille Tauri embarque le même routeur dans son processus (voir plus bas).
 
-| Commande | Entrée | Sortie | Fonction du crate |
+Configuration, par variables d'environnement uniquement :
+
+| Variable | Défaut | Rôle |
+| --- | --- | --- |
+| `LAVANDE_MAIL_BIND` | `127.0.0.1:8790` | adresse d'écoute (loopback : aucune authentification) |
+| `LAVANDE_MAIL_DATA_DIR` | `$XDG_DATA_HOME/lavande` | `mail.db` (SQLite) + `accounts.json` (0600) |
+| `LAVANDE_MAIL_EXTRA_ROOTS` | — | PEM ajouté aux racines TLS (serveur de test auto-signé) |
+
+Erreurs : `{ "error": "message lisible", "kind": "config|auth|imap|smtp|tls|oauth|store|mime" }`.
+`MailError::Config` → 400, `Auth` → 401, `InvalidData` → 404, réseau/TLS/IMAP/SMTP/OAuth → 502,
+`Store`/`Mime` → 500.
+
+| Méthode | Chemin | Corps | Réponse |
 | --- | --- | --- | --- |
-| `add_account` | `AccountConfig` | `AccountSummary` | `AccountConfig::validate` → `Store::upsert_account` (+ `sync_account` si synchro demandée) |
-| `list_accounts` | — | `Vec<AccountSummary>` | *(à ajouter : `Store::list_accounts`)* |
-| `sync_folder` | `{ account_id, folder_path }` | `SyncReport` | `imap::connect_with` → `imap::sync_folder` (réconciliation complète du dossier : suppressions, flags, nouveaux corps) |
-| `list_threads` | `{ account_id, folder_path }` | `Vec<Thread>` | `Store::threads_in_folder` (+ `thread_key` côté bridge) |
-| `get_message` | `{ account_id, folder_path, uid, fetch_body? }` | `Message` | `Store::get_message`, puis `imap::fetch_body` si le corps manque |
-| `set_flags` | `{ account_id, folder_path, uid, unread, starred }` | `()` | `imap::set_flags` puis `Store::set_flags` |
-| `move_message` | `{ account_id, from_path, uid, to_path }` | `()` | `imap::move_message` (supprime la ligne source, réconcilie la destination : l'UID local devient celui du serveur) |
-| `send_message` | `{ account_id, message: OutgoingMessageDto }` | `()` | `smtp::send_with` |
+| GET | `/api/health` | — | `{ "status": "ok", "version": "0.1.0" }` |
+| GET | `/api/accounts` | — | `[AccountSummary]` (jamais de secret) |
+| POST | `/api/accounts` | `AccountConfig` | 201 `AccountSummary`, 400 config, 409 id pris, 401/502 connexion refusée |
+| DELETE | `/api/accounts/{id}` | — | 204 (purge base + `accounts.json`), 404 |
+| GET | `/api/discover?email=…` | — | 200 `Discovery` (`found: false` si rien publié), 400 adresse invalide |
+| GET | `/api/accounts/{id}/folders` | — | `[Folder]` |
+| POST | `/api/accounts/{id}/sync` | `{ "folder_path"? }` | `{ "reports": [{ folder_path, inserted, flags_updated, removed, uidvalidity_changed, uidnext }] }` |
+| GET | `/api/accounts/{id}/folders/{path}/threads?limit=50&offset=0` | — | `[Thread]` (limit plafonné à 200) |
+| GET | `/api/accounts/{id}/folders/{path}/messages/{uid}?fetch_body=true` | — | `Message` (corps rapatrié à la demande) |
+| POST | `/api/accounts/{id}/flags` | `{ folder_path, uid, unread, starred }` | 204 (serveur d'abord, store ensuite) |
+| POST | `/api/accounts/{id}/move` | `{ from_path, uid, to_path }` | 204 (UID local réaligné sur celui du serveur) |
+| POST | `/api/accounts/{id}/send` | `SendRequest` | 204 |
 
-### Signatures (non implémentées)
+`POST /api/accounts` **teste la connexion IMAP et liste les dossiers avant d'écrire quoi que ce soit** :
+rien n'est persisté si le serveur refuse. Les corps et réponses sont les types de
+`crates/mail-core/src/model.rs` sérialisés tels quels (`folder_path`, `uid`, `flags.unread`, etc.) ;
+`{path}` doit être percent-encodé.
 
-```rust
-#[tauri::command]
-async fn add_account(state: State<'_, MailState>, config: AccountConfig) -> Result<AccountSummary, String>;
+### Découverte des serveurs (`GET /api/discover`)
 
-#[tauri::command]
-async fn list_accounts(state: State<'_, MailState>) -> Result<Vec<AccountSummary>, String>;
+Chaîne exécutée côté service (le navigateur ne peut ni interroger l'ISPDB ni faire du DNS) :
 
-#[tauri::command]
-async fn sync_folder(
-    state: State<'_, MailState>, account_id: String, folder_path: String,
-) -> Result<SyncReport, String>;
+1. **ISPDB Thunderbird** `https://autoconfig.thunderbird.net/v1.1/<domaine>` — base centrale ;
+2. **autoconfig du domaine** `https://autoconfig.<domaine>/mail/config-v1.1.xml?emailaddress=…`,
+   puis `https://<domaine>/.well-known/autoconfig/mail/config-v1.1.xml?emailaddress=…`, puis HTTP
+   en clair sur `autoconfig.<domaine>` ;
+3. **sondage** : `imap.`/`mail.`/`<domaine>` sur 993 (TLS), `smtp.`/`mail.`/`<domaine>` sur 465 puis
+   587, retenus seulement si le handshake TLS et la bannière (`* OK` / `220`) répondent.
 
-#[tauri::command]
-async fn list_threads(
-    state: State<'_, MailState>, account_id: String, folder_path: String,
-) -> Result<Vec<Thread>, String>;
+Les quatre documents sont interrogés **en parallèle** puis choisis par priorité ; sinon un domaine
+dont `autoconfig.<domaine>` ne résout pas consommait le délai et retombait sur le sondage. Parsing de
+`clientConfig v1.1` : `socketType` (`SSL` → `tls`, `STARTTLS` → `start_tls`), `authentication`
+(`password-cleartext` → `password`, `OAuth2` → `oauth2`), substitution de `%EMAILADDRESS%`,
+`%EMAILLOCALPART%`, `%EMAILDOMAIN%`. Cache mémoire par domaine (1 h, échec 5 min), délai 3 s par
+tentative.
 
-#[tauri::command]
-async fn get_message(
-    state: State<'_, MailState>, account_id: String, folder_path: String, uid: u32,
-) -> Result<Message, String>;
-
-#[tauri::command]
-async fn set_flags(
-    state: State<'_, MailState>,
-    account_id: String, folder_path: String, uid: u32, unread: bool, starred: bool,
-) -> Result<(), String>;
-
-#[tauri::command]
-async fn move_message(
-    state: State<'_, MailState>,
-    account_id: String, from_path: String, uid: u32, to_path: String,
-) -> Result<(), String>;
-
-#[tauri::command]
-async fn send_message(
-    state: State<'_, MailState>, account_id: String, message: OutgoingMessageDto,
-) -> Result<(), String>;
+```json
+{
+  "found": true, "source": "ispdb",
+  "url": "https://autoconfig.thunderbird.net/v1.1/gmail.com",
+  "provider": "Google Mail", "display_name": "Google Mail",
+  "incoming": { "host": "imap.gmail.com", "port": 993, "encryption": "tls", "username": "roman@gmail.com" },
+  "outgoing": { "host": "smtp.gmail.com", "port": 465, "encryption": "tls", "username": "roman@gmail.com" },
+  "auth": ["password", "oauth2"]
+}
 ```
 
-`MailState` n'existe pas encore : c'est l'état partagé décrit plus bas (`Store` sous `Mutex`, plus
-les `AccountConfig`). `OutgoingMessageDto` est à écrire : `OutgoingMessage` **n'est pas**
-`Deserialize` (champs `Vec<u8>` pour les pièces jointes, ce qui suppose du base64 côté JSON).
+`source` ∈ `ispdb` \| `autoconfig` \| `well_known` \| `guess`. Un domaine inconnu renvoie
+`{ "found": false, "source": null, "reason": "aucune configuration publiée pour « … »" }` — ce n'est
+pas une erreur.
 
 ### Exemples de payloads
 
-`add_account` (entrée) :
+`POST /api/accounts` :
 
 ```json
 {
-  "id": "perso",
-  "label": "Perso",
-  "email": "roman@lavande.mail",
-  "username": "roman@lavande.mail",
-  "imap": { "host": "imap.lavande.mail", "port": 993, "encryption": "tls" },
-  "smtp": { "host": "smtp.lavande.mail", "port": 465, "encryption": "tls" },
-  "auth": { "kind": "password", "password": "secret" }
+  "id": "perso", "label": "Perso", "email": "roman@mail.lanro.eu", "username": "roman@mail.lanro.eu",
+  "imap": { "host": "mail.lanro.eu", "port": 993, "encryption": "tls" },
+  "smtp": { "host": "mail.lanro.eu", "port": 587, "encryption": "start_tls" },
+  "auth": { "kind": "password", "password": "…" }
 }
 ```
 
-Variante OAuth2 (`auth`) :
+Variante OAuth2 (`auth`) : `{ "kind": "oauth2", "client_id": "…", "client_secret": "…",
+"refresh_token": "…", "token_endpoint": "https://oauth2.googleapis.com/token" }` — acceptée par
+l'API, mais l'écran de connexion ne propose encore que le mot de passe.
 
-```json
-{ "kind": "oauth2", "client_id": "…", "client_secret": "…",
-  "refresh_token": "…", "token_endpoint": "https://oauth2.googleapis.com/token" }
-```
-
-`add_account` (sortie) — forme proposée, cohérente avec `accounts.ts` :
-
-```json
-{ "id": "perso", "label": "Perso", "email": "roman@lavande.mail", "folders": 6 }
-```
-
-`sync_folder` (sortie) :
-
-```json
-{ "inserted": 42, "flags_updated": 3, "removed": 1, "uidvalidity_changed": false, "uidnext": 1207 }
-```
-
-`list_threads` (sortie, tronquée) :
-
-```json
-[
-  {
-    "id": "perso:9f3c1a77b2e40d18",
-    "account_id": "perso",
-    "count": 3, "unread": 1, "starred": true, "encrypted": 2, "attachments": 2,
-    "participants": ["Camille", "Marc"],
-    "subject": "Maquettes mobiles — version 3",
-    "preview": "Camille : J'ai poussé la v3.1 dans Figma…",
-    "primary": {
-      "account_id": "perso", "folder_path": "INBOX", "uid": 1206, "uidvalidity": 7,
-      "thread_id": "9f3c1a77b2e40d18",
-      "from": { "name": "Camille Rousseau", "email": "camille@studio-lilas.fr" },
-      "to": [{ "name": "Roman", "email": "roman@lavande.mail" }],
-      "cc": [], "references": ["a@studio-lilas.fr", "b@studio-lilas.fr"],
-      "in_reply_to": "b@studio-lilas.fr",
-      "message_id": "c@studio-lilas.fr",
-      "subject": "Re: Maquettes mobiles — version 3",
-      "date": "2026-11-10T10:02:00Z",
-      "flags": { "unread": true, "starred": false, "answered": false },
-      "size": 48120, "pgp": "encrypted", "preview": "J'ai poussé la v3.1 dans Figma, les deux barres sont décollées",
-      "body_text": null, "body_html": null,
-      "attachments": [{ "filename": "inbox-v3.fig", "mime": "application/octet-stream", "size": 4404019, "inline": false }]
-    }
-  }
-]
-```
-
-Les identifiants de message (`message_id`, `in_reply_to`, `references`) sont stockés **sans
-chevrons** (`mime.rs` les nettoie) : ce sont ces valeurs qu'il faut réinjecter dans
-`send_message`.
-
-`set_flags` (entrée) :
-
-```json
-{ "account_id": "perso", "folder_path": "INBOX", "uid": 1206, "unread": false, "starred": true }
-```
-
-`send_message` (entrée) — DTO proposé, pièces jointes en base64 :
+`POST /api/accounts/{id}/send` (pièces jointes en base64) :
 
 ```json
 {
-  "account_id": "perso",
-  "message": {
-    "from": { "name": "Roman", "email": "roman@lavande.mail" },
-    "to": [{ "name": "Camille", "email": "camille@studio-lilas.fr" }],
-    "cc": [], "bcc": [],
-    "subject": "Re: Maquettes mobiles — version 3",
-    "text": "Les contrastes passent mieux en extérieur.",
-    "html": null,
-    "in_reply_to": "b@studio-lilas.fr",
-    "references": ["a@studio-lilas.fr", "b@studio-lilas.fr"],
-    "attachments": [{ "filename": "specs-mobile.pdf", "mime": "application/pdf", "data": "JVBERi0xLjQK…" }]
-  }
+  "to": [{ "name": "Camille", "email": "camille@studio-lilas.fr" }],
+  "cc": [], "bcc": [],
+  "subject": "Re: Maquettes", "text": "Bonjour…",
+  "in_reply_to": "c@studio-lilas.fr", "references": ["a@studio-lilas.fr", "c@studio-lilas.fr"],
+  "attachments": [{ "filename": "plan.pdf", "mime": "application/pdf", "data_base64": "JVBERi0…" }]
 }
 ```
 
-### Erreurs par commande
+Les identifiants de message (`message_id`, `in_reply_to`, `references`) sont stockés **sans chevrons**.
 
-| Commande | Erreurs attendues (`MailError`) |
-| --- | --- |
-| `add_account` | `Config` (champ vide, endpoint `plain`), `Store` (base inaccessible), `Auth`/`Imap` si synchro immédiate. Un `id` déjà présent est **mis à jour**, pas rejeté (`ON CONFLICT DO UPDATE`) |
-| `list_accounts` | `Store` |
-| `sync_folder` | `Config`, `Auth`, `Tls`, `Imap` (dossier absent, pas de `UIDVALIDITY`/`UIDNEXT`), `Mime`, `Store` |
-| `list_threads` | `Store` |
-| `get_message` | `Store` (`get_message` renvoie `Ok(None)` quand l'UID est absent : à traduire en erreur lisible côté commande), `Imap`, `Mime` |
-| `set_flags` | `Auth`, `Imap`, `Store` (`InvalidData("message not found")`) |
-| `move_message` | `Auth`, `Imap` (pas de `MOVE`/`COPY`, dossier cible absent), `Mime` (corps illisible pendant la réconciliation de la destination), `Store` |
-| `send_message` | `Smtp` (`"no recipient"`, refus serveur), `Tls`, `OAuth`, `Config` |
+### Front et coquille Tauri
 
-Rappel : `Display` fournit déjà `"imap error: …"`, `"auth error: …"`, etc. Le front peut afficher
-`String` tel quel ; il ne faut pas renvoyer le `Debug` d'`AccountConfig`.
+- `src/lib/api.ts` : client typé, `ApiError { kind, status }`, délais 15 s (appels courts) et 180 s
+  (synchro, corps, envoi). Base = `${BASE_URL}api`, ou `http://127.0.0.1:8790/api` quand
+  `window.isTauri` est présent (démon embarqué).
+- `src/lib/mail-backend.ts` : traduction `Message`/`Thread` → `Mail`/`Thread` du store, rôles de
+  dossiers → `FolderId`, formatage des dates.
+- `VITE_MAIL_BACKEND=demo` garde les fixtures (calendrier, planning, MCP) ; `api` (défaut) branche la
+  vraie boîte. Si le démon est absent, un bandeau propose de le démarrer ou de passer en démo.
+- Coquille Tauri (`src-tauri/src/lib.rs`) : `lavande_mail_api::serve()` démarre le routeur sur
+  `127.0.0.1:8790` avec `app_data_dir()` au lancement, dans le processus de l'app (pas de sidecar).
+  Le routeur autorise l'origine du webview (CORS), et l'APK autorise le trafic local en clair.
 
-## Stratégie de cohabitation
+## Modes de fonctionnement
 
-### Mode démo (aujourd'hui)
+| Mode | Mise en place | Données |
+| --- | --- | --- |
+| `api` (défaut) | démon local (`scripts/mail-service.sh`) ou coquille Tauri | vraie boîte, SQLite locale |
+| `demo` | `VITE_MAIL_BACKEND=demo` | fixtures `src/lib/mail.ts` |
 
-`src/lib/store.tsx` initialise `const [mails, setMails] = useState<Mail[]>(MAILS)` : toute l'app lit
-et mute ce tableau en mémoire (archivage, étoile, envoi, annulation). Aucun appel réseau. Les écrans
-sont fonctionnels et couvrent déjà les gestes que le backend devra servir.
+Les écrans calendrier, planning et MCP restent sur leurs fixtures quel que soit le mode. Si le démon
+est absent, `BackendBanner` l'explique et propose « Réessayer » ou « Voir la démo » — jamais d'écran
+blanc.
 
-### Bascule par drapeau explicite
-
-```
-VITE_MAIL_BACKEND=demo    # défaut
-VITE_MAIL_BACKEND=tauri
-```
-
-Lu **une seule fois**, côté front, dans un module dédié (`src/lib/backend.ts`) :
-
-```ts
-export const mailBackend = import.meta.env.VITE_MAIL_BACKEND === "tauri" ? "tauri" : "demo";
-```
-
-C'est là que vivrait l'unique import de `@tauri-apps/api/core` :
-
-```ts
-import { invoke } from "@tauri-apps/api/core";
-export const listThreads = (accountId: string, folderPath: string) =>
-  invoke<Thread[]>("list_threads", { accountId, folderPath });
-```
-
-Aucun autre module ne connaît le backend : `src/lib/store.tsx` choisit entre `MAILS` et un chargement
-initial par `invoke`, et ses actions (`mailAction`, `toggleStar`, `sendDraft`) appellent soit la
-mutation locale actuelle, soit la commande correspondante. Tant que le drapeau vaut `demo`, le
-comportement actuel est strictement inchangé (et `npm run build` reste vert sans Tauri).
-
-### Le jour du branchement
-
-1. **Dépendance** : `lavande-mail = { path = "../crates/mail-core" }` dans `src-tauri/Cargo.toml`
-   (le workspace racine `exclude` `src-tauri`, donc chemin direct, pas de membre). Attention :
-   `rusqlite` est en `bundled` → il faut un compilateur C au build Tauri (même contrainte que sur
-   cette machine).
-2. **État partagé** : `rusqlite::Connection` est `Send` mais pas `Sync` ; `tauri::State` exige
-   `Send + Sync`. Créer un `MailState { store: Mutex<Store>, accounts: RwLock<HashMap<String, AccountConfig>> }`,
-   ouvert via `Store::open(app.path().app_data_dir()?.join("mail.db"))` puis `store.migrate()`, et
-   l'enregistrer avec `.manage(MailState { .. })`.
-3. **Sessions IMAP** : une `ImapSession` n'est pas réutilisable entre commandes (pas de pool) :
-   chaque commande réseau ouvre sa session, fait son travail, `logout()`. Le `Store` reste la seule
-   chose persistante.
-4. **Enregistrement** : `.invoke_handler(tauri::generate_handler![add_account, list_accounts, sync_folder, list_threads, get_message, set_flags, move_message, send_message])`
-   dans `src-tauri/src/lib.rs`, qui n'a aujourd'hui que `tauri::Builder::default().run(...)`.
-5. **Permissions** : `src-tauri/capabilities/default.json` n'accorde que `core:default`. Les
-   commandes définies dans l'app elle-même ne passent pas par les capacités (elles ne seraient
-   filtrées que si on les emballait dans un plugin) ; en revanche, tout accès au système de fichiers
-   ou au keychain passera par un plugin, donc par une permission à ajouter ici.
-6. **Secrets** : aucun keychain dans le crate. Tant qu'il n'y en a pas, les mots de passe vivent en
-   mémoire (`AccountConfig`) et transitent en clair dans l'IPC. À traiter avant tout usage réel.
-7. **Conversion** : écrire la couche `Message → Mail` / `Thread → Thread` (table ci-dessus) dans un
-   seul fichier front (`src/lib/bridge.ts`), formatage `time`/`date` inclus.
+Coquille Tauri : le processus démarre le routeur sur `127.0.0.1:8790` (`app_data_dir()`), le webview
+appelle cette base (origine différente, d'où le CORS loopback). L'APK autorise le trafic local en
+clair (`usesCleartextTraffic`), le démon n'écoutant que sur la boucle locale.
 
 ## Tests
 
-### Hors-ligne (44 tests, `cargo test -p lavande-mail`)
+### Hors-ligne (72 tests, `cargo test --workspace`)
 
 Presque tout est dans `tests/`, sans réseau ; le seul `#[cfg(test)] mod tests` de `src/` est dans
 `store/mod.rs` (suppression des pièces jointes par `delete_messages`).
@@ -860,9 +758,11 @@ Presque tout est dans `tests/`, sans réseau ; le seul `#[cfg(test)] mod tests` 
 | `tests/mime.rs` | 11 | message texte simple, quoted-printable, repli HTML → texte, préférence `text/plain`, métadonnées de pièces jointes, `PgpState`, aperçu compacté/tronqué, en-têtes de threading, en-têtes absents |
 | `tests/threading.rs` | 7 | `References` prioritaire, repli `In-Reply-To`, repli sujet (préfixes + accents), isolation par compte, `Message-ID` de repli, `split_ids` |
 | `tests/oauth.rs` | 4 | payload XOAUTH2, cache de l'access token, rafraîchissement après expiration, message d'erreur lisible sans secret (serveur HTTP local) |
-| `tests/store.rs` | 12 | upsert idempotent, flags/corps/`delete_message`, `flags_in_folder`, `delete_messages` (vide → 0, UID inconnus ignorés, pièces jointes emportées), `set_flags_batch` (même sémantique), tri `date DESC` + pagination, agrégation des threads, absence de préfixe expéditeur dans `Sent`, migration rejouable, relecture des dossiers, `relink_replies`, `clear_folder` |
-| `src/store/mod.rs` (`mod tests`) | 1 | `delete_messages` supprime aussi les pièces jointes du message |
-| `tests/live.rs` | 9 | réseau, `#[ignore]` (voir ci-dessous) |
+| `tests/store.rs` | 16 | upsert idempotent, flags/corps/`delete_message`, `flags_in_folder`, `delete_messages` (vide → 0, UID inconnus ignorés, pièces jointes emportées), `set_flags_batch`, `list_accounts`/`list_folders`/`delete_account`, tri `date DESC` + pagination, agrégation des threads, absence de préfixe expéditeur dans `Sent`, migration rejouable, `relink_replies`, `clear_folder` |
+| `src/store/mod.rs` (`mod tests`) | 2 | pièces jointes emportées par `delete_messages`, `Store: Send + Sync` |
+| `crates/mail-api/tests/http.rs` | 13 | routeur sans socket : `/api/health`, 400 config/JSON invalide, 409 id déjà pris, aucun secret dans `GET /api/accounts`, connexion échouée n'écrit rien, 404 inconnus, chemin de dossier percent-encodé, mapping `MailError` → statut |
+| `crates/mail-api/tests/discovery.rs` | 10 (+2 réseau) | parsing ISPDB Gmail/LaPoste et autoconfig lanro.eu, `SSL`/`STARTTLS`, `%EMAILADDRESS%`/`%EMAILLOCALPART%`, chaîne HTTP avec serveur local (`source: ispdb`), adresse invalide, domaine inconnu |
+| `tests/live.rs` (mail-core + mail-api) | 13 | réseau GreenMail, `#[ignore]` (voir ci-dessous) |
 
 Sur cette machine (pas de compilateur C système, `rusqlite`/`ring` en ont besoin) :
 
@@ -870,10 +770,10 @@ Sur cette machine (pas de compilateur C système, `rusqlite`/`ring` en ont besoi
 export PATH=/home/roman/.local/opt/lavande-cc:$PATH
 export CC=/home/roman/.local/opt/lavande-cc/cc
 export CXX=/home/roman/.local/opt/lavande-cc/c++
-npm run mail:test          # cargo test -p lavande-mail
+npm run mail:test          # cargo test --workspace
 ```
 
-### Réseau (`tests/live.rs`, 9 scénarios, ignorés par défaut)
+### Réseau (`tests/live.rs`, 15 scénarios ignorés par défaut)
 
 ```sh
 scripts/mail-test-server.sh start      # conteneur lavande-mail-test (GreenMail)

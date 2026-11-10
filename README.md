@@ -24,9 +24,26 @@ schéma SQLite, correspondance des types et limites détaillées :
 
 ```bash
 scripts/mail-service.sh start   # démon local sur 127.0.0.1:8790 (données : ~/.local/share/lavande)
-npm run dev:portal              # portail https://…:8443/lavande/  (base /lavande/)
+scripts/dev-web.sh start        # maquette servie sur le portail (équivaut à npm run dev:portal)
 npm run dev                     # ou en direct : http://localhost:1420/
 ```
+
+### APK Android
+
+La coquille Tauri **embarque le démon mail** : le routeur `lavande-mail-api` est monté dans le
+processus de l'app (écoute `127.0.0.1:8790`, données dans le stockage privé de l'app), donc un seul
+processus, aucun sidecar. Le front vise cette base dès qu'il tourne dans la coquille.
+
+```bash
+scripts/android-prepare.sh      # SDK/JDK/NDK locaux, projet généré, trafic local en clair
+scripts/android-apk.sh          # APK release arm64 signé → dist/apk/lavande-<version>-arm64.apk
+scripts/android-apk.sh --debug  # APK debug universel (test rapide)
+adb install -r dist/apk/lavande-<version>-arm64.apk
+```
+
+La clé de signature est créée au premier build dans `~/.android/lavande-release.jks` (mots de passe
+associés dans `~/.android/lavande-release.properties`, 0600) : elle ne doit jamais être versionnée,
+sinon les mises à jour de l'app seront refusées.
 
 Le portail sert l'app sous `/lavande/` : il faut `npm run dev:portal` (base `/lavande/`), sinon Vite
 renvoie l'index avec des chemins absolus et la page reste blanche (`404` sur `/src/main.tsx`).
