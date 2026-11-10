@@ -36,9 +36,9 @@ processus, aucun sidecar. Le front vise cette base dès qu'il tourne dans la coq
 
 ```bash
 scripts/android-prepare.sh      # SDK/JDK/NDK locaux, projet généré, trafic local en clair
-scripts/android-apk.sh          # APK release arm64 signé → dist/apk/lavande-<version>-arm64.apk
+scripts/android-apk.sh          # APK release arm64 signé → artifacts/apk/lavande-<version>-arm64.apk
 scripts/android-apk.sh --debug  # APK debug universel (test rapide)
-adb install -r dist/apk/lavande-<version>-arm64.apk
+adb install -r artifacts/apk/lavande-<version>-arm64.apk
 ```
 
 La clé de signature est créée au premier build dans `~/.android/lavande-release.jks` (mots de passe

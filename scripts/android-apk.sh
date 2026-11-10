@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Construit et signe l'APK Android (arm64, release) puis le copie dans
-# `dist/apk/`. La clé vit hors du dépôt (~/.android), la signature est faite
+# `artifacts/apk/` (jamais `dist/`, que `npm run build` efface). La clé vit hors du dépôt (~/.android), la signature est faite
 # avec `apksigner` : rien à modifier dans le projet Gradle généré.
 #
 #   scripts/android-apk.sh            # release arm64 signé
@@ -14,7 +14,7 @@ readonly NDK="${NDK_HOME:-$SDK/ndk/28.2.13676358}"
 readonly BUILD_TOOLS="$(ls -d "$SDK"/build-tools/* 2>/dev/null | sort -V | tail -1)"
 readonly KEYSTORE="$HOME/.android/lavande-signing.jks"
 readonly KEYPROPS="$HOME/.android/lavande-signing.properties"
-readonly OUT="$ROOT/dist/apk"
+readonly OUT="$ROOT/artifacts/apk"
 
 export ANDROID_HOME="$SDK"
 export ANDROID_SDK_ROOT="$SDK"
