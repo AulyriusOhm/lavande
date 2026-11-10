@@ -40,6 +40,68 @@ pub struct Health {
     pub version: &'static str,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub enum AuthKind {
+    #[serde(rename = "password")]
+    Password,
+    #[serde(rename = "oauth2")]
+    OAuth2,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Source {
+    Ispdb,
+    Autoconfig,
+    WellKnown,
+    Guess,
+}
+
+#[derive(Serialize)]
+pub struct SuggestedEndpoint {
+    pub host: String,
+    pub port: u16,
+    pub encryption: Encryption,
+    pub username: String,
+}
+
+/// `found: false` is a normal answer: no error envelope, just the reason.
+#[derive(Serialize)]
+pub struct DiscoverResponse {
+    pub found: bool,
+    pub source: Option<Source>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incoming: Option<SuggestedEndpoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outgoing: Option<SuggestedEndpoint>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub auth: Vec<AuthKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl DiscoverResponse {
+    pub fn missing(reason: impl Into<String>) -> Self {
+        Self {
+            found: false,
+            source: None,
+            url: None,
+            provider: None,
+            display_name: None,
+            incoming: None,
+            outgoing: None,
+            auth: Vec::new(),
+            reason: Some(reason.into()),
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct EndpointSummary {
     pub host: String,

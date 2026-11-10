@@ -10,6 +10,7 @@ use lavande_mail::store::Store;
 use lavande_mail::tls::TlsOptions;
 
 use crate::config_file;
+use crate::discovery::{Discovery, DiscoveryEndpoints};
 use crate::error::ApiError;
 
 pub const ACCOUNTS_FILE: &str = "accounts.json";
@@ -19,12 +20,21 @@ pub struct AppState {
     store: Store,
     accounts_path: PathBuf,
     tls: TlsOptions,
+    discovery: Discovery,
 }
 
 impl AppState {
     /// Opens and migrates the store of `data_dir`. `accounts.json` is read on
     /// demand: the file is the source of truth for the accounts.
     pub fn open(data_dir: impl AsRef<Path>, tls: TlsOptions) -> Result<Self, MailError> {
+        Self::open_with(data_dir, tls, DiscoveryEndpoints::default())
+    }
+
+    pub fn open_with(
+        data_dir: impl AsRef<Path>,
+        tls: TlsOptions,
+        endpoints: DiscoveryEndpoints,
+    ) -> Result<Self, MailError> {
         fs::create_dir_all(data_dir.as_ref())?;
         let store = Store::open(data_dir.as_ref().join(DATABASE_FILE))?;
         store.migrate()?;
@@ -32,7 +42,12 @@ impl AppState {
             store,
             accounts_path: data_dir.as_ref().join(ACCOUNTS_FILE),
             tls,
+            discovery: Discovery::new(endpoints)?,
         })
+    }
+
+    pub fn discovery(&self) -> &Discovery {
+        &self.discovery
     }
 
     pub fn tls(&self) -> &TlsOptions {

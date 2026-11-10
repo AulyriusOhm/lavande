@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod config_file;
+pub mod discovery;
 pub mod dto;
 pub mod error;
 pub mod routes;
@@ -30,6 +31,7 @@ pub fn app(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .merge(routes::accounts::router())
+        .merge(routes::discover::router())
         .merge(routes::mail::router())
         .with_state(state)
 }

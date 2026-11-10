@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { ArrowLeft, Loader2, PlugZap, Server, Sparkles } from "lucide-react";
-import { ApiError, errorText } from "@/lib/api";
-import type { Encryption } from "@/lib/api";
+import { ArrowLeft, Loader2, PlugZap, Radar, Server, Sparkles } from "lucide-react";
+import { ApiError, errorText, mailApi } from "@/lib/api";
+import type { DiscoverySource, Encryption } from "@/lib/api";
 import { accountSlug } from "@/lib/mail-backend";
 import { useMailStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -22,6 +22,13 @@ const LABEL = "text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercas
 const portsOf = (value: Encryption) =>
   ENCRYPTIONS.find((entry) => entry.value === value) ?? ENCRYPTIONS[0];
 
+const ORIGIN_LABEL: Record<DiscoverySource, string> = {
+  ispdb: "base Thunderbird",
+  autoconfig: "configuration du domaine",
+  well_known: "configuration du domaine",
+  guess: "détection par sondage",
+};
+
 export function ConnectScreen({ onClose }: { onClose?: () => void }) {
   const { createAccount, useDemo, phase } = useMailStore();
   const [label, setLabel] = useState("");
@@ -36,6 +43,46 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
   const [smtpEncryption, setSmtpEncryption] = useState<Encryption>(ENCRYPTIONS[0].value);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [discovery, setDiscovery] = useState<{ tone: "ok" | "none"; text: string } | null>(null);
+
+  const applyDiscovery = async () => {
+    const address = email.trim();
+    if (discovering || !address.includes("@")) return;
+    setDiscovering(true);
+    setDiscovery(null);
+    try {
+      const found = await mailApi.discover(address);
+      const incoming = found.incoming;
+      const outgoing = found.outgoing;
+      if (!found.found || !incoming || !outgoing) {
+        setDiscovery({
+          tone: "none",
+          text:
+            found.reason ??
+            "Aucune configuration publiée pour ce domaine : saisis les serveurs à la main.",
+        });
+        return;
+      }
+      const name = found.display_name || found.provider || "Configuration trouvée";
+      setLabel((current) => current.trim() || name);
+      setUsername((current) => current.trim() || incoming.username || address);
+      setImapHost(incoming.host);
+      setImapPort(String(incoming.port));
+      setImapEncryption(incoming.encryption);
+      setSmtpHost(outgoing.host);
+      setSmtpPort(String(outgoing.port));
+      setSmtpEncryption(outgoing.encryption);
+      setDiscovery({
+        tone: "ok",
+        text: `${name} · ${found.source ? ORIGIN_LABEL[found.source] : "détection"}`,
+      });
+    } catch (failure: unknown) {
+      setDiscovery({ tone: "none", text: errorText(failure) });
+    } finally {
+      setDiscovering(false);
+    }
+  };
 
   const changeImapEncryption = (value: Encryption) => {
     setImapEncryption(value);
@@ -124,10 +171,38 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
                 className={cn(FIELD, "mt-1.5")}
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
+                onBlur={() => {
+                  if (!imapHost.trim() && !smtpHost.trim()) void applyDiscovery();
+                }}
                 placeholder="prenom@domaine.fr"
                 autoComplete="email"
                 required
               />
+              <div className="mt-1.5 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void applyDiscovery()}
+                  disabled={discovering || !email.includes("@")}
+                  className="focus-ring inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 text-[11px] font-bold text-accent-ink transition-colors hover:border-accent-ring disabled:opacity-50"
+                >
+                  {discovering ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Radar className="size-3.5" strokeWidth={2.4} />
+                  )}
+                  Détecter les serveurs
+                </button>
+                {discovery ? (
+                  <p
+                    className={cn(
+                      "min-w-0 truncate text-[11px] font-semibold",
+                      discovery.tone === "ok" ? "text-emerald-600" : "text-ink-muted",
+                    )}
+                  >
+                    {discovery.text}
+                  </p>
+                ) : null}
+              </div>
             </div>
             <div>
               <label htmlFor="connect-username" className={LABEL}>

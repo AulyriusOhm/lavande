@@ -138,6 +138,22 @@ export type NewAccount = {
   auth: { kind: "password"; password: string };
 };
 
+export type DiscoverySource = "ispdb" | "autoconfig" | "well_known" | "guess";
+
+export type ApiDiscoveryEndpoint = ApiEndpoint & { username: string };
+
+export type ApiDiscovery = {
+  found: boolean;
+  source: DiscoverySource | null;
+  url?: string;
+  provider?: string;
+  display_name?: string;
+  incoming?: ApiDiscoveryEndpoint;
+  outgoing?: ApiDiscoveryEndpoint;
+  auth?: ("password" | "oauth2")[];
+  reason?: string;
+};
+
 export type FlagsInput = {
   folder_path: string;
   uid: number;
@@ -258,6 +274,9 @@ export const mailApi = {
   health: () => request<ApiHealth>("/health"),
 
   accounts: () => request<ApiAccount[]>("/accounts"),
+
+  discover: (email: string) =>
+    request<ApiDiscovery>(`/discover?email=${encodeURIComponent(email)}`, { timeout: 20_000 }),
 
   createAccount: (input: NewAccount) =>
     request<ApiAccount>("/accounts", { method: "POST", body: input }),
