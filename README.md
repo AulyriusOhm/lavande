@@ -8,6 +8,18 @@ composants inspirés de [Magic UI](https://magicui.design/docs/components).
 >
 > 🎨 **Intentions de design, palette, motion et arbitrages : [`DESIGN.md`](./DESIGN.md).**
 
+## Dépôt
+
+- Gitea : **https://git.lanro.eu/Roman/lavande** (branche `main`)
+- ⚠️ Le WAF en frontal bloque git-over-HTTPS : `/.git/info/refs` renvoie **403 « Accès refusé »**
+  (constaté aussi sur les autres dépôts, sans et avec authentification). Depuis le LAN/WireGuard, on
+  pousse donc sur l'instance directe :
+
+  ```bash
+  git remote set-url origin http://192.168.5.121:3555/Roman/lavande.git
+  git push origin main
+  ```
+
 ## Nom
 
 Le nom de marque suit le thème : **Lavande** en clair, **Orchidée** en sombre
