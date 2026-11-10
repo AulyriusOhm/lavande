@@ -14,7 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { ACCOUNTS } from "@/lib/accounts";
+import { useMailStore } from "@/lib/store";
 import { composeReply, replySuggestions, rewriteBody, userPart, type ReplySuggestion } from "@/lib/assist";
 import { ReplySuggestSheet, RewriteSheet } from "@/screens/assist-sheet";
 import { IconButton } from "@/components/ui/primitives";
@@ -23,7 +23,6 @@ import { ShimmerButton } from "@/components/ui/shimmer-button";
 export type { ComposeDraft };
 
 const EMAIL = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]{2,}$/;
-const DEFAULT_ACCOUNT = ACCOUNTS[0].id;
 
 const recipients = (value: string) =>
   value
@@ -51,15 +50,19 @@ export function ComposeScreen({
   onMinimize?: () => void;
   title?: string;
 }) {
+  const { accounts } = useMailStore();
   const [draft, setDraft] = useState<ComposeDraft>(() => ({
     to: initialDraft?.to ?? "",
     cc: initialDraft?.cc ?? "",
     cci: initialDraft?.cci ?? "",
     subject: initialDraft?.subject ?? "",
     body: initialDraft?.body ?? "",
-    account: initialDraft?.account ?? DEFAULT_ACCOUNT,
+    account: initialDraft?.account ?? accounts[0]?.id ?? "",
     pgpEncrypt: initialDraft?.pgpEncrypt ?? true,
     pgpSign: initialDraft?.pgpSign ?? true,
+    threadId: initialDraft?.threadId,
+    inReplyTo: initialDraft?.inReplyTo,
+    references: initialDraft?.references,
   }));
   const [showCc, setShowCc] = useState(Boolean(initialDraft?.cc?.trim()));
   const [showCci, setShowCci] = useState(Boolean(initialDraft?.cci?.trim()));
@@ -161,7 +164,7 @@ export function ComposeScreen({
             onChange={(event) => update({ account: event.target.value })}
             className="min-w-0 flex-1 cursor-pointer bg-transparent text-[13px] font-semibold text-ink outline-none"
           >
-            {ACCOUNTS.map((entry) => (
+            {accounts.map((entry) => (
               <option key={entry.id} value={entry.id} className="bg-surface text-ink">
                 {entry.label} · {entry.email}
               </option>

@@ -185,3 +185,25 @@ sudo ufw --force enable
 
 `sudo ufw status` demande un mot de passe que je n'ai pas (`sudo -n -l` n'autorise sans
 mot de passe que `/usr/local/sbin/nihyl-tls-deploy`).
+
+## Résolution du serveur mail (IMAP/SMTP)
+
+`mail.lanro.eu` résout publiquement vers `194.164.201.13`, où les ports IMAP/SMTP (993, 143, 465,
+587) sont **filtrés** ; le serveur Dovecot/Postfix réel écoute sur `192.168.5.121` avec un certificat
+Let's Encrypt valide pour `mail.lanro.eu` / `imap.lanro.eu`.
+
+Conséquence pour le démon mail (`lavande-maild`) : il se connecte au **nom**, donc il lui faut une
+résolution interne. Deux options propres :
+
+- ajouter un enregistrement A interne (ou une entrée `/etc/hosts` sur la machine qui héberge le
+  service) : `192.168.5.121 imap.lanro.eu smtp.lanro.eu` ;
+- ou lancer le démon avec une surcharge de résolution sans toucher au système, par exemple un
+  conteneur `--network host --add-host imap.lanro.eu:192.168.5.121` (utilisé pour la recette avec le
+  compte réel : le certificat reste validé, l'IP n'étant pas dans ses SAN).
+
+Vérification en lecture seule, sans modifier aucun drapeau :
+
+```bash
+openssl s_client -connect 192.168.5.121:993 -servername mail.lanro.eu </dev/null 2>/dev/null \
+  | openssl x509 -noout -subject -ext subjectAltName
+```

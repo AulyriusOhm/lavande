@@ -3,6 +3,8 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 
+const MAIL_API = process.env.MAIL_API ?? "http://127.0.0.1:8790";
+
 export default defineConfig({
   base: process.env.VITE_BASE ?? "/",
   plugins: [react(), tailwindcss()],
@@ -16,6 +18,13 @@ export default defineConfig({
     allowedHosts: true,
     watch: {
       ignored: ["**/.plasma/**", "**/src-tauri/**", "**/server/**", "**/dist/**"],
+    },
+    proxy: {
+      "/api": { target: MAIL_API },
+      "/lavande/api": {
+        target: MAIL_API,
+        rewrite: (requestPath) => requestPath.replace(/^\/lavande\/api/, "/api"),
+      },
     },
   },
   clearScreen: false,

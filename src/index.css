@@ -233,3 +233,72 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* Corps HTML des mails : rendu neutre, jamais de dépassement horizontal. */
+.mail-html {
+  overflow-wrap: anywhere;
+}
+.mail-html p,
+.mail-html div {
+  margin: 0 0 0.85em;
+}
+.mail-html p:last-child,
+.mail-html div:last-child {
+  margin-bottom: 0;
+}
+.mail-html a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.mail-html blockquote {
+  margin: 0 0 0.85em;
+  padding-left: 0.9em;
+  border-left: 3px solid var(--line);
+  color: var(--ink-muted);
+}
+.mail-html ul,
+.mail-html ol {
+  margin: 0 0 0.85em;
+  padding-left: 1.3em;
+  list-style: disc;
+}
+.mail-html ol {
+  list-style: decimal;
+}
+.mail-html h1,
+.mail-html h2,
+.mail-html h3,
+.mail-html h4 {
+  margin: 0 0 0.5em;
+  font-weight: 800;
+  font-size: 1.05em;
+}
+.mail-html table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 0.85em;
+  font-size: 0.95em;
+}
+.mail-html th,
+.mail-html td {
+  border: 1px solid var(--line);
+  padding: 0.35em 0.5em;
+  text-align: left;
+}
+.mail-html hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1em 0;
+}
+.mail-html code,
+.mail-html pre {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.92em;
+}
+.mail-html pre {
+  white-space: pre-wrap;
+  background: var(--surface-2, transparent);
+  padding: 0.6em;
+  border-radius: 0.5em;
+}

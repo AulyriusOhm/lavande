@@ -1,17 +1,29 @@
 export type PgpState = "none" | "signed" | "encrypted";
 
-export type FolderId = "inbox" | "spam" | "sent" | "archive" | "trash";
+export type FolderId = "inbox" | "spam" | "sent" | "drafts" | "archive" | "trash" | "other";
+
+/** Libellés par rôle IMAP : le serveur ne renvoie que des rôles. */
+export const FOLDER_LABELS: Record<FolderId, string> = {
+  inbox: "Boîte de réception",
+  sent: "Envoyés",
+  drafts: "Brouillons",
+  archive: "Archives",
+  spam: "Spam",
+  trash: "Corbeille",
+  other: "Autres",
+};
 
 export const FOLDERS: { id: FolderId; label: string }[] = [
-  { id: "inbox", label: "Boîte de réception" },
-  { id: "sent", label: "Envoyés" },
-  { id: "archive", label: "Archives" },
-  { id: "spam", label: "Spam" },
-  { id: "trash", label: "Corbeille" },
+  { id: "inbox", label: FOLDER_LABELS.inbox },
+  { id: "sent", label: FOLDER_LABELS.sent },
+  { id: "drafts", label: FOLDER_LABELS.drafts },
+  { id: "archive", label: FOLDER_LABELS.archive },
+  { id: "spam", label: FOLDER_LABELS.spam },
+  { id: "trash", label: FOLDER_LABELS.trash },
 ];
 
 export function folderLabel(id: FolderId) {
-  return FOLDERS.find((folder) => folder.id === id)?.label ?? "Boîte de réception";
+  return FOLDER_LABELS[id] ?? FOLDER_LABELS.inbox;
 }
 
 export function normalize(value: string) {
@@ -29,18 +41,29 @@ export function mailMatches(mail: Mail, query: string) {
   );
 }
 
+export type MailSource = {
+  accountId: string;
+  folderPath: string;
+  uid: number;
+};
+
 export type Mail = {
   id: string;
-  account: "perso" | "pro" | "gmail";
+  account: string;
   folder: FolderId;
   threadId?: string;
   previousFolder?: FolderId;
+  source?: MailSource;
+  messageId?: string;
+  references?: string[];
+  bodyFetched?: boolean;
   name: string;
   email: string;
   to?: string;
   subject: string;
   preview: string;
   body: string[];
+  html?: string;
   time: string;
   date?: string;
   unread: boolean;

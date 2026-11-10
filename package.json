@@ -13,7 +13,11 @@
     "tauri": "tauri",
     "android:init": "tauri android init && node scripts/patch-android.mjs",
     "android:build": "bash scripts/build-android-release.sh",
-    "android:build:debug": "node scripts/patch-android.mjs && tauri android build --debug --apk"
+    "android:build:debug": "node scripts/patch-android.mjs && tauri android build --debug --apk",
+    "mail:fmt": "cargo fmt --all -- --check",
+    "mail:clippy": "cargo clippy --workspace --all-targets -- -D warnings",
+    "mail:test": "cargo test --workspace",
+    "mail:test:live": "MAIL_TEST_TLS_DIR=$HOME/.cache/lavande/mail-test cargo test --workspace --test live -- --ignored --test-threads=1"
   },
   "dependencies": {
     "@noble/ciphers": "^2.4.0",

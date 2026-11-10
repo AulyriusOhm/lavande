@@ -14,6 +14,123 @@ composants inspirés de [Magic UI](https://magicui.design/docs/components).
 > (cadre téléphone) et **PC** sur `/lavande/?desktop`. La coquille native **Android** reprend la
 > maquette mobile en plein écran, toujours sans backend ([`docs/android.md`](./docs/android.md)).
 
+## Implémentation (périmètre Mails)
+
+Le moteur mail Rust existe : crate **`crates/mail-core`** (package `lavande-mail`, lib `lavande_mail`),
+exposé en HTTP local par **`crates/mail-api`** (binaire `lavande-maild`). Le front s'y branche :
+`src/lib/api.ts` + `src/lib/mail-backend.ts`, écran de connexion, dossiers et fils réels, flags,
+déplacement et envoi. Le mode maquette reste disponible (`VITE_MAIL_BACKEND=demo`). Contrat HTTP,
+schéma SQLite, correspondance des types et limites détaillées :
+**[`docs/mail-core.md`](./docs/mail-core.md)**.
+
+### Lancer l'app avec le backend
+
+```bash
+scripts/mail-service.sh start   # démon local sur 127.0.0.1:8790 (données : ~/.local/share/lavande)
+scripts/dev-web.sh start        # maquette servie sur le portail (équivaut à npm run dev:portal)
+npm run dev                     # ou en direct : http://localhost:1420/
+```
+
+### APK Android
+
+La coquille Tauri **embarque le démon mail** : le routeur `lavande-mail-api` est monté dans le
+processus de l'app (écoute `127.0.0.1:8790`, données dans le stockage privé de l'app), donc un seul
+processus, aucun sidecar. Le front vise cette base dès qu'il tourne dans la coquille.
+
+```bash
+npm run android:build           # release arm64 signé → dist/android/Lavande.apk
+npm run android:build:debug     # debug universel (inspecteur WebView, plus lent)
+adb install -r dist/android/Lavande.apk
+```
+
+Le build passe par `scripts/build-android-release.sh` (voir aussi `docs/android.md`) : clé de
+signature dans `~/.android/lavande-release.jks`, jamais versionnée, sinon les mises à jour de l'app
+seront refusées par Android.
+
+Le portail sert l'app sous `/lavande/` : il faut `npm run dev:portal` (base `/lavande/`), sinon Vite
+renvoie l'index avec des chemins absolus et la page reste blanche (`404` sur `/src/main.tsx`).
+
+
+Première ouverture : l'écran de connexion demande libellé, adresse, identifiant, hôtes/ports IMAP et
+SMTP, chiffrement (TLS implicite ou STARTTLS) et mot de passe. Le serveur **teste la connexion avant
+d'enregistrer** quoi que ce soit. Sans démon joignable, un bandeau explique comment le démarrer et
+propose la démo.
+
+Pour essayer sans vraie boîte : `scripts/mail-test-server.sh start`, puis connecte
+`roman@lavande.test` / `secret` en IMAP `localhost:3993`, SMTP `localhost:3465`, TLS implicite — le
+démon doit faire confiance au certificat de test :
+
+```bash
+LAVANDE_MAIL_EXTRA_ROOTS=$HOME/.cache/lavande/mail-test/cert.pem scripts/mail-service.sh restart
+```
+
+
+```
+crates/mail-core/
+├── Cargo.toml            # lavande-mail / lib lavande_mail
+├── src/
+│   ├── model.rs          # Message, Thread, Folder, Flags, AttachmentMeta, PgpState
+│   ├── config.rs         # AccountConfig, AuthConfig, Endpoint, Encryption, FolderMapping
+│   ├── mime.rs           # parsing RFC 5322 / MIME, aperçu, pièces jointes
+│   ├── threading.rs      # thread_id déterministe (References → In-Reply-To → sujet)
+│   ├── store/mod.rs      # Store SQLite (+ store/schema.sql embarqué)
+│   ├── imap.rs           # TLS/STARTTLS, dossiers, réconciliation, flags, move
+│   ├── smtp.rs           # envoi (lettre), pièces jointes
+│   ├── oauth.rs          # refresh token + XOAUTH2
+│   ├── sync.rs           # sync_account (INBOX + Sent)
+│   └── tls.rs            # racines de confiance supplémentaires
+└── tests/                # config, mime, threading, oauth, store (hors-ligne) · live (réseau)
+```
+
+### Tests hors-ligne
+
+Sur cette machine il n'y a **pas de compilateur C système** (`rusqlite`/`ring` en ont besoin) : on
+passe par le `cc` local avant de lancer cargo.
+
+```bash
+export PATH=/home/roman/.local/opt/lavande-cc:$PATH
+export CC=/home/roman/.local/opt/lavande-cc/cc
+export CXX=/home/roman/.local/opt/lavande-cc/c++
+
+npm run mail:test          # cargo test -p lavande-mail          (44 tests, aucun réseau)
+npm run mail:fmt           # cargo fmt --all -- --check
+npm run mail:clippy        # cargo clippy -p lavande-mail --all-targets -- -D warnings
+```
+
+### Tests réseau (GreenMail)
+
+9 scénarios réels (TLS implicite, envoi SMTP puis sync, flags poussés puis rapatriés depuis un autre
+client, message expurgé côté serveur, dossier inchangé, déplacement INBOX → Archive avec UID
+réattribué, réponse qui rejoint son thread, XOAUTH2), ignorés par défaut par `cargo test`.
+
+```bash
+scripts/mail-test-server.sh start     # conteneur lavande-mail-test, certificat auto-signé
+npm run mail:test:live                # 9 tests, --test-threads=1 obligatoire
+scripts/mail-test-server.sh stop      # ou `reset` (stop + start), `status`
+```
+
+### Limites (courte liste)
+
+- STARTTLS non testé : seul le TLS implicite est validé (GreenMail ne l'annonce pas).
+- Réconciliation, pas de CONDSTORE/QRESYNC : chaque synchro fait une passe métadonnées complète du
+  dossier (coût linéaire en nombre de messages, comme Thunderbird sans CONDSTORE) ; les corps ne sont
+  tirés que pour les nouveaux UID, par lots de 500.
+- Push via IMAP **IDLE sur INBOX** (SSE vers le front) : un mail arrive sans clic ; les autres
+  dossiers restent à la demande.
+- Aucune suppression poussée vers le serveur : le crate supprime localement et déplace, mais n'expose
+  pas `STORE \Deleted` + `EXPUNGE` côté client.
+- Un seul dossier synchronisé par appel (`move_message` réconcilie en plus sa destination) ;
+  `sync_account` ne fait que INBOX + Sent ; aucun retry réseau.
+- HTML des mails assaini à l'ingestion (liens sûrs, **images retirées**) ; les mails purement
+  graphiques sont donc plus sobres que dans leur client d'origine.
+- OAuth2 fonctionnel mais **sans identifiant d'application embarqué** : il faut enregistrer un
+  `client_id` (Google/Microsoft) ou le fournir au service ; seul le parcours de test est validé.
+- Ni pool de connexions, ni keychain, ni PGP réel, ni recherche serveur.
+- Le démon écoute **127.0.0.1 uniquement** et n'a aucune authentification : quiconque atteint le port
+  pilote les comptes. Ne l'expose pas hors loopback sans mettre une authentification devant.
+- Les mots de passe IMAP/SMTP sont stockés en clair dans `~/.local/share/lavande/accounts.json`
+  (permissions 0600) : pas encore de trousseau système.
+
 ## Dépôt
 
 - Gitea : **https://git.lanro.eu/Roman/lavande** (branche `main`)

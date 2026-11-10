@@ -5,7 +5,6 @@ import { useMailStore } from "@/lib/store";
 import { useEscapeLayer } from "@/desktop/escape";
 import { RECENT_SEARCHES, folderLabel, mailMatches } from "@/lib/mail";
 import { buildThreads } from "@/lib/threads";
-import { accountById } from "@/lib/accounts";
 import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/primitives";
 import { Badge, DIconButton, EmptyState, Kbd, SectionLabel } from "@/desktop/ui";
@@ -55,7 +54,7 @@ function RowAction({
 }
 
 export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { mails, openMessage, toggleStar, mailAction } = useMailStore();
+  const { mails, openMessage, toggleStar, mailAction, accountById } = useMailStore();
   const [query, setQuery] = useState("");
   const [recent, setRecent] = useState<string[]>(readRecent);
   const [selected, setSelected] = useState(0);

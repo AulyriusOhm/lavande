@@ -26,6 +26,8 @@ import { DotPattern, MeshGlow } from "@/components/ui/backdrops";
 import { Notice } from "@/components/ui/notice";
 import type { CalendarEvent } from "@/lib/calendar";
 import { isNativeShell } from "@/lib/native";
+import { AccountRemoveDialog, BackendBanner, BackendLoading } from "@/components/backend-status";
+import { ConnectScreen } from "@/screens/connect-screen";
 
 const InboxScreen = memo(InboxView);
 const CalendarScreen = memo(CalendarView);
@@ -142,6 +144,10 @@ function PhoneApp({ native }: { native?: boolean }) {
     replyTo,
     forwardMail,
     sendDraft,
+    mode,
+    phase,
+    connectOpen,
+    closeConnect,
   } = useMailStore();
   const order = useMemo<TabId[]>(
     () =>
@@ -177,6 +183,7 @@ function PhoneApp({ native }: { native?: boolean }) {
   }, [order, tab]);
 
   const layers: [boolean, () => void][] = [
+    [connectOpen, closeConnect],
     [composeOpen, minimizeCompose],
     [eventDraftOpen, () => setEventDraftOpen(false)],
     [taskDraftOpen, () => setTaskDraftOpen(false)],
@@ -310,6 +317,18 @@ function PhoneApp({ native }: { native?: boolean }) {
     else if (dx > 55 && index > 0) changeTab(order[index - 1]);
   };
 
+  if (mode === "api" && phase === "loading") {
+    return <BackendLoading />;
+  }
+
+  if (mode === "api" && phase === "empty") {
+    return (
+      <div className="h-full w-full pt-[env(safe-area-inset-top,0px)]">
+        <ConnectScreen />
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn(
@@ -317,6 +336,7 @@ function PhoneApp({ native }: { native?: boolean }) {
         !native && "pt-[env(safe-area-inset-top,0px)] sm:pt-7",
       )}
     >
+      <BackendBanner />
       <div
         className="relative flex-1 overflow-hidden"
         onPointerDown={onPointerDown}
@@ -702,6 +722,21 @@ function PhoneApp({ native }: { native?: boolean }) {
         </AnimatePresence>
 
         <AnimatePresence>
+          {connectOpen && (
+            <motion.div
+              key="connect"
+              className="absolute inset-0 z-[60] bg-canvas"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ type: "spring", stiffness: 340, damping: 34 }}
+            >
+              <ConnectScreen onClose={closeConnect} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
           {composeOpen && (
             <motion.div key="compose" className="absolute inset-0 z-[45]" initial={false}>
               <motion.div
@@ -733,6 +768,7 @@ function PhoneApp({ native }: { native?: boolean }) {
       </div>
 
       <Notice notice={notices[0] ?? null} onClose={dismissNotice} />
+      <AccountRemoveDialog />
     </div>
   );
 }
