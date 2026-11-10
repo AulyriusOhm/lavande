@@ -91,7 +91,7 @@ le compte et les non-lus sont dans la puce de compte et dans la barre.
 - La **couleur secondaire est personnalisable** : palette de préréglages + sélecteur libre
   (Réglages → Couleur d'accent), persistée en `localStorage`.
 - Tout dérive de variables CSS : `--accent`, `--accent-soft`, `--accent-ring`, `--accent-ink`
-  (calculées avec `color-mix`, donc jamais de teintes codées en dur dans les composants).
+  (calculées avec `color-mix`) et `--accent-contrast` (texte clair/sombre garantissant au moins 4,5:1).
 - Mode sombre complet via la classe `.dark` sur `<html>`.
 
 Tokens dans `src/index.css`, provider dans `src/lib/theme.tsx`.
@@ -111,8 +111,9 @@ Tokens dans `src/index.css`, provider dans `src/lib/theme.tsx`.
 
 ## Navigation
 
-Swipe horizontal entre les 3 onglets (`#inbox`, `#search`, `#settings` — deep-link par hash)
-+ dock flottant. Les écrans message et compose sont des overlays animés.
+Swipe horizontal entre les 4 onglets (`#inbox`, `#calendar`, `#planning`, `#settings`)
++ dock flottant. La recherche, les messages et la rédaction sont des overlays animés ; les réponses
++ préremplissent le message et le brouillon peut être réduit puis repris sans perte.
 
 ## Accès
 

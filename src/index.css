@@ -8,11 +8,12 @@
   --surface-2: #f6f3fd;
   --ink: #1b1523;
   --ink-soft: #6b6478;
-  --ink-muted: #a49db0;
+  --ink-muted: #726c7f;
   --line: #ece8f5;
   --shadow-color: 265 40% 55%;
 
   --accent: #8b7cf6;
+  --accent-contrast: #1b1523;
   --accent-soft: color-mix(in oklab, var(--accent) 12%, white);
   --accent-ring: color-mix(in oklab, var(--accent) 34%, white);
   --accent-ink: color-mix(in oklab, var(--accent) 58%, #241b3a);
@@ -24,7 +25,7 @@
   --surface-2: #1d1929;
   --ink: #f4f1fa;
   --ink-soft: #a8a1b8;
-  --ink-muted: #726b80;
+  --ink-muted: #8c8699;
   --line: #2a2438;
   --shadow-color: 265 60% 4%;
 
@@ -45,6 +46,7 @@
   --color-line: var(--line);
 
   --color-accent: var(--accent);
+  --color-accent-contrast: var(--accent-contrast);
   --color-accent-soft: var(--accent-soft);
   --color-accent-ring: var(--accent-ring);
   --color-accent-ink: var(--accent-ink);
@@ -75,6 +77,15 @@
   ::-webkit-scrollbar {
     display: none;
   }
+
+  :where(button, a, input, select, textarea, [role="button"]):not(
+    .focus-ring,
+    .focus-row,
+    [type="color"]
+  ):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
 }
 
 @utility no-scrollbar {
@@ -92,6 +103,20 @@
 
 @utility safe-bottom {
   padding-bottom: max(env(safe-area-inset-bottom), 0px);
+}
+
+@utility focus-ring {
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+@utility focus-row {
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
 }
 
 @keyframes shimmer-sweep {
@@ -132,5 +157,16 @@
   }
   50% {
     transform: translateY(-6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

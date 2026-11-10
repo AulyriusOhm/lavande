@@ -12,42 +12,112 @@ export const SWIPE_ACTIONS: { id: SwipeActionId; label: string }[] = [
 ];
 
 const STORAGE_KEY = "lavande.prefs";
-const DEFAULTS = { swipeLeft: "delete" as SwipeActionId, swipeRight: "reply" as SwipeActionId };
 
-type PrefsContextValue = {
+export type Prefs = {
   swipeLeft: SwipeActionId;
   swipeRight: SwipeActionId;
+  pgpEncrypt: boolean;
+  pgpSign: boolean;
+  attachPublicKey: boolean;
+  mcpConfirmSend: boolean;
+  mcpEnabled: Record<string, boolean>;
+};
+
+const DEFAULTS: Prefs = {
+  swipeLeft: "delete",
+  swipeRight: "reply",
+  pgpEncrypt: true,
+  pgpSign: true,
+  attachPublicKey: false,
+  mcpConfirmSend: true,
+  mcpEnabled: {},
+};
+
+type PrefsContextValue = Prefs & {
   setSwipe: (side: "left" | "right", action: SwipeActionId) => void;
+  setPgpEncrypt: (value: boolean) => void;
+  setPgpSign: (value: boolean) => void;
+  setAttachPublicKey: (value: boolean) => void;
+  setMcpConfirmSend: (value: boolean) => void;
+  setMcpEnabled: (serverId: string, value: boolean) => void;
 };
 
 const PrefsContext = createContext<PrefsContextValue | null>(null);
 
-type Stored = Partial<{ swipeLeft: SwipeActionId; swipeRight: SwipeActionId }>;
+export function mergeFlags(defaults: Record<string, boolean>, stored: Record<string, boolean>) {
+  return { ...defaults, ...stored };
+}
 
-function read(): Stored {
+const asSwipe = (value: unknown, fallback: SwipeActionId): SwipeActionId =>
+  SWIPE_ACTIONS.some((action) => action.id === value) ? (value as SwipeActionId) : fallback;
+
+const asBoolean = (value: unknown, fallback: boolean): boolean =>
+  typeof value === "boolean" ? value : fallback;
+
+const asFlags = (value: unknown): Record<string, boolean> =>
+  value && typeof value === "object"
+    ? Object.fromEntries(Object.entries(value).filter(([, enabled]) => typeof enabled === "boolean"))
+    : {};
+
+function read(): Prefs {
+  let stored: Record<string, unknown> = {};
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}") as Stored;
+    const parsed: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}");
+    if (parsed && typeof parsed === "object") stored = parsed as Record<string, unknown>;
   } catch {
-    return {};
+    stored = {};
   }
+  return {
+    swipeLeft: asSwipe(stored.swipeLeft, DEFAULTS.swipeLeft),
+    swipeRight: asSwipe(stored.swipeRight, DEFAULTS.swipeRight),
+    pgpEncrypt: asBoolean(stored.pgpEncrypt, DEFAULTS.pgpEncrypt),
+    pgpSign: asBoolean(stored.pgpSign, DEFAULTS.pgpSign),
+    attachPublicKey: asBoolean(stored.attachPublicKey, DEFAULTS.attachPublicKey),
+    mcpConfirmSend: asBoolean(stored.mcpConfirmSend, DEFAULTS.mcpConfirmSend),
+    mcpEnabled: asFlags(stored.mcpEnabled),
+  };
 }
 
 export function PrefsProvider({ children }: { children: React.ReactNode }) {
-  const [swipeLeft, setSwipeLeft] = useState<SwipeActionId>(() => read().swipeLeft ?? DEFAULTS.swipeLeft);
-  const [swipeRight, setSwipeRight] = useState<SwipeActionId>(() => read().swipeRight ?? DEFAULTS.swipeRight);
+  const [prefs, setPrefs] = useState<Prefs>(read);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ swipeLeft, swipeRight }));
-  }, [swipeLeft, swipeRight]);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+  }, [prefs]);
 
-  const setSwipe = useCallback((side: "left" | "right", action: SwipeActionId) => {
-    if (side === "left") setSwipeLeft(action);
-    else setSwipeRight(action);
+  const patch = useCallback(<K extends keyof Prefs>(key: K, value: Prefs[K]) => {
+    setPrefs((current) => ({ ...current, [key]: value }));
   }, []);
 
-  const value = useMemo(
-    () => ({ swipeLeft, swipeRight, setSwipe }),
-    [swipeLeft, swipeRight, setSwipe],
+  const setSwipe = useCallback(
+    (side: "left" | "right", action: SwipeActionId) =>
+      patch(side === "left" ? "swipeLeft" : "swipeRight", action),
+    [patch],
+  );
+  const setPgpEncrypt = useCallback((value: boolean) => patch("pgpEncrypt", value), [patch]);
+  const setPgpSign = useCallback((value: boolean) => patch("pgpSign", value), [patch]);
+  const setAttachPublicKey = useCallback((value: boolean) => patch("attachPublicKey", value), [patch]);
+  const setMcpConfirmSend = useCallback((value: boolean) => patch("mcpConfirmSend", value), [patch]);
+  const setMcpEnabled = useCallback(
+    (serverId: string, value: boolean) =>
+      setPrefs((current) => ({
+        ...current,
+        mcpEnabled: { ...current.mcpEnabled, [serverId]: value },
+      })),
+    [],
+  );
+
+  const value = useMemo<PrefsContextValue>(
+    () => ({
+      ...prefs,
+      setSwipe,
+      setPgpEncrypt,
+      setPgpSign,
+      setAttachPublicKey,
+      setMcpConfirmSend,
+      setMcpEnabled,
+    }),
+    [prefs, setSwipe, setPgpEncrypt, setPgpSign, setAttachPublicKey, setMcpConfirmSend, setMcpEnabled],
   );
 
   return <PrefsContext.Provider value={value}>{children}</PrefsContext.Provider>;

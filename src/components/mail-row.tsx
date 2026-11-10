@@ -1,4 +1,4 @@
-import { Archive, CornerUpLeft, MailOpen, Star, Trash2 } from "lucide-react";
+import { Archive, CornerUpLeft, MailOpen, RotateCcw, ShieldCheck, Star, Trash2 } from "lucide-react";
 import type { Mail } from "@/lib/mail";
 import { accountById } from "@/lib/accounts";
 import { cn } from "@/lib/utils";
@@ -16,6 +16,8 @@ export function MailRow({
   onArchive,
   onReply,
   onToggleRead,
+  onNotSpam,
+  onRestore,
   delay = 0,
   showPreview = true,
   showAccount = false,
@@ -27,11 +29,14 @@ export function MailRow({
   onArchive?: () => void;
   onReply?: () => void;
   onToggleRead?: () => void;
+  onNotSpam?: () => void;
+  onRestore?: () => void;
   delay?: number;
   showPreview?: boolean;
   showAccount?: boolean;
 }) {
   const account = accountById(mail.account);
+  const displayName = mail.folder === "sent" && mail.to ? `À ${mail.to}` : mail.name;
   const { swipeLeft, swipeRight } = usePrefs();
 
   const build = (id: SwipeActionId): SwipeActionDef | null => {
@@ -39,6 +44,9 @@ export function MailRow({
       case "delete":
         return { label: "Supprimer", icon: Trash2, tone: "danger", run: () => onDelete?.() };
       case "archive":
+        if (mail.folder === "archive" && onRestore) {
+          return { label: "Désarchiver", icon: Archive, tone: "neutral", run: onRestore };
+        }
         return { label: "Archiver", icon: Archive, tone: "neutral", run: () => onArchive?.() };
       case "reply":
         return { label: "Répondre", icon: CornerUpLeft, tone: "accent", run: () => onReply?.() };
@@ -61,15 +69,48 @@ export function MailRow({
     }
   };
 
+  const special = mail.folder === "spam" || mail.folder === "trash";
+
+  const leading = (): SwipeActionDef | null => {
+    if (mail.folder === "trash") {
+      return onDelete
+        ? { label: "Supprimer définitivement", icon: Trash2, tone: "danger", run: onDelete }
+        : null;
+    }
+    if (mail.folder === "spam") {
+      return onDelete ? { label: "Supprimer", icon: Trash2, tone: "danger", run: onDelete } : null;
+    }
+    const action = build(swipeRight);
+    if (mail.folder === "archive" && action?.label === "Désarchiver") return null;
+    return action;
+  };
+
+  const trailing = (): SwipeActionDef | null => {
+    if (mail.folder === "spam" && onNotSpam) {
+      return { label: "Non spam", icon: ShieldCheck, tone: "accent", run: onNotSpam };
+    }
+    if (mail.folder === "trash" && onRestore) {
+      return { label: "Restaurer", icon: RotateCcw, tone: "neutral", run: onRestore };
+    }
+    if (mail.folder === "archive" && onRestore) {
+      return { label: "Désarchiver", icon: Archive, tone: "neutral", run: onRestore };
+    }
+    return special ? null : build(swipeLeft);
+  };
+
   return (
     <BlurFade delay={delay} yOffset={14}>
-      <SwipeAction leading={build(swipeRight)} trailing={build(swipeLeft)}>
+      <SwipeAction leading={leading()} trailing={trailing()}>
       <div
         role="button"
         tabIndex={0}
+        aria-label={`${displayName} — ${mail.subject}${mail.unread ? " · non lu" : ""}${mail.starred ? " · étoilé" : ""}`}
         onClick={onOpen}
         onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") onOpen();
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onOpen();
+          }
         }}
         className={cn(
           "group relative flex cursor-pointer gap-3 rounded-[22px] px-3 py-3 transition-all duration-300",
@@ -79,7 +120,7 @@ export function MailRow({
         )}
       >
         <div className="relative">
-          <Avatar name={mail.name} tone={mail.tone} size={42} />
+          <Avatar name={displayName} tone={mail.tone} size={42} />
           {mail.unread && (
             <span className="absolute -top-0.5 -left-0.5 size-2.5 rounded-full border-2 border-surface bg-accent" />
           )}
@@ -94,7 +135,7 @@ export function MailRow({
                   mail.unread ? "font-bold text-ink" : "font-semibold text-ink-soft",
                 )}
               >
-                {mail.name}
+                {displayName}
               </p>
               {showAccount && account ? (
                 <span
@@ -117,11 +158,12 @@ export function MailRow({
               <button
                 type="button"
                 aria-label={mail.starred ? "Retirer l'étoile" : "Marquer d'une étoile"}
+                aria-pressed={mail.starred}
                 onClick={(event) => {
                   event.stopPropagation();
                   onToggleStar();
                 }}
-                className="-mr-1 grid size-6 place-items-center rounded-full transition-colors hover:bg-surface-2"
+                className="relative -mr-1 grid size-6 place-items-center rounded-full transition-colors before:absolute before:-inset-2.5 before:rounded-full before:content-[''] hover:bg-surface-2"
               >
                 <Star
                   className={cn(

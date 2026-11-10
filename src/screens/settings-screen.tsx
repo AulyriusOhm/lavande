@@ -13,14 +13,23 @@ import {
   Users,
 } from "lucide-react";
 import { ACCENT_PRESETS, useTheme } from "@/lib/theme";
-import { SWIPE_ACTIONS, usePrefs } from "@/lib/prefs";
+import { SWIPE_ACTIONS, mergeFlags, usePrefs } from "@/lib/prefs";
 import { ACCOUNTS, ALL_ACCOUNTS } from "@/lib/accounts";
+import { MCP_SERVERS, mcpCounts } from "@/lib/mcp";
 import type { Mail } from "@/lib/mail";
 import { cn } from "@/lib/utils";
-import { Avatar, Card, SectionTitle, Switch } from "@/components/ui/primitives";
+import { Avatar, Card, SectionTitle, ToggleRow } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { AnimatedGradientText } from "@/components/ui/animated-text";
+
+const PREVIEW_OPTIONS = [
+  { value: "always", label: "Toujours" },
+  { value: "unlocked", label: "Si déverrouillé" },
+  { value: "never", label: "Jamais" },
+] as const;
+
+type PreviewMode = (typeof PREVIEW_OPTIONS)[number]["value"];
 
 export function SettingsScreen({
   mails,
@@ -36,13 +45,24 @@ export function SettingsScreen({
   onOpenMcp: () => void;
 }) {
   const { accent, dark, brand, setAccent, setDark, reset } = useTheme();
-  const { swipeLeft, swipeRight, setSwipe } = usePrefs();
+  const { swipeLeft, swipeRight, setSwipe, mcpEnabled } = usePrefs();
   const [notifications, setNotifications] = useState(true);
-  const [preview, setPreview] = useState(true);
+  const [preview, setPreview] = useState<PreviewMode>("unlocked");
   const [autoSync, setAutoSync] = useState(true);
+  const enabled = mergeFlags(
+    Object.fromEntries(MCP_SERVERS.map((server) => [server.id, server.status === "connected"])),
+    mcpEnabled,
+  );
+  const mcp = mcpCounts((server) => enabled[server.id]);
 
   const unreadFor = (id: string) =>
-    mails.filter((mail) => mail.unread && (id === ALL_ACCOUNTS || mail.account === id)).length;
+    mails.filter(
+      (mail) =>
+        mail.unread &&
+        mail.folder !== "spam" &&
+        mail.folder !== "trash" &&
+        (id === ALL_ACCOUNTS || mail.account === id),
+    ).length;
 
   return (
     <div className="relative h-full overflow-y-auto no-scrollbar pb-32">
@@ -62,9 +82,9 @@ export function SettingsScreen({
             <p className="truncate text-[14px] font-bold text-ink">Roman</p>
             <p className="truncate text-[11.5px] font-medium text-ink-muted">roman@lavande.mail</p>
           </div>
-          <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent-soft px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
             <PenLine className="size-3" />
-            Signature
+            Signature e-mail
           </span>
         </Card>
       </BlurFade>
@@ -78,7 +98,7 @@ export function SettingsScreen({
               type="button"
               onClick={onOpenAccounts}
               className={cn(
-                "flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-surface-2/70",
+                "focus-row flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-surface-2/70",
                 item.id === account && "bg-accent-soft/40",
               )}
             >
@@ -100,27 +120,21 @@ export function SettingsScreen({
               <ChevronRight className="size-4 shrink-0 text-ink-muted" />
             </button>
           ))}
-          <div className="flex items-center gap-3 px-3.5 py-2.5">
-            <span className="grid size-8 place-items-center rounded-xl bg-surface-2 text-ink-soft">
-              <Users className="size-4" />
-            </span>
-            <div className="min-w-0 flex-1 leading-tight">
-              <p className="text-[12.5px] font-bold text-ink">Boîte unifiée</p>
-              <p className="text-[10.5px] font-medium text-ink-muted">Tous les comptes dans une liste</p>
-            </div>
-            <Switch
-              checked={account === ALL_ACCOUNTS}
-              onChange={() => onOpenAccounts()}
-              label="Boîte unifiée"
-            />
-          </div>
+          <Row
+            icon={<Users className="size-4" />}
+            label="Boîte unifiée"
+            hint="Choisir les comptes · tous les comptes dans une liste"
+            onClick={onOpenAccounts}
+          >
+            <ChevronRight className="size-4 text-ink-muted" />
+          </Row>
         </Card>
       </BlurFade>
 
-      <SectionTitle hint="personnalisable">Couleur secondaire</SectionTitle>
+      <SectionTitle hint="personnalisable">Couleur d'accent</SectionTitle>
       <BlurFade delay={0.12}>
         <Card className="mx-5 p-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <span className="grid size-7 place-items-center rounded-xl bg-accent-soft text-accent-ink">
                 <Palette className="size-3.5" />
@@ -132,7 +146,7 @@ export function SettingsScreen({
             </span>
           </div>
 
-          <div className="mt-3.5 flex flex-wrap gap-2.5">
+          <div className="mt-2.5 flex flex-wrap gap-0.5">
             {ACCENT_PRESETS.map((preset) => {
               const selected = preset.value.toLowerCase() === accent.toLowerCase();
               return (
@@ -143,25 +157,31 @@ export function SettingsScreen({
                   aria-label={preset.name}
                   aria-pressed={selected}
                   onClick={() => setAccent(preset.value)}
-                  className="size-8 rounded-full transition-transform duration-200 hover:scale-110 active:scale-95"
-                  style={{
-                    backgroundColor: preset.value,
-                    boxShadow: selected
-                      ? `0 0 0 2px var(--surface), 0 0 0 4px ${preset.value}`
-                      : "inset 0 0 0 1px rgba(0,0,0,0.06)",
-                  }}
-                />
+                  className="focus-ring grid size-11 place-items-center rounded-full"
+                >
+                  <span
+                    className="size-8 rounded-full transition-transform duration-200 hover:scale-110"
+                    style={{
+                      backgroundColor: preset.value,
+                      boxShadow: selected
+                        ? `0 0 0 2px var(--surface), 0 0 0 4px ${preset.value}`
+                        : "inset 0 0 0 1px rgba(0,0,0,0.06)",
+                    }}
+                  />
+                </button>
               );
             })}
 
             <label
               className={cn(
-                "relative grid size-8 cursor-pointer place-items-center overflow-hidden rounded-full",
-                "border border-line bg-surface",
+                "relative grid size-11 cursor-pointer place-items-center rounded-full",
+                "focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent",
               )}
               title="Couleur personnalisée"
             >
-              <span className="text-[13px] font-black text-ink-soft">+</span>
+              <span className="grid size-8 place-items-center rounded-full border border-line bg-surface text-[13px] font-black text-ink-soft">
+                +
+              </span>
               <input
                 type="color"
                 value={accent}
@@ -175,12 +195,14 @@ export function SettingsScreen({
           <div className="mt-4 flex items-center gap-2 rounded-2xl bg-surface-2 p-3">
             <Avatar name="C" tone={0} size={32} />
             <div className="min-w-0 flex-1 leading-tight">
-              <p className="truncate text-[12px] font-bold text-ink">Aperçu de l'accent</p>
-              <p className="truncate text-[10.5px] font-medium text-ink-muted">
+              <p className="text-[12px] font-bold text-ink">Aperçu de l'accent</p>
+              <p className="text-[10.5px] leading-relaxed font-medium text-ink-muted">
                 Boutons, badges et surlignages suivent cette teinte
               </p>
             </div>
-            <span className="rounded-full bg-accent px-2.5 py-1 text-[10px] font-bold text-white">{accent}</span>
+            <span className="shrink-0 rounded-full bg-accent px-2.5 py-1 text-[10px] font-bold text-accent-contrast">
+              {accent}
+            </span>
           </div>
         </Card>
       </BlurFade>
@@ -196,19 +218,65 @@ export function SettingsScreen({
           >
             <ChevronRight className="size-4 text-ink-muted" />
           </Row>
-          <Row icon={<Bell className="size-4" />} label="Notifications" hint="Push instantanée">
-            <Switch checked={notifications} onChange={setNotifications} label="Notifications" />
-          </Row>
-          <Row icon={<Type className="size-4" />} label="Aperçu du texte" hint="Dans les notifications">
-            <Switch checked={preview} onChange={setPreview} label="Aperçu du texte" />
-          </Row>
-          <Row icon={<RotateCcw className="size-4" />} label="Synchro automatique" hint="Toutes les 5 min">
-            <Switch checked={autoSync} onChange={setAutoSync} label="Synchro automatique" />
-          </Row>
+          <ToggleRow
+            icon={<Bell className="size-4" />}
+            label="Notifications"
+            hint="Push instantanée"
+            checked={notifications}
+            onChange={setNotifications}
+          />
+          <div className="px-3.5 py-3">
+            <div className="flex items-center gap-3">
+              <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-surface-2 text-ink-soft">
+                <Type className="size-4" />
+              </span>
+              <div className="min-w-0 flex-1 leading-tight">
+                <p className="text-[12.5px] font-bold text-ink">Aperçu du texte</p>
+                <p className="text-[10.5px] font-medium text-ink-muted">Dans les notifications push</p>
+              </div>
+            </div>
+            <div
+              role="radiogroup"
+              aria-label="Aperçu du texte des notifications"
+              className={cn("mt-2.5 flex gap-1.5", !notifications && "opacity-55")}
+            >
+              {PREVIEW_OPTIONS.map((option) => {
+                const selected = preview === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="radio"
+                    disabled={!notifications}
+                    aria-checked={selected}
+                    onClick={() => setPreview(option.value)}
+                    className={cn(
+                      "focus-ring min-h-11 flex-1 rounded-xl px-1 text-[11.5px] font-bold transition-colors disabled:cursor-not-allowed",
+                      selected
+                        ? "bg-accent text-accent-contrast"
+                        : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-2 text-[10px] leading-relaxed font-medium text-ink-muted">
+              Les messages chiffrés ne sont jamais inclus en clair dans la notification push.
+            </p>
+          </div>
+          <ToggleRow
+            icon={<RotateCcw className="size-4" />}
+            label="Synchro automatique"
+            hint={autoSync ? "Toutes les 5 min" : "Synchronisation manuelle"}
+            checked={autoSync}
+            onChange={setAutoSync}
+          />
         </Card>
       </BlurFade>
 
-      <SectionTitle>Gestes</SectionTitle>
+      <SectionTitle>Gestes des mails</SectionTitle>
       <BlurFade delay={0.17}>
         <Card className="mx-5 space-y-3 p-3.5">
           {(
@@ -226,11 +294,12 @@ export function SettingsScreen({
                     <button
                       key={action.id}
                       type="button"
+                      aria-pressed={active}
                       onClick={() => setSwipe(row.side, action.id)}
                       className={cn(
-                        "rounded-full px-2.5 py-1 text-[10.5px] font-bold transition-all",
+                        "focus-ring min-h-11 rounded-full px-3 text-[11px] font-bold transition-all",
                         active
-                          ? "bg-accent text-white shadow-[0_4px_12px_-6px_var(--accent)]"
+                          ? "bg-accent text-accent-contrast shadow-[0_4px_12px_-6px_var(--accent)]"
                           : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
                       )}
                     >
@@ -242,7 +311,8 @@ export function SettingsScreen({
             </div>
           ))}
           <p className="text-[10px] leading-relaxed font-medium text-ink-muted">
-            S'applique aux mails de la boîte et aux suggestions de la planification.
+            Ces gestes s'appliquent aux mails de la boîte. Les gestes des suggestions de la
+            planification sont gérés séparément.
           </p>
         </Card>
       </BlurFade>
@@ -253,7 +323,7 @@ export function SettingsScreen({
           <Row
             icon={<Blocks className="size-4" />}
             label="Serveurs MCP"
-            hint="3 actifs · 11 outils exposés"
+            hint={`${mcp.activeServers} serveurs actifs · ${mcp.activeTools} outils actifs`}
             onClick={onOpenMcp}
           >
             <ChevronRight className="size-4 text-ink-muted" />
@@ -275,9 +345,10 @@ export function SettingsScreen({
                 <button
                   key={option.label}
                   type="button"
+                  aria-pressed={selected}
                   onClick={() => setDark(option.value)}
                   className={cn(
-                    "flex flex-1 items-center justify-center gap-2 rounded-[18px] py-2.5 text-[12.5px] font-bold transition-all",
+                    "focus-ring flex min-h-11 flex-1 items-center justify-center gap-2 rounded-[18px] py-2.5 text-[12.5px] font-bold transition-all",
                     selected
                       ? "bg-accent-soft text-accent-ink ring-1 ring-accent-ring/60"
                       : "text-ink-muted hover:bg-surface-2",
@@ -300,7 +371,7 @@ export function SettingsScreen({
           <button
             type="button"
             onClick={reset}
-            className="mt-3 rounded-full border border-line px-4 py-2 text-[11.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+            className="focus-ring mt-3 min-h-11 rounded-full border border-line px-4 text-[11.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
           >
             Réinitialiser le thème
           </button>
@@ -321,30 +392,20 @@ function Row({
   label: string;
   hint: string;
   children: React.ReactNode;
-  onClick?: () => void;
+  onClick: () => void;
 }) {
-  const content = (
-    <>
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="focus-row flex w-full items-center gap-3 px-3.5 py-3 transition-colors hover:bg-surface-2/70"
+    >
       <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-surface-2 text-ink-soft">{icon}</span>
       <span className="min-w-0 flex-1 text-left leading-tight">
-        <span className="block truncate text-[12.5px] font-bold text-ink">{label}</span>
-        <span className="block truncate text-[10.5px] font-medium text-ink-muted">{hint}</span>
+        <span className="block text-[12.5px] font-bold text-ink">{label}</span>
+        <span className="block text-[10.5px] font-medium text-ink-muted">{hint}</span>
       </span>
       {children}
-    </>
+    </button>
   );
-
-  if (onClick) {
-    return (
-      <button
-        type="button"
-        onClick={onClick}
-        className="flex w-full items-center gap-3 px-3.5 py-3 transition-colors hover:bg-surface-2/70"
-      >
-        {content}
-      </button>
-    );
-  }
-
-  return <div className="flex items-center gap-3 px-3.5 py-3">{content}</div>;
 }

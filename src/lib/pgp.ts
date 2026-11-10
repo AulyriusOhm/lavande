@@ -1,7 +1,7 @@
 export type PgpKey = {
   id: string;
   name: string;
-  email: string;
+  email?: string;
   fingerprint: string;
   algorithm: string;
   created: string;
@@ -9,6 +9,9 @@ export type PgpKey = {
   verified: boolean;
   trust: "ultimate" | "full" | "marginal";
   secret?: boolean;
+  tone?: number;
+  revoked?: boolean;
+  invalid?: boolean;
 };
 
 export const MY_KEY: PgpKey = {
@@ -22,6 +25,7 @@ export const MY_KEY: PgpKey = {
   verified: true,
   trust: "ultimate",
   secret: true,
+  tone: 2,
 };
 
 export const CONTACT_KEYS: PgpKey[] = [
@@ -35,6 +39,7 @@ export const CONTACT_KEYS: PgpKey[] = [
     expires: "04/11/2027",
     verified: true,
     trust: "full",
+    tone: 0,
   },
   {
     id: "marc",
@@ -46,6 +51,7 @@ export const CONTACT_KEYS: PgpKey[] = [
     expires: "19/01/2028",
     verified: true,
     trust: "full",
+    tone: 1,
   },
   {
     id: "lea",
@@ -57,5 +63,42 @@ export const CONTACT_KEYS: PgpKey[] = [
     expires: "02/06/2026",
     verified: false,
     trust: "marginal",
+    tone: 3,
   },
 ];
+
+export const PGP_STATE = {
+  valid: {
+    label: "clé valide",
+    hint: "Clé valide, utilisable pour chaque destinataire.",
+  },
+  expired: {
+    label: "clé expirée",
+    hint: "Cette clé ne peut plus servir à chiffrer : demande une nouvelle clé au destinataire.",
+  },
+  revoked: {
+    label: "clé révoquée",
+    hint: "Le propriétaire a révoqué cette clé : le chiffrement est bloqué jusqu'à réception d'une nouvelle clé.",
+  },
+  invalid: {
+    label: "clé invalide",
+    hint: "Clé illisible ou invalide : vérifie l'empreinte auprès du destinataire avant tout envoi.",
+  },
+} as const;
+
+export type PgpState = keyof typeof PGP_STATE;
+
+function parseFrDate(value: string) {
+  const [day, month, year] = value.split("/").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+export function isExpired(key: PgpKey, now = new Date()) {
+  return parseFrDate(key.expires).getTime() < now.getTime();
+}
+
+export function keyState(key: PgpKey, now = new Date()): PgpState {
+  if (key.revoked) return "revoked";
+  if (key.invalid) return "invalid";
+  return isExpired(key, now) ? "expired" : "valid";
+}

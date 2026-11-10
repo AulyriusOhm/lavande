@@ -9,6 +9,7 @@ export type Task = {
   state: TaskState;
   due: string;
   dueTone: "late" | "soon" | "soft" | "none";
+  dueDate?: string;
   progress?: number;
   description?: string;
   subtasks?: Subtask[];
@@ -39,7 +40,8 @@ export const TASKS: Task[] = [
     meta: "mail · Perso · Camille",
     state: "todo",
     due: "vendredi",
-    dueTone: "late",
+    dueTone: "soon",
+    dueDate: isoToday(3),
     mailId: "1",
     description:
       "Camille veut figer la v3 avant la démo. Relire les écrans, vérifier les contrastes en extérieur et répondre avec les deux points bloquants (barre de recherche flottante, hiérarchie des chips).",
@@ -56,6 +58,7 @@ export const TASKS: Task[] = [
     state: "doing",
     due: "aujourd'hui",
     dueTone: "soon",
+    dueDate: isoToday(0),
     progress: 45,
     description:
       "Passer la palette en revue avec l'équipe : accent personnalisable, variantes sombres et nouveaux tokens de surface.",
@@ -69,8 +72,9 @@ export const TASKS: Task[] = [
     title: "Accès serveur (Marc)",
     meta: "mail · Studio · sans réponse depuis 3 j",
     state: "waiting",
-    due: "3 j",
-    dueTone: "soft",
+    due: "il y a 2 j",
+    dueTone: "late",
+    dueDate: isoToday(-2),
     mailId: "3",
     description:
       "Marc devait transmettre les accès serveur dans la journée. Relancer si rien n'arrive avant la fin de semaine.",
@@ -82,7 +86,8 @@ export const TASKS: Task[] = [
     meta: "pièce jointe · PDF · à archiver",
     state: "review",
     due: "demain",
-    dueTone: "soft",
+    dueTone: "soon",
+    dueDate: isoToday(1),
     mailId: "3",
     description: "L'avenant signé est arrivé en pièce jointe. Le classer dans le dossier administratif du projet.",
     subtasks: [
@@ -93,10 +98,11 @@ export const TASKS: Task[] = [
   {
     id: "t6",
     title: "Importer la clé PGP de Léa",
-    meta: "sécurité · clé expirée le 02/06",
+    meta: "sécurité · clé expirée le 2 juin",
     state: "todo",
     due: "cette semaine",
     dueTone: "soft",
+    dueDate: isoEndOfWeek(),
     description:
       "La clé de Léa n'est plus vérifiée et a expiré. Lui demander une nouvelle clé signée, puis la marquer de confiance complète.",
   },
@@ -124,7 +130,7 @@ export const TASKS: Task[] = [
     title: "Ranger le dossier Design System",
     meta: "manuel",
     state: "done",
-    due: "lun.",
+    due: "lundi dernier",
     dueTone: "none",
     description: "Trier les pages obsolètes et fusionner les doublons de tokens.",
   },
@@ -149,10 +155,10 @@ export const MAIL_SUGGESTIONS: MailSuggestion[] = [
     mailId: "1",
     account: "perso",
     from: "Camille Rousseau",
-    subject: "Maquettes mobile — version 3",
+    subject: "Maquettes mobiles — version 3",
     proposal: "Répondre à Camille",
     due: "vendredi",
-    dueTone: "late",
+    dueTone: "soon",
     tone: 0,
     description:
       "Camille attend un retour sur la v3 des maquettes avant vendredi : contrastes, hiérarchie, et variante de barre de recherche flottante.",
@@ -176,12 +182,43 @@ export const MAIL_SUGGESTIONS: MailSuggestion[] = [
     from: "OVHcloud",
     subject: "Facture F2026-1187 disponible",
     proposal: "Envoyer la facture au comptable",
-    due: "cette sem.",
+    due: "cette semaine",
     dueTone: "soft",
     tone: 0,
     description: "Facture de 11,98 € TTC pour octobre, prélèvement le 15.",
   },
 ];
+
+export function isoDate(date: Date) {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+export function isoToday(offset = 0) {
+  const date = new Date();
+  date.setDate(date.getDate() + offset);
+  return isoDate(date);
+}
+
+export function isoEndOfWeek() {
+  return isoToday(6 - ((new Date().getDay() + 6) % 7));
+}
+
+const DUE_FMT = new Intl.DateTimeFormat("fr-FR", { weekday: "short", day: "numeric", month: "short" });
+
+export function formatDueDate(iso: string) {
+  if (iso === isoToday(0)) return "aujourd'hui";
+  if (iso === isoToday(1)) return "demain";
+  return DUE_FMT.format(new Date(`${iso}T12:00:00`)).replace(/\./g, "").replace(/[\u202f\u00a0]/g, " ");
+}
+
+export function dueToneFor(iso: string): Task["dueTone"] {
+  const today = isoToday();
+  if (iso < today) return "late";
+  if (iso <= isoToday(1)) return "soon";
+  return "soft";
+}
 
 const DUE_ORDER: Record<Task["dueTone"], number> = { late: 0, soon: 1, soft: 2, none: 3 };
 

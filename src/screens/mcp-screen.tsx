@@ -1,11 +1,20 @@
-import { useState } from "react";
-import { Activity, ArrowLeft, Blocks, ChevronRight, Plug, ShieldCheck, Terminal, Wifi } from "lucide-react";
-import { MCP_LOG, MCP_SERVERS } from "@/lib/mcp";
+import {
+  Activity,
+  ArrowLeft,
+  Blocks,
+  Globe,
+  Plug,
+  ShieldCheck,
+  Terminal,
+} from "lucide-react";
+import { MCP_LOG, MCP_SCOPES, MCP_SERVERS, mcpCounts } from "@/lib/mcp";
+import { mergeFlags, usePrefs } from "@/lib/prefs";
+import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { NumberTicker } from "@/components/ui/number-ticker";
-import { Switch } from "@/components/ui/primitives";
+import { Switch, ToggleRow } from "@/components/ui/primitives";
 import { ShinyText } from "@/components/ui/animated-text";
 
 const SCOPE_STYLE: Record<string, string> = {
@@ -15,12 +24,14 @@ const SCOPE_STYLE: Record<string, string> = {
 };
 
 export function McpScreen({ onClose }: { onClose?: () => void }) {
-  const [enabled, setEnabled] = useState<Record<string, boolean>>(
-    Object.fromEntries(MCP_SERVERS.map((server) => [server.id, server.status === "connected"])),
-  );
+  const { brand } = useTheme();
+  const { mcpEnabled, setMcpEnabled, mcpConfirmSend, setMcpConfirmSend } = usePrefs();
 
-  const toolCount = MCP_SERVERS.reduce((total, server) => total + server.tools.length, 0);
-  const connected = MCP_SERVERS.filter((server) => enabled[server.id]).length;
+  const enabled = mergeFlags(
+    Object.fromEntries(MCP_SERVERS.map((server) => [server.id, server.status === "connected"])),
+    mcpEnabled,
+  );
+  const counts = mcpCounts((server) => enabled[server.id]);
 
   return (
     <div className="relative h-full overflow-y-auto no-scrollbar pb-32">
@@ -32,12 +43,12 @@ export function McpScreen({ onClose }: { onClose?: () => void }) {
             type="button"
             onClick={onClose}
             aria-label="Retour"
-            className="mb-3 grid size-9 place-items-center rounded-full border border-line bg-surface text-ink-soft"
+            className="focus-ring mb-3 grid size-11 place-items-center rounded-full border border-line bg-surface text-ink-soft"
           >
             <ArrowLeft className="size-4" />
           </button>
         ) : null}
-        <p className="text-[10.5px] font-bold tracking-[0.18em] text-ink-muted uppercase">Lavande · MCP</p>
+        <p className="text-[10.5px] font-bold tracking-[0.18em] text-ink-muted uppercase">{brand} · MCP</p>
         <h1 className="mt-1.5 text-[27px] leading-none font-extrabold tracking-[-0.035em] text-ink">
           Assistant
         </h1>
@@ -50,8 +61,8 @@ export function McpScreen({ onClose }: { onClose?: () => void }) {
       <BlurFade delay={0.05}>
         <div className="mx-5 mt-4 grid grid-cols-3 gap-2">
           {[
-            { label: "Serveurs", value: connected, icon: Plug },
-            { label: "Outils", value: toolCount, icon: Terminal },
+            { label: "Serveurs actifs", value: counts.activeServers, icon: Plug },
+            { label: "Outils actifs", value: counts.activeTools, icon: Terminal },
             { label: "Appels / 24 h", value: 42, icon: Activity },
           ].map((stat) => {
             const Icon = stat.icon;
@@ -66,13 +77,35 @@ export function McpScreen({ onClose }: { onClose?: () => void }) {
             );
           })}
         </div>
+        <p className="mx-5 mt-2 text-[10px] leading-relaxed font-medium text-ink-muted">
+          {counts.activeTools} outils actifs sur {counts.installedTools} installés · les serveurs
+          désactivés ne sont pas exposés.
+        </p>
       </BlurFade>
 
       <div className="mt-5 flex items-baseline justify-between px-5">
         <h2 className="text-[10.5px] font-bold tracking-[0.16em] text-ink-soft uppercase">Serveurs</h2>
         <span className="text-[10.5px] font-medium text-ink-muted">
-          <ShinyText>{connected} actifs</ShinyText>
+          <ShinyText>
+            {counts.activeServers} serveurs actifs · {counts.activeTools} outils actifs
+          </ShinyText>
         </span>
+      </div>
+
+      <div className="mx-4 mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+        {MCP_SCOPES.map((scope) => (
+          <span key={scope.id} className="inline-flex items-center gap-1.5">
+            <span
+              className={cn(
+                "rounded-md px-1.5 py-0.5 text-[9.5px] font-bold",
+                SCOPE_STYLE[scope.id],
+              )}
+            >
+              {scope.id}
+            </span>
+            <span className="text-[10px] font-medium text-ink-muted">{scope.hint}</span>
+          </span>
+        ))}
       </div>
 
       <div className="mt-3 space-y-2 px-4">
@@ -89,15 +122,19 @@ export function McpScreen({ onClose }: { onClose?: () => void }) {
                     <div className="flex items-center gap-1.5">
                       <p className="truncate text-[13px] font-bold text-ink">{server.name}</p>
                       <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[9.5px] font-bold tracking-wide text-ink-muted uppercase">
-                        <Wifi className="size-2.5" />
+                        {server.transport === "stdio" ? (
+                          <Terminal className="size-2.5" />
+                        ) : (
+                          <Globe className="size-2.5" />
+                        )}
                         {server.transport}
                       </span>
                     </div>
-                    <p className="mt-0.5 truncate text-[11px] font-medium text-ink-muted">{server.description}</p>
+                    <p className="mt-0.5 text-[11px] font-medium text-ink-muted">{server.description}</p>
                   </div>
                   <Switch
                     checked={isOn}
-                    onChange={(value) => setEnabled((current) => ({ ...current, [server.id]: value }))}
+                    onChange={(value) => setMcpEnabled(server.id, value)}
                     label={server.name}
                   />
                 </div>
@@ -132,34 +169,51 @@ export function McpScreen({ onClose }: { onClose?: () => void }) {
           {MCP_LOG.map((entry, index) => (
             <div
               key={entry.time + entry.tool}
-              className={cn("flex items-center gap-2.5 px-2.5 py-2.5", index > 0 && "border-t border-line/70")}
+              className={cn("px-2.5 py-2.5", index > 0 && "border-t border-line/70")}
             >
-              <span className="w-9 shrink-0 font-mono text-[10px] font-semibold text-ink-muted">{entry.time}</span>
-              <span className="shrink-0 rounded-lg bg-accent-soft px-1.5 py-0.5 font-mono text-[10px] font-bold text-accent-ink">
-                {entry.tool}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-ink-soft">{entry.detail}</span>
+              <div className="flex items-center gap-2.5">
+                <span className="w-9 shrink-0 font-mono text-[10px] font-semibold text-ink-muted">
+                  {entry.time}
+                </span>
+                <span className="shrink-0 rounded-lg bg-accent-soft px-1.5 py-0.5 font-mono text-[10px] font-bold text-accent-ink">
+                  {entry.tool}
+                </span>
+                <span
+                  className={cn(
+                    "ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-bold",
+                    entry.status === "succès"
+                      ? "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300"
+                      : "bg-red-500/12 text-red-700 dark:text-red-300",
+                  )}
+                >
+                  {entry.status}
+                </span>
+              </div>
+              <p className="mt-1 pl-[46px] text-[10.5px] leading-relaxed font-medium text-ink-soft">
+                <span className="font-bold text-ink-muted">{entry.agent}</span> · {entry.detail}
+              </p>
             </div>
           ))}
         </div>
       </BlurFade>
 
       <BlurFade delay={0.3}>
-        <button
-          type="button"
-          className="mx-4 mt-3 flex w-[calc(100%-2rem)] items-center gap-3 rounded-3xl border border-dashed border-line p-3.5 text-left transition-colors hover:border-accent-ring"
-        >
-          <span className="grid size-9 place-items-center rounded-xl bg-surface-2 text-ink-soft">
-            <ShieldCheck className="size-4" />
-          </span>
-          <span className="min-w-0 flex-1 leading-tight">
-            <span className="block text-[12.5px] font-bold text-ink">Jetons et permissions</span>
-            <span className="block text-[10.5px] font-medium text-ink-muted">
-              Un jeton par agent, portée limitée, révocable
-            </span>
-          </span>
-          <ChevronRight className="size-4 text-ink-muted" />
-        </button>
+        <div className="mx-4 mt-3 overflow-hidden rounded-3xl border border-line bg-surface">
+          <p className="px-3.5 pt-3 text-[10.5px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+            Permissions
+          </p>
+          <ToggleRow
+            icon={<ShieldCheck className="size-4" />}
+            label="Exiger une confirmation avant chaque envoi"
+            hint="mail.send et les écritures attendent ta validation"
+            checked={mcpConfirmSend}
+            onChange={setMcpConfirmSend}
+          />
+          <p className="px-3.5 pb-3 text-[10px] leading-relaxed font-medium text-ink-muted">
+            Un jeton par agent, portée limitée, révocable. Aucune permission n'est accordée sans ton
+            accord.
+          </p>
+        </div>
       </BlurFade>
     </div>
   );

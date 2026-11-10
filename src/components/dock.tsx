@@ -51,7 +51,7 @@ export function Dock({
               aria-label={tab.label}
               aria-current={isActive}
               className={cn(
-                "relative flex h-11 items-center gap-2 rounded-full px-3 transition-colors duration-300",
+                "focus-ring relative flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-full px-3 transition-colors duration-300",
                 isActive ? "text-accent-ink" : "text-ink-muted hover:text-ink-soft",
               )}
             >
@@ -91,8 +91,8 @@ export function Dock({
                 onClick={fab.run}
                 aria-label={fab.label}
                 className={cn(
-                  "group relative grid size-11 shrink-0 place-items-center overflow-hidden rounded-full",
-                  "bg-accent text-white shadow-[0_10px_24px_-10px_var(--accent)]",
+                  "focus-ring group relative grid size-12 shrink-0 place-items-center overflow-hidden rounded-full",
+                  "bg-accent text-accent-contrast shadow-[0_10px_24px_-10px_var(--accent)]",
                   "transition-transform duration-200 active:scale-90",
                 )}
               >

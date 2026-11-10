@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useMotionValue, useSpring, useTransform } from "motion/react";
-import { Check, ChevronRight, ListChecks, Mail, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Check, ChevronRight, EyeOff, ListChecks, Mail, Plus, Sparkles } from "lucide-react";
 import type { MailSuggestion, Task, TaskState } from "@/lib/tasks";
 import { TASK_STATES, sortTasks, stateMeta } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
@@ -19,6 +19,9 @@ const DUE_STYLE: Record<Task["dueTone"], string> = {
   none: "bg-surface-2 text-ink-muted",
 };
 
+const CHIP =
+  "inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[11.5px] font-bold transition-all";
+
 export function PlanningScreen({
   tasks,
   setTasks,
@@ -27,6 +30,9 @@ export function PlanningScreen({
   onDismissSuggestion,
   onOpenTask,
   onOpenSuggestion,
+  onNewTask,
+  movingTask,
+  onMovingChange,
 }: {
   tasks: Task[];
   setTasks: React.Dispatch<React.SetStateAction<Task[]>>;
@@ -35,13 +41,26 @@ export function PlanningScreen({
   onDismissSuggestion: (suggestion: MailSuggestion) => void;
   onOpenTask: (task: Task) => void;
   onOpenSuggestion: (suggestion: MailSuggestion) => void;
+  onNewTask?: () => void;
+  movingTask?: Task | null;
+  onMovingChange?: (task: Task | null) => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
-  const [moving, setMoving] = useState<Task | null>(null);
+  const [localMoving, setLocalMoving] = useState<Task | null>(null);
   const [headerH, setHeaderH] = useState(0);
+  const [edges, setEdges] = useState({ left: false, right: false });
+
+  const moving = movingTask === undefined ? localMoving : movingTask;
+
+  const setMoving = (task: Task | null) => {
+    if (movingTask === undefined) setLocalMoving(task);
+    onMovingChange?.(task);
+  };
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLElement>(null);
+  const filtersRef = useRef<HTMLDivElement>(null);
+  const chips = useRef<Partial<Record<Filter, HTMLButtonElement | null>>>({});
   const raw = useMotionValue(0);
   const progress = useSpring(raw, { stiffness: 220, damping: 30, mass: 0.9 });
 
@@ -67,6 +86,34 @@ export function PlanningScreen({
     element.addEventListener("scroll", onScroll, { passive: true });
     return () => element.removeEventListener("scroll", onScroll);
   }, [raw]);
+
+  useEffect(() => {
+    const element = filtersRef.current;
+    if (!element) return;
+    const update = () =>
+      setEdges({
+        left: element.scrollLeft > 4,
+        right: element.scrollLeft + element.clientWidth < element.scrollWidth - 4,
+      });
+    update();
+    element.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+    return () => {
+      element.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+    };
+  }, []);
+
+  useEffect(() => {
+    const container = filtersRef.current;
+    const chip = chips.current[filter];
+    if (!container || !chip) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    container.scrollTo({
+      left: chip.offsetLeft - (container.clientWidth - chip.offsetWidth) / 2,
+      behavior: reduce ? "auto" : "smooth",
+    });
+  }, [filter]);
 
   const countFor = (state: TaskState) => tasks.filter((task) => task.state === state).length;
   const visibleTasks =
@@ -104,84 +151,105 @@ export function PlanningScreen({
 
         <div className="relative">
           <div
+            ref={filtersRef}
             className="mt-4 flex gap-2 overflow-x-auto px-5 pb-1 no-scrollbar"
             style={{ touchAction: "pan-x", overscrollBehaviorX: "contain" }}
           >
             <button
-            type="button"
-            onClick={() => setFilter("all")}
-            className={cn(
-              "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[11.5px] font-bold transition-all",
-              filter === "all"
-                ? "bg-accent text-white shadow-[0_6px_16px_-8px_var(--accent)]"
-                : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
-            )}
-          >
-            Toutes
-            <span
+              type="button"
+              ref={(element) => {
+                chips.current.all = element;
+              }}
+              onClick={() => setFilter("all")}
+              aria-pressed={filter === "all"}
               className={cn(
-                "rounded-full px-1.5 text-[10px] font-bold",
-                filter === "all" ? "bg-white/25 text-white" : "bg-accent-soft text-accent-ink",
+                CHIP,
+                filter === "all"
+                  ? "bg-accent text-accent-contrast shadow-[0_6px_16px_-8px_var(--accent)]"
+                  : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
               )}
             >
-              {tasks.length}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setFilter("suggestion")}
-            className={cn(
-              "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[11.5px] font-bold transition-all",
-              filter === "suggestion"
-                ? "bg-accent text-white shadow-[0_6px_16px_-8px_var(--accent)]"
-                : "border border-dashed border-accent-ring/80 bg-surface text-accent-ink hover:border-accent",
-            )}
-          >
-            <Sparkles className="size-3" strokeWidth={2.4} />
-            Suggestions
-            <span
-              className={cn(
-                "rounded-full px-1.5 text-[10px] font-bold",
-                filter === "suggestion" ? "bg-white/25 text-white" : "bg-accent-soft text-accent-ink",
-              )}
-            >
-              {suggestions.length}
-            </span>
-          </button>
-
-          {TASK_STATES.map((state) => {
-            const active = filter === state.id;
-            return (
-              <button
-                key={state.id}
-                type="button"
-                onClick={() => setFilter(state.id)}
+              Tâches
+              <span
                 className={cn(
-                  "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[11.5px] font-bold transition-all",
-                  active
-                    ? "bg-accent text-white shadow-[0_6px_16px_-8px_var(--accent)]"
-                    : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
+                  "rounded-full px-1.5 text-[10px] font-bold",
+                  filter === "all" ? "bg-accent-contrast/25 text-accent-contrast" : "bg-accent-soft text-accent-ink",
                 )}
               >
-                <span className={cn("size-1.5 rounded-full", active ? "bg-white/80" : state.dot)} />
-                {state.label}
-                <span
+                {tasks.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              ref={(element) => {
+                chips.current.suggestion = element;
+              }}
+              onClick={() => setFilter("suggestion")}
+              aria-pressed={filter === "suggestion"}
+              className={cn(
+                CHIP,
+                filter === "suggestion"
+                  ? "bg-accent text-accent-contrast shadow-[0_6px_16px_-8px_var(--accent)]"
+                  : "border border-dashed border-accent-ring/80 bg-surface text-accent-ink hover:border-accent",
+              )}
+            >
+              <Sparkles className="size-3" strokeWidth={2.4} />
+              Suggestions
+              <span
+                className={cn(
+                  "rounded-full px-1.5 text-[10px] font-bold",
+                  filter === "suggestion" ? "bg-accent-contrast/25 text-accent-contrast" : "bg-accent-soft text-accent-ink",
+                )}
+              >
+                {suggestions.length}
+              </span>
+            </button>
+
+            {TASK_STATES.map((state) => {
+              const active = filter === state.id;
+              return (
+                <button
+                  key={state.id}
+                  type="button"
+                  ref={(element) => {
+                    chips.current[state.id] = element;
+                  }}
+                  onClick={() => setFilter(state.id)}
+                  aria-pressed={active}
                   className={cn(
-                    "rounded-full px-1.5 text-[10px] font-bold",
-                    active ? "bg-white/25 text-white" : "bg-surface-2 text-ink-muted",
+                    CHIP,
+                    active
+                      ? "bg-accent text-accent-contrast shadow-[0_6px_16px_-8px_var(--accent)]"
+                      : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
                   )}
                 >
-                  {countFor(state.id)}
-                </span>
-              </button>
-            );
-          })}
+                  <span className={cn("size-1.5 rounded-full", active ? "bg-accent-contrast/80" : state.dot)} />
+                  {state.label}
+                  <span
+                    className={cn(
+                      "rounded-full px-1.5 text-[10px] font-bold",
+                      active ? "bg-accent-contrast/25 text-accent-contrast" : "bg-surface-2 text-ink-muted",
+                    )}
+                  >
+                    {countFor(state.id)}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-          <div className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-canvas to-transparent" />
+          {edges.left && (
+            <div className="pointer-events-none absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-canvas to-transparent" />
+          )}
+          {edges.right && (
+            <div className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-canvas to-transparent" />
+          )}
         </div>
 
         <div className="mt-3 space-y-1.5 px-4">
+          {showSuggestions && suggestions.length > 0 ? (
+            <p className="px-1 text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Suggestions</p>
+          ) : null}
           <AnimatePresence initial={false}>
             {showSuggestions &&
               suggestions.map((suggestion) => (
@@ -196,51 +264,57 @@ export function PlanningScreen({
                 >
                   <SwipeAction
                     leading={{
-                      label: "Supprimer",
-                      icon: Trash2,
-                      tone: "danger",
+                      label: "Ignorer",
+                      icon: EyeOff,
+                      tone: "neutral",
                       run: () => onDismissSuggestion(suggestion),
                     }}
                     trailing={{
-                      label: "Supprimer",
-                      icon: Trash2,
-                      tone: "danger",
+                      label: "Ignorer",
+                      icon: EyeOff,
+                      tone: "neutral",
                       run: () => onDismissSuggestion(suggestion),
                     }}
                   >
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => onOpenSuggestion(suggestion)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") onOpenSuggestion(suggestion);
-                    }}
-                    className="flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed border-accent-ring/70 bg-accent-soft/50 px-3 py-2.5 transition-colors hover:border-accent hover:bg-accent-soft"
-                  >
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onAddSuggestion(suggestion);
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => onOpenSuggestion(suggestion)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") onOpenSuggestion(suggestion);
                       }}
-                      aria-label={"Ajouter : " + suggestion.proposal}
-                      className="grid size-5 shrink-0 place-items-center rounded-md border-2 border-accent-ring bg-surface text-accent-ink transition-colors hover:border-accent hover:bg-accent hover:text-white"
+                      className="flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed border-accent-ring/70 bg-accent-soft/50 px-3 py-2.5 transition-colors hover:border-accent hover:bg-accent-soft"
                     >
-                      <Plus className="size-3" strokeWidth={3.5} />
-                    </button>
-                    <div className="min-w-0 flex-1 leading-tight">
-                      <p className="truncate text-[12.5px] font-bold text-ink">{suggestion.proposal}</p>
-                      <p className="mt-0.5 flex items-center gap-1 truncate text-[10.5px] font-medium text-ink-muted">
-                        <Mail className="size-2.5 shrink-0" />
-                        {suggestion.subject}
-                      </p>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onAddSuggestion(suggestion);
+                        }}
+                        aria-label={"Ajouter : " + suggestion.proposal}
+                        className="relative grid size-5 shrink-0 place-items-center rounded-md border-2 border-accent-ring bg-surface text-accent-ink transition-colors before:absolute before:-inset-3 before:rounded-full before:content-[''] hover:border-accent hover:bg-accent hover:text-accent-contrast"
+                      >
+                        <Plus className="size-3" strokeWidth={3.5} />
+                      </button>
+                      <div className="min-w-0 flex-1 leading-tight">
+                        <p className="line-clamp-2 text-[12.5px] font-bold text-ink">{suggestion.proposal}</p>
+                        <p className="mt-0.5 flex items-start gap-1 text-[10.5px] font-medium text-ink-muted">
+                          <Mail className="mt-0.5 size-2.5 shrink-0" />
+                          <span className="line-clamp-2">{suggestion.subject}</span>
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-surface-2 px-1.5 py-0.5 text-[9.5px] font-extrabold whitespace-nowrap text-accent-ink">
+                        {suggestion.due}
+                      </span>
                     </div>
-                    <span className="shrink-0 text-[9.5px] font-extrabold text-accent-ink">{suggestion.due}</span>
-                  </div>
                   </SwipeAction>
                 </motion.div>
               ))}
           </AnimatePresence>
+
+          {filter === "all" && visibleTasks.length > 0 ? (
+            <p className="px-1 pt-1.5 text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Tâches</p>
+          ) : null}
 
           {visibleTasks.map((task, index) => {
             const meta = stateMeta(task.state);
@@ -262,13 +336,14 @@ export function PlanningScreen({
                   <button
                     type="button"
                     aria-label={done ? "Rouvrir la tâche" : "Marquer comme faite"}
+                    aria-pressed={done}
                     onClick={(event) => {
                       event.stopPropagation();
                       setState(task.id, done ? "todo" : "done");
                     }}
                     className={cn(
-                      "grid size-5 shrink-0 place-items-center rounded-md border-2 transition-colors",
-                      done ? "border-accent bg-accent text-white" : "border-accent-ring/70 hover:border-accent",
+                      "relative grid size-5 shrink-0 place-items-center rounded-md border-2 transition-colors before:absolute before:-inset-3 before:rounded-full before:content-['']",
+                      done ? "border-accent bg-accent text-accent-contrast" : "border-accent-ring/70 hover:border-accent",
                     )}
                   >
                     {done ? <Check className="size-3" strokeWidth={3.5} /> : null}
@@ -277,16 +352,28 @@ export function PlanningScreen({
                   <div className="min-w-0 flex-1">
                     <p
                       className={cn(
-                        "truncate text-[12.5px] leading-tight font-bold",
+                        "line-clamp-2 text-[12.5px] leading-tight font-bold",
                         done ? "text-ink-muted line-through" : "text-ink",
                       )}
                     >
                       {task.title}
                     </p>
-                    <p className="mt-0.5 truncate text-[10.5px] font-medium text-ink-muted">{task.meta}</p>
+                    <p className="mt-0.5 line-clamp-2 text-[10.5px] font-medium text-ink-muted">{task.meta}</p>
                     {typeof task.progress === "number" && !done ? (
-                      <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-surface-2">
-                        <div className="h-full rounded-full bg-accent" style={{ width: `${task.progress}%` }} />
+                      <div className="mt-1.5 flex items-center gap-1.5">
+                        <div
+                          role="progressbar"
+                          aria-label={"Progression de " + task.title}
+                          aria-valuenow={task.progress}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          className="h-1 flex-1 overflow-hidden rounded-full bg-surface-2"
+                        >
+                          <div className="h-full rounded-full bg-accent" style={{ width: `${task.progress}%` }} />
+                        </div>
+                        <span className="shrink-0 text-[9px] font-bold tabular-nums text-ink-muted">
+                          {task.progress} %
+                        </span>
                       </div>
                     ) : null}
                   </div>
@@ -294,7 +381,7 @@ export function PlanningScreen({
                   {task.dueTone !== "none" ? (
                     <span
                       className={cn(
-                        "shrink-0 rounded-full px-2 py-0.5 text-[9.5px] font-extrabold",
+                        "shrink-0 rounded-full px-2 py-0.5 text-[9.5px] font-extrabold whitespace-nowrap",
                         DUE_STYLE[task.dueTone],
                       )}
                     >
@@ -323,18 +410,32 @@ export function PlanningScreen({
           })}
 
           {visibleTasks.length === 0 && !(showSuggestions && suggestions.length > 0) && (
-            <p className="px-6 py-12 text-center text-[13px] font-medium text-ink-muted">
-              Aucune tâche dans cet état.
-            </p>
+            <div className="px-4 py-10 text-center">
+              <p className="text-[13px] font-medium text-ink-muted">
+                {showSuggestions ? "Aucune suggestion pour l'instant." : "Aucune tâche dans ce filtre."}
+              </p>
+              {filter !== "all" && (
+                <button
+                  type="button"
+                  onClick={() => setFilter("all")}
+                  className="mt-3 rounded-full border border-line bg-surface px-3 py-1.5 text-[11.5px] font-bold text-accent-ink transition-colors hover:border-accent-ring"
+                >
+                  Réinitialiser le filtre
+                </button>
+              )}
+            </div>
           )}
 
-          <button
-            type="button"
-            className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-line py-3 text-[12.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
-          >
-            <Plus className="size-4" />
-            Nouvelle tâche
-          </button>
+          {onNewTask ? (
+            <button
+              type="button"
+              onClick={onNewTask}
+              className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-line py-3 text-[12.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+            >
+              <Plus className="size-4" />
+              Nouvelle tâche
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -354,7 +455,7 @@ export function PlanningScreen({
       </motion.div>
 
       {moving && (
-        <div className="absolute inset-0 z-50 flex items-end" role="dialog" aria-label="Changer l'état">
+        <div className="absolute inset-0 z-50 flex items-end" role="dialog" aria-modal="true" aria-label="Changer l'état" data-swipe>
           <button
             type="button"
             aria-label="Fermer"
@@ -363,15 +464,14 @@ export function PlanningScreen({
           />
           <div className="relative w-full rounded-t-[28px] border-t border-line bg-canvas px-4 pt-3 pb-28 shadow-[0_-20px_60px_-20px_rgba(40,20,80,0.35)]">
             <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-line" />
-            <p className="px-1 pb-1 text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
-              Déplacer vers
-            </p>
-            <p className="truncate px-1 pb-3 text-[12.5px] font-bold text-ink">{moving.title}</p>
+            <p className="px-1 pb-1 text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Changer l'état</p>
+            <p className="line-clamp-2 px-1 pb-3 text-[12.5px] font-bold text-ink">{moving.title}</p>
             <div className="space-y-1">
               {TASK_STATES.map((state) => (
                 <button
                   key={state.id}
                   type="button"
+                  aria-pressed={moving.state === state.id}
                   onClick={() => setState(moving.id, state.id)}
                   className={cn(
                     "flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[12.5px] font-semibold transition-colors",
@@ -384,6 +484,13 @@ export function PlanningScreen({
                 </button>
               ))}
             </div>
+            <button
+              type="button"
+              onClick={() => setMoving(null)}
+              className="mt-3 w-full rounded-full border border-line bg-surface py-2.5 text-[12.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring"
+            >
+              Fermer
+            </button>
           </div>
         </div>
       )}

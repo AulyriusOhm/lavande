@@ -14,16 +14,34 @@ export function folderLabel(id: FolderId) {
   return FOLDERS.find((folder) => folder.id === id)?.label ?? "Boîte de réception";
 }
 
+export function normalize(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+export function mailMatches(mail: Mail, query: string) {
+  const needle = normalize(query.trim());
+  if (!needle) return false;
+  return [mail.name, mail.email, mail.subject, mail.preview, ...mail.body].some((field) =>
+    normalize(field).includes(needle),
+  );
+}
+
 export type Mail = {
   id: string;
   account: "perso" | "pro" | "gmail";
   folder: FolderId;
+  previousFolder?: FolderId;
   name: string;
   email: string;
+  to?: string;
   subject: string;
   preview: string;
   body: string[];
   time: string;
+  date?: string;
   unread: boolean;
   starred: boolean;
   pgp: PgpState;
@@ -47,7 +65,7 @@ export const MAILS: Mail[] = [
     folder: "inbox",
     name: "Camille Rousseau",
     email: "camille@studio-lilas.fr",
-    subject: "Maquettes mobile — version 3",
+    subject: "Maquettes mobiles — version 3",
     preview: "J'ai retravaillé les écrans de la boîte de réception, dis-moi ce que tu penses des nouveaux contrastes…",
     body: [
       "Salut,",
@@ -57,6 +75,7 @@ export const MAILS: Mail[] = [
       "À très vite,\nCamille",
     ],
     time: "09:41",
+    date: "mardi 10 novembre 2026 · 09:41",
     unread: true,
     starred: true,
     pgp: "encrypted",
@@ -65,26 +84,6 @@ export const MAILS: Mail[] = [
       { name: "specs-mobile.pdf", size: "820 Ko" },
     ],
     tone: 0,
-  },
-  {
-    id: "2",
-    account: "perso",
-    folder: "inbox",
-    name: "GitHub",
-    email: "notifications@github.com",
-    subject: "[lavande] Rust backend: 3 pull requests",
-    preview: "@marie a demandé une revue sur feat/imap-sync, et 2 autres pull requests attendent ton avis.",
-    body: [
-      "Trois pull requests attendent ta revue sur le dépôt lavande.",
-      "feat/imap-sync — synchronisation IMAP incrémentale, 14 fichiers modifiés.",
-      "fix/oauth-refresh — corrige l'expiration silencieuse du refresh token.",
-      "chore/tauri-v2 — migration vers Tauri v2 et activation du support Android.",
-    ],
-    time: "08:12",
-    unread: true,
-    starred: false,
-    pgp: "signed",
-    tone: 2,
   },
   {
     id: "3",
@@ -101,11 +100,33 @@ export const MAILS: Mail[] = [
       "Bien à toi,\nMarc",
     ],
     time: "08:47",
+    date: "mardi 10 novembre 2026 · 08:47",
     unread: true,
     starred: true,
     pgp: "encrypted",
     attachments: [{ name: "avenant-phase2.pdf", size: "310 Ko" }],
     tone: 1,
+  },
+  {
+    id: "2",
+    account: "perso",
+    folder: "inbox",
+    name: "GitHub",
+    email: "notifications@github.com",
+    subject: "[lavande] Rust backend: 3 pull requests",
+    preview: "@marie a demandé une revue sur feat/imap-sync, et 2 autres pull requests attendent ton avis.",
+    body: [
+      "Trois pull requests attendent ta revue sur le dépôt lavande.",
+      "feat/imap-sync — synchronisation IMAP incrémentale, 14 fichiers modifiés.",
+      "fix/oauth-refresh — corrige l'expiration silencieuse du refresh token.",
+      "chore/tauri-v2 — migration vers Tauri v2 et activation du support Android.",
+    ],
+    time: "08:12",
+    date: "mardi 10 novembre 2026 · 08:12",
+    unread: true,
+    starred: false,
+    pgp: "signed",
+    tone: 2,
   },
   {
     id: "4",
@@ -121,6 +142,7 @@ export const MAILS: Mail[] = [
       "Jeudi 12h30 ? Je réserve si tu confirmes.",
     ],
     time: "Hier",
+    date: "lundi 9 novembre 2026 · 18:24",
     unread: false,
     starred: false,
     pgp: "none",
@@ -140,6 +162,7 @@ export const MAILS: Mail[] = [
       "Il y en a quelques-unes de toi plutôt réussies, notamment celle du ponton au coucher du soleil.",
     ],
     time: "Hier",
+    date: "lundi 9 novembre 2026 · 17:08",
     unread: true,
     starred: false,
     pgp: "none",
@@ -159,6 +182,7 @@ export const MAILS: Mail[] = [
       "La page « Couleurs & tokens » a été mise à jour par Camille hier à 18:04.",
     ],
     time: "Hier",
+    date: "lundi 9 novembre 2026 · 09:15",
     unread: false,
     starred: false,
     pgp: "signed",
@@ -177,6 +201,7 @@ export const MAILS: Mail[] = [
       "Ambient, lo-fi et pas mal de piano. Bonne session.",
     ],
     time: "dim.",
+    date: "dimanche 8 novembre 2026 · 21:40",
     unread: false,
     starred: false,
     pgp: "none",
@@ -196,6 +221,7 @@ export const MAILS: Mail[] = [
       "Le prélèvement aura lieu le 15 du mois.",
     ],
     time: "lun.",
+    date: "lundi 9 novembre 2026 · 14:02",
     unread: false,
     starred: false,
     pgp: "signed",
@@ -216,6 +242,7 @@ export const MAILS: Mail[] = [
       "Cordialement, le service des gains.",
     ],
     time: "03:12",
+    date: "mardi 10 novembre 2026 · 03:12",
     unread: true,
     starred: false,
     pgp: "none",
@@ -228,9 +255,11 @@ export const MAILS: Mail[] = [
     name: "Roman",
     email: "roman@studio-lilas.fr",
     subject: "Re: Devis signé — retour de ma part",
+    to: "marc.delaunay@mail.fr",
     preview: "Parfait Marc, merci. Je lance la phase 2 lundi, je te transmets le planning dans la journée.",
     body: ["Parfait Marc, merci.", "Je lance la phase 2 lundi, je te transmets le planning dans la journée."],
-    time: "lun.",
+    time: "10:12",
+    date: "mardi 10 novembre 2026 · 10:12",
     unread: false,
     starred: false,
     pgp: "encrypted",
@@ -248,7 +277,8 @@ export const MAILS: Mail[] = [
       "Pour mémoire, la v2 est validée.",
       "Les deux variantes de barre de recherche restent dans le fichier Figma, on tranchera sur la v3.",
     ],
-    time: "12 sept.",
+    time: "11 sept.",
+    date: "vendredi 11 septembre 2026 · 11:02",
     unread: false,
     starred: true,
     pgp: "encrypted",

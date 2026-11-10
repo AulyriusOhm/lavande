@@ -13,6 +13,12 @@ export type McpServer = {
   tools: McpTool[];
 };
 
+export const MCP_SCOPES: { id: McpTool["scope"]; hint: string }[] = [
+  { id: "lecture", hint: "consultation seule" },
+  { id: "écriture", hint: "modifie la boîte ou l'agenda" },
+  { id: "signature", hint: "chiffre ou vérifie" },
+];
+
 export const MCP_SERVERS: McpServer[] = [
   {
     id: "mail",
@@ -43,7 +49,7 @@ export const MCP_SERVERS: McpServer[] = [
   {
     id: "pgp",
     name: "pgp-signer",
-    description: "Chiffrement et signature hors processus",
+    description: "Chiffrement et vérification hors processus",
     transport: "stdio",
     status: "connected",
     tools: [
@@ -61,8 +67,51 @@ export const MCP_SERVERS: McpServer[] = [
   },
 ];
 
-export const MCP_LOG: { time: string; tool: string; detail: string }[] = [
-  { time: "09:38", tool: "mail.search", detail: "« maquettes v3 » · 1 résultat · perso" },
-  { time: "09:39", tool: "calendar.create", detail: "Point maquettes v3 · aujourd'hui 10:00" },
-  { time: "09:40", tool: "pgp.verify", detail: "Signature de Camille Rousseau · valide" },
+export function mcpCounts(active: (server: McpServer) => boolean = (server) => server.status === "connected") {
+  const servers = MCP_SERVERS.filter(active);
+  return {
+    servers: MCP_SERVERS.length,
+    activeServers: servers.length,
+    activeTools: servers.reduce((total, server) => total + server.tools.length, 0),
+    installedTools: MCP_SERVERS.reduce((total, server) => total + server.tools.length, 0),
+  };
+}
+
+export type McpLogEntry = {
+  time: string;
+  tool: string;
+  agent: string;
+  status: "succès" | "échec";
+  detail: string;
+};
+
+export const MCP_LOG: McpLogEntry[] = [
+  {
+    time: "09:38",
+    tool: "mail.search",
+    agent: "Assistant Lavande",
+    status: "succès",
+    detail: "« maquettes v3 » · 1 résultat · perso",
+  },
+  {
+    time: "09:39",
+    tool: "calendar.create",
+    agent: "Assistant Lavande",
+    status: "succès",
+    detail: "Point maquettes v3 · aujourd'hui 10:00",
+  },
+  {
+    time: "09:40",
+    tool: "pgp.verify",
+    agent: "Relais local",
+    status: "succès",
+    detail: "Signature de Camille Rousseau · valide",
+  },
+  {
+    time: "09:41",
+    tool: "fs.read",
+    agent: "Assistant Lavande",
+    status: "échec",
+    detail: "Serveur filesystem inactif · aucune pièce jointe lue",
+  },
 ];

@@ -48,7 +48,7 @@ Aucun composant ne code une teinte en dur. On manipule des **rôles** :
 | `--surface-2` | `#f6f3fd` | `#1d1929` |
 | `--ink` | `#1b1523` | `#f4f1fa` |
 | `--ink-soft` | `#6b6478` | `#a8a1b8` |
-| `--ink-muted` | `#a49db0` | `#726b80` |
+| `--ink-muted` | `#726c7f` | `#8c8699` |
 | `--line` | `#ece8f5` | `#2a2438` |
 
 Et trois dérivés de l'accent, calculés par `color-mix` (jamais stockés) :
@@ -58,6 +58,7 @@ Et trois dérivés de l'accent, calculés par `color-mix` (jamais stockés) :
 --accent-soft: accent 12 % sur blanc    /* fonds de badges, cartes, pastilles */
 --accent-ring: accent 34 % sur blanc    /* bordures, focus, contours */
 --accent-ink:  accent 58 % vers l'encre /* texte accentué, lisible sur --accent-soft */
+--accent-contrast: clair ou sombre, contraste ≥ 4,5:1 sur --accent
 ```
 
 **Pourquoi** : changer l'accent en une variable met à jour toute l'application sans repasser sur les
@@ -128,7 +129,8 @@ referme alors en largeur, avec un ressort).
 
 Trois garde-fous :
 
-1. **`prefers-reduced-motion`** : l'interface démarre directement dans l'état replié.
+1. **`prefers-reduced-motion`** : l'interface démarre directement dans l'état replié et les animations
+   d'apparition, de shimmer, de swipe et de navigation sont réduites ou supprimées.
 2. **Rien ne bouge sans raison** : pas de parallaxe, pas de particules, pas de rebond décoratif.
 3. **Le geste ne se bat jamais avec un autre** : les zones marquées `data-swipe` sont ignorées par le
    gestionnaire de swipe d'onglets, et le scroll vertical est préservé (`touch-pan-y`).
@@ -173,15 +175,14 @@ réglages, pas des destinations quotidiennes.
 ## 9. Limites connues (maquette)
 
 - Aucune donnée réelle : tout est en mémoire, l'état repart au rechargement (sauf thème, accent et
-  préférences de gestes, persistés en `localStorage`).
+  préférences de gestes, persistés en `localStorage`). Le brouillon est uniquement conservé pendant la session.
 - Pas de vue bureau (2 colonnes liste + lecteur) : le cadre téléphone est un choix de présentation.
-- Les actions destructrices (supprimer, archiver) ne sont pas annulables.
+- Les actions destructrices proposent une annulation temporaire, sans persistance après rechargement.
 - Pas d'états vides soignés partout, pas de mode hors-ligne, pas d'internationalisation.
 
 ## 10. Suite
 
 1. Vue bureau/tablette (liste + lecteur, colonnes du kanban).
-2. Passe d'accessibilité : contrastes AA sur `--ink-muted` (particulièrement en sombre), focus
-   visibles, tailles de cible ≥ 44 px.
+2. Valider sur appareils réels les safe areas, le clavier, les tailles de texte et les cibles ≥ 44 px.
 3. Brancher les vraies données (IMAP/OAuth) puis remplacer les fixtures sans toucher aux composants.
-4. Undo sur les gestes destructeurs, et un vrai `aria-live` pour les changements d'état.
+4. Persister les brouillons et les annulations, et compléter les annonces `aria-live` des changements d'état.

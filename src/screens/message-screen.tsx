@@ -1,5 +1,20 @@
-import { ArrowLeft, Archive, CornerUpLeft, CornerUpRight, Download, Lock, MoreHorizontal, Paperclip, ShieldCheck, Star, Trash2 } from "lucide-react";
+import { useState } from "react";
+import {
+  ArrowLeft,
+  Archive,
+  ChevronDown,
+  CornerUpLeft,
+  CornerUpRight,
+  Download,
+  Lock,
+  Paperclip,
+  RotateCcw,
+  ShieldCheck,
+  Star,
+  Trash2,
+} from "lucide-react";
 import type { Mail } from "@/lib/mail";
+import { folderLabel } from "@/lib/mail";
 import { cn } from "@/lib/utils";
 import { Avatar, IconButton } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
@@ -11,12 +26,30 @@ export function MessageScreen({
   onClose,
   onToggleStar,
   onReply,
+  onForward,
+  onArchive,
+  onDelete,
+  onNotSpam,
+  onRestore,
 }: {
   mail: Mail;
   onClose: () => void;
   onToggleStar: () => void;
-  onReply: () => void;
+  onReply: (mail: Mail) => void;
+  onForward?: (mail: Mail) => void;
+  onArchive?: (mail: Mail) => void;
+  onDelete?: (mail: Mail) => void;
+  onNotSpam?: (mail: Mail) => void;
+  onRestore?: (mail: Mail) => void;
 }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [hint, setHint] = useState<{ mailId: string; file: string } | null>(null);
+  const hintFile = hint?.mailId === mail.id ? hint.file : null;
+
+  const inSpam = mail.folder === "spam";
+  const inTrash = mail.folder === "trash";
+  const inArchive = mail.folder === "archive";
+
   return (
     <div className="relative flex h-full flex-col bg-canvas">
       <MeshGlow className="h-40" />
@@ -26,21 +59,46 @@ export function MessageScreen({
           <ArrowLeft className="size-4.5" />
         </IconButton>
         <div className="ml-auto flex items-center">
-          <IconButton aria-label="Archiver">
-            <Archive className="size-4.5" />
-          </IconButton>
-          <IconButton aria-label="Supprimer">
-            <Trash2 className="size-4.5" />
-          </IconButton>
+          {inTrash ? (
+            onRestore && (
+              <IconButton aria-label="Restaurer" onClick={() => onRestore(mail)}>
+                <RotateCcw className="size-4.5" />
+              </IconButton>
+            )
+          ) : inSpam ? (
+            onNotSpam && (
+              <IconButton aria-label="Non spam" onClick={() => onNotSpam(mail)}>
+                <ShieldCheck className="size-4.5" />
+              </IconButton>
+            )
+          ) : inArchive ? (
+            onRestore && (
+              <IconButton aria-label="Désarchiver" onClick={() => onRestore(mail)}>
+                <RotateCcw className="size-4.5" />
+              </IconButton>
+            )
+          ) : (
+            onArchive && (
+              <IconButton aria-label="Archiver" onClick={() => onArchive(mail)}>
+                <Archive className="size-4.5" />
+              </IconButton>
+            )
+          )}
+          {onDelete && (
+            <IconButton
+              aria-label={inTrash ? "Supprimer définitivement" : "Supprimer"}
+              onClick={() => onDelete(mail)}
+            >
+              <Trash2 className="size-4.5" />
+            </IconButton>
+          )}
           <IconButton
-            aria-label="Étoile"
+            aria-label={mail.starred ? "Retirer l'étoile" : "Marquer d'une étoile"}
+            aria-pressed={mail.starred}
             onClick={onToggleStar}
             className={mail.starred ? "text-amber-400" : undefined}
           >
             <Star className={cn("size-4.5", mail.starred && "fill-amber-400")} />
-          </IconButton>
-          <IconButton aria-label="Plus d'actions">
-            <MoreHorizontal className="size-4.5" />
           </IconButton>
         </div>
       </header>
@@ -49,7 +107,7 @@ export function MessageScreen({
         <BlurFade yOffset={6}>
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="rounded-full bg-accent-soft px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
-              Boîte de réception
+              {folderLabel(mail.folder)}
             </span>
             {mail.attachments?.length ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-[10.5px] font-semibold text-ink-soft">
@@ -68,16 +126,51 @@ export function MessageScreen({
         <BlurFade delay={0.06}>
           <div className="mt-4 flex items-center gap-3">
             <Avatar name={mail.name} tone={mail.tone} size={40} rounded="rounded-full" />
-            <div className="min-w-0 flex-1 leading-tight">
-              <p className="truncate text-[13px] font-bold text-ink">{mail.name}</p>
-              <p className="truncate text-[11.5px] font-medium text-ink-muted">
+            <button
+              type="button"
+              onClick={() => setDetailsOpen((value) => !value)}
+              aria-expanded={detailsOpen}
+              aria-label={
+                detailsOpen ? "Masquer le détail de l'expéditeur" : "Afficher le détail de l'expéditeur"
+              }
+              className="min-w-0 flex-1 text-left leading-tight"
+            >
+              <span className="flex items-center gap-1">
+                <span className="truncate text-[13px] font-bold text-ink">{mail.name}</span>
+                <ChevronDown
+                  className={cn(
+                    "size-3.5 shrink-0 text-ink-muted transition-transform",
+                    detailsOpen && "rotate-180",
+                  )}
+                />
+              </span>
+              <span className="block truncate text-[11.5px] font-medium text-ink-muted">
                 à moi · {mail.time}
-              </p>
-            </div>
-            <IconButton aria-label="Répondre" onClick={onReply} className="bg-accent-soft text-accent-ink">
+              </span>
+            </button>
+            <IconButton aria-label="Répondre" onClick={() => onReply(mail)} className="bg-accent-soft text-accent-ink">
               <CornerUpLeft className="size-4" />
             </IconButton>
           </div>
+
+          {detailsOpen && (
+            <dl className="mt-2 space-y-1 rounded-2xl bg-surface-2/70 px-3 py-2 text-[11.5px] font-medium text-ink-soft">
+              <div className="flex gap-2">
+                <dt className="shrink-0 font-bold text-ink-muted">De</dt>
+                <dd className="min-w-0 break-all">
+                  {mail.name} &lt;{mail.email}&gt;
+                </dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="shrink-0 font-bold text-ink-muted">À</dt>
+                <dd className="min-w-0 break-all">{mail.to ?? "moi"}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="shrink-0 font-bold text-ink-muted">Date</dt>
+                <dd className="min-w-0">{mail.date ?? mail.time}</dd>
+              </div>
+            </dl>
+          )}
         </BlurFade>
 
         {mail.pgp !== "none" && (
@@ -114,20 +207,28 @@ export function MessageScreen({
           <BlurFade delay={0.18}>
             <div className="mt-6 space-y-2">
               {mail.attachments.map((file) => (
-                <div
+                <button
                   key={file.name}
-                  className="flex items-center gap-3 rounded-2xl border border-line bg-surface px-3 py-2.5"
+                  type="button"
+                  onClick={() => setHint({ mailId: mail.id, file: file.name })}
+                  aria-label={`${file.name} — téléchargement non disponible dans la maquette`}
+                  className="flex w-full items-center gap-3 rounded-2xl border border-line bg-surface px-3 py-2.5 text-left transition-colors hover:border-accent-ring"
                 >
                   <span className="grid size-9 place-items-center rounded-xl bg-accent-soft text-accent-ink">
                     <Paperclip className="size-4" />
                   </span>
-                  <div className="min-w-0 flex-1 leading-tight">
-                    <p className="truncate text-[12.5px] font-bold text-ink">{file.name}</p>
-                    <p className="text-[11px] text-ink-muted">{file.size}</p>
-                  </div>
+                  <span className="min-w-0 flex-1 leading-tight">
+                    <span className="block truncate text-[12.5px] font-bold text-ink">{file.name}</span>
+                    <span className="block text-[11px] text-ink-muted">{file.size}</span>
+                  </span>
                   <Download className="size-4 text-ink-muted" />
-                </div>
+                </button>
               ))}
+              <p role="status" aria-live="polite" className="px-1 text-[10.5px] leading-snug font-medium text-ink-muted">
+                {hintFile
+                  ? `Maquette : « ${hintFile} » n'est pas téléchargeable ici. Le téléchargement sera géré par le trousseau / le stockage système.`
+                  : "Aucun fichier n'est réellement téléchargé depuis cette maquette."}
+              </p>
             </div>
           </BlurFade>
         ) : null}
@@ -135,13 +236,15 @@ export function MessageScreen({
 
       <div className="relative border-t border-line/80 px-5 py-3 glass safe-bottom sm:pb-5">
         <div className="flex items-center gap-2">
-          <ShimmerButton onClick={onReply} className="flex-1" shimmerDuration={4}>
+          <ShimmerButton onClick={() => onReply(mail)} className="flex-1" shimmerDuration={4}>
             <CornerUpLeft className="size-4" />
             Répondre
           </ShimmerButton>
           <button
             type="button"
-            className="grid size-11 place-items-center rounded-full border border-line bg-surface text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+            onClick={() => onForward?.(mail)}
+            disabled={!onForward}
+            className="grid size-11 place-items-center rounded-full border border-line bg-surface text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink disabled:pointer-events-none disabled:opacity-40"
             aria-label="Transférer"
           >
             <CornerUpRight className="size-4.5" />

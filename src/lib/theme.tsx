@@ -14,6 +14,11 @@ export const ACCENT_PRESETS = [
 
 const DEFAULT_ACCENT = ACCENT_PRESETS[0].value;
 const STORAGE_KEY = "lavande.theme";
+const CONTRAST_LIGHT = "#ffffff";
+const CONTRAST_DARK = "#1b1523";
+const CONTRAST_FALLBACK = "#000000";
+const CONTRAST_MIN = 4.5;
+const THEME_COLOR = { light: "#fbfaff", dark: "#0e0c13" };
 
 type ThemeContextValue = {
   accent: string;
@@ -36,6 +41,31 @@ function readStored(): Stored {
   }
 }
 
+function channel(value: number) {
+  const srgb = value / 255;
+  return srgb <= 0.03928 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4;
+}
+
+function luminance(hex: string) {
+  const clean = hex.replace("#", "");
+  const full = clean.length === 3 ? clean.split("").map((part) => part + part).join("") : clean;
+  const [r, g, b] = [0, 2, 4].map((offset) => channel(parseInt(full.slice(offset, offset + 2), 16)));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+export function contrastRatio(a: string, b: string) {
+  const first = luminance(a);
+  const second = luminance(b);
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
+export function accentContrast(accent: string) {
+  const light = contrastRatio(accent, CONTRAST_LIGHT);
+  const dark = contrastRatio(accent, CONTRAST_DARK);
+  const best = light >= dark ? CONTRAST_LIGHT : CONTRAST_DARK;
+  return Math.max(light, dark) >= CONTRAST_MIN ? best : CONTRAST_FALLBACK;
+}
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [accent, setAccentState] = useState(() => readStored().accent ?? DEFAULT_ACCENT);
   const [dark, setDarkState] = useState(() => readStored().dark ?? false);
@@ -44,7 +74,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ accent, dark }));
     const root = document.documentElement;
     root.style.setProperty("--accent", accent);
+    root.style.setProperty("--accent-contrast", accentContrast(accent));
     root.classList.toggle("dark", dark);
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute("content", dark ? THEME_COLOR.dark : THEME_COLOR.light);
   }, [accent, dark]);
 
   const setAccent = useCallback((value: string) => setAccentState(value), []);

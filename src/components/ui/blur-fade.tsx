@@ -1,4 +1,4 @@
-import { motion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import { cn } from "@/lib/utils";
 
 type BlurFadeProps = {
@@ -17,6 +17,10 @@ export function BlurFade({
   duration = 0.45,
   yOffset = 10,
 }: BlurFadeProps) {
+  const reduce = useReducedMotion();
+
+  if (reduce) return <div className={cn(className)}>{children}</div>;
+
   return (
     <motion.div
       initial={{ opacity: 0, y: yOffset, filter: "blur(8px)" }}

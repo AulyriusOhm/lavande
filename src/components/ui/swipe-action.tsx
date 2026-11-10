@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { animate, motion, useMotionValue, useTransform } from "motion/react";
+import { animate, motion, useMotionValue, useReducedMotion, useTransform } from "motion/react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -30,6 +30,7 @@ export function SwipeAction({
   className?: string;
 }) {
   const x = useMotionValue(0);
+  const reduce = useReducedMotion();
   const [armed, setArmed] = useState<"leading" | "trailing" | null>(null);
 
   const leadingOpacity = useTransform(x, [8, 56], [0, 1]);
@@ -38,7 +39,8 @@ export function SwipeAction({
   const trailingScale = useTransform(x, [-56, -8], [1, 0.85]);
 
   const reset = () => {
-    animate(x, 0, { type: "spring", stiffness: 420, damping: 32 });
+    if (reduce) x.set(0);
+    else animate(x, 0, { type: "spring", stiffness: 420, damping: 32 });
     setArmed(null);
   };
 
