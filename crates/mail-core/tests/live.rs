@@ -391,6 +391,165 @@ async fn expunged_message_disappears_locally() {
 
 #[tokio::test]
 #[ignore = "requires scripts/mail-test-server.sh start"]
+async fn delete_reaches_the_server() {
+    let cfg = account();
+    let store = store(&cfg);
+    let subject = unique("[live-delete] suppression definitive");
+    send(&cfg, &subject, "corps supprime", None).await;
+    sync(&cfg, &store, INBOX).await;
+    let uid = find(&store, INBOX, &subject).uid;
+
+    let mut session = connect(&cfg).await;
+    checked(
+        "delete",
+        imap::delete_message(&mut session, &store, ACCOUNT, INBOX, uid).await,
+    );
+    assert!(
+        checked("inbox lookup", store.get_message(ACCOUNT, INBOX, uid)).is_none(),
+        "uid {uid} survived the local delete"
+    );
+    let inbox = checked(
+        "inbox listing",
+        store.messages_in_folder(ACCOUNT, INBOX, -1, 0),
+    );
+    assert!(
+        inbox.iter().all(|message| message.subject != subject),
+        "'{subject}' is still in the local INBOX"
+    );
+
+    let mut raw = connect(&cfg).await;
+    select(&mut raw, INBOX).await;
+    let server = server_uids(&mut raw).await;
+    assert!(
+        !server.contains(&uid),
+        "the server still exposes uid {uid}: {server:?}"
+    );
+
+    checked(
+        "delete again",
+        imap::delete_message(&mut session, &store, ACCOUNT, INBOX, uid).await,
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn empty_folder_clears_both_sides() {
+    let cfg = account();
+    let store = store(&cfg);
+    let subject = unique("[live-purge] dossier vide");
+    send(&cfg, &subject, "corps purge", None).await;
+
+    let mut session = connect(&cfg).await;
+    checked(
+        "create Purge",
+        imap::create_folder(&mut session, "Purge").await,
+    );
+    checked(
+        "sync",
+        imap::sync_folder(
+            &mut session,
+            &store,
+            ACCOUNT,
+            INBOX,
+            &FolderMapping::default(),
+        )
+        .await,
+    );
+    let uid = find(&store, INBOX, &subject).uid;
+    checked(
+        "move to Purge",
+        imap::move_message(&mut session, &store, ACCOUNT, INBOX, uid, "Purge").await,
+    );
+
+    let removed = checked(
+        "empty Purge",
+        imap::empty_folder(&mut session, &store, ACCOUNT, "Purge").await,
+    );
+    assert!(removed >= 1, "removed {removed}");
+    let left = checked(
+        "purge listing",
+        store.messages_in_folder(ACCOUNT, "Purge", -1, 0),
+    );
+    assert!(left.is_empty(), "the local Purge still holds {left:?}");
+
+    let mut raw = connect(&cfg).await;
+    select(&mut raw, "Purge").await;
+    let server = server_uids(&mut raw).await;
+    assert!(
+        server.is_empty(),
+        "the server still exposes {server:?} in Purge"
+    );
+}
+
+/// A folder the store has never seen is still emptied on the server, so
+/// `removed` has to come from the server's `EXPUNGE` responses: a store-driven
+/// count reports 0 there and the ui would claim the folder was already empty.
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn empty_folder_counts_a_never_synced_folder() {
+    let cfg = account();
+    let store = store(&cfg);
+    let subject = unique("[live-purge-unsynced] dossier jamais synchronise");
+    let folder = unique("Purge-unsynced").replace(' ', "-");
+    send(&cfg, &subject, "corps purge", None).await;
+
+    let mut session = connect(&cfg).await;
+    checked(
+        "create the unsynced folder",
+        imap::create_folder(&mut session, &folder).await,
+    );
+    checked(
+        "sync inbox",
+        imap::sync_folder(
+            &mut session,
+            &store,
+            ACCOUNT,
+            INBOX,
+            &FolderMapping::default(),
+        )
+        .await,
+    );
+    let uid = find(&store, INBOX, &subject).uid;
+
+    select(&mut session, INBOX).await;
+    session
+        .uid_copy(uid.to_string(), &folder)
+        .await
+        .unwrap_or_else(|error| panic!("uid copy {uid} to {folder}: {error}"));
+    let local = checked(
+        "unsynced listing",
+        store.messages_in_folder(ACCOUNT, &folder, -1, 0),
+    );
+    assert!(
+        local.is_empty(),
+        "'{folder}' must stay unsynced, the store already holds {local:?}"
+    );
+
+    let removed = checked(
+        "empty the unsynced folder",
+        imap::empty_folder(&mut session, &store, ACCOUNT, &folder).await,
+    );
+    assert!(
+        removed >= 1,
+        "the server held one message but the purge counted {removed}"
+    );
+
+    let left = checked(
+        "purge listing",
+        store.messages_in_folder(ACCOUNT, &folder, -1, 0),
+    );
+    assert!(left.is_empty(), "the local '{folder}' still holds {left:?}");
+
+    select(&mut session, &folder).await;
+    let server = server_uids(&mut session).await;
+    assert!(
+        server.is_empty(),
+        "the server still exposes {server:?} in '{folder}'"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
 async fn flags_from_another_client_are_pulled() {
     let cfg = account();
     let store = store(&cfg);

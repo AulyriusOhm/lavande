@@ -15,6 +15,7 @@ pub mod state;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::extract::State;
 use axum::routing::get;
 use axum::{Json, Router};
 use tower_http::cors::{Any, CorsLayer};
@@ -26,10 +27,11 @@ use lavande_mail::tls::TlsOptions;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-async fn health() -> Json<Health> {
+async fn health(State(state): State<Arc<AppState>>) -> Json<Health> {
     Json(Health {
         status: "ok",
         version: VERSION,
+        public_url: state.public_url().to_string(),
     })
 }
 

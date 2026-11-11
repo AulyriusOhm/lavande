@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use futures::TryStreamExt;
 use lavande_mail::config::{AccountConfig, AuthConfig, Encryption, Endpoint};
 use lavande_mail::imap;
 use lavande_mail::tls::TlsOptions;
@@ -232,6 +233,30 @@ async fn create_folder(path: &str) {
     let _ = session.logout().await;
 }
 
+/// The uids a fresh session sees in `folder_path`: the server's own view.
+async fn server_uids(folder_path: &str) -> Vec<u32> {
+    let config = account();
+    let mut session = imap::connect_with(&config, &tls_options())
+        .await
+        .unwrap_or_else(|error| panic!("connexion imap : {error}"));
+    session
+        .select(folder_path)
+        .await
+        .unwrap_or_else(|error| panic!("SELECT {folder_path} : {error}"));
+    let uids = session
+        .uid_fetch("1:*", "(UID)")
+        .await
+        .unwrap_or_else(|error| panic!("UID FETCH {folder_path} : {error}"))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap_or_else(|error| panic!("UID FETCH {folder_path} : {error}"))
+        .iter()
+        .filter_map(|fetch| fetch.uid)
+        .collect();
+    let _ = session.logout().await;
+    uids
+}
+
 #[tokio::test]
 #[ignore = "requires scripts/mail-test-server.sh start"]
 async fn account_is_added_and_synced() {
@@ -396,5 +421,119 @@ async fn message_moves_to_archive() {
     assert!(
         archived.iter().any(|known| known == &subject),
         "« {subject} » n'est pas dans Archive : {archived:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn message_is_deleted_permanently() {
+    let daemon = Daemon::start().await;
+    let client = Client::new();
+    add_account(&client, &daemon).await;
+
+    let witness = unique("[live-api-delete] temoin");
+    let target = unique("[live-api-delete] suppression definitive");
+    send(&client, &daemon, &witness).await;
+    send(&client, &daemon, &target).await;
+    sync(&client, &daemon, Some(INBOX)).await;
+    let uid = find(&threads(&client, &daemon, INBOX).await, &target);
+    assert!(
+        server_uids(INBOX).await.contains(&uid),
+        "l'uid {uid} manque côté serveur avant la suppression"
+    );
+
+    let payload = json!({ "folder_path": INBOX, "uid": uid });
+    let response = client
+        .post(daemon.url(&format!("/api/accounts/{ACCOUNT}/delete")))
+        .json(&payload)
+        .send()
+        .await
+        .expect("POST delete");
+    let status = response.status();
+    let body = response.text().await.expect("corps");
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let response = client
+        .get(daemon.url(&format!(
+            "/api/accounts/{ACCOUNT}/folders/{INBOX}/messages/{uid}"
+        )))
+        .send()
+        .await
+        .expect("GET message");
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "l'uid {uid} est toujours stocké"
+    );
+
+    sync(&client, &daemon, Some(INBOX)).await;
+    let inbox = subjects(&threads(&client, &daemon, INBOX).await);
+    assert!(
+        !inbox.iter().any(|known| known == &target),
+        "« {target} » est encore dans INBOX : {inbox:?}"
+    );
+    assert!(
+        inbox.iter().any(|known| known == &witness),
+        "« {witness} » est parti avec la suppression : {inbox:?}"
+    );
+
+    let server = server_uids(INBOX).await;
+    assert!(
+        !server.contains(&uid),
+        "le serveur expose encore l'uid {uid} : {server:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn folder_is_purged() {
+    let folder = unique("Purge").replace(' ', "-");
+    create_folder(&folder).await;
+    let daemon = Daemon::start().await;
+    let client = Client::new();
+    add_account(&client, &daemon).await;
+
+    let subject = unique("[live-api-purge] dossier vide");
+    send(&client, &daemon, &subject).await;
+    sync(&client, &daemon, Some(INBOX)).await;
+    let uid = find(&threads(&client, &daemon, INBOX).await, &subject);
+
+    let payload = json!({ "from_path": INBOX, "uid": uid, "to_path": folder });
+    let response = client
+        .post(daemon.url(&format!("/api/accounts/{ACCOUNT}/move")))
+        .json(&payload)
+        .send()
+        .await
+        .expect("POST move");
+    let status = response.status();
+    let body = response.text().await.expect("corps");
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    sync(&client, &daemon, Some(folder.as_str())).await;
+
+    let payload = json!({ "folder_path": folder });
+    let response = client
+        .post(daemon.url(&format!("/api/accounts/{ACCOUNT}/purge")))
+        .json(&payload)
+        .send()
+        .await
+        .expect("POST purge");
+    let status = response.status();
+    let body = response.text().await.expect("corps");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let removed = serde_json::from_str::<Value>(&body).expect("purge")["removed"]
+        .as_u64()
+        .expect("removed");
+    assert!(
+        removed >= 1,
+        "la purge n'a rien retiré de « {folder} » : {body}"
+    );
+
+    sync(&client, &daemon, Some(folder.as_str())).await;
+    let left = subjects(&threads(&client, &daemon, &folder).await);
+    assert!(left.is_empty(), "« {folder} » n'est pas vide : {left:?}");
+    let server = server_uids(&folder).await;
+    assert!(
+        server.is_empty(),
+        "le serveur expose encore {server:?} dans « {folder} »"
     );
 }

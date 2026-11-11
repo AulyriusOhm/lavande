@@ -1,4 +1,5 @@
-//! `/api/accounts/{id}/…`: sync, threads, messages, flags, move, send.
+//! `/api/accounts/{id}/…`: sync, threads, messages, flags, move, delete, purge,
+//! send.
 
 use std::sync::Arc;
 
@@ -15,7 +16,8 @@ use lavande_mail::sync as mail_sync;
 use serde::Deserialize;
 
 use crate::dto::{
-    ApiJson, FlagsRequest, FolderReport, MoveRequest, SendRequest, SyncRequest, SyncResponse,
+    ApiJson, DeleteRequest, FlagsRequest, FolderReport, MoveRequest, PurgeRequest, PurgeResponse,
+    SendRequest, SyncRequest, SyncResponse,
 };
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -33,6 +35,8 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/api/accounts/{id}/flags", post(set_flags))
         .route("/api/accounts/{id}/move", post(move_message))
+        .route("/api/accounts/{id}/delete", post(delete_message))
+        .route("/api/accounts/{id}/purge", post(purge_folder))
         .route("/api/accounts/{id}/send", post(send))
 }
 
@@ -167,6 +171,38 @@ async fn move_message(
     .await?;
     logout(session).await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_message(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<DeleteRequest>,
+) -> Result<StatusCode, ApiError> {
+    let config = state.account(&id)?;
+    let mut session = imap::connect_with(&config, state.tls()).await?;
+    imap::delete_message(
+        &mut session,
+        state.store(),
+        &id,
+        &request.folder_path,
+        request.uid,
+    )
+    .await?;
+    logout(session).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn purge_folder(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<PurgeRequest>,
+) -> Result<Json<PurgeResponse>, ApiError> {
+    let config = state.account(&id)?;
+    let mut session = imap::connect_with(&config, state.tls()).await?;
+    let removed =
+        imap::empty_folder(&mut session, state.store(), &id, &request.folder_path).await?;
+    logout(session).await;
+    Ok(Json(PurgeResponse { removed }))
 }
 
 async fn send(

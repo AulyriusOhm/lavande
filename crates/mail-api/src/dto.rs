@@ -38,6 +38,8 @@ where
 pub struct Health {
     pub status: &'static str,
     pub version: &'static str,
+    /// URL publique du service : c'est elle que les fournisseurs OAuth2 rappellent.
+    pub public_url: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -191,6 +193,22 @@ pub struct MoveRequest {
     pub from_path: String,
     pub uid: u32,
     pub to_path: String,
+}
+
+#[derive(Deserialize)]
+pub struct DeleteRequest {
+    pub folder_path: String,
+    pub uid: u32,
+}
+
+#[derive(Deserialize)]
+pub struct PurgeRequest {
+    pub folder_path: String,
+}
+
+#[derive(Serialize)]
+pub struct PurgeResponse {
+    pub removed: usize,
 }
 
 #[derive(Deserialize)]

@@ -445,8 +445,10 @@ pub async fn set_flags(
 }
 
 /// `UID MOVE` when the server has the capability, `UID COPY` + `\Deleted` +
-/// `UID EXPUNGE` otherwise. The source row is dropped, then the destination is
-/// reconciled so it carries the uid the server actually gave the message.
+/// `UID EXPUNGE` otherwise; the fallback needs `UIDPLUS` and is refused before
+/// the copy when the server does not announce it. The source row is dropped,
+/// then the destination is reconciled so it carries the uid the server actually
+/// gave the message.
 pub async fn move_message(
     session: &mut ImapSession,
     store: &Store,
@@ -463,21 +465,118 @@ pub async fn move_message(
             .await
             .map_err(imap_error)?;
     } else {
+        if !capabilities.has_str("UIDPLUS") {
+            return Err(uidplus_required());
+        }
         session
             .uid_copy(uid.to_string(), to_path)
             .await
             .map_err(imap_error)?;
         store_flags(session, uid, "+FLAGS", &["\\Deleted"]).await?;
-        let expunged = session
-            .uid_expunge(uid.to_string())
-            .await
-            .map_err(imap_error)?;
-        let mut expunged = Box::pin(expunged);
-        while expunged.try_next().await.map_err(imap_error)?.is_some() {}
+        expunge(session, &uid.to_string(), ExpungeMode::Strict).await?;
     }
     store.delete_message(account_id, from_path, uid)?;
     reconcile(session, store, account_id, to_path, None).await?;
     Ok(())
+}
+
+/// Drops the message from the server and from the store. The store row is
+/// dropped even when it was already gone: the server is the source of truth and
+/// a missing row must not turn a successful expunge into an error.
+///
+/// `UIDPLUS` is required and checked before `\Deleted` is set: without it the
+/// only expunge available is folder-wide and would destroy every message
+/// another client already flagged, so the call refuses and changes nothing.
+pub async fn delete_message(
+    session: &mut ImapSession,
+    store: &Store,
+    account_id: &str,
+    folder_path: &str,
+    uid: u32,
+) -> Result<(), MailError> {
+    session.select(folder_path).await.map_err(imap_error)?;
+    if !supports_uidplus(session).await? {
+        return Err(uidplus_required());
+    }
+    store_flags(session, uid, "+FLAGS", &["\\Deleted"]).await?;
+    expunge(session, &uid.to_string(), ExpungeMode::Strict).await?;
+    store.delete_messages(account_id, folder_path, &[uid])?;
+    Ok(())
+}
+
+/// Empties a folder on the server and in the store, returning how many messages
+/// the server reported expunged. Emptying the folder is precisely the intent, so
+/// the folder-wide `EXPUNGE` fallback is used here; the local rows are cleared
+/// without trusting the uids known locally, since a never-synced folder is
+/// emptied on the server too.
+pub async fn empty_folder(
+    session: &mut ImapSession,
+    store: &Store,
+    account_id: &str,
+    folder_path: &str,
+) -> Result<usize, MailError> {
+    session.select(folder_path).await.map_err(imap_error)?;
+    {
+        let stored = session
+            .uid_store("1:*", "+FLAGS (\\Deleted)")
+            .await
+            .map_err(imap_error)?;
+        let mut stored = Box::pin(stored);
+        while stored.try_next().await.map_err(imap_error)?.is_some() {}
+    }
+    let removed = expunge(session, "1:*", ExpungeMode::FolderWide).await?;
+    store.clear_folder(account_id, folder_path)?;
+    Ok(removed)
+}
+
+/// How far an expunge may reach. Without `UIDPLUS` the only expunge available
+/// takes every `\Deleted` message of the folder, whoever flagged it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExpungeMode {
+    Strict,
+    FolderWide,
+}
+
+fn uidplus_required() -> MailError {
+    MailError::Imap(
+        "suppression définitive impossible : le serveur n'annonce pas UIDPLUS \
+         (EXPUNGE emporterait les messages déjà marqués \\Deleted par un autre client)"
+            .to_string(),
+    )
+}
+
+async fn supports_uidplus(session: &mut ImapSession) -> Result<bool, MailError> {
+    let capabilities = session.capabilities().await.map_err(imap_error)?;
+    Ok(capabilities.has_str("UIDPLUS"))
+}
+
+/// Expunges and returns the number of `EXPUNGE` responses the server sent: that
+/// count, not the local row count, is what the folder actually lost. `Strict`
+/// refuses without `UIDPLUS`; `FolderWide` accepts the folder-wide `EXPUNGE`.
+async fn expunge(
+    session: &mut ImapSession,
+    range: &str,
+    mode: ExpungeMode,
+) -> Result<usize, MailError> {
+    if supports_uidplus(session).await? {
+        let expunged = session.uid_expunge(range).await.map_err(imap_error)?;
+        let mut expunged = Box::pin(expunged);
+        let mut removed = 0;
+        while expunged.try_next().await.map_err(imap_error)?.is_some() {
+            removed += 1;
+        }
+        Ok(removed)
+    } else if mode == ExpungeMode::Strict {
+        Err(uidplus_required())
+    } else {
+        let expunged = session.expunge().await.map_err(imap_error)?;
+        let mut expunged = Box::pin(expunged);
+        let mut removed = 0;
+        while expunged.try_next().await.map_err(imap_error)?.is_some() {
+            removed += 1;
+        }
+        Ok(removed)
+    }
 }
 
 async fn store_flags(
