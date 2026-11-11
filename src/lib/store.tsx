@@ -391,6 +391,34 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     };
   }, [mode, phase, accounts, revision]);
 
+  // Première visite d'un dossier : synchro automatique en arrière-plan, pour ne
+  // pas avoir à cliquer sur « Synchroniser ». Une seule fois par portée
+  // (compte + dossier) ; revision recharge ensuite fils et compteurs.
+  const autoSyncedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (mode !== "api" || phase !== "ready" || isComposeWindow()) return;
+    if (targets.length === 0) return;
+    const key = targets.map((t) => `${t.accountId}:${t.path}`).sort().join("|");
+    if (autoSyncedRef.current.has(key)) return;
+    autoSyncedRef.current.add(key);
+    let cancelled = false;
+    setSyncing(true);
+    Promise.all(targets.map((t) => mailApi.sync(t.accountId, t.path)))
+      .then(() => {
+        if (!cancelled) setRevision((value) => value + 1);
+      })
+      .catch(() => {
+        // Synchro de confort en arrière-plan : muette en cas d'échec pour ne pas
+        // dupliquer la notice du chargement des fils. L'état vide propose « Synchroniser ».
+      })
+      .finally(() => {
+        if (!cancelled) setSyncing(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, phase, targets]);
+
   const demoCounts = useMemo(() => {
     const next: Record<string, { total: number; unread: number }> = {};
     if (mode !== "demo") return next;

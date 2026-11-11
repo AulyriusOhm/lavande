@@ -82,6 +82,12 @@ function mockBackend(options: { failing?: string } = {}) {
     const { pathname } = new URL(String(input), "http://localhost");
     const path = decodeURIComponent(pathname);
     if (path.endsWith("/api/accounts")) return reply([apiAccount(ALPHA), apiAccount(BETA)]);
+    const syncMatch = path.match(/\/api\/accounts\/([^/]+)\/sync$/);
+    if (syncMatch) {
+      const accountId = syncMatch[1];
+      if (options.failing === accountId) return reply({ error: "échec IMAP simulé", kind: "imap" }, 502);
+      return reply({ reports: [] });
+    }
     const match = path.match(/\/api\/accounts\/([^/]+)\/folders(?:\/([^/]+)\/threads)?$/);
     if (!match) throw new Error(`requête inattendue : ${path}`);
     const [, accountId, folderPath] = match;
