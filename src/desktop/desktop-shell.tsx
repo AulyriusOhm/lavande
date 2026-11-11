@@ -70,8 +70,8 @@ export function DesktopApp() {
   if (mode === "api" && phase === "empty") {
     return (
       <div data-desktop className="grid h-full w-full place-items-center bg-canvas p-6">
-        <div className="h-[min(820px,100%)] w-[460px] max-w-full overflow-hidden rounded-[28px] border border-line bg-canvas shadow-[0_40px_100px_-50px_var(--accent)]">
-          <ConnectScreen />
+        <div className="h-[min(760px,100%)] w-[min(900px,100%)] overflow-hidden rounded-[28px] border border-line bg-canvas shadow-[0_40px_100px_-50px_var(--accent)]">
+          <ConnectScreen variant="desktop" />
         </div>
       </div>
     );
@@ -123,9 +123,9 @@ export function DesktopApp() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 12, scale: 0.98 }}
               transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-              className="h-[min(780px,100%)] w-[480px] max-w-full overflow-hidden rounded-[28px] border border-line bg-canvas shadow-[0_44px_96px_-48px_var(--accent)]"
+              className="h-[min(760px,100%)] w-[min(900px,100%)] overflow-hidden rounded-[28px] border border-line bg-canvas shadow-[0_44px_96px_-48px_var(--accent)]"
             >
-              <ConnectScreen onClose={closeConnect} />
+              <ConnectScreen variant="desktop" onClose={closeConnect} />
             </motion.div>
           </motion.div>
         )}

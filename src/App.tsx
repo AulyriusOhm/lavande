@@ -25,7 +25,7 @@ import { PgpScreen } from "@/screens/pgp-screen";
 import { DotPattern, MeshGlow } from "@/components/ui/backdrops";
 import { Notice } from "@/components/ui/notice";
 import type { CalendarEvent } from "@/lib/calendar";
-import { isNativeShell } from "@/lib/native";
+import { shellLayout } from "@/lib/native";
 import { AccountRemoveDialog, BackendBanner, BackendLoading } from "@/components/backend-status";
 import { ConnectScreen } from "@/screens/connect-screen";
 
@@ -40,8 +40,8 @@ const DesktopShell = lazy(() =>
 const OVERLAY_STATE = { lavandeOverlay: true };
 
 export default function App() {
-  const desktop = new URLSearchParams(window.location.search).has("desktop");
-  const native = !desktop && isNativeShell();
+  const layout = shellLayout();
+
 
   return (
     <MotionConfig reducedMotion="user">
@@ -50,7 +50,13 @@ export default function App() {
           <PlanningProvider>
             <MailStoreProvider>
               <Suspense fallback={<div className="h-full w-full bg-canvas" />}>
-                {desktop ? <DesktopShell /> : native ? <NativeShell /> : <Stage />}
+                {layout === "desktop" ? (
+                  <DesktopShell />
+                ) : layout === "native" ? (
+                  <NativeShell />
+                ) : (
+                  <Stage />
+                )}
               </Suspense>
             </MailStoreProvider>
           </PlanningProvider>

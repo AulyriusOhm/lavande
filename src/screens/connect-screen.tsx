@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft, CheckCircle2, Loader2, PlugZap, Radar, Server, Sparkles } from "lucide-react";
 import { ApiError, errorText, mailApi } from "@/lib/api";
 import type { DiscoverySource, Encryption } from "@/lib/api";
 import { accountSlug } from "@/lib/mail-backend";
+import { isTauriShell, openExternal } from "@/lib/open-external";
+import { OAuthGuide } from "@/components/oauth-guide";
 import { useMailStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { IconButton } from "@/components/ui/primitives";
@@ -38,7 +40,14 @@ const ORIGIN_LABEL: Record<DiscoverySource, string> = {
   guess: "détection par sondage",
 };
 
-export function ConnectScreen({ onClose }: { onClose?: () => void }) {
+export function ConnectScreen({
+  onClose,
+  variant = "mobile",
+}: {
+  onClose?: () => void;
+  variant?: "mobile" | "desktop";
+}) {
+  const desktop = variant === "desktop";
   const { createAccount, useDemo, phase, refreshMailbox } = useMailStore();
   const [label, setLabel] = useState("");
   const [email, setEmail] = useState("");
@@ -53,9 +62,36 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [discovering, setDiscovering] = useState(false);
-  const [clientId, setClientId] = useState("");
+  const builtInClientId =
+    import.meta.env.VITE_OAUTH_CLIENT_ID ??
+    import.meta.env.VITE_MICROSOFT_CLIENT_ID ??
+    import.meta.env.VITE_GOOGLE_CLIENT_ID ??
+    "";
+  const [clientId, setClientId] = useState(builtInClientId);
   const [oauthBusy, setOauthBusy] = useState<string | null>(null);
   const [oauthError, setOauthError] = useState<string | null>(null);
+  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [redirectUri, setRedirectUri] = useState(
+    isTauriShell()
+      ? "http://127.0.0.1:8790/api/oauth/callback"
+      : `${window.location.origin}/api/oauth/callback`,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    mailApi
+      .health()
+      .then((health) => {
+        if (!cancelled && health.public_url) {
+          setRedirectUri(`${health.public_url}/api/oauth/callback`);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [discovery, setDiscovery] = useState<{ tone: "ok" | "none"; text: string } | null>(null);
 
   const applyDiscovery = async () => {
@@ -113,11 +149,13 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
       return;
     }
     if (!imapHost.trim() || !smtpHost.trim()) {
-      setOauthError("Détecte d'abord les serveurs (bouton sous l'adresse).");
+      setOauthError("Renseigne d'abord les serveurs (bouton « Détecter les serveurs » sous l'adresse).");
       return;
     }
+    const tab = isTauriShell() ? null : window.open("", "_blank");
     setOauthBusy(provider);
     setOauthError(null);
+    setPendingUrl(null);
     try {
       const started = await mailApi.oauthStart({
         provider,
@@ -128,14 +166,27 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
         smtp: { host: smtpHost.trim(), port: Number(smtpPort), encryption: smtpEncryption },
         client_id: clientId.trim() || undefined,
       });
-      window.open(started.auth_url, "_blank", "noopener");
+      if (tab) {
+        tab.location.replace(started.auth_url);
+      } else {
+        openExternal(started.auth_url);
+      }
+      setPendingUrl(started.auth_url);
       const outcome = await waitForOAuth(started.session);
       if (outcome.status === "done") {
+        setPendingUrl(null);
+        setConnected(true);
+        await new Promise((resolve) => setTimeout(resolve, 1200));
         await refreshMailbox();
+        onClose?.();
         return;
       }
+      tab?.close();
+      setPendingUrl(null);
       setOauthError(outcome.error ?? "Connexion OAuth2 interrompue.");
     } catch (failure: unknown) {
+      tab?.close();
+      setPendingUrl(null);
       setOauthError(errorText(failure));
     } finally {
       setOauthBusy(null);
@@ -166,11 +217,47 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
       .finally(() => setBusy(false));
   };
 
-  return (
-    <div className="relative flex h-full flex-col bg-canvas">
-      <MeshGlow className="h-36" />
+  if (connected) {
+    return (
+      <div
+        className={cn(
+          "relative bg-canvas",
+          desktop ? "grid h-full w-full place-items-center" : "flex h-full flex-col items-center justify-center px-6",
+        )}
+      >
+        <MeshGlow className="h-44" />
+        <div className="relative flex flex-col items-center text-center">
+          <span className="grid size-14 place-items-center rounded-full bg-emerald-500/15 text-emerald-600">
+            <CheckCircle2 className="size-7" strokeWidth={2.4} />
+          </span>
+          <h1 className="mt-4 text-[21px] leading-tight font-extrabold tracking-[-0.035em] text-ink">
+            Authentification réussie
+          </h1>
+          <p className="mt-1 text-[12.5px] font-bold text-ink-soft">{label.trim() || email}</p>
+          <p className="mt-3 inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-ink-muted">
+            <Loader2 className="size-3.5 animate-spin" />
+            Ouverture de la boîte…
+          </p>
+        </div>
+      </div>
+    );
+  }
 
-      <header className="relative flex shrink-0 items-center gap-2 px-3 pt-3 pb-1">
+  return (
+    <div
+      className={cn(
+        "relative bg-canvas",
+        desktop ? "h-full w-full overflow-y-auto" : "flex h-full flex-col",
+      )}
+    >
+      <MeshGlow className={desktop ? "h-52" : "h-36"} />
+
+      <header
+        className={cn(
+          "relative flex shrink-0 items-center gap-2",
+          desktop ? "mx-auto w-full max-w-[780px] px-10 pt-9 pb-2" : "px-3 pt-3 pb-1",
+        )}
+      >
         {onClose && (
           <IconButton aria-label="Fermer la connexion de compte" onClick={onClose}>
             <ArrowLeft className="size-4.5" />
@@ -178,13 +265,24 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
         )}
         <div className="min-w-0 flex-1">
           <p className="text-[10.5px] font-bold tracking-[0.18em] text-ink-muted uppercase">Connexion</p>
-          <h1 className="mt-0.5 text-[21px] leading-tight font-extrabold tracking-[-0.035em] text-ink">
+          <h1
+            className={cn(
+              "mt-0.5 leading-tight font-extrabold tracking-[-0.035em] text-ink",
+              desktop ? "text-[27px]" : "text-[21px]",
+            )}
+          >
             Ajouter un compte
           </h1>
         </div>
       </header>
 
-      <form onSubmit={submit} className="relative min-h-0 flex-1 overflow-y-auto no-scrollbar px-5 pt-2 pb-8">
+      <form
+        onSubmit={submit}
+        className={cn(
+          "relative min-h-0 flex-1 overflow-y-auto no-scrollbar",
+          desktop ? "mx-auto w-full max-w-[780px] px-10 pt-3 pb-12" : "px-5 pt-2 pb-8",
+        )}
+      >
         <BlurFade yOffset={8}>
           <p className="text-[11.5px] leading-relaxed font-medium text-ink-muted">
             {phase === "empty"
@@ -194,7 +292,7 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
         </BlurFade>
 
         <BlurFade delay={0.04}>
-          <div className="mt-4 space-y-3">
+          <div className={cn("mt-4", desktop ? "grid grid-cols-2 gap-3" : "space-y-3")}>
             <div>
               <label htmlFor="connect-label" className={LABEL}>
                 Libellé
@@ -252,20 +350,26 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
                 ) : null}
               </div>
             </div>
-            <div className="rounded-2xl border border-line bg-surface/60 p-3">
+            <div className={cn("rounded-2xl border border-line bg-surface/60 p-3", desktop && "col-span-2")}>
               <p className={LABEL}>Connexion par OAuth2</p>
               <p className="mt-1 text-[11px] leading-relaxed font-medium text-ink-muted">
-                Le consentement s'ouvre dans un nouvel onglet. Il faut un identifiant d'application
-                OAuth (client_id) enregistré chez le fournisseur : rien n'est embarqué dans Lavande.
+                {builtInClientId
+                  ? "Le consentement s'ouvre dans ton navigateur, puis la boîte est relevée par le service local. Aucun mot de passe ne transite par l'interface."
+                  : "Le consentement s'ouvre dans un nouvel onglet. Il faut un identifiant d'application OAuth (client_id) enregistré chez le fournisseur : rien n'est embarqué dans Lavande."}
               </p>
-              <input
-                className={cn(FIELD, "mt-2 h-9 text-[12px]")}
-                value={clientId}
-                onChange={(event) => setClientId(event.target.value)}
-                placeholder="client_id (facultatif si configuré côté service)"
-                autoComplete="off"
-                aria-label="Identifiant d'application OAuth"
-              />
+              {builtInClientId ? null : (
+                <>
+                  <input
+                    className={cn(FIELD, "mt-2 h-9 text-[12px]")}
+                    value={clientId}
+                    onChange={(event) => setClientId(event.target.value)}
+                    placeholder="Application (client) ID"
+                    autoComplete="off"
+                    aria-label="Identifiant d'application OAuth"
+                  />
+                  <OAuthGuide redirectUri={redirectUri} />
+                </>
+              )}
               <div className="mt-2 flex flex-wrap gap-1.5">
                 <button
                   type="button"
@@ -303,6 +407,18 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
               {oauthError ? (
                 <p className="mt-2 text-[11px] font-semibold text-rose-600">{oauthError}</p>
               ) : null}
+              {pendingUrl ? (
+                <p className="mt-2 text-[11px] leading-relaxed font-semibold text-ink-muted">
+                  Rien ne s'est ouvert ?{" "}
+                  <button
+                    type="button"
+                    onClick={() => openExternal(pendingUrl)}
+                    className="font-bold text-accent-ink underline underline-offset-2"
+                  >
+                    Ouvrir la page de consentement
+                  </button>
+                </p>
+              ) : null}
             </div>
             <div>
               <label htmlFor="connect-username" className={LABEL}>
@@ -335,8 +451,9 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
           </div>
         </BlurFade>
 
+        <div className={cn("mt-5", desktop ? "grid grid-cols-2 gap-3" : "space-y-3")}>
         <BlurFade delay={0.08}>
-          <fieldset className="mt-5 rounded-2xl border border-line bg-surface p-3.5">
+          <fieldset className="rounded-2xl border border-line bg-surface p-3.5">
             <legend className="flex items-center gap-1.5 px-1 text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
               <Server className="size-3.5" />
               Réception IMAP
@@ -396,7 +513,7 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
         </BlurFade>
 
         <BlurFade delay={0.12}>
-          <fieldset className="mt-3 rounded-2xl border border-line bg-surface p-3.5">
+          <fieldset className="rounded-2xl border border-line bg-surface p-3.5">
             <legend className="flex items-center gap-1.5 px-1 text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
               <PlugZap className="size-3.5" />
               Envoi SMTP
@@ -454,6 +571,7 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
             </div>
           </fieldset>
         </BlurFade>
+        </div>
 
         {error && (
           <p
@@ -464,8 +582,13 @@ export function ConnectScreen({ onClose }: { onClose?: () => void }) {
           </p>
         )}
 
-        <div className="mt-5 flex flex-col gap-2">
-          <ShimmerButton type="submit" disabled={busy} shimmerDuration={4} className="w-full">
+        <div className={cn("mt-5 flex gap-2", desktop ? "flex-row items-center" : "flex-col")}>
+          <ShimmerButton
+            type="submit"
+            disabled={busy}
+            shimmerDuration={4}
+            className={desktop ? "w-[260px]" : "w-full"}
+          >
             {busy ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
             {busy ? "Connexion en cours…" : "Tester et connecter"}
           </ShimmerButton>
