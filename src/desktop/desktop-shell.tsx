@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useMailStore } from "@/lib/store";
 import { usePrefs } from "@/lib/prefs";
@@ -17,7 +17,7 @@ import { DesktopComposePage } from "@/desktop/compose-page";
 import { isComposeWindow } from "@/lib/compose-bus";
 import { useEscapeLayer } from "@/desktop/escape";
 import { useShortcuts } from "@/lib/shortcuts";
-import { appShortcuts } from "@/lib/app-shortcuts";
+import { appShortcuts, type MailNavigation } from "@/lib/app-shortcuts";
 import { ShortcutsOverlay } from "@/components/shortcuts-overlay";
 
 export function DesktopApp() {
@@ -38,6 +38,7 @@ function DesktopMain() {
   const [newEventOpen, setNewEventOpen] = useState(false);
   const [pgpOpen, setPgpOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const mailNav = useRef<MailNavigation | null>(null);
 
   const openMailId = openMail?.id ?? null;
   useEffect(() => {
@@ -77,6 +78,13 @@ function DesktopMain() {
         newEvent: () => setNewEventOpen(true),
         search: () => setSearchOpen(true),
         toggleHelp,
+        mail: {
+          canMove: () => mailNav.current?.canMove() ?? false,
+          canOpen: () => mailNav.current?.canOpen() ?? false,
+          next: () => mailNav.current?.next(),
+          previous: () => mailNav.current?.previous(),
+          open: () => mailNav.current?.open(),
+        },
       }),
     [changeView, calendarEnabled, planningEnabled, view, openComposer, toggleHelp],
   );
@@ -120,7 +128,9 @@ function DesktopMain() {
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
             className="h-full min-h-0"
           >
-            {view === "inbox" && <DesktopInbox onOpenSearch={() => setSearchOpen(true)} />}
+            {view === "inbox" && (
+              <DesktopInbox onOpenSearch={() => setSearchOpen(true)} navigationRef={mailNav} />
+            )}
             {view === "calendar" && <DesktopCalendar onNewEvent={() => setNewEventOpen(true)} />}
             {view === "planning" && (
               <DesktopPlanning onNewTask={() => setNewTaskOpen(true)} onOpenSync={() => changeView("settings")} />

@@ -1,5 +1,13 @@
 import { defineShortcuts, type Shortcut } from "@/lib/shortcuts";
 
+export type MailNavigation = {
+  canMove: () => boolean;
+  canOpen: () => boolean;
+  next: () => void;
+  previous: () => void;
+  open: () => void;
+};
+
 export type AppShortcutActions = {
   navigate: (view: "inbox" | "calendar" | "planning" | "settings") => void;
   calendarEnabled: boolean;
@@ -10,9 +18,11 @@ export type AppShortcutActions = {
   newEvent: () => void;
   search: () => void;
   toggleHelp: () => void;
+  mail: MailNavigation;
 };
 
 export function appShortcuts(actions: AppShortcutActions): Shortcut[] {
+  const { mail } = actions;
   return defineShortcuts([
     {
       id: "view-inbox",
@@ -104,6 +114,55 @@ export function appShortcuts(actions: AppShortcutActions): Shortcut[] {
       label: "Raccourcis clavier",
       description: "Afficher ou masquer cette liste",
       run: actions.toggleHelp,
+    },
+    {
+      id: "mail-next",
+      keys: "arrowdown",
+      group: "Navigation",
+      label: "Message suivant",
+      description: "Descendre dans la liste des messages",
+      allowRepeat: true,
+      when: mail.canMove,
+      run: mail.next,
+    },
+    {
+      id: "mail-previous",
+      keys: "arrowup",
+      group: "Navigation",
+      label: "Message précédent",
+      description: "Remonter dans la liste des messages",
+      allowRepeat: true,
+      when: mail.canMove,
+      run: mail.previous,
+    },
+    {
+      id: "mail-next-vim",
+      keys: "j",
+      group: "Navigation",
+      label: "Message suivant",
+      description: "Alias vim de la flèche bas",
+      allowRepeat: true,
+      when: mail.canMove,
+      run: mail.next,
+    },
+    {
+      id: "mail-previous-vim",
+      keys: "k",
+      group: "Navigation",
+      label: "Message précédent",
+      description: "Alias vim de la flèche haut",
+      allowRepeat: true,
+      when: mail.canMove,
+      run: mail.previous,
+    },
+    {
+      id: "mail-open",
+      keys: "enter",
+      group: "Actions",
+      label: "Ouvrir le message",
+      description: "Ouvrir le message sélectionné",
+      when: mail.canOpen,
+      run: mail.open,
     },
   ]);
 }

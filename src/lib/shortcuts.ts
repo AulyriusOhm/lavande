@@ -13,6 +13,7 @@ export type Shortcut = {
   run: () => void;
   when?: () => boolean;
   allowInInput?: boolean;
+  allowRepeat?: boolean;
 };
 
 export type ShortcutEvent = {
@@ -52,6 +53,13 @@ const AZERTY_DIGITS: Record<string, string> = {
 };
 
 const TEXT_FIELDS = new Set(["input", "textarea", "select"]);
+
+const KEY_LABELS: Record<string, string> = {
+  arrowup: "↑",
+  arrowdown: "↓",
+  enter: "Entrée",
+  escape: "Échap",
+};
 
 export function parseKeys(keys: string): ParsedKeys {
   const tokens = keys.split("+").map((token) => token.trim());
@@ -141,7 +149,7 @@ export function keyLabels(keys: string, mod: ModKey): string[] {
   if (parsed.mod) labels.push(mod === "meta" ? "⌘" : "Ctrl");
   if (parsed.alt) labels.push(mod === "meta" ? "⌥" : "Alt");
   if (parsed.shift) labels.push(mod === "meta" ? "⇧" : "Maj");
-  labels.push(parsed.key.toUpperCase());
+  labels.push(KEY_LABELS[parsed.key] ?? parsed.key.toUpperCase());
   return labels;
 }
 
@@ -154,9 +162,9 @@ export function useShortcuts(shortcuts: readonly Shortcut[], enabled = true): Mo
     if (!enabled) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat || event.isComposing) return;
+      if (event.defaultPrevented || event.isComposing) return;
       const shortcut = resolveShortcut(current.current, event, mod);
-      if (!shortcut) return;
+      if (!shortcut || (event.repeat && !shortcut.allowRepeat)) return;
       event.preventDefault();
       shortcut.run();
     };

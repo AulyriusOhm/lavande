@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { animate, motion, useMotionValue, useSpring, useTransform } from "motion/react";
 import { Archive, ChevronDown, ChevronUp, Inbox, Loader2, PenLine, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2 } from "lucide-react";
 import type { FolderId, Mail } from "@/lib/mail";
@@ -6,6 +6,7 @@ import { folderLabel } from "@/lib/mail";
 import { threadsInFolder } from "@/lib/threads";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
 import { useMailStore } from "@/lib/store";
+import type { MailNavigation } from "@/lib/app-shortcuts";
 import { cn } from "@/lib/utils";
 import { Avatar, Chip, IconButton } from "@/components/ui/primitives";
 import { AnimatedGradientText } from "@/components/ui/animated-text";
@@ -23,6 +24,8 @@ export function InboxScreen({
   mails,
   account,
   folder,
+  active,
+  navigationRef,
   onOpenAccounts,
   onOpenFolders,
   onOpen,
@@ -36,6 +39,8 @@ export function InboxScreen({
   mails: Mail[];
   account: string;
   folder: FolderId;
+  active: boolean;
+  navigationRef: RefObject<MailNavigation | null>;
   onOpenAccounts: () => void;
   onOpenFolders: () => void;
   onOpen: (mail: Mail) => void;
@@ -49,6 +54,20 @@ export function InboxScreen({
   const [filter, setFilter] = useState<Filter>("all");
   const [compact, setCompact] = useState(false);
   const [sizes, setSizes] = useState({ hero: 0, card: 0, bar: 0 });
+  const [cursor, setCursor] = useState<number | null>(null);
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const wasOpen = useRef(false);
+
+  const focusRow = useCallback((id: string | null) => {
+    if (!id || !rowsRef.current) return;
+    const row = Array.from(rowsRef.current.querySelectorAll<HTMLElement>("[data-mail-row]")).find(
+      (element) => element.dataset.mailRow === id,
+    );
+    if (!row) return;
+    row.focus({ preventScroll: true });
+    row.scrollIntoView?.({ block: "nearest" });
+  }, []);
+
   const {
     mode,
     syncing,
@@ -63,6 +82,7 @@ export function InboxScreen({
     summary,
     summaryLoading,
     refreshSummary,
+    openMail,
   } = useMailStore();
 
   useEffect(() => {
@@ -137,6 +157,63 @@ export function InboxScreen({
     if (filter === "encrypted") return thread.encrypted > 0;
     return true;
   });
+
+  const currentIndex = useMemo(() => {
+    if (openMail) {
+      const index = visible.findIndex((thread) => thread.messages.some((message) => message.id === openMail.id));
+      if (index >= 0) return index;
+    }
+    return cursor;
+  }, [openMail, visible, cursor]);
+  const selectedThreadId = currentIndex === null ? null : (visible[currentIndex]?.id ?? null);
+  const navState = useRef({ visible, currentIndex, active, openMail });
+  navState.current = { visible, currentIndex, active, openMail };
+
+  useEffect(() => {
+    setCursor(null);
+  }, [filter, folder, folderPath, account]);
+
+  useEffect(() => {
+    const available = () => {
+      const state = navState.current;
+      return state.active && !state.openMail && state.visible.length > 0;
+    };
+
+    const move = (step: number) => {
+      const state = navState.current;
+      if (state.visible.length === 0) return;
+      const base = state.currentIndex ?? (step > 0 ? -1 : state.visible.length);
+      const index = Math.min(state.visible.length - 1, Math.max(0, base + step));
+      const thread = state.visible[index];
+      if (!thread) return;
+      setCursor(index);
+      focusRow(thread.id);
+    };
+
+    navigationRef.current = {
+      canMove: available,
+      canOpen: available,
+      next: () => move(1),
+      previous: () => move(-1),
+      open: () => {
+        const state = navState.current;
+        const index = state.currentIndex ?? 0;
+        const thread = state.visible[index];
+        if (!thread) return;
+        setCursor(index);
+        onOpen(thread.primary);
+      },
+    };
+
+    return () => {
+      navigationRef.current = null;
+    };
+  }, [navigationRef, onOpen, focusRow]);
+
+  useEffect(() => {
+    if (wasOpen.current && !openMail && cursor !== null) focusRow(selectedThreadId);
+    wasOpen.current = Boolean(openMail);
+  }, [openMail, cursor, selectedThreadId, focusRow]);
 
   return (
     <div className="relative h-full">
@@ -370,22 +447,32 @@ export function InboxScreen({
           </Chip>
         </div>
 
-        <div className="mt-3 space-y-1 px-1">
+        <div ref={rowsRef} className="mt-3 space-y-1 px-1">
           {visible.map((thread, index) => (
-            <ThreadRow
+            <div
               key={thread.id}
-              thread={thread}
-              delay={Math.min(0.4, 0.16 + index * 0.05)}
-              showAccount={account === ALL_ACCOUNTS}
-              onOpen={() => onOpen(thread.primary)}
-              onToggleStar={() => onToggleStar(thread.primary.id)}
-              onDelete={() => onMailAction("delete", thread.primary)}
-              onArchive={() => onMailAction("archive", thread.primary)}
-              onToggleRead={() => onMailAction("read", thread.primary)}
-              onReply={() => onReply(thread.primary)}
-              onNotSpam={onNotSpam ? () => onNotSpam(thread.primary) : undefined}
-              onRestore={onRestore ? () => onRestore(thread.primary) : undefined}
-            />
+              data-mail-row={thread.id}
+              tabIndex={-1}
+              aria-current={selectedThreadId === thread.id}
+              className={cn(
+                "rounded-[18px] transition-colors duration-200",
+                selectedThreadId === thread.id && "bg-accent-soft ring-1 ring-accent-ring",
+              )}
+            >
+              <ThreadRow
+                thread={thread}
+                delay={Math.min(0.4, 0.16 + index * 0.05)}
+                showAccount={account === ALL_ACCOUNTS}
+                onOpen={() => onOpen(thread.primary)}
+                onToggleStar={() => onToggleStar(thread.primary.id)}
+                onDelete={() => onMailAction("delete", thread.primary)}
+                onArchive={() => onMailAction("archive", thread.primary)}
+                onToggleRead={() => onMailAction("read", thread.primary)}
+                onReply={() => onReply(thread.primary)}
+                onNotSpam={onNotSpam ? () => onNotSpam(thread.primary) : undefined}
+                onRestore={onRestore ? () => onRestore(thread.primary) : undefined}
+              />
+            </div>
           ))}
           {threadsLoading && visible.length === 0 && (
             <div className="flex items-center justify-center gap-2 px-6 py-10 text-[12px] font-semibold text-ink-muted">

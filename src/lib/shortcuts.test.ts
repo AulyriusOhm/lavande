@@ -85,6 +85,8 @@ describe("raccourcis · plateforme", () => {
     expect(keyLabels("mod+shift+n", "meta")).toEqual(["⌘", "⇧", "N"]);
     expect(keyLabels("mod+shift+n", "ctrl")).toEqual(["Ctrl", "Maj", "N"]);
     expect(keyLabels("?", "ctrl")).toEqual(["?"]);
+    expect(keyLabels("arrowdown", "ctrl")).toEqual(["↓"]);
+    expect(keyLabels("enter", "meta")).toEqual(["Entrée"]);
   });
 });
 
@@ -224,6 +226,14 @@ describe("raccourcis · branchement clavier", () => {
     const consumed = new KeyboardEvent("keydown", { key: "k", ...modifiers, cancelable: true });
     consumed.preventDefault();
     window.dispatchEvent(consumed);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("répète la touche seulement si le raccourci l'autorise", () => {
+    const run = vi.fn();
+    renderHook(() => useShortcuts([shortcut({ keys: "arrowdown", run, allowRepeat: true })]));
+
+    typeInWindow({ key: "ArrowDown", repeat: true });
     expect(run).toHaveBeenCalledTimes(1);
   });
 

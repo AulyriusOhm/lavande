@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   BellRing,
@@ -38,6 +38,7 @@ import { ALL_ACCOUNTS } from "@/lib/accounts";
 import { PGP_STATE, formatKeyDate, keyLabel, keyState, shortFingerprint, type PgpKey } from "@/lib/pgp";
 import { listKeys } from "@/lib/pgp-api";
 import { useMailStore } from "@/lib/store";
+import type { MailNavigation } from "@/lib/app-shortcuts";
 import { useEscapeLayer } from "@/desktop/escape";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -339,10 +340,11 @@ function ThreadRow({
           type="button"
           onClick={onOpen}
           aria-current={selected}
+          data-mail-row={thread.id}
           aria-label={`${name} — ${thread.subject}${thread.count > 1 ? ` · ${thread.count} messages` : ""}${
             unread ? " · non lu" : ""
           }`}
-          className="focus-ring absolute inset-0 rounded-[16px]"
+          className="focus-row absolute inset-0 rounded-[16px]"
         />
 
         <div className="pointer-events-none relative flex gap-3 px-3 py-3.5">
@@ -414,7 +416,13 @@ function ThreadRow({
   );
 }
 
-export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
+export function DesktopInbox({
+  onOpenSearch,
+  navigationRef,
+}: {
+  onOpenSearch: () => void;
+  navigationRef?: React.RefObject<MailNavigation | null>;
+}) {
   const {
     mails,
     account,
@@ -455,6 +463,27 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
   const [pgpKeys, setPgpKeys] = useState<PgpKey[] | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
+  const [cursor, setCursor] = useState<number | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const readerRef = useRef<HTMLElement>(null);
+  const pendingFocus = useRef<"reader" | "list" | null>(null);
+
+  const focusRow = useCallback((id: string | null) => {
+    if (!id || !listRef.current) return;
+    const row = Array.from(listRef.current.querySelectorAll<HTMLElement>("[data-mail-row]")).find(
+      (element) => element.dataset.mailRow === id,
+    );
+    if (!row) return;
+    row.focus({ preventScroll: true });
+    row.scrollIntoView?.({ block: "nearest" });
+  }, []);
+
+  const listFocused = useCallback(() => {
+    const active = document.activeElement;
+    if (!active || active === document.body) return true;
+    return listRef.current?.contains(active) ?? false;
+  }, []);
+
 
   const runDownload = async (mail: Mail, file: MailAttachment) => {
     const key = `${mail.id}:${file.name}`;
@@ -463,8 +492,6 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
     setDownloadNotice(await downloadAttachment(mail, file));
     setDownloading(null);
   };
-
-  useEscapeLayer(Boolean(openMail), () => closeMessage());
 
   const threads = threadsInFolder(mails, folder, account);
   const heading =
@@ -502,6 +529,80 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
     pgpState === "expired" ? "amber" : pgpState === "revoked" ? "rose" : "green";
 
   const mail = openMail;
+
+  const currentIndex = useMemo(() => {
+    if (mail) {
+      const index = visible.findIndex((thread) => thread.messages.some((message) => message.id === mail.id));
+      if (index >= 0) return index;
+    }
+    return cursor;
+  }, [mail, visible, cursor]);
+  const selectedThreadId = currentIndex === null ? null : (visible[currentIndex]?.id ?? null);
+  const navState = useRef({ visible, currentIndex, mail });
+  navState.current = { visible, currentIndex, mail };
+
+  useEffect(() => {
+    setCursor(null);
+  }, [filter, folder, folderPath, account]);
+
+  useEscapeLayer(Boolean(mail), () => {
+    setCursor(currentIndex);
+    pendingFocus.current = "list";
+    closeMessage();
+  });
+
+  useEffect(() => {
+    if (!navigationRef) return;
+
+    const move = (step: number) => {
+      const state = navState.current;
+      if (state.visible.length === 0) return;
+      const base = state.currentIndex ?? (step > 0 ? -1 : state.visible.length);
+      const index = Math.min(state.visible.length - 1, Math.max(0, base + step));
+      const thread = state.visible[index];
+      if (!thread) return;
+      setCursor(index);
+      if (state.mail) {
+        openMessage(thread.primary);
+        pendingFocus.current = "reader";
+        return;
+      }
+      focusRow(thread.id);
+    };
+
+    navigationRef.current = {
+      canMove: () => navState.current.visible.length > 0,
+      canOpen: () => navState.current.visible.length > 0 && listFocused(),
+      next: () => move(1),
+      previous: () => move(-1),
+      open: () => {
+        const state = navState.current;
+        const index = state.currentIndex ?? 0;
+        const thread = state.visible[index];
+        if (!thread) return;
+        setCursor(index);
+        openMessage(thread.primary);
+        pendingFocus.current = "reader";
+      },
+    };
+
+    return () => {
+      navigationRef.current = null;
+    };
+  }, [navigationRef, openMessage, focusRow, listFocused]);
+
+  useEffect(() => {
+    if (pendingFocus.current === "reader" && mail) {
+      pendingFocus.current = null;
+      readerRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    if (pendingFocus.current === "list" && !mail) {
+      pendingFocus.current = null;
+      focusRow(selectedThreadId);
+    }
+  }, [mail, selectedThreadId, focusRow]);
+
   const previous = openThread && mail ? openThread.messages.filter((message) => message.id !== mail.id) : [];
   const allExpanded = previous.every((message) => !collapsedPrevious.includes(message.id));
 
@@ -752,12 +853,12 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
             </div>
           ) : null}
 
-          <div className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-[104px]">
+          <div ref={listRef} className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-[104px]">
             {visible.map((thread, index) => (
               <ThreadRow
                 key={thread.id}
                 thread={thread}
-                selected={mail !== null && thread.messages.some((message) => message.id === mail.id)}
+                selected={selectedThreadId === thread.id}
                 delay={Math.min(0.4, 0.06 + index * 0.04)}
                 onOpen={() => openMessage(thread.primary)}
                 onStar={() => toggleStar(thread.primary.id)}
@@ -811,7 +912,12 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
           </div>
         </section>
 
-        <section className="flex min-h-0 flex-col">
+        <section
+          ref={readerRef}
+          tabIndex={-1}
+          aria-label="Panneau de lecture"
+          className="flex min-h-0 flex-col outline-none"
+        >
           {mail ? (
             <>
               <div className="sticky top-0 z-20 shrink-0">

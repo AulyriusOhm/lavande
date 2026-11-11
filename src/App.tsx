@@ -29,7 +29,7 @@ import { shellLayout } from "@/lib/native";
 import { AccountRemoveDialog, BackendBanner, BackendLoading } from "@/components/backend-status";
 import { ConnectScreen } from "@/screens/connect-screen";
 import { useShortcuts } from "@/lib/shortcuts";
-import { appShortcuts } from "@/lib/app-shortcuts";
+import { appShortcuts, type MailNavigation } from "@/lib/app-shortcuts";
 import { ShortcutsOverlay } from "@/components/shortcuts-overlay";
 
 const InboxScreen = memo(InboxView);
@@ -185,6 +185,7 @@ function PhoneApp({ native }: { native?: boolean }) {
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
   const gesture = useRef<{ x: number; y: number; axis: "x" | "y" | null } | null>(null);
+  const mailNav = useRef<MailNavigation | null>(null);
 
   const index = Math.max(order.indexOf(tab), 0);
   const last = order.length - 1;
@@ -326,6 +327,13 @@ function PhoneApp({ native }: { native?: boolean }) {
         newEvent: openEventDraft,
         search: openSearch,
         toggleHelp: () => setHelpOpen((current) => !current),
+        mail: {
+          canMove: () => mailNav.current?.canMove() ?? false,
+          canOpen: () => mailNav.current?.canOpen() ?? false,
+          next: () => mailNav.current?.next(),
+          previous: () => mailNav.current?.previous(),
+          open: () => mailNav.current?.open(),
+        },
       }),
     [changeTab, calendarEnabled, planningEnabled, tab, openComposer, openSearch, openTaskDraft, openEventDraft],
   );
@@ -390,6 +398,8 @@ function PhoneApp({ native }: { native?: boolean }) {
                   mails={mails}
                   account={account}
                   folder={folder}
+                  active={tab === "inbox"}
+                  navigationRef={mailNav}
                   onOpenAccounts={openAccounts}
                   onOpenFolders={openFolders}
                   onOpen={openMessage}
