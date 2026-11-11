@@ -33,6 +33,7 @@ async fn run() -> Result<(), String> {
     let data_dir = data_dir()?;
     let state = Arc::new(
         AppState::open(&data_dir, tls_options()?)
+            .await
             .map_err(|error| format!("ouverture de {} : {error}", data_dir.display()))?,
     );
 
@@ -45,7 +46,7 @@ async fn run() -> Result<(), String> {
         .map_err(|error| format!("adresse locale illisible : {error}"))?;
     tracing::info!(%address, data = %data_dir.display(), "lavande-maild écoute");
 
-    events::watch_all(&state);
+    events::watch_all(&state).await;
     axum::serve(listener, app(state))
         .with_graceful_shutdown(shutdown())
         .await

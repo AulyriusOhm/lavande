@@ -7,3 +7,6 @@ src-tauri/gen
 .plasma
 artifacts
 /target
+
+# Jeton Bearer injecté par nginx, généré par deploy/dev-proxy.sh (secret local).
+deploy/nginx/lavande-token.inc

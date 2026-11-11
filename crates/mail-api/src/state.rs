@@ -1,19 +1,21 @@
-//! Shared state: the SQLite store, the accounts file and the trust roots.
+//! Shared state: the SQLite store, the accounts file, the secrets and the
+//! daemon token.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use lavande_mail::config::AccountConfig;
-use lavande_mail::error::MailError;
 use lavande_mail::model::Folder;
 use lavande_mail::store::Store;
 use lavande_mail::tls::TlsOptions;
 
-use crate::config_file;
+use crate::config_file::{self, StoredAccount};
 use crate::discovery::{Discovery, DiscoveryEndpoints};
 use crate::error::ApiError;
 use crate::events::Events;
 use crate::oauth_flow::Sessions;
+use crate::secrets::{SecretBackend, Secrets};
+use crate::token;
 
 pub const ACCOUNTS_FILE: &str = "accounts.json";
 pub const DATABASE_FILE: &str = "mail.db";
@@ -21,6 +23,8 @@ pub const DATABASE_FILE: &str = "mail.db";
 pub struct AppState {
     store: Store,
     accounts_path: PathBuf,
+    secrets: Secrets,
+    token: String,
     tls: TlsOptions,
     discovery: Discovery,
     sessions: Sessions,
@@ -30,28 +34,71 @@ pub struct AppState {
 
 impl AppState {
     /// Opens and migrates the store of `data_dir`. `accounts.json` is read on
-    /// demand: the file is the source of truth for the accounts.
-    pub fn open(data_dir: impl AsRef<Path>, tls: TlsOptions) -> Result<Self, MailError> {
-        Self::open_with(data_dir, tls, DiscoveryEndpoints::default())
+    /// demand: the file is the source of truth for the accounts. Secrets live
+    /// outside it (keychain or encrypted file) and legacy inline secrets are
+    /// migrated on open.
+    pub async fn open(data_dir: impl AsRef<Path>, tls: TlsOptions) -> Result<Self, ApiError> {
+        Self::open_with(
+            data_dir,
+            tls,
+            DiscoveryEndpoints::default(),
+            SecretBackend::from_env()?,
+        )
+        .await
     }
 
-    pub fn open_with(
+    pub async fn open_with(
         data_dir: impl AsRef<Path>,
         tls: TlsOptions,
         endpoints: DiscoveryEndpoints,
-    ) -> Result<Self, MailError> {
-        fs::create_dir_all(data_dir.as_ref())?;
-        let store = Store::open(data_dir.as_ref().join(DATABASE_FILE))?;
+        backend: SecretBackend,
+    ) -> Result<Self, ApiError> {
+        let data_dir = data_dir.as_ref();
+        fs::create_dir_all(data_dir)?;
+        let store = Store::open(data_dir.join(DATABASE_FILE))?;
         store.migrate()?;
-        Ok(Self {
+        let secrets = Secrets::open(backend, data_dir).await?;
+        let token = token::load_or_create(data_dir)?;
+        let state = Self {
             store,
-            accounts_path: data_dir.as_ref().join(ACCOUNTS_FILE),
+            accounts_path: data_dir.join(ACCOUNTS_FILE),
+            secrets,
+            token,
             tls,
             discovery: Discovery::new(endpoints)?,
             sessions: Sessions::default(),
             events: Events::default(),
             public_url: env_url(),
-        })
+        };
+        state.migrate_inline_secrets().await?;
+        Ok(state)
+    }
+
+    /// Legacy `accounts.json` carried passwords and refresh tokens inline:
+    /// move them to the secret store once, then rewrite the file stripped.
+    async fn migrate_inline_secrets(&self) -> Result<(), ApiError> {
+        let mut accounts = config_file::load(&self.accounts_path)?;
+        let migrated = self.extract_secrets(&mut accounts).await?;
+        if migrated > 0 {
+            config_file::save(&self.accounts_path, &accounts)?;
+            tracing::info!(
+                accounts = migrated,
+                "secrets déplacés hors de accounts.json"
+            );
+        }
+        Ok(())
+    }
+
+    /// Moves any inline secret to the secret store; returns how many moved.
+    async fn extract_secrets(&self, accounts: &mut [StoredAccount]) -> Result<usize, ApiError> {
+        let mut moved = 0;
+        for account in accounts.iter_mut() {
+            if let Some(secrets) = account.take_secrets() {
+                self.secrets.put(&account.id, &secrets).await?;
+                moved += 1;
+            }
+        }
+        Ok(moved)
     }
 
     pub fn discovery(&self) -> &Discovery {
@@ -79,21 +126,66 @@ impl AppState {
         &self.store
     }
 
-    pub fn accounts(&self) -> Result<Vec<AccountConfig>, ApiError> {
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    pub fn secrets(&self) -> &Secrets {
+        &self.secrets
+    }
+
+    /// Accounts without their secrets: listing, duplicate and existence checks.
+    pub fn stored_accounts(&self) -> Result<Vec<StoredAccount>, ApiError> {
         config_file::load(&self.accounts_path)
     }
 
-    pub fn account(&self, id: &str) -> Result<AccountConfig, ApiError> {
-        self.accounts()?
-            .into_iter()
-            .find(|account| account.id == id)
-            .ok_or_else(|| ApiError::not_found(format!("compte « {id} » inconnu")))
+    pub fn ensure_account(&self, id: &str) -> Result<(), ApiError> {
+        if self
+            .stored_accounts()?
+            .iter()
+            .any(|account| account.id == id)
+        {
+            Ok(())
+        } else {
+            Err(ApiError::not_found(format!("compte « {id} » inconnu")))
+        }
     }
 
-    pub fn add_account(&self, config: &AccountConfig, folders: &[Folder]) -> Result<(), ApiError> {
-        let mut accounts = self.accounts()?;
-        accounts.push(config.clone());
-        config_file::save(&self.accounts_path, &accounts)?;
+    pub async fn accounts(&self) -> Result<Vec<AccountConfig>, ApiError> {
+        let stored = self.stored_accounts()?;
+        let mut configs = Vec::with_capacity(stored.len());
+        for account in stored {
+            let secrets = self.secrets.get(&account.id).await?;
+            configs.push(account.into_config(secrets)?);
+        }
+        Ok(configs)
+    }
+
+    pub async fn account(&self, id: &str) -> Result<AccountConfig, ApiError> {
+        let stored = self
+            .stored_accounts()?
+            .into_iter()
+            .find(|account| account.id == id)
+            .ok_or_else(|| ApiError::not_found(format!("compte « {id} » inconnu")))?;
+        let secrets = self.secrets.get(id).await?;
+        stored.into_config(secrets)
+    }
+
+    pub async fn add_account(
+        &self,
+        config: &AccountConfig,
+        folders: &[Folder],
+    ) -> Result<(), ApiError> {
+        let mut accounts = self.stored_accounts()?;
+        let mut stored = StoredAccount::from_config(config);
+        if let Some(secrets) = stored.take_secrets() {
+            self.secrets.put(&config.id, &secrets).await?;
+        }
+        accounts.push(stored);
+        if let Err(error) = self.save_accounts(&mut accounts).await {
+            let _ = self.secrets.delete(&config.id).await;
+            return Err(error);
+        }
         self.store
             .upsert_account(&config.id, &config.label, &config.email)?;
         for folder in folders {
@@ -103,17 +195,23 @@ impl AppState {
     }
 
     /// `true` when the account was listed in `accounts.json`.
-    pub fn remove_account(&self, id: &str) -> Result<bool, ApiError> {
-        let accounts = self.accounts()?;
+    pub async fn remove_account(&self, id: &str) -> Result<bool, ApiError> {
+        let accounts = self.stored_accounts()?;
         if !accounts.iter().any(|account| account.id == id) {
             return Ok(false);
         }
-        let kept: Vec<AccountConfig> = accounts
+        let mut kept: Vec<StoredAccount> = accounts
             .into_iter()
             .filter(|account| account.id != id)
             .collect();
-        config_file::save(&self.accounts_path, &kept)?;
+        self.save_accounts(&mut kept).await?;
+        self.secrets.delete(id).await?;
         Ok(true)
+    }
+
+    async fn save_accounts(&self, accounts: &mut [StoredAccount]) -> Result<(), ApiError> {
+        self.extract_secrets(accounts).await?;
+        config_file::save(&self.accounts_path, accounts)
     }
 }
 

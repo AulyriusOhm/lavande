@@ -12,8 +12,16 @@ import { DesktopCompose } from "@/desktop/compose";
 import { DesktopCalendar, NewEventDialog } from "@/desktop/calendar";
 import { DesktopPlanning, NewTaskDialog } from "@/desktop/planning";
 import { DesktopSettings } from "@/desktop/settings";
+import { DesktopComposePage } from "@/desktop/compose-page";
+import { isComposeWindow } from "@/lib/compose-bus";
+import { useEscapeLayer } from "@/desktop/escape";
 
 export function DesktopApp() {
+  if (isComposeWindow()) return <DesktopComposePage />;
+  return <DesktopMain />;
+}
+
+function DesktopMain() {
   const { notices, dismissNotice, openComposer, openMail, mode, phase, connectOpen, closeConnect } =
     useMailStore();
   const { calendarEnabled, planningEnabled } = usePrefs();
@@ -25,9 +33,10 @@ export function DesktopApp() {
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [newEventOpen, setNewEventOpen] = useState(false);
 
+  const openMailId = openMail?.id ?? null;
   useEffect(() => {
-    if (openMail) setView("inbox");
-  }, [openMail]);
+    if (openMailId) setView("inbox");
+  }, [openMailId]);
 
   const changeView = useCallback((next: DesktopView) => {
     setView(next);
@@ -58,6 +67,8 @@ export function DesktopApp() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  useEscapeLayer(connectOpen, closeConnect);
 
   if (mode === "api" && phase === "loading") {
     return (

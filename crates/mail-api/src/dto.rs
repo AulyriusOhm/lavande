@@ -4,13 +4,14 @@ use axum::extract::{FromRequest, Request};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use lavande_mail::config::{AccountConfig, Encryption, Endpoint};
+use lavande_mail::config::{Encryption, Endpoint};
 use lavande_mail::imap::SyncReport;
 use lavande_mail::model::Address;
 use lavande_mail::smtp::{OutgoingAttachment, OutgoingMessage};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::config_file::StoredAccount;
 use crate::error::ApiError;
 
 /// `Json` with the API error envelope and a 400 instead of axum's 415/422.
@@ -133,14 +134,14 @@ pub struct AccountSummary {
 }
 
 impl AccountSummary {
-    pub fn new(config: &AccountConfig, folders: usize) -> Self {
+    pub fn new(account: &StoredAccount, folders: usize) -> Self {
         Self {
-            id: config.id.clone(),
-            label: config.label.clone(),
-            email: config.email.clone(),
-            username: config.username.clone(),
-            imap: EndpointSummary::new(&config.imap),
-            smtp: EndpointSummary::new(&config.smtp),
+            id: account.id.clone(),
+            label: account.label.clone(),
+            email: account.email.clone(),
+            username: account.username.clone(),
+            imap: EndpointSummary::new(&account.imap),
+            smtp: EndpointSummary::new(&account.smtp),
             folders,
         }
     }

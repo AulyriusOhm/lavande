@@ -154,6 +154,8 @@ function PhoneApp({ native }: { native?: boolean }) {
     phase,
     connectOpen,
     closeConnect,
+    removeTarget,
+    cancelRemoveAccount,
   } = useMailStore();
   const order = useMemo<TabId[]>(
     () =>
@@ -189,6 +191,7 @@ function PhoneApp({ native }: { native?: boolean }) {
   }, [order, tab]);
 
   const layers: [boolean, () => void][] = [
+    [Boolean(removeTarget), cancelRemoveAccount],
     [connectOpen, closeConnect],
     [composeOpen, minimizeCompose],
     [eventDraftOpen, () => setEventDraftOpen(false)],
@@ -598,7 +601,6 @@ function PhoneApp({ native }: { native?: boolean }) {
                 Fermer
               </button>
               <SearchScreen
-                mails={mails}
                 onOpen={openMessage}
                 onToggleStar={toggleStar}
                 onMailAction={mailAction}
@@ -628,7 +630,6 @@ function PhoneApp({ native }: { native?: boolean }) {
                 transition={{ type: "spring", stiffness: 320, damping: 32 }}
               >
                 <AccountSwitchSheet
-                  mails={mails}
                   active={account}
                   onSelect={setAccount}
                   onClose={() => setAccountsOpen(false)}
@@ -656,8 +657,6 @@ function PhoneApp({ native }: { native?: boolean }) {
                 transition={{ type: "spring", stiffness: 320, damping: 32 }}
               >
                 <MailboxSheet
-                  mails={mails}
-                  account={account}
                   folder={folder}
                   onSelect={setFolder}
                   onClose={() => setFoldersOpen(false)}
@@ -743,7 +742,7 @@ function PhoneApp({ native }: { native?: boolean }) {
         </AnimatePresence>
 
         <AnimatePresence>
-          {composeOpen && (
+          {composeOpen && composeDraft && (
             <motion.div key="compose" className="absolute inset-0 z-[45]" initial={false}>
               <motion.div
                 className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
@@ -761,7 +760,7 @@ function PhoneApp({ native }: { native?: boolean }) {
               >
                 <ComposeScreen
                   title={composeTitle}
-                  initialDraft={composeDraft ?? undefined}
+                  draft={composeDraft}
                   onDraftChange={setComposeDraft}
                   onSend={sendDraft}
                   onMinimize={minimizeCompose}

@@ -1,6 +1,6 @@
 //! SQLite-backed local store for accounts, folders, messages and threads.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
@@ -21,6 +21,14 @@ const MESSAGE_COLUMNS: &str = "account_id, folder_path, uid, uidvalidity, thread
 
 pub struct Store {
     conn: Mutex<Connection>,
+}
+
+/// Per-folder message totals, as stored locally.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct FolderCount {
+    pub path: String,
+    pub total: usize,
+    pub unread: usize,
 }
 
 impl Store {
@@ -108,6 +116,27 @@ impl Store {
             folders.push(row?.into_folder()?);
         }
         Ok(folders)
+    }
+
+    /// Message totals per folder, computed from the local store (no IMAP round-trip).
+    pub fn folder_counts(&self, account_id: &str) -> Result<Vec<FolderCount>, MailError> {
+        let conn = self.conn()?;
+        let mut statement = conn.prepare(
+            "SELECT folder_path, COUNT(*), COALESCE(SUM(unread), 0) \
+             FROM messages WHERE account_id = ?1 GROUP BY folder_path ORDER BY folder_path",
+        )?;
+        let rows = statement.query_map(params![account_id], |row| {
+            Ok(FolderCount {
+                path: row.get(0)?,
+                total: row.get::<_, i64>(1)? as usize,
+                unread: row.get::<_, i64>(2)? as usize,
+            })
+        })?;
+        let mut counts = Vec::new();
+        for row in rows {
+            counts.push(row?);
+        }
+        Ok(counts)
     }
 
     /// Every account as `(id, label, email)`, in insertion order.
@@ -257,6 +286,9 @@ impl Store {
         Ok(by_uid)
     }
 
+    /// User-driven flag change: only `unread` and `starred` are written.
+    /// `answered` belongs to the server sync and must survive a concurrent
+    /// read-modify-write.
     pub fn set_flags(
         &self,
         account_id: &str,
@@ -266,18 +298,45 @@ impl Store {
     ) -> Result<(), MailError> {
         let conn = self.conn()?;
         let updated = conn.execute(
-            "UPDATE messages SET unread = ?4, starred = ?5, answered = ?6 \
+            "UPDATE messages SET unread = ?4, starred = ?5 \
              WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
-            params![
-                account_id,
-                folder_path,
-                uid,
-                flags.unread,
-                flags.starred,
-                flags.answered
-            ],
+            params![account_id, folder_path, uid, flags.unread, flags.starred],
         )?;
         require_one(updated, "message")
+    }
+
+    /// Folder and uid of the message carrying this `Message-ID`, if stored.
+    pub fn find_by_message_id(
+        &self,
+        account_id: &str,
+        message_id: &str,
+    ) -> Result<Option<(String, u32)>, MailError> {
+        let conn = self.conn()?;
+        let found = conn
+            .query_row(
+                "SELECT folder_path, uid FROM messages \
+                 WHERE account_id = ?1 AND message_id = ?2 LIMIT 1",
+                params![account_id, message_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        Ok(found)
+    }
+
+    /// Marks a message answered locally; returns whether a row matched.
+    pub fn mark_answered(
+        &self,
+        account_id: &str,
+        folder_path: &str,
+        uid: u32,
+    ) -> Result<bool, MailError> {
+        let conn = self.conn()?;
+        let updated = conn.execute(
+            "UPDATE messages SET answered = 1 \
+             WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
+            params![account_id, folder_path, uid],
+        )?;
+        Ok(updated > 0)
     }
 
     /// Writes many flag sets in one statement inside one transaction; returns
@@ -385,7 +444,8 @@ impl Store {
         let conn = self.conn()?;
         let updated = conn.execute(
             "UPDATE messages SET thread_id = ?3 WHERE account_id = ?1 \
-             AND (in_reply_to = ?2 OR instr(references_json, ?2) > 0)",
+             AND (in_reply_to = ?2 OR EXISTS (\
+                 SELECT 1 FROM json_each(messages.references_json) WHERE value = ?2))",
             params![account_id, message_id, thread_id],
         )?;
         Ok(updated)
@@ -403,28 +463,107 @@ impl Store {
         messages_in_folder_on(&conn, account_id, folder_path, limit, offset)
     }
 
-    /// Threads of a folder, newest activity first. `unread`, `preview` and
-    /// `participants` are computed on the folder's messages only.
+    /// Full-text-ish search over the local store: subject, preview, body and
+    /// sender, newest first. `%` and `_` in the query are escaped.
+    pub fn search_messages(
+        &self,
+        account_id: &str,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<Message>, MailError> {
+        let escaped = query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let needle = format!("%{escaped}%");
+        let conn = self.conn()?;
+        let sql = format!(
+            "SELECT {MESSAGE_COLUMNS} FROM messages \
+             WHERE account_id = ?1 AND (subject LIKE ?2 ESCAPE '\\' \
+                 OR preview LIKE ?2 ESCAPE '\\' \
+                 OR body_text LIKE ?2 ESCAPE '\\' \
+                 OR from_json LIKE ?2 ESCAPE '\\') \
+             ORDER BY date DESC, uid DESC LIMIT ?3"
+        );
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params![account_id, needle, limit], MessageRow::read)?;
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row?.into_message()?);
+        }
+        let folders: HashSet<String> = messages
+            .iter()
+            .map(|message| message.folder_path.clone())
+            .collect();
+        for folder in folders {
+            let mut attachments = attachments_of_on(&conn, account_id, &folder, None)?;
+            for message in messages.iter_mut().filter(|m| m.folder_path == folder) {
+                message.attachments = attachments.remove(&message.uid).unwrap_or_default();
+            }
+        }
+        Ok(messages)
+    }
+
+    /// Threads of a folder, newest activity first, paginated in SQL: only the
+    /// requested page of threads is loaded. `limit <= 0` returns everything.
+    /// `unread`, `preview` and `participants` are computed on the folder's
+    /// messages only.
     pub fn threads_in_folder(
         &self,
         account_id: &str,
         folder_path: &str,
+        limit: i64,
+        offset: i64,
     ) -> Result<Vec<Thread>, MailError> {
         let conn = self.conn()?;
         let sent = get_folder_on(&conn, account_id, folder_path)?
             .map(|folder| folder.role == FolderRole::Sent)
             .unwrap_or(false);
 
+        let mut statement = conn.prepare(
+            "SELECT thread_id FROM messages WHERE account_id = ?1 AND folder_path = ?2 \
+             GROUP BY thread_id ORDER BY MAX(date) DESC, MAX(uid) DESC LIMIT ?3 OFFSET ?4",
+        )?;
+        let ids: Vec<String> = statement
+            .query_map(params![account_id, folder_path, limit, offset], |row| {
+                row.get(0)
+            })?
+            .collect::<Result<_, _>>()?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders = vec!["?"; ids.len()].join(", ");
+        let sql = format!(
+            "SELECT {MESSAGE_COLUMNS} FROM messages \
+             WHERE account_id = ?1 AND folder_path = ?2 AND thread_id IN ({placeholders})"
+        );
+        let mut values: Vec<&dyn ToSql> = vec![&account_id, &folder_path];
+        for id in &ids {
+            values.push(id);
+        }
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(values.as_slice(), MessageRow::read)?;
         let mut groups: HashMap<String, Vec<Message>> = HashMap::new();
-        for message in messages_in_folder_on(&conn, account_id, folder_path, -1, 0)? {
+        for row in rows {
+            let message = row?.into_message()?;
             groups
                 .entry(message.thread_id.clone())
                 .or_default()
                 .push(message);
         }
+        let mut attachments = attachments_of_on(&conn, account_id, folder_path, None)?;
+        for messages in groups.values_mut() {
+            for message in messages {
+                message.attachments = attachments.remove(&message.uid).unwrap_or_default();
+            }
+        }
 
         let mut threads = Vec::new();
-        for (id, mut messages) in groups {
+        for id in ids {
+            let Some(mut messages) = groups.remove(&id) else {
+                continue;
+            };
             messages.sort_by(|a, b| b.date.cmp(&a.date).then(b.uid.cmp(&a.uid)));
             let Some(primary) = messages.first().cloned() else {
                 continue;
@@ -471,12 +610,6 @@ impl Store {
                 primary,
             });
         }
-        threads.sort_by(|a, b| {
-            b.primary
-                .date
-                .cmp(&a.primary.date)
-                .then_with(|| a.id.cmp(&b.id))
-        });
         Ok(threads)
     }
 }

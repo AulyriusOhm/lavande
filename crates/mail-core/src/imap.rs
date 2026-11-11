@@ -322,7 +322,13 @@ async fn import_bodies(
         let Some((flags, size)) = server.get(&uid) else {
             continue;
         };
-        let parsed = mime::parse_message(raw)?;
+        let parsed = match mime::parse_message(raw) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                tracing::warn!(account = account_id, folder = folder_path, uid, %error, "message illisible, ignoré");
+                continue;
+            }
+        };
         let message = Message {
             account_id: account_id.to_string(),
             folder_path: folder_path.to_string(),
@@ -475,9 +481,48 @@ pub async fn move_message(
         store_flags(session, uid, "+FLAGS", &["\\Deleted"]).await?;
         expunge(session, &uid.to_string(), ExpungeMode::Strict).await?;
     }
-    store.delete_message(account_id, from_path, uid)?;
+    store.delete_messages(account_id, from_path, &[uid])?;
     reconcile(session, store, account_id, to_path, None).await?;
     Ok(())
+}
+
+/// APPENDs a sent message to the Sent folder unless the server already holds
+/// that `Message-ID` (some providers archive SMTP submissions themselves),
+/// then reconciles so the copy is visible immediately.
+pub async fn append_sent(
+    session: &mut ImapSession,
+    store: &Store,
+    account_id: &str,
+    folder_path: &str,
+    raw: &[u8],
+    message_id: Option<&str>,
+) -> Result<(), MailError> {
+    session.select(folder_path).await.map_err(imap_error)?;
+    if let Some(id) = message_id {
+        let existing = session
+            .uid_search(format!("HEADER Message-ID \"<{id}>\""))
+            .await
+            .map_err(imap_error)?;
+        if !existing.is_empty() {
+            return Ok(());
+        }
+    }
+    session
+        .append(folder_path, Some("(\\Seen)"), None, raw)
+        .await
+        .map_err(imap_error)?;
+    reconcile(session, store, account_id, folder_path, None).await?;
+    Ok(())
+}
+
+/// Pushes `\Answered` on the message the user replied to.
+pub async fn mark_answered(
+    session: &mut ImapSession,
+    folder_path: &str,
+    uid: u32,
+) -> Result<(), MailError> {
+    session.select(folder_path).await.map_err(imap_error)?;
+    store_flags(session, uid, "+FLAGS", &["\\Answered"]).await
 }
 
 /// Drops the message from the server and from the store. The store row is

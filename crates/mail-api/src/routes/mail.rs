@@ -10,7 +10,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use lavande_mail::config::FolderMapping;
 use lavande_mail::imap::{self, ImapSession};
-use lavande_mail::model::{Address, Flags, Message, Thread};
+use lavande_mail::model::{Address, Flags, FolderRole, Message, Thread};
 use lavande_mail::smtp;
 use lavande_mail::sync as mail_sync;
 use serde::Deserialize;
@@ -64,7 +64,7 @@ async fn sync(
             ApiError::bad_request("config", format!("corps de la requête refusé : {error}"))
         })?
     };
-    let config = state.account(&id)?;
+    let config = state.account(&id).await?;
     let mapping = FolderMapping::default();
     let reports: Vec<FolderReport> = match request.folder_path {
         Some(folder_path) => {
@@ -95,11 +95,14 @@ async fn threads(
     Query(paging): Query<Paging>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<Thread>>, ApiError> {
-    state.account(&id)?;
+    state.ensure_account(&id)?;
     let limit = paging.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = paging.offset.unwrap_or(0);
-    let threads = state.store().threads_in_folder(&id, &folder_path)?;
-    Ok(Json(threads.into_iter().skip(offset).take(limit).collect()))
+    let threads =
+        state
+            .store()
+            .threads_in_folder(&id, &folder_path, limit as i64, offset as i64)?;
+    Ok(Json(threads))
 }
 
 async fn message(
@@ -107,7 +110,7 @@ async fn message(
     Query(query): Query<MessageQuery>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Message>, ApiError> {
-    let config = state.account(&id)?;
+    let config = state.account(&id).await?;
     let stored = state
         .store()
         .get_message(&id, &folder_path, uid)?
@@ -133,7 +136,7 @@ async fn set_flags(
     State(state): State<Arc<AppState>>,
     ApiJson(request): ApiJson<FlagsRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let config = state.account(&id)?;
+    let config = state.account(&id).await?;
     let stored = state
         .store()
         .get_message(&id, &request.folder_path, request.uid)?
@@ -158,7 +161,7 @@ async fn move_message(
     State(state): State<Arc<AppState>>,
     ApiJson(request): ApiJson<MoveRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let config = state.account(&id)?;
+    let config = state.account(&id).await?;
     let mut session = imap::connect_with(&config, state.tls()).await?;
     imap::move_message(
         &mut session,
@@ -178,7 +181,7 @@ async fn delete_message(
     State(state): State<Arc<AppState>>,
     ApiJson(request): ApiJson<DeleteRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let config = state.account(&id)?;
+    let config = state.account(&id).await?;
     let mut session = imap::connect_with(&config, state.tls()).await?;
     imap::delete_message(
         &mut session,
@@ -197,7 +200,7 @@ async fn purge_folder(
     State(state): State<Arc<AppState>>,
     ApiJson(request): ApiJson<PurgeRequest>,
 ) -> Result<Json<PurgeResponse>, ApiError> {
-    let config = state.account(&id)?;
+    let config = state.account(&id).await?;
     let mut session = imap::connect_with(&config, state.tls()).await?;
     let removed =
         imap::empty_folder(&mut session, state.store(), &id, &request.folder_path).await?;
@@ -210,13 +213,64 @@ async fn send(
     State(state): State<Arc<AppState>>,
     ApiJson(request): ApiJson<SendRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let config = state.account(&id)?;
+    let config = state.account(&id).await?;
+    let in_reply_to = request.in_reply_to.clone();
     let outgoing = request.into_outgoing(Address {
         name: None,
         email: config.email.clone(),
     })?;
-    smtp::send_with(&config, &outgoing, state.tls()).await?;
+    let email = smtp::build_message(&outgoing)?;
+    let raw = email.formatted();
+    let message_id = email
+        .headers()
+        .get_raw("Message-ID")
+        .map(|value| value.trim_matches(|c| c == '<' || c == '>').to_string());
+    smtp::send_built_with(&config, email, state.tls()).await?;
     tracing::info!(account = %id, "message envoyé");
+
+    // Best effort: the mail is gone, a failing Sent copy or \Answered push
+    // must not turn a successful send into an error.
+    let sent_folder = state
+        .store()
+        .list_folders(&id)?
+        .into_iter()
+        .find(|folder| folder.role == FolderRole::Sent);
+    if sent_folder.is_some() || in_reply_to.is_some() {
+        match imap::connect_with(&config, state.tls()).await {
+            Ok(mut session) => {
+                if let Some(folder) = sent_folder {
+                    if let Err(error) = imap::append_sent(
+                        &mut session,
+                        state.store(),
+                        &id,
+                        &folder.path,
+                        &raw,
+                        message_id.as_deref(),
+                    )
+                    .await
+                    {
+                        tracing::warn!(account = %id, %error, "copie vers « Envoyés » impossible");
+                    }
+                }
+                if let Some(reply_id) = &in_reply_to {
+                    if let Ok(Some((folder_path, uid))) =
+                        state.store().find_by_message_id(&id, reply_id)
+                    {
+                        let _ = state.store().mark_answered(&id, &folder_path, uid);
+                        if let Err(error) =
+                            imap::mark_answered(&mut session, &folder_path, uid).await
+                        {
+                            tracing::debug!(%error, "\\Answered non poussé");
+                        }
+                    }
+                }
+                logout(session).await;
+            }
+            Err(error) => {
+                tracing::warn!(account = %id, %error, "connexion IMAP après envoi impossible");
+            }
+        }
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

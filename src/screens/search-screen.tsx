@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { RotateCcw, Search, X } from "lucide-react";
 import type { Mail } from "@/lib/mail";
-import { RECENT_SEARCHES, mailMatches, normalize } from "@/lib/mail";
+import { RECENT_SEARCHES, normalize } from "@/lib/mail";
 import { buildThreads } from "@/lib/threads";
+import { useMailStore } from "@/lib/store";
 import { useTheme } from "@/lib/theme";
 import { Avatar, Chip } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
@@ -45,7 +46,6 @@ function writeRecent(next: string[]) {
 type Scope = (typeof SCOPES)[number];
 
 export function SearchScreen({
-  mails,
   onOpen,
   onToggleStar,
   onMailAction,
@@ -53,7 +53,6 @@ export function SearchScreen({
   onNotSpam,
   onRestore,
 }: {
-  mails: Mail[];
   onOpen: (mail: Mail) => void;
   onToggleStar: (id: string) => void;
   onMailAction: (kind: "delete" | "archive" | "read", mail: Mail) => void;
@@ -73,21 +72,44 @@ export function SearchScreen({
 
   const trimmed = query.trim();
 
+  const { searchMails } = useMailStore();
+  const [found, setFound] = useState<Mail[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => {
+    if (!trimmed) {
+      setFound([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void searchMails(trimmed).then((messages) => {
+        if (cancelled) return;
+        setFound(messages);
+        setSearching(false);
+      });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [trimmed, searchMails]);
+
   const results = useMemo(() => {
     if (!trimmed || scope === "Contacts") return [];
-    return mails.filter((mail) => {
-      if (!mailMatches(mail, trimmed)) return false;
+    return found.filter((mail) => {
       if (scope === "Non lus") return mail.unread;
       if (scope === "Fichiers") return Boolean(mail.attachments?.length);
       return true;
     });
-  }, [mails, scope, trimmed]);
+  }, [found, scope, trimmed]);
 
-  const threads = useMemo(() => {
-    if (scope === "Contacts") return [];
-    const ids = new Set(results.map((mail) => mail.id));
-    return buildThreads(mails).filter((thread) => thread.messages.some((message) => ids.has(message.id)));
-  }, [mails, results, scope]);
+  const threads = useMemo(
+    () => (scope === "Contacts" ? [] : buildThreads(results)),
+    [results, scope],
+  );
 
   const contacts = useMemo(() => {
     const needle = normalize(trimmed);
@@ -102,7 +124,7 @@ export function SearchScreen({
     setScope("Tout");
   };
 
-  const empty = trimmed !== "" && (scope === "Contacts" ? contacts.length === 0 : results.length === 0);
+  const empty = trimmed !== "" && !searching && (scope === "Contacts" ? contacts.length === 0 : results.length === 0);
 
   return (
     <div className="relative h-full overflow-y-auto no-scrollbar pb-32">
@@ -233,7 +255,9 @@ export function SearchScreen({
           <p className="px-4 pb-2 text-[11.5px] font-semibold text-ink-muted" role="status">
             {scope === "Contacts"
               ? `${contacts.length} contact${contacts.length > 1 ? "s" : ""} pour « ${trimmed} »`
-              : `${results.length} résultat${results.length > 1 ? "s" : ""} pour « ${trimmed} »`}
+              : searching
+                ? `Recherche de « ${trimmed} »…`
+                : `${threads.length} résultat${threads.length > 1 ? "s" : ""} pour « ${trimmed} »`}
           </p>
 
           {scope === "Contacts" ? (

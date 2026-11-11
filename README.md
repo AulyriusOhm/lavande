@@ -158,11 +158,12 @@ scripts/mail-test-server.sh stop      # ou `reset` (stop + start), `status`
   graphiques sont donc plus sobres que dans leur client d'origine.
 - OAuth2 fonctionnel mais **sans identifiant d'application embarqué** : il faut enregistrer un
   `client_id` (Google/Microsoft) ou le fournir au service ; seul le parcours de test est validé.
-- Ni pool de connexions, ni keychain, ni PGP réel, ni recherche serveur.
-- Le démon écoute **127.0.0.1 uniquement** et n'a aucune authentification : quiconque atteint le port
-  pilote les comptes. Ne l'expose pas hors loopback sans mettre une authentification devant.
-- Les mots de passe IMAP/SMTP sont stockés en clair dans `~/.local/share/lavande/accounts.json`
-  (permissions 0600) : pas encore de trousseau système.
+- Ni pool de connexions, ni PGP réel, ni recherche serveur. Les secrets ont un trousseau (voir ci-dessous).
+- Le démon écoute **127.0.0.1 uniquement** et exige un **jeton Bearer** (`daemon-token`, 0600) : sans
+  lui, 401. Le proxy Vite/nginx et la coquille Tauri l'injectent ; ne l'expose pas hors loopback.
+- Les mots de passe IMAP/SMTP et jetons OAuth2 ne sont **plus en clair dans `accounts.json`** :
+  trousseau système (desktop Linux) ou fichier chiffré XChaCha20-Poly1305 (Android/headless), tous deux
+  0600. Détails et migration : [`docs/mail-core.md`](./docs/mail-core.md#stockage-des-secrets).
 
 ## Dépôt
 

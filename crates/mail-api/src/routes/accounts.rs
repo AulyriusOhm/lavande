@@ -10,6 +10,7 @@ use lavande_mail::config::AccountConfig;
 use lavande_mail::imap;
 use lavande_mail::model::Folder;
 
+use crate::config_file::StoredAccount;
 use crate::dto::{AccountSummary, ApiJson};
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -22,7 +23,7 @@ pub fn router() -> Router<Arc<AppState>> {
 }
 
 async fn list(State(state): State<Arc<AppState>>) -> Result<Json<Vec<AccountSummary>>, ApiError> {
-    let accounts = state.accounts()?;
+    let accounts = state.stored_accounts()?;
     let mut summaries = Vec::with_capacity(accounts.len());
     for config in &accounts {
         let folders = state.store().list_folders(&config.id)?.len();
@@ -36,7 +37,11 @@ async fn add(
     ApiJson(config): ApiJson<AccountConfig>,
 ) -> Result<(StatusCode, Json<AccountSummary>), ApiError> {
     config.validate()?;
-    if state.accounts()?.iter().any(|known| known.id == config.id) {
+    if state
+        .stored_accounts()?
+        .iter()
+        .any(|known| known.id == config.id)
+    {
         return Err(ApiError::conflict(
             "config",
             format!("le compte « {} » existe déjà", config.id),
@@ -44,12 +49,15 @@ async fn add(
     }
 
     let folders = probe(&state, &config).await?;
-    state.add_account(&config, &folders)?;
+    state.add_account(&config, &folders).await?;
     crate::events::watch_account(&state, config.clone());
     tracing::info!(account = %config.id, folders = folders.len(), "compte ajouté");
     Ok((
         StatusCode::CREATED,
-        Json(AccountSummary::new(&config, folders.len())),
+        Json(AccountSummary::new(
+            &StoredAccount::from_config(&config),
+            folders.len(),
+        )),
     ))
 }
 
@@ -67,7 +75,7 @@ async fn remove(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<StatusCode, ApiError> {
-    let known = state.remove_account(&id)?;
+    let known = state.remove_account(&id).await?;
     let deleted = state.store().delete_account(&id)?;
     if !known && deleted == 0 {
         return Err(ApiError::not_found(format!("compte « {id} » inconnu")));
@@ -80,6 +88,6 @@ async fn folders(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<Folder>>, ApiError> {
-    state.account(&id)?;
+    state.ensure_account(&id)?;
     Ok(Json(state.store().list_folders(&id)?))
 }

@@ -100,6 +100,12 @@ export type ApiFolder = {
   last_sync_at: string | null;
 };
 
+export type ApiFolderCount = {
+  path: string;
+  total: number;
+  unread: number;
+};
+
 export type ApiAccount = {
   id: string;
   label: string;
@@ -248,6 +254,23 @@ const BASE = inShell ? "http://127.0.0.1:8790/api" : `${import.meta.env.BASE_URL
 const SHORT_TIMEOUT = 15_000;
 const LONG_TIMEOUT = 180_000;
 
+/**
+ * Jeton du démon. Dans la coquille, la commande Rust le lit dans le répertoire
+ * de données ; sur le web, le proxy (Vite ou nginx) l'injecte et le front n'a
+ * rien à porter.
+ */
+let tokenPromise: Promise<string> | null = null;
+function daemonToken(): Promise<string> {
+  if (!inShell) return Promise.resolve("");
+  tokenPromise ??= import("@tauri-apps/api/core")
+    .then(({ invoke }) => invoke<string>("mail_daemon_token"))
+    .catch((error: unknown) => {
+      tokenPromise = null;
+      throw error;
+    });
+  return tokenPromise;
+}
+
 const KINDS: readonly ApiErrorKind[] = [
   "config",
   "auth",
@@ -301,9 +324,13 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   options.signal?.addEventListener("abort", relay);
 
   try {
+    const token = await daemonToken();
+    const headers: Record<string, string> = {};
+    if (options.body !== undefined) headers["content-type"] = "application/json";
+    if (token) headers["authorization"] = `Bearer ${token}`;
     const response = await fetch(`${BASE}${path}`, {
       method: options.method ?? "GET",
-      headers: options.body === undefined ? undefined : { "content-type": "application/json" },
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       signal: controller.signal,
     });
@@ -335,6 +362,8 @@ export const mailApi = {
 
   folders: (id: string) => request<ApiFolder[]>(`${accountPath(id)}/folders`),
 
+  folderCounts: (id: string) => request<ApiFolderCount[]>(`${accountPath(id)}/folder-counts`),
+
   sync: (id: string, folderPath?: string) =>
     request<SyncResult>(`${accountPath(id)}/sync`, {
       method: "POST",
@@ -345,6 +374,11 @@ export const mailApi = {
   threads: (id: string, folderPath: string, limit = 100, offset = 0) =>
     request<ApiThread[]>(
       `${accountPath(id)}/folders/${encodeURIComponent(folderPath)}/threads?limit=${limit}&offset=${offset}`,
+    ),
+
+  search: (id: string, query: string, limit = 50) =>
+    request<ApiMessage[]>(
+      `${accountPath(id)}/search?q=${encodeURIComponent(query)}&limit=${limit}`,
     ),
 
   message: (id: string, folderPath: string, uid: number) =>
@@ -380,7 +414,11 @@ export const mailApi = {
   oauthStatus: (session: string) =>
     request<ApiOAuthStatus>(`/oauth/status?session=${encodeURIComponent(session)}`),
 
-  eventsUrl: () => `${BASE}/events`,
+  /** `EventSource` ne porte pas d'en-tête : dans la coquille, le jeton passe en query. */
+  eventsUrl: async () => {
+    const token = await daemonToken();
+    return token ? `${BASE}/events?token=${encodeURIComponent(token)}` : `${BASE}/events`;
+  },
 
   send: (id: string, input: SendInput) =>
     request<void>(`${accountPath(id)}/send`, {

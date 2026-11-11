@@ -26,6 +26,7 @@ use lavande_mail::config::{AccountConfig, AuthConfig, Encryption, Endpoint};
 use lavande_mail::imap;
 use lavande_mail::tls::TlsOptions;
 use lavande_mail_api::app;
+use lavande_mail_api::secrets::SecretBackend;
 use lavande_mail_api::state::AppState;
 use reqwest::{Client, StatusCode};
 use serde_json::{json, Value};
@@ -110,8 +111,16 @@ struct Daemon {
 impl Daemon {
     async fn start() -> Self {
         let directory = tempfile::tempdir().expect("répertoire temporaire");
-        let state =
-            Arc::new(AppState::open(directory.path(), tls_options()).expect("ouverture de l'état"));
+        let state = Arc::new(
+            AppState::open_with(
+                directory.path(),
+                tls_options(),
+                Default::default(),
+                SecretBackend::File,
+            )
+            .await
+            .expect("ouverture de l'état"),
+        );
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("port libre");
         let address = listener.local_addr().expect("adresse locale");
         let served = state.clone();
@@ -127,6 +136,21 @@ impl Daemon {
 
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.base, path)
+    }
+
+    /// Client HTTP portant le jeton Bearer du démon.
+    fn client(&self) -> Client {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {}", self._state.token())
+                .parse()
+                .expect("en-tête d'authentification"),
+        );
+        Client::builder()
+            .default_headers(headers)
+            .build()
+            .expect("client HTTP")
     }
 }
 
@@ -261,7 +285,7 @@ async fn server_uids(folder_path: &str) -> Vec<u32> {
 #[ignore = "requires scripts/mail-test-server.sh start"]
 async fn account_is_added_and_synced() {
     let daemon = Daemon::start().await;
-    let client = Client::new();
+    let client = daemon.client();
 
     let summary = add_account(&client, &daemon).await;
     assert_eq!(summary["id"], ACCOUNT);
@@ -326,7 +350,7 @@ async fn account_is_added_and_synced() {
 #[ignore = "requires scripts/mail-test-server.sh start"]
 async fn sent_message_is_found_by_a_sync() {
     let daemon = Daemon::start().await;
-    let client = Client::new();
+    let client = daemon.client();
     add_account(&client, &daemon).await;
 
     let subject = unique("[live-api-sync] parcours");
@@ -353,7 +377,7 @@ async fn sent_message_is_found_by_a_sync() {
 #[ignore = "requires scripts/mail-test-server.sh start"]
 async fn flags_reach_the_server() {
     let daemon = Daemon::start().await;
-    let client = Client::new();
+    let client = daemon.client();
     add_account(&client, &daemon).await;
 
     let subject = unique("[live-api-flags] etoile");
@@ -391,7 +415,7 @@ async fn flags_reach_the_server() {
 async fn message_moves_to_archive() {
     create_folder(ARCHIVE).await;
     let daemon = Daemon::start().await;
-    let client = Client::new();
+    let client = daemon.client();
     add_account(&client, &daemon).await;
 
     let subject = unique("[live-api-archive] deplacement");
@@ -428,7 +452,7 @@ async fn message_moves_to_archive() {
 #[ignore = "requires scripts/mail-test-server.sh start"]
 async fn message_is_deleted_permanently() {
     let daemon = Daemon::start().await;
-    let client = Client::new();
+    let client = daemon.client();
     add_account(&client, &daemon).await;
 
     let witness = unique("[live-api-delete] temoin");
@@ -490,7 +514,7 @@ async fn folder_is_purged() {
     let folder = unique("Purge").replace(' ', "-");
     create_folder(&folder).await;
     let daemon = Daemon::start().await;
-    let client = Client::new();
+    let client = daemon.client();
     add_account(&client, &daemon).await;
 
     let subject = unique("[live-api-purge] dossier vide");

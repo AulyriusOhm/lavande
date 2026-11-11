@@ -695,7 +695,10 @@ async fn reply_joins_the_thread() {
     assert_eq!(reply.thread_id, original.thread_id);
     assert_eq!(reply.in_reply_to.as_deref(), Some(message_id.as_str()));
 
-    let threads = checked("read threads", store.threads_in_folder(ACCOUNT, INBOX));
+    let threads = checked(
+        "read threads",
+        store.threads_in_folder(ACCOUNT, INBOX, -1, 0),
+    );
     let ours: Vec<_> = threads
         .iter()
         .filter(|thread| {

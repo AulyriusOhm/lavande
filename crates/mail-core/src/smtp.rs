@@ -42,10 +42,17 @@ pub async fn send_with(
     message: &OutgoingMessage,
     tls_options: &TlsOptions,
 ) -> Result<(), MailError> {
-    if message.to.is_empty() && message.cc.is_empty() && message.bcc.is_empty() {
-        return Err(MailError::Smtp("no recipient".to_string()));
-    }
+    let email = build_message(message)?;
+    send_built_with(cfg, email, tls_options).await
+}
 
+/// Sends an already-built message so the caller can keep the exact bytes (and
+/// the `Message-ID`) for the Sent-folder copy.
+pub async fn send_built_with(
+    cfg: &AccountConfig,
+    email: Message,
+    tls_options: &TlsOptions,
+) -> Result<(), MailError> {
     let builder = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(cfg.smtp.host.clone())
         .port(cfg.smtp.port)
         .tls(tls(&cfg.smtp, tls_options)?);
@@ -73,7 +80,6 @@ pub async fn send_with(
         }
     };
 
-    let email = build(message)?;
     builder
         .build()
         .send(email)
@@ -102,7 +108,11 @@ fn tls(endpoint: &Endpoint, options: &TlsOptions) -> Result<Tls, MailError> {
     }
 }
 
-fn build(message: &OutgoingMessage) -> Result<Message, MailError> {
+/// Builds the outgoing message without sending it.
+pub fn build_message(message: &OutgoingMessage) -> Result<Message, MailError> {
+    if message.to.is_empty() && message.cc.is_empty() && message.bcc.is_empty() {
+        return Err(MailError::Smtp("no recipient".to_string()));
+    }
     let mut builder = Message::builder()
         .from(mailbox(&message.from)?)
         .subject(message.subject.clone())

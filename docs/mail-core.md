@@ -634,13 +634,60 @@ Configuration, par variables d'environnement uniquement :
 
 | Variable | Défaut | Rôle |
 | --- | --- | --- |
-| `LAVANDE_MAIL_BIND` | `127.0.0.1:8790` | adresse d'écoute (loopback : aucune authentification) |
-| `LAVANDE_MAIL_DATA_DIR` | `$XDG_DATA_HOME/lavande` | `mail.db` (SQLite) + `accounts.json` (0600) |
+| `LAVANDE_MAIL_BIND` | `127.0.0.1:8790` | adresse d'écoute (loopback + jeton Bearer, voir plus bas) |
+| `LAVANDE_MAIL_DATA_DIR` | `$XDG_DATA_HOME/lavande` | `mail.db` (SQLite), `accounts.json`, `daemon-token`, `secrets.key`/`secrets.enc` (tous 0600) |
 | `LAVANDE_MAIL_EXTRA_ROOTS` | — | PEM ajouté aux racines TLS (serveur de test auto-signé) |
+| `LAVANDE_MAIL_SECRETS` | `auto` | stockage des secrets : `keychain` (trousseau système, échoue s'il est injoignable), `file` (fichier chiffré), `auto` (trousseau sinon fichier) |
 
 Erreurs : `{ "error": "message lisible", "kind": "config|auth|imap|smtp|tls|oauth|store|mime" }`.
 `MailError::Config` → 400, `Auth` → 401, `InvalidData` → 404, réseau/TLS/IMAP/SMTP/OAuth → 502,
 `Store`/`Mime` → 500.
+
+### Authentification du démon
+
+Le démon n'est plus ouvert à quiconque atteint le port : chaque requête porte un jeton Bearer
+(`Authorization: Bearer …`), comparé à temps constant. Le jeton (32 octets aléatoires, base64url)
+est créé au premier lancement dans `daemon-token` (0600) du répertoire de données, puis réutilisé ;
+il n'est jamais journalisé. Réponse sans jeton valide : 401 `kind: auth`.
+
+Trois exceptions, assumées :
+
+- `GET /api/health` : sonde des scripts, ne révèle que version et `public_url` ;
+- `GET /api/oauth/callback` : retour du navigateur du système, qui ne peut pas porter le jeton ;
+  la route est protégée par le `state` PKCE aléatoire à usage unique ;
+- `GET /api/events` : `EventSource` ne sait pas porter d'en-tête, le jeton est accepté en
+  `?token=…` (boucle locale uniquement).
+
+Où chaque client prend le jeton :
+
+| Client | Injection |
+| --- | --- |
+| Coquille Tauri (desktop/mobile) | commande `mail_daemon_token` (lit/crée le même fichier), le front porte le jeton ; SSE en `?token=` |
+| Web dev (`npm run dev`) | proxy Vite : lit `daemon-token` au démarrage et l'injecte, le navigateur ne le voit jamais |
+| Portail nginx (`/lavande/api/`) | `dev-proxy.sh` génère `deploy/nginx/lavande-token.inc` (gitignoré) que `portal.conf` inclut |
+
+Si le démon démarre après Vite ou nginx, relancez le proxy pour qu'il lise le jeton. Un processus
+du même utilisateur peut lire le fichier : le jeton protège contre les autres utilisateurs et toute
+exposition réseau, pas contre un processus déjà compromis sur le compte.
+
+### Stockage des secrets
+
+Mots de passe IMAP/SMTP et jetons OAuth2 (`client_secret`, `refresh_token`) ne sont plus écrits dans
+`accounts.json`. Le fichier ne porte que la configuration ; les secrets vivent dans un stockage
+séparé, choisi au démarrage (`LAVANDE_MAIL_SECRETS`) :
+
+- **Trousseau système** (desktop Linux, Secret Service via D-Bus, crate `keyring` en pur Rust) :
+  une entrée `lavande-mail` par compte. C'est le backend par défaut quand le trousseau répond.
+- **Fichier chiffré** (Android, headless, trousseau injoignable) : `secrets.enc`, JSON des secrets
+  chiffré XChaCha20-Poly1305 avec une clé aléatoire `secrets.key` (0600). Sur Android, l'ensemble
+  reste dans le stockage privé de l'application ; un Keystore matériel reste à faire.
+
+Le choix est journalisé au démarrage ; `keychain` forcé échoue si le trousseau est injoignable
+(pas de repli silencieux). Un `accounts.json` ancien format (secrets inline) est migré à
+l'ouverture : les secrets partent dans le stockage choisi et le fichier est réécrit sans eux.
+Supprimer un compte supprime son secret. Un fichier de secrets corrompu est une erreur explicite,
+jamais un reset silencieux.
+
 
 | Méthode | Chemin | Corps | Réponse |
 | --- | --- | --- | --- |
@@ -750,6 +797,8 @@ data: {"type":"folder-updated","account_id":"perso","folder_path":"INBOX",
 
 Le front s'y abonne (`EventSource`) et rafraîchit la liste sans clic ; le flux se reconnecte seul et
 un `keep-alive` de 20 s maintient la connexion. La veille se reconnecte 30 s après une coupure.
+Sur le web, le proxy injecte le jeton ; dans la coquille, l'URL porte `?token=…` (voir
+« Authentification du démon »).
 
 ### Exemples de payloads
 
@@ -786,7 +835,8 @@ Les identifiants de message (`message_id`, `in_reply_to`, `references`) sont sto
 
 - `src/lib/api.ts` : client typé, `ApiError { kind, status }`, délais 15 s (appels courts) et 180 s
   (synchro, corps, envoi). Base = `${BASE_URL}api`, ou `http://127.0.0.1:8790/api` quand
-  `window.isTauri` est présent (démon embarqué).
+  `window.isTauri` est présent (démon embarqué). Dans la coquille, le jeton Bearer vient de la
+  commande `mail_daemon_token` ; sur le web, le proxy l'injecte.
 - `src/lib/mail-backend.ts` : traduction `Message`/`Thread` → `Mail`/`Thread` du store, rôles de
   dossiers → `FolderId`, formatage des dates.
 - `VITE_MAIL_BACKEND=demo` garde les fixtures (calendrier, planning, MCP) ; `api` (défaut) branche la
@@ -917,8 +967,9 @@ Variables lues par `scripts/mail-test-server.sh` : `LAVANDE_MAIL_TEST_DIR`, `…
 - **Corps complet à chaque nouveau message.** Les nouveaux UID sont téléchargés en entier
   (`BODY.PEEK[]`, lots de 500) : simple et correct, mais coûteux sur une grosse boîte. Optimisation
   prévue : métadonnées d'abord, corps à la demande (`fetch_body` le permet déjà).
-- **Pas de pool, pas de keychain, pas de PGP réel, pas de flux navigateur OAuth2, pas de recherche
-  serveur.** Voir la vue d'ensemble.
+- **Pas de pool, pas de PGP réel, pas de flux navigateur OAuth2, pas de recherche serveur.** Voir
+  la vue d'ensemble. Le trousseau système existe (desktop Linux) ; Android utilise le fichier
+  chiffré en attendant un Keystore matériel.
 - **`Store` incomplet pour l'IPC** : ni `list_accounts`, ni liste des dossiers d'un compte, ni
   suppression de compte.
 - **`OutgoingMessage`/`OutgoingAttachment` ne sont pas `Deserialize`** : le DTO Tauri est à écrire

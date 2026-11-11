@@ -280,7 +280,11 @@ async fn finish(
     };
     config.validate()?;
 
-    if state.accounts()?.iter().any(|known| known.id == config.id) {
+    if state
+        .stored_accounts()?
+        .iter()
+        .any(|known| known.id == config.id)
+    {
         return Err(ApiError::conflict(
             "config",
             format!("le compte « {} » existe déjà", config.id),
@@ -289,7 +293,7 @@ async fn finish(
     let mut session = imap::connect_with(&config, state.tls()).await?;
     let folders = imap::list_folders(&mut session, &config.id).await?;
     let _ = session.logout().await;
-    state.add_account(&config, &folders)?;
+    state.add_account(&config, &folders).await?;
     Ok(config.id)
 }
 

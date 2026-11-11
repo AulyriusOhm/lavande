@@ -1,5 +1,3 @@
-import { ACCOUNTS } from "@/lib/accounts";
-
 export type ComposeDraft = {
   to: string;
   cc: string;
@@ -29,8 +27,4 @@ export function emptyDraft(draft: ComposeDraft) {
 
 export function baseDraft(account: string, pgpEncrypt: boolean, pgpSign: boolean, threadId?: string): ComposeDraft {
   return { to: "", cc: "", cci: "", subject: "", body: "", account, pgpEncrypt, pgpSign, threadId };
-}
-
-export function accountOfDraft(account: string) {
-  return ACCOUNTS.find((entry) => entry.id === account) ?? ACCOUNTS[0];
 }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Archive,
   BellRing,
@@ -407,6 +407,8 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
     closeMessage,
     replyTo,
     forwardMail,
+    folderStats,
+    accountUnread,
   } = useMailStore();
   const { dark, setDark } = useTheme();
   const [filter, setFilter] = useState<Filter>("all");
@@ -420,21 +422,13 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
     folderOptions.find((entry) => entry.id === folder && entry.path === folderPath)?.label ??
     folderLabel(folder);
   const visible = threads.filter(FILTER_MATCH[filter]);
-  const unreadCount = mails.filter(
-    (mail) => mail.folder === folder && mail.unread && (account === ALL_ACCOUNTS || mail.account === account),
-  ).length;
   const unreadThreads = threads.filter((thread) => thread.unread > 0).length;
   const attachmentThreads = threads.filter((thread) => thread.attachments > 0).length;
   const encryptedThreads = threads.filter((thread) => thread.encrypted > 0).length;
 
-  const unreadFor = (id: string) =>
-    mails.filter((mail) => mail.folder === "inbox" && mail.unread && (id === ALL_ACCOUNTS || mail.account === id))
-      .length;
-  const countFor = (id: FolderId) =>
-    mails.filter(
-      (mail) =>
-        mail.folder === id && (account === ALL_ACCOUNTS || mail.account === account) && (id !== "inbox" || mail.unread),
-    ).length;
+  useEffect(() => {
+    setFilter("all");
+  }, [folder, folderPath, account]);
 
   const openById = (id: string) => {
     const mail = mails.find((entry) => entry.id === id);
@@ -535,7 +529,7 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                     active={account === ALL_ACCOUNTS}
                     onClick={() => setAccount(ALL_ACCOUNTS)}
                     label="Tous les comptes"
-                    count={unreadFor(ALL_ACCOUNTS)}
+                    count={accountUnread(ALL_ACCOUNTS)}
                     icon={<span className="size-2 rounded-full bg-accent" />}
                   />
                 )}
@@ -545,7 +539,7 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                     active={account === entry.id}
                     onClick={() => setAccount(entry.id)}
                     label={entry.label}
-                    count={unreadFor(entry.id)}
+                    count={accountUnread(entry.id)}
                     icon={<span className="size-2 rounded-full" style={{ backgroundColor: entry.color }} />}
                   />
                 ))}
@@ -565,13 +559,20 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
               <div className="space-y-0.5">
                 {folderOptions.map((entry) => {
                   const Icon = FOLDER_ICONS[entry.id];
+                  const stats = folderStats(entry.id, entry.path);
+                  const count =
+                    entry.id === "sent"
+                      ? 0
+                      : entry.id === "drafts" || entry.id === "trash"
+                        ? stats.total
+                        : stats.unread;
                   return (
                     <RailItem
                       key={`${entry.id}:${entry.path}`}
                       active={folder === entry.id && (entry.id !== "other" || entry.path === folderPath)}
                       onClick={() => setFolder(entry.id, entry.id === "other" ? entry.path : null)}
                       label={entry.label}
-                      count={countFor(entry.id)}
+                      count={count}
                       icon={<Icon className="size-4" />}
                     />
                   );
@@ -579,7 +580,7 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                 {folderOptions.some((entry) => entry.id === "trash") && (
                   <div className="pt-1">
                     <EmptyTrashButton
-                      count={countFor("trash")}
+                      count={folderStats("trash").total}
                       onConfirm={emptyTrash}
                       variant="desktop"
                     />
@@ -623,7 +624,7 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                 hint={
                   folder === "inbox" ? (
                     <>
-                      <NumberTicker value={unreadCount} /> non lus
+                      <NumberTicker value={unreadThreads} /> non lus
                     </>
                   ) : (
                     `${visible.length} conversation${visible.length > 1 ? "s" : ""}`

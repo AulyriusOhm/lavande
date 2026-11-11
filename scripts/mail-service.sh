@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Démon mail local de Lavande (lavande-maild) : bâtit le binaire puis le lance
 # détaché. L'app web parle à http://127.0.0.1:8790/api (proxy Vite et nginx).
+# Le démon exige un jeton Bearer : il crée `daemon-token` (0600) dans le répertoire
+# de données au premier lancement ; Vite/nginx le lisent pour l'injecter.
 #
 #   scripts/mail-service.sh start|stop|restart|status
 #
@@ -8,6 +10,7 @@
 #   LAVANDE_MAIL_DATA_DIR    base SQLite + accounts.json  (défaut ~/.local/share/lavande)
 #   LAVANDE_MAIL_BIND        adresse d'écoute             (défaut 127.0.0.1:8790)
 #   LAVANDE_MAIL_EXTRA_ROOTS PEM ajouté aux racines TLS   (ex. certificat GreenMail de test)
+#   LAVANDE_MAIL_SECRETS     stockage des secrets : keychain | file | auto (défaut auto)
 set -euo pipefail
 
 readonly NAME="lavande-maild"

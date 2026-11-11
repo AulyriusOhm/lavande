@@ -10,6 +10,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use lavande_mail::tls::TlsOptions;
 use lavande_mail_api::app;
+use lavande_mail_api::secrets::SecretBackend;
 use lavande_mail_api::state::AppState;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -29,9 +30,16 @@ fn tls() -> TlsOptions {
     }
 }
 
-fn state() -> (TempDir, Arc<AppState>) {
+async fn state() -> (TempDir, Arc<AppState>) {
     let directory = tempfile::tempdir().expect("répertoire temporaire");
-    let state = AppState::open(directory.path(), tls()).expect("état");
+    let state = AppState::open_with(
+        directory.path(),
+        tls(),
+        Default::default(),
+        SecretBackend::File,
+    )
+    .await
+    .expect("état");
     (directory, Arc::new(state))
 }
 
@@ -40,6 +48,7 @@ async fn post(state: &Arc<AppState>, uri: &str, body: Value) -> (StatusCode, Val
         .method("POST")
         .uri(uri)
         .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", state.token()))
         .body(Body::from(body.to_string()))
         .expect("requête");
     let response = app(state.clone()).oneshot(request).await.expect("réponse");
@@ -56,6 +65,7 @@ async fn post(state: &Arc<AppState>, uri: &str, body: Value) -> (StatusCode, Val
 async fn get(state: &Arc<AppState>, uri: &str) -> (StatusCode, String) {
     let request = Request::builder()
         .uri(uri)
+        .header("authorization", format!("Bearer {}", state.token()))
         .body(Body::empty())
         .expect("requête");
     let response = app(state.clone()).oneshot(request).await.expect("réponse");
@@ -89,7 +99,7 @@ async fn fake_provider() -> String {
 #[tokio::test]
 #[ignore = "requires scripts/mail-test-server.sh start"]
 async fn the_whole_oauth_flow_creates_a_working_account() {
-    let (_directory, state) = state();
+    let (_directory, state) = state().await;
     let provider = fake_provider().await;
     let input = json!({
         "provider": "custom",

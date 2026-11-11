@@ -58,6 +58,18 @@ impl ApiError {
     }
 }
 
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl From<std::io::Error> for ApiError {
+    fn from(error: std::io::Error) -> Self {
+        Self::internal("store", format!("accès disque : {error}"))
+    }
+}
+
 impl From<MailError> for ApiError {
     fn from(error: MailError) -> Self {
         let (status, kind) = match &error {

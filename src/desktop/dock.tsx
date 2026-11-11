@@ -30,8 +30,8 @@ export function DesktopDock({
   onSearch: () => void;
 }) {
   const { calendarEnabled, planningEnabled } = usePrefs();
-  const { mails } = useMailStore();
-  const unread = mails.filter((mail) => mail.folder === "inbox" && mail.unread).length;
+  const { folderStats } = useMailStore();
+  const unread = folderStats("inbox").unread;
   const tabs = DESKTOP_TABS.filter((tab) =>
     tab.id === "calendar" ? calendarEnabled : tab.id === "planning" ? planningEnabled : true,
   );

@@ -10,21 +10,29 @@ use lavande_mail::tls::TlsOptions;
 use lavande_mail_api::app;
 use lavande_mail_api::dto::FolderReport;
 use lavande_mail_api::events::Event;
+use lavande_mail_api::secrets::SecretBackend;
 use lavande_mail_api::state::AppState;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-fn state() -> (TempDir, Arc<AppState>) {
+async fn state() -> (TempDir, Arc<AppState>) {
     let directory = tempfile::tempdir().expect("répertoire temporaire");
-    let state = AppState::open(directory.path(), TlsOptions::default()).expect("état");
+    let state = AppState::open_with(
+        directory.path(),
+        TlsOptions::default(),
+        Default::default(),
+        SecretBackend::File,
+    )
+    .await
+    .expect("état");
     (directory, Arc::new(state))
 }
 
 #[tokio::test]
 async fn a_published_event_reaches_the_stream() {
-    let (_directory, state) = state();
+    let (_directory, state) = state().await;
     let request = Request::builder()
-        .uri("/api/events")
+        .uri(format!("/api/events?token={}", state.token()))
         .body(Body::empty())
         .expect("requête");
     let response = app(state.clone()).oneshot(request).await.expect("réponse");

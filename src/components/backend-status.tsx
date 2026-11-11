@@ -1,6 +1,7 @@
 import { AlertTriangle, Loader2, RefreshCw, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 import { useMailStore } from "@/lib/store";
+import { useEscapeLayer } from "@/desktop/escape";
 import { cn } from "@/lib/utils";
 
 const SPRING = { type: "spring", stiffness: 320, damping: 32 } as const;
@@ -55,6 +56,7 @@ export function BackendBanner({ variant = "mobile" }: { variant?: "mobile" | "de
 
 export function AccountRemoveDialog({ variant = "sheet" }: { variant?: "sheet" | "dialog" }) {
   const { removeTarget, cancelRemoveAccount, confirmRemoveAccount } = useMailStore();
+  useEscapeLayer(variant === "dialog" && Boolean(removeTarget), cancelRemoveAccount);
   if (!removeTarget) return null;
 
   const body = (

@@ -1,7 +1,1 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Capacités par défaut de Lavande",
-  "windows": ["main"],
-  "permissions": ["core:default", "opener:default"]
-}
+{"$schema": "../gen/schemas/desktop-schema.json", "identifier": "default", "description": "Capacités par défaut de Lavande", "windows": ["main"], "permissions": ["core:default", "opener:default", "core:window:allow-create", "core:webview:allow-create-webview-window", "core:window:allow-close", "core:window:allow-set-focus"]}

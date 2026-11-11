@@ -8,8 +8,8 @@ use crate::store::Store;
 use crate::tls::TlsOptions;
 
 /// Connects once against the webpki roots, stores the account and its folders,
-/// syncs the inbox and the sent folder when the server exposes them, then logs
-/// out.
+/// syncs every folder with a known role (inbox, sent, drafts, archive, spam,
+/// trash), then logs out. Custom folders are synced on demand, per folder.
 pub async fn sync_account(
     store: &Store,
     cfg: &AccountConfig,
@@ -32,21 +32,30 @@ pub async fn sync_account_with(
     let mut session = imap::connect_with(cfg, tls_options).await?;
     let folders = imap::list_folders(&mut session, &cfg.id).await?;
     for folder in &folders {
-        store.upsert_folder(folder)?;
+        // Keep the stored UIDVALIDITY: reconcile compares it against the live
+        // SELECT and must still see a server-side change to purge the folder.
+        let mut record = folder.clone();
+        if let Some(stored) = store.get_folder(&cfg.id, &folder.path)? {
+            record.uidvalidity = stored.uidvalidity;
+        }
+        store.upsert_folder(&record)?;
     }
 
     let mut reports = Vec::new();
     for folder in &folders {
-        if matches!(folder.role, FolderRole::Inbox | FolderRole::Sent) {
-            let report =
-                imap::sync_folder(&mut session, store, &cfg.id, &folder.path, mapping).await?;
-            reports.push((folder.path.clone(), report));
+        if folder.role == FolderRole::Other {
+            continue;
+        }
+        match imap::sync_folder(&mut session, store, &cfg.id, &folder.path, mapping).await {
+            Ok(report) => reports.push((folder.path.clone(), report)),
+            Err(error) => {
+                tracing::warn!(account = %cfg.id, folder = %folder.path, %error, "dossier non synchronisé");
+            }
         }
     }
 
-    session
-        .logout()
-        .await
-        .map_err(|error| MailError::Imap(error.to_string()))?;
+    if let Err(error) = session.logout().await {
+        tracing::warn!(%error, "fermeture de la session imap");
+    }
     Ok(reports)
 }

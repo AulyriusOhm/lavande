@@ -61,8 +61,8 @@ impl Events {
 
 /// Démarre une veille par compte (une seule par compte) : IDLE sur INBOX, puis
 /// synchro du dossier dès que le serveur signale du nouveau.
-pub fn watch_all(state: &Arc<AppState>) {
-    let Ok(accounts) = state.accounts() else {
+pub async fn watch_all(state: &Arc<AppState>) {
+    let Ok(accounts) = state.accounts().await else {
         return;
     };
     for config in accounts {

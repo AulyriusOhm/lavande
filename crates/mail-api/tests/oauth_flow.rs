@@ -6,6 +6,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use lavande_mail::tls::TlsOptions;
 use lavande_mail_api::app;
+use lavande_mail_api::secrets::SecretBackend;
 use lavande_mail_api::state::AppState;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -13,9 +14,16 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tower::ServiceExt;
 
-fn state() -> (TempDir, Arc<AppState>) {
+async fn state() -> (TempDir, Arc<AppState>) {
     let directory = tempfile::tempdir().expect("répertoire temporaire");
-    let state = AppState::open(directory.path(), TlsOptions::default()).expect("état");
+    let state = AppState::open_with(
+        directory.path(),
+        TlsOptions::default(),
+        Default::default(),
+        SecretBackend::File,
+    )
+    .await
+    .expect("état");
     (directory, Arc::new(state))
 }
 
@@ -37,6 +45,7 @@ async fn post(state: &Arc<AppState>, uri: &str, body: Value) -> (StatusCode, Val
         .method("POST")
         .uri(uri)
         .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", state.token()))
         .body(Body::from(body.to_string()))
         .expect("requête");
     let response = app(state.clone()).oneshot(request).await.expect("réponse");
@@ -53,6 +62,7 @@ async fn post(state: &Arc<AppState>, uri: &str, body: Value) -> (StatusCode, Val
 async fn get(state: &Arc<AppState>, uri: &str) -> (StatusCode, String) {
     let request = Request::builder()
         .uri(uri)
+        .header("authorization", format!("Bearer {}", state.token()))
         .body(Body::empty())
         .expect("requête");
     let response = app(state.clone()).oneshot(request).await.expect("réponse");
@@ -101,7 +111,7 @@ async fn fake_provider() -> String {
 
 #[tokio::test]
 async fn start_returns_a_pkce_authorization_url() {
-    let (_directory, state) = state();
+    let (_directory, state) = state().await;
     let provider = fake_provider().await;
     let (status, payload) = post(
         &state,
@@ -132,7 +142,7 @@ async fn start_returns_a_pkce_authorization_url() {
 
 #[tokio::test]
 async fn a_broken_imap_leaves_no_account_and_a_failed_session() {
-    let (directory, state) = state();
+    let (directory, state) = state().await;
     let provider = fake_provider().await;
     let (status, payload) = post(
         &state,
@@ -175,7 +185,7 @@ async fn a_broken_imap_leaves_no_account_and_a_failed_session() {
 
 #[tokio::test]
 async fn a_denied_consent_marks_the_session_failed() {
-    let (_directory, state) = state();
+    let (_directory, state) = state().await;
     let provider = fake_provider().await;
     let (_, payload) = post(
         &state,
@@ -211,7 +221,7 @@ async fn a_denied_consent_marks_the_session_failed() {
 
 #[tokio::test]
 async fn an_unknown_state_is_rejected() {
-    let (_directory, state) = state();
+    let (_directory, state) = state().await;
     let (status, page) = get(&state, "/api/oauth/callback?code=abc&state=inconnu").await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(page.contains("expiré"), "{page}");
@@ -219,7 +229,7 @@ async fn an_unknown_state_is_rejected() {
 
 #[tokio::test]
 async fn a_provider_without_client_id_is_a_config_error() {
-    let (_directory, state) = state();
+    let (_directory, state) = state().await;
     let mut input = account_input(
         "https://example.invalid/token",
         "https://example.invalid/auth",
@@ -233,7 +243,7 @@ async fn a_provider_without_client_id_is_a_config_error() {
 
 #[tokio::test]
 async fn an_unknown_session_is_a_404() {
-    let (_directory, state) = state();
+    let (_directory, state) = state().await;
     let (status, _) = get(&state, "/api/oauth/status?session=inconnue").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }

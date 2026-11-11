@@ -1,5 +1,6 @@
 use chrono::{TimeZone, Utc};
 use lavande_mail::model::{Address, AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState};
+use lavande_mail::store::FolderCount;
 use lavande_mail::Store;
 
 fn open() -> Store {
@@ -119,7 +120,43 @@ fn flags_body_and_delete() {
         .get_message("perso", "INBOX", 1)
         .expect("get")
         .expect("present");
-    assert_eq!(stored.flags, flags);
+    // set_flags n'écrit que unread/starred : answered appartient à la synchro.
+    assert_eq!(
+        stored.flags,
+        Flags {
+            unread: false,
+            starred: true,
+            answered: false
+        }
+    );
+
+    store
+        .set_flags_batch("perso", "INBOX", &[(1, flags)])
+        .expect("batch");
+    store
+        .set_flags(
+            "perso",
+            "INBOX",
+            1,
+            &Flags {
+                unread: true,
+                starred: false,
+                answered: false,
+            },
+        )
+        .expect("flags");
+    let stored = store
+        .get_message("perso", "INBOX", 1)
+        .expect("get")
+        .expect("present");
+    assert_eq!(
+        stored.flags,
+        Flags {
+            unread: true,
+            starred: false,
+            answered: true
+        }
+    );
 
     store
         .set_body("perso", "INBOX", 1, Some("texte"), Some("<p>html</p>"))
@@ -288,7 +325,9 @@ fn aggregates_threads_in_folder() {
         store.upsert_message(mail).expect("insert");
     }
 
-    let threads = store.threads_in_folder("perso", "INBOX").expect("threads");
+    let threads = store
+        .threads_in_folder("perso", "INBOX", -1, 0)
+        .expect("threads");
     assert_eq!(threads.len(), 2);
     assert_eq!(threads[0].id, "t2");
     assert_eq!(threads[0].count, 2);
@@ -320,7 +359,9 @@ fn sent_folder_threads_have_no_sender_prefix() {
     mail.preview = "Je lance la phase 2 lundi".to_string();
     store.upsert_message(&mail).expect("insert");
 
-    let threads = store.threads_in_folder("perso", "Sent").expect("threads");
+    let threads = store
+        .threads_in_folder("perso", "Sent", -1, 0)
+        .expect("threads");
     assert_eq!(threads.len(), 1);
     assert_eq!(threads[0].preview, "Je lance la phase 2 lundi");
     assert!(threads[0].participants.is_empty());
@@ -414,7 +455,9 @@ fn relink_replies_joins_a_parent_seen_later() {
     assert_eq!(relinked.thread_id, root);
     assert_eq!(parent.thread_id, root);
 
-    let threads = store.threads_in_folder("perso", "INBOX").expect("threads");
+    let threads = store
+        .threads_in_folder("perso", "INBOX", -1, 0)
+        .expect("threads");
     assert_eq!(threads.len(), 1);
     assert_eq!(threads[0].id, root);
     assert_eq!(threads[0].count, 2);
@@ -523,4 +566,133 @@ fn delete_unknown_account_is_not_an_error() {
     let store = open();
     assert_eq!(store.delete_account("absent").expect("delete"), 0);
     assert_eq!(store.list_accounts().expect("accounts").len(), 1);
+}
+
+#[test]
+fn folder_counts_totals_and_unread_per_folder() {
+    let store = open();
+    let mut inbox = message(1, "t1", "Marc", "Un", 1);
+    inbox.flags.unread = true;
+    let mut spam_unread = message(2, "t2", "Marc", "Deux", 2);
+    spam_unread.folder_path = "Spam".to_string();
+    spam_unread.flags.unread = true;
+    let mut spam_read = message(3, "t3", "Marc", "Trois", 3);
+    spam_read.folder_path = "Spam".to_string();
+    for mail in [&inbox, &spam_unread, &spam_read] {
+        store.upsert_message(mail).expect("insert");
+    }
+
+    assert_eq!(
+        store.folder_counts("perso").expect("counts"),
+        vec![
+            FolderCount {
+                path: "INBOX".to_string(),
+                total: 1,
+                unread: 1
+            },
+            FolderCount {
+                path: "Spam".to_string(),
+                total: 2,
+                unread: 1
+            },
+        ]
+    );
+    assert!(store.folder_counts("absent").expect("counts").is_empty());
+}
+
+#[test]
+fn threads_pagination_slices_in_sql() {
+    let store = open();
+    for uid in 1..=6 {
+        let mail = message(
+            uid,
+            &format!("t{uid}"),
+            "Marc",
+            &format!("Sujet {uid}"),
+            uid,
+        );
+        store.upsert_message(&mail).expect("insert");
+    }
+
+    let first = store
+        .threads_in_folder("perso", "INBOX", 2, 0)
+        .expect("page");
+    let second = store
+        .threads_in_folder("perso", "INBOX", 2, 2)
+        .expect("page");
+    assert_eq!(first.len(), 2);
+    assert_eq!(second.len(), 2);
+    assert!(first.iter().all(|a| !second.iter().any(|b| a.id == b.id)));
+    assert_eq!(first[0].id, "t6");
+    assert_eq!(second[0].id, "t4");
+    assert_eq!(
+        store
+            .threads_in_folder("perso", "INBOX", -1, 0)
+            .expect("all")
+            .len(),
+        6
+    );
+    assert!(store
+        .threads_in_folder("perso", "INBOX", 2, 10)
+        .expect("page")
+        .is_empty());
+}
+
+#[test]
+fn find_by_message_id_and_mark_answered() {
+    let store = open();
+    let mail = message(1, "t1", "Marc", "Question", 1);
+    store.upsert_message(&mail).expect("insert");
+
+    let found = store
+        .find_by_message_id("perso", "<m1@x>")
+        .expect("find")
+        .expect("present");
+    assert_eq!(found, ("INBOX".to_string(), 1));
+    assert!(store
+        .find_by_message_id("perso", "<absent@x>")
+        .expect("find")
+        .is_none());
+
+    assert!(store.mark_answered("perso", "INBOX", 1).expect("answered"));
+    assert!(!store.mark_answered("perso", "INBOX", 42).expect("answered"));
+    let stored = store
+        .get_message("perso", "INBOX", 1)
+        .expect("get")
+        .expect("present");
+    assert!(stored.flags.answered);
+}
+
+#[test]
+fn search_messages_matches_subject_body_and_sender() {
+    let store = open();
+    let mut invoice = message(1, "t1", "Marc", "Facture mars", 1);
+    invoice.body_text = Some("montant dû".to_string());
+    let planning = message(2, "t2", "Lea", "Planning", 2);
+    let mut sent = message(3, "t3", "Marc", "Devis", 3);
+    sent.folder_path = "Sent".to_string();
+    sent.body_text = Some("facture avril".to_string());
+    for mail in [&invoice, &planning, &sent] {
+        store.upsert_message(mail).expect("insert");
+    }
+
+    let hits = store
+        .search_messages("perso", "facture", 10)
+        .expect("search");
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hits[0].uid, 3);
+    assert_eq!(hits[1].uid, 1);
+
+    let sender = store.search_messages("perso", "lea@", 10).expect("search");
+    assert_eq!(sender.len(), 1);
+    assert_eq!(sender[0].uid, 2);
+
+    assert!(store
+        .search_messages("perso", "%", 10)
+        .expect("search")
+        .is_empty());
+    assert!(store
+        .search_messages("absent", "facture", 10)
+        .expect("search")
+        .is_empty());
 }

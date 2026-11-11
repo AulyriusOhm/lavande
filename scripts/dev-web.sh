@@ -14,6 +14,10 @@ readonly IMAGE="node:22-bookworm-slim"
 readonly PORT=1420
 readonly URL="http://127.0.0.1:${PORT}/lavande/"
 
+# Répertoire de données du démon : Vite y lit le jeton Bearer (daemon-token) pour
+# l'injecter dans le proxy /api. Monté en lecture seule ; même résolution que le démon.
+readonly DATA_DIR="${LAVANDE_MAIL_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/lavande}"
+
 running() {
     [[ "$(docker inspect --format '{{.State.Running}}' "$NAME" 2>/dev/null)" == "true" ]]
 }
@@ -30,7 +34,9 @@ start() {
     docker rm -f "$NAME" >/dev/null 2>&1 || true
     docker run -d --name "$NAME" --network host --restart unless-stopped \
         -v "$ROOT:/app" -w /app \
+        -v "$DATA_DIR:/lavande-data:ro" \
         -e VITE_BASE=/lavande/ \
+        -e LAVANDE_MAIL_DATA_DIR=/lavande-data \
         "$IMAGE" npm run dev >/dev/null
     for _ in $(seq 1 100); do
         if curl -fsS --max-time 1 "$URL" >/dev/null 2>&1; then

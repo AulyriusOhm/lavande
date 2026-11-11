@@ -3,7 +3,8 @@ import { AnimatePresence, motion } from "motion/react";
 import { Archive, Search, Star, Trash2, X } from "lucide-react";
 import { useMailStore } from "@/lib/store";
 import { useEscapeLayer } from "@/desktop/escape";
-import { RECENT_SEARCHES, folderLabel, mailMatches } from "@/lib/mail";
+import { RECENT_SEARCHES, folderLabel } from "@/lib/mail";
+import type { Mail } from "@/lib/mail";
 import { buildThreads } from "@/lib/threads";
 import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/primitives";
@@ -54,18 +55,37 @@ function RowAction({
 }
 
 export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { mails, openMessage, toggleStar, mailAction, accountById } = useMailStore();
+  const { mails, openMessage, toggleStar, mailAction, accountById, searchMails } = useMailStore();
   const [query, setQuery] = useState("");
   const [recent, setRecent] = useState<string[]>(readRecent);
   const [selected, setSelected] = useState(0);
+  const [results, setResults] = useState<Mail[]>([]);
+  const [searching, setSearching] = useState(false);
 
   const trimmed = query.trim();
 
-  const threads = useMemo(() => {
-    if (!trimmed) return [];
-    const hits = new Set(mails.filter((mail) => mailMatches(mail, trimmed)).map((mail) => mail.id));
-    return buildThreads(mails).filter((thread) => thread.messages.some((message) => hits.has(message.id)));
-  }, [mails, trimmed]);
+  useEffect(() => {
+    if (!trimmed) {
+      setResults([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void searchMails(trimmed).then((found) => {
+        if (cancelled) return;
+        setResults(found);
+        setSearching(false);
+      });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [trimmed, searchMails]);
+
+  const threads = useMemo(() => buildThreads(results), [results]);
 
   const contacts = useMemo(() => {
     const seen = new Map<string, { name: string; email: string; tone: number; count: number }>();
@@ -250,7 +270,9 @@ export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () =>
               ) : (
                 <div className="pb-1">
                   <p role="status" className="px-2.5 pt-1.5 pb-2 text-[11.5px] font-semibold text-ink-muted">
-                    {threads.length} résultat{threads.length > 1 ? "s" : ""} pour « {trimmed} »
+                    {searching
+                      ? `Recherche de « ${trimmed} »…`
+                      : `${threads.length} résultat${threads.length > 1 ? "s" : ""} pour « ${trimmed} »`}
                   </p>
 
                   <div className="space-y-0.5">
@@ -334,7 +356,7 @@ export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () =>
                     })}
                   </div>
 
-                  {threads.length === 0 ? (
+                  {threads.length === 0 && !searching ? (
                     <EmptyState
                       icon={<Search className="size-5" />}
                       title="Aucun message ne correspond"

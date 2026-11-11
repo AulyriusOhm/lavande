@@ -11,6 +11,7 @@ use lavande_mail::model::Address;
 use lavande_mail::smtp::{self, OutgoingMessage};
 use lavande_mail::tls::TlsOptions;
 use lavande_mail_api::events;
+use lavande_mail_api::secrets::SecretBackend;
 use lavande_mail_api::state::AppState;
 use tempfile::TempDir;
 
@@ -51,7 +52,16 @@ fn account() -> AccountConfig {
 #[ignore = "requires scripts/mail-test-server.sh start"]
 async fn idle_pushes_new_mail_without_a_manual_sync() {
     let directory = tempfile::tempdir().expect("répertoire temporaire");
-    let state = Arc::new(AppState::open(directory.path(), tls()).expect("état"));
+    let state = Arc::new(
+        AppState::open_with(
+            directory.path(),
+            tls(),
+            Default::default(),
+            SecretBackend::File,
+        )
+        .await
+        .expect("état"),
+    );
     let config = account();
     let _: TempDir = directory;
 
@@ -63,7 +73,7 @@ async fn idle_pushes_new_mail_without_a_manual_sync() {
             .await
             .expect("dossiers")
     };
-    state.add_account(&config, &folders).expect("compte");
+    state.add_account(&config, &folders).await.expect("compte");
     let mut receiver = state.events().subscribe();
     events::watch_account(&state, config.clone());
 
@@ -114,7 +124,7 @@ async fn idle_pushes_new_mail_without_a_manual_sync() {
     let mapping = FolderMapping::default();
     let threads = state
         .store()
-        .threads_in_folder(&config.id, "INBOX")
+        .threads_in_folder(&config.id, "INBOX", -1, 0)
         .expect("fils");
     assert!(!threads.is_empty(), "{mapping:?}");
 }

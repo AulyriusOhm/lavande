@@ -10,6 +10,7 @@ use lavande_mail::tls::TlsOptions;
 use lavande_mail_api::app;
 use lavande_mail_api::discovery::{parse, DiscoveryEndpoints};
 use lavande_mail_api::dto::AuthKind;
+use lavande_mail_api::secrets::SecretBackend;
 use lavande_mail_api::state::AppState;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -46,16 +47,23 @@ const SYNTHETIC: &str = r#"<clientConfig version="1.1">
   </emailProvider>
 </clientConfig>"#;
 
-fn state(endpoints: DiscoveryEndpoints) -> (TempDir, Arc<AppState>) {
+async fn state(endpoints: DiscoveryEndpoints) -> (TempDir, Arc<AppState>) {
     let directory = tempfile::tempdir().expect("répertoire temporaire");
-    let state =
-        AppState::open_with(directory.path(), TlsOptions::default(), endpoints).expect("état");
+    let state = AppState::open_with(
+        directory.path(),
+        TlsOptions::default(),
+        endpoints,
+        SecretBackend::File,
+    )
+    .await
+    .expect("état");
     (directory, Arc::new(state))
 }
 
 async fn get(state: &Arc<AppState>, uri: &str) -> (StatusCode, Value) {
     let request = Request::builder()
         .uri(uri)
+        .header("authorization", format!("Bearer {}", state.token()))
         .body(Body::empty())
         .expect("requête");
     let response = app(state.clone())
@@ -213,7 +221,7 @@ fn a_document_without_smtp_is_not_usable() {
 #[tokio::test]
 async fn the_chain_starts_with_the_ispdb() {
     let base = document_server(GMAIL).await;
-    let (_directory, state) = state(mock_endpoints(&base));
+    let (_directory, state) = state(mock_endpoints(&base)).await;
     let (status, payload) = get(&state, "/api/discover?email=roman@gmail.com").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(payload["found"], true, "{payload}");
@@ -237,7 +245,7 @@ async fn the_chain_starts_with_the_ispdb() {
 #[tokio::test]
 async fn the_chain_falls_through_to_the_domain_document() {
     let base = well_known_server(LANRO).await;
-    let (_directory, state) = state(mock_endpoints(&base));
+    let (_directory, state) = state(mock_endpoints(&base)).await;
     let (status, payload) = get(&state, "/api/discover?email=roman@mail.lanro.eu").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(payload["found"], true, "{payload}");
@@ -256,7 +264,7 @@ async fn the_chain_falls_through_to_the_domain_document() {
 #[tokio::test]
 async fn a_second_request_is_served_from_the_cache() {
     let base = document_server(LAPOSTE).await;
-    let (_directory, state) = state(mock_endpoints(&base));
+    let (_directory, state) = state(mock_endpoints(&base)).await;
     let (_, first) = get(&state, "/api/discover?email=roman@laposte.net").await;
     assert_eq!(first["incoming"]["username"], "roman");
     let (_, second) = get(&state, "/api/discover?email=autre@laposte.net").await;
@@ -268,7 +276,7 @@ async fn a_second_request_is_served_from_the_cache() {
 #[tokio::test]
 async fn an_unusable_document_is_not_found() {
     let base = document_server("<html><body>nope</body></html>").await;
-    let (_directory, state) = state(mock_endpoints(&base));
+    let (_directory, state) = state(mock_endpoints(&base)).await;
     let (status, payload) = get(&state, "/api/discover?email=roman@exemple.fr").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(payload["found"], false, "{payload}");
@@ -280,7 +288,7 @@ async fn an_unusable_document_is_not_found() {
 
 #[tokio::test]
 async fn missing_or_invalid_address_is_a_400() {
-    let (_directory, state) = state(mock_endpoints("http://127.0.0.1:9"));
+    let (_directory, state) = state(mock_endpoints("http://127.0.0.1:9")).await;
     for uri in [
         "/api/discover?email=pasunemail",
         "/api/discover?email=roman%40",
@@ -298,7 +306,7 @@ async fn missing_or_invalid_address_is_a_400() {
 #[tokio::test]
 #[ignore = "réseau : ISPDB puis autoconfig du domaine"]
 async fn the_lanro_domain_is_discovered_live() {
-    let (_directory, state) = state(DiscoveryEndpoints::default());
+    let (_directory, state) = state(DiscoveryEndpoints::default()).await;
     let (status, payload) = get(&state, "/api/discover?email=roman@mail.lanro.eu").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(payload["found"], true, "{payload}");
@@ -313,7 +321,7 @@ async fn the_lanro_domain_is_discovered_live() {
 #[tokio::test]
 #[ignore = "réseau : domaine inexistant"]
 async fn an_unknown_domain_is_not_an_error_live() {
-    let (_directory, state) = state(DiscoveryEndpoints::default());
+    let (_directory, state) = state(DiscoveryEndpoints::default()).await;
     let (status, payload) = get(
         &state,
         "/api/discover?email=un-inexistant-xyz@example.invalid",

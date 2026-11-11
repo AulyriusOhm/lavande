@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import type { ComposeDraft } from "@/lib/draft";
 import {
   Check,
@@ -37,38 +38,34 @@ const invalidRecipients = (draft: ComposeDraft) =>
 
 export function ComposeScreen({
   onClose,
-  initialDraft,
+  draft,
   onDraftChange,
   onSend,
   onMinimize,
   title = "Nouveau message",
+  sent = false,
+  sendError,
+  headerActions,
+  onHeaderPointerDown,
+  onHeaderDoubleClick,
 }: {
   onClose: () => void;
-  initialDraft?: Partial<ComposeDraft>;
-  onDraftChange?: (draft: ComposeDraft) => void;
+  draft: ComposeDraft;
+  onDraftChange: (draft: ComposeDraft) => void;
   onSend?: (draft: ComposeDraft) => void;
   onMinimize?: () => void;
   title?: string;
+  sent?: boolean;
+  sendError?: string | null;
+  headerActions?: ReactNode;
+  onHeaderPointerDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onHeaderDoubleClick?: () => void;
 }) {
   const { accounts } = useMailStore();
-  const [draft, setDraft] = useState<ComposeDraft>(() => ({
-    to: initialDraft?.to ?? "",
-    cc: initialDraft?.cc ?? "",
-    cci: initialDraft?.cci ?? "",
-    subject: initialDraft?.subject ?? "",
-    body: initialDraft?.body ?? "",
-    account: initialDraft?.account ?? accounts[0]?.id ?? "",
-    pgpEncrypt: initialDraft?.pgpEncrypt ?? true,
-    pgpSign: initialDraft?.pgpSign ?? true,
-    threadId: initialDraft?.threadId,
-    inReplyTo: initialDraft?.inReplyTo,
-    references: initialDraft?.references,
-  }));
-  const [showCc, setShowCc] = useState(Boolean(initialDraft?.cc?.trim()));
-  const [showCci, setShowCci] = useState(Boolean(initialDraft?.cci?.trim()));
+  const [showCc, setShowCc] = useState(Boolean(draft.cc.trim()));
+  const [showCci, setShowCci] = useState(Boolean(draft.cci.trim()));
   const [confirmSend, setConfirmSend] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
-  const [sent, setSent] = useState(false);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [rewriteOpen, setRewriteOpen] = useState(false);
 
@@ -79,9 +76,7 @@ export function ComposeScreen({
   const isReply = /^re\s*:/i.test(draft.subject) || /a écrit\s*:/.test(draft.body);
 
   const update = (patch: Partial<ComposeDraft>) => {
-    const next = { ...draft, ...patch };
-    setDraft(next);
-    onDraftChange?.(next);
+    onDraftChange({ ...draft, ...patch });
   };
 
   const invalid = invalidRecipients(draft);
@@ -96,7 +91,6 @@ export function ComposeScreen({
   const send = () => {
     setConfirmSend(false);
     onSend?.(draft);
-    setSent(true);
     if (!onSend) onClose();
   };
 
@@ -133,12 +127,20 @@ export function ComposeScreen({
   return (
     <div className="flex h-full flex-col bg-canvas">
       <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-line" />
-      <div className="flex items-center gap-2 px-3 pt-2 pb-2">
+      <div
+        className={cn(
+          "flex items-center gap-2 px-3 pt-2 pb-2",
+          onHeaderPointerDown && "cursor-grab touch-none select-none active:cursor-grabbing",
+        )}
+        onPointerDown={onHeaderPointerDown}
+        onDoubleClick={onHeaderDoubleClick}
+      >
         <IconButton aria-label="Fermer" onClick={requestClose}>
           <X className="size-5" />
         </IconButton>
         <h2 className="text-[15px] font-bold tracking-tight text-ink">{title}</h2>
         <div className="ml-auto flex items-center gap-1">
+          {headerActions}
           {onMinimize && (
             <IconButton aria-label="Réduire le brouillon" onClick={onMinimize}>
               <Minus className="size-4.5" />
@@ -322,6 +324,11 @@ export function ComposeScreen({
       </div>
 
       <div className="border-t border-line/80 px-5 py-3 glass safe-bottom sm:pb-5">
+        {sendError && (
+          <p role="alert" className="mb-2 rounded-2xl bg-red-500/10 px-3 py-2 text-[11.5px] font-semibold text-red-600 dark:text-red-300">
+            {sendError}
+          </p>
+        )}
         {confirmSend && (
           <div
             role="alertdialog"

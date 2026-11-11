@@ -5,8 +5,9 @@
  */
 
 import { mailApi } from "@/lib/api";
-import type { ApiAccount, ApiFolder, ApiMessage, ApiThread, ApiFolderRole } from "@/lib/api";
+import type { ApiAccount, ApiFolder, ApiMessage, ApiThread, ApiFolderRole, SendInput } from "@/lib/api";
 import type { Account } from "@/lib/accounts";
+import type { ComposeDraft } from "@/lib/draft";
 import type { FolderId, Mail } from "@/lib/mail";
 import { TONES, folderLabel } from "@/lib/mail";
 
@@ -206,7 +207,7 @@ export function messageToMail(
     },
     messageId: message.message_id ?? undefined,
     references: message.references,
-    bodyFetched: body.length > 0,
+    bodyFetched: body.length > 0 || Boolean(message.body_html),
     name: message.from.name?.trim() || message.from.email,
     email: message.from.email,
     to: message.to.map((address) => address.email).join(", ") || undefined,
@@ -258,6 +259,20 @@ export function splitAddresses(value: string): string[] {
     .split(/[\s,;]+/)
     .map((token) => token.trim())
     .filter(Boolean);
+}
+
+export function sendInputOf(draft: ComposeDraft): SendInput {
+  const recipients = (value: string) =>
+    splitAddresses(value).map((email) => ({ name: null, email }));
+  return {
+    to: recipients(draft.to),
+    cc: recipients(draft.cc),
+    bcc: recipients(draft.cci),
+    subject: draft.subject.trim() || "(sans objet)",
+    text: draft.body,
+    ...(draft.inReplyTo ? { in_reply_to: draft.inReplyTo } : {}),
+    ...(draft.references?.length ? { references: draft.references } : {}),
+  };
 }
 
 export function accountSlug(email: string): string {
