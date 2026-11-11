@@ -250,6 +250,7 @@ function usePgpKeys() {
 export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   const updater = useUpdater();
   const updateState = phaseLabel(updater.phase);
+  const installedVersion = updater.current ?? APP_VERSION;
   const { accent, mode: themeMode, brand, setAccent, setMode: setThemeMode, reset } = useTheme();
   const {
     pgpEncrypt,
@@ -1342,14 +1343,14 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
               <Block
                 id="mise-a-jour"
                 label="Mise à jour"
-                hint={`v${updater.current ?? APP_VERSION}`}
+                hint={`v${installedVersion}`}
               >
                 <Surface className="p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="leading-tight">
                       <SectionLabel>Version installée</SectionLabel>
                       <p className="mt-1 text-[15px] font-extrabold tracking-[-0.02em] text-ink tabular-nums">
-                        v{updater.current ?? APP_VERSION}
+                        v{installedVersion}
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5">

@@ -28,7 +28,8 @@ import type { CalendarEvent } from "@/lib/calendar";
 import { shellLayout } from "@/lib/native";
 import { AccountRemoveDialog, BackendBanner, BackendLoading } from "@/components/backend-status";
 import { ConnectScreen } from "@/screens/connect-screen";
-import { defineShortcuts, useShortcuts } from "@/lib/shortcuts";
+import { useShortcuts } from "@/lib/shortcuts";
+import { appShortcuts } from "@/lib/app-shortcuts";
 import { ShortcutsOverlay } from "@/components/shortcuts-overlay";
 
 const InboxScreen = memo(InboxView);
@@ -315,99 +316,17 @@ function PhoneApp({ native }: { native?: boolean }) {
 
   const shortcuts = useMemo(
     () =>
-      defineShortcuts([
-        {
-          id: "view-inbox",
-          keys: "mod+1",
-          group: "Navigation",
-          label: "Boîte de réception",
-          description: "Revenir aux messages",
-          allowInInput: true,
-          run: () => changeTab("inbox"),
-        },
-        {
-          id: "view-calendar",
-          keys: "mod+2",
-          group: "Navigation",
-          label: "Agenda",
-          description: "Ouvrir le calendrier",
-          allowInInput: true,
-          when: () => calendarEnabled,
-          run: () => changeTab("calendar"),
-        },
-        {
-          id: "view-planning",
-          keys: "mod+3",
-          group: "Navigation",
-          label: "Planification",
-          description: "Ouvrir les tâches",
-          allowInInput: true,
-          when: () => planningEnabled,
-          run: () => changeTab("planning"),
-        },
-        {
-          id: "view-settings",
-          keys: "mod+4",
-          group: "Navigation",
-          label: "Réglages",
-          description: "Ouvrir les réglages",
-          allowInInput: true,
-          run: () => changeTab("settings"),
-        },
-        {
-          id: "compose",
-          keys: "mod+n",
-          group: "Actions",
-          label: "Nouveau message",
-          description: "Ouvrir la rédaction",
-          allowInInput: true,
-          run: openComposer,
-        },
-        {
-          id: "create",
-          keys: "mod+shift+n",
-          group: "Actions",
-          label: tab === "calendar" ? "Nouveau rendez-vous" : "Nouvelle tâche",
-          description: tab === "calendar" ? "Ajouter un rendez-vous à l’agenda" : "Ajouter une tâche",
-          allowInInput: true,
-          run: () => (tab === "calendar" ? openEventDraft() : openTaskDraft()),
-        },
-        {
-          id: "search",
-          keys: "mod+k",
-          group: "Actions",
-          label: "Rechercher",
-          description: "Chercher dans tous les comptes",
-          allowInInput: true,
-          run: openSearch,
-        },
-        {
-          id: "settings-shortcut",
-          keys: "mod+,",
-          group: "Actions",
-          label: "Réglages",
-          description: "Préférences et comptes",
-          allowInInput: true,
-          run: () => changeTab("settings"),
-        },
-        {
-          id: "help",
-          keys: "mod+/",
-          group: "Aide",
-          label: "Raccourcis clavier",
-          description: "Afficher ou masquer cette liste",
-          allowInInput: true,
-          run: () => setHelpOpen((current) => !current),
-        },
-        {
-          id: "help-question",
-          keys: "?",
-          group: "Aide",
-          label: "Raccourcis clavier",
-          description: "Afficher ou masquer cette liste",
-          run: () => setHelpOpen((current) => !current),
-        },
-      ]),
+      appShortcuts({
+        navigate: changeTab,
+        calendarEnabled,
+        planningEnabled,
+        calendarActive: tab === "calendar",
+        compose: openComposer,
+        newTask: openTaskDraft,
+        newEvent: openEventDraft,
+        search: openSearch,
+        toggleHelp: () => setHelpOpen((current) => !current),
+      }),
     [changeTab, calendarEnabled, planningEnabled, tab, openComposer, openSearch, openTaskDraft, openEventDraft],
   );
   const mod = useShortcuts(shortcuts);
