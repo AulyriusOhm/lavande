@@ -54,7 +54,6 @@ import { SignatureEditor } from "@/components/signature-editor";
 import { SyncSettings } from "@/components/sync-settings";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { NumberTicker } from "@/components/ui/number-ticker";
-import { MailSyncPanel } from "@/desktop/mail-sync";
 import {
   Badge,
   DChip,
@@ -76,7 +75,6 @@ const SECTIONS = [
   { id: "modules", label: "Modules" },
   { id: "securite", label: "Sécurité" },
   { id: "synchronisation", label: "Synchronisation" },
-  { id: "synchro-mails", label: "Synchro des mails" },
   { id: "ia", label: "IA" },
   { id: "resumes", label: "Résumés" },
   { id: "taches-ia", label: "Suggestions de tâches" },
@@ -1004,10 +1002,6 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
 
               <Block id="synchronisation" label="Synchronisation" hint="chiffré de bout en bout">
                 <SyncSettings variant="desktop" />
-              </Block>
-
-              <Block id="synchro-mails" label="Synchro des mails" hint="cache local par dossier">
-                <MailSyncPanel />
               </Block>
 
               <Block id="ia" label="Intelligence artificielle" hint="suggestions & réécriture">

@@ -152,30 +152,3 @@ describe("Réglages · dossiers synchronisés", () => {
     expect(screen.queryByLabelText("Synchroniser Boîte de réception")).toBeNull();
   });
 });
-
-describe("Réglages · synchro des mails", () => {
-  it("liste les dossiers avec leur dernière synchro", async () => {
-    stubFetch();
-    mount();
-
-    expect(await screen.findByText(`INBOX · uidnext 42`)).toBeTruthy();
-    expect(screen.getByText(`Archives · uidnext 9`)).toBeTruthy();
-    expect(screen.getByText(WHEN.format(new Date("2026-03-12T10:00:00Z")))).toBeTruthy();
-    expect(screen.getByText("jamais")).toBeTruthy();
-    expect(screen.getByText("Réception")).toBeTruthy();
-    expect(screen.getByText("Archives", { selector: "p" })).toBeTruthy();
-  });
-
-  it("désynchronise un dossier après confirmation", async () => {
-    const { state } = stubFetch();
-    mount();
-
-    fireEvent.click(await screen.findByLabelText("Désynchroniser Boîte de réception"));
-    expect(screen.getByText("Purger le cache local ?")).toBeTruthy();
-    fireEvent.click(screen.getByLabelText("Confirmer la désynchronisation de Boîte de réception"));
-
-    await waitFor(() => expect(state.purged).toEqual(["INBOX"]));
-    await waitFor(() => expect(screen.queryByText("INBOX · uidnext 42")).toBeNull());
-    expect(screen.getByText("Archives · uidnext 9")).toBeTruthy();
-  });
-});
