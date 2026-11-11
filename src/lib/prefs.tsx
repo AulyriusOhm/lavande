@@ -19,6 +19,9 @@ import { DEFAULT_AI_TASKS, DEFAULT_SUMMARY, type AiTasksConfig, type SummaryConf
 
 export type AccountSignature = { html: string; enabled: boolean };
 
+/** Interrupteur PGP d'un compte : maître, chiffrement, signature. */
+export type AccountPgp = { enabled: boolean; encrypt: boolean; sign: boolean };
+
 /** Domaines dont la synchronisation peut être coupée indépendamment. */
 export type SyncPrefs = {
   enabled: boolean;
@@ -43,6 +46,8 @@ export type Prefs = {
   /** Types d'action MCP dispensés de demande d'approbation. */
   mcpAlwaysAllow: Record<string, boolean>;
   signatures: Record<string, AccountSignature>;
+  /** Réglages PGP explicites : un compte absent suit les défauts globaux. */
+  pgpAccounts: Record<string, AccountPgp>;
   llm: LlmConfig;
   /** Suggestions de réponse générées par le LLM (sinon repli local). */
   aiReplyEnabled: boolean;
@@ -65,6 +70,7 @@ const DEFAULTS: Prefs = {
   mcpEnabled: {},
   mcpAlwaysAllow: {},
   signatures: {},
+  pgpAccounts: {},
   llm: EMPTY_LLM,
   aiReplyEnabled: true,
   summary: DEFAULT_SUMMARY,
@@ -74,8 +80,6 @@ const DEFAULTS: Prefs = {
 
 type PrefsContextValue = Prefs & {
   setSwipe: (side: "left" | "right", action: SwipeActionId) => void;
-  setPgpEncrypt: (value: boolean) => void;
-  setPgpSign: (value: boolean) => void;
   setAttachPublicKey: (value: boolean) => void;
   setCalendarEnabled: (value: boolean) => void;
   setPlanningEnabled: (value: boolean) => void;
@@ -83,6 +87,7 @@ type PrefsContextValue = Prefs & {
   setMcpAlwaysAllow: (type: string, value: boolean) => void;
   resetMcpAllowances: () => void;
   setSignature: (accountId: string, patch: Partial<AccountSignature>) => void;
+  setAccountPgp: (accountId: string, patch: Partial<AccountPgp>) => void;
   setLlm: (patch: Partial<LlmConfig>) => void;
   setAiReplyEnabled: (value: boolean) => void;
   setSummary: (patch: Partial<SummaryConfig>) => void;
@@ -115,6 +120,31 @@ const asSignatures = (value: unknown): Record<string, AccountSignature> => {
     const { html, enabled } = entry as { html?: unknown; enabled?: unknown };
     if (typeof html !== "string") continue;
     out[id] = { html, enabled: typeof enabled === "boolean" ? enabled : true };
+  }
+  return out;
+};
+
+export const asPgpAccounts = (
+  value: unknown,
+  fallback: { encrypt: boolean; sign: boolean },
+): Record<string, AccountPgp> => {
+  if (!value || typeof value !== "object") return {};
+  const out: Record<string, AccountPgp> = {};
+  for (const [id, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (!entry || typeof entry !== "object") continue;
+    const { enabled, encrypt, sign } = entry as {
+      enabled?: unknown;
+      encrypt?: unknown;
+      sign?: unknown;
+    };
+    if (typeof enabled !== "boolean" && typeof encrypt !== "boolean" && typeof sign !== "boolean") {
+      continue;
+    }
+    out[id] = {
+      enabled: asBoolean(enabled, true),
+      encrypt: asBoolean(encrypt, fallback.encrypt),
+      sign: asBoolean(sign, fallback.sign),
+    };
   }
   return out;
 };
@@ -181,6 +211,32 @@ export function activeSignature(
   return entry.html;
 }
 
+/** Réglage PGP explicite d'un compte, sinon les défauts globaux (migration douce). */
+export function accountPgp(
+  prefs: Pick<Prefs, "pgpEncrypt" | "pgpSign" | "pgpAccounts">,
+  accountId: string | null | undefined,
+): AccountPgp {
+  const entry = accountId ? prefs.pgpAccounts[accountId] : undefined;
+  if (entry) return { ...entry };
+  return { enabled: true, encrypt: prefs.pgpEncrypt, sign: prefs.pgpSign };
+}
+
+/**
+ * PGP effectif d'un compte : l'interrupteur maître coupe chiffrement, signature
+ * et déchiffrement. Point de passage unique de la composition et de la réception.
+ */
+export function resolvePgp(
+  prefs: Pick<Prefs, "pgpEncrypt" | "pgpSign" | "pgpAccounts">,
+  accountId: string | null | undefined,
+): AccountPgp {
+  const entry = accountPgp(prefs, accountId);
+  return {
+    enabled: entry.enabled,
+    encrypt: entry.enabled && entry.encrypt,
+    sign: entry.enabled && entry.sign,
+  };
+}
+
 function read(): Prefs {
   let stored: Record<string, unknown> = {};
   try {
@@ -189,11 +245,13 @@ function read(): Prefs {
   } catch {
     stored = {};
   }
+  const pgpEncrypt = asBoolean(stored.pgpEncrypt, DEFAULTS.pgpEncrypt);
+  const pgpSign = asBoolean(stored.pgpSign, DEFAULTS.pgpSign);
   return {
     swipeLeft: asSwipe(stored.swipeLeft, DEFAULTS.swipeLeft),
     swipeRight: asSwipe(stored.swipeRight, DEFAULTS.swipeRight),
-    pgpEncrypt: asBoolean(stored.pgpEncrypt, DEFAULTS.pgpEncrypt),
-    pgpSign: asBoolean(stored.pgpSign, DEFAULTS.pgpSign),
+    pgpEncrypt,
+    pgpSign,
     attachPublicKey: asBoolean(stored.attachPublicKey, DEFAULTS.attachPublicKey),
     mcpConfirmSend: asBoolean(stored.mcpConfirmSend, DEFAULTS.mcpConfirmSend),
     calendarEnabled: asBoolean(stored.calendarEnabled, DEFAULTS.calendarEnabled),
@@ -201,6 +259,7 @@ function read(): Prefs {
     mcpEnabled: asFlags(stored.mcpEnabled),
     mcpAlwaysAllow: asFlags(stored.mcpAlwaysAllow),
     signatures: asSignatures(stored.signatures),
+    pgpAccounts: asPgpAccounts(stored.pgpAccounts, { encrypt: pgpEncrypt, sign: pgpSign }),
     llm: asLlm(stored.llm),
     aiReplyEnabled: asBoolean(stored.aiReplyEnabled, DEFAULTS.aiReplyEnabled),
     summary: asSummary(stored.summary),
@@ -233,8 +292,6 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       patch(side === "left" ? "swipeLeft" : "swipeRight", action),
     [patch],
   );
-  const setPgpEncrypt = useCallback((value: boolean) => patch("pgpEncrypt", value), [patch]);
-  const setPgpSign = useCallback((value: boolean) => patch("pgpSign", value), [patch]);
   const setAttachPublicKey = useCallback((value: boolean) => patch("attachPublicKey", value), [patch]);
   const setCalendarEnabled = useCallback((value: boolean) => patch("calendarEnabled", value), [patch]);
   const setPlanningEnabled = useCallback((value: boolean) => patch("planningEnabled", value), [patch]);
@@ -270,6 +327,18 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const setAccountPgp = useCallback(
+    (accountId: string, patch: Partial<AccountPgp>) =>
+      setPrefs((current) => ({
+        ...current,
+        pgpAccounts: {
+          ...current.pgpAccounts,
+          [accountId]: { ...accountPgp(current, accountId), ...patch },
+        },
+      })),
+    [],
+  );
+
   const setLlm = useCallback(
     (patch: Partial<LlmConfig>) =>
       setPrefs((current) => ({ ...current, llm: { ...current.llm, ...patch } })),
@@ -300,8 +369,6 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     () => ({
       ...prefs,
       setSwipe,
-      setPgpEncrypt,
-      setPgpSign,
       setAttachPublicKey,
       setCalendarEnabled,
       setPlanningEnabled,
@@ -309,6 +376,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setMcpAlwaysAllow,
       resetMcpAllowances,
       setSignature,
+      setAccountPgp,
       setLlm,
       setAiReplyEnabled,
       setSummary,
@@ -318,8 +386,6 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     [
       prefs,
       setSwipe,
-      setPgpEncrypt,
-      setPgpSign,
       setAttachPublicKey,
       setCalendarEnabled,
       setPlanningEnabled,
@@ -327,6 +393,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setMcpAlwaysAllow,
       resetMcpAllowances,
       setSignature,
+      setAccountPgp,
       setLlm,
       setAiReplyEnabled,
       setSummary,

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { DEFAULT_SYNC, PrefsProvider, asSync, usePrefs } from "@/lib/prefs";
+import { DEFAULT_SYNC, PrefsProvider, accountPgp, asPgpAccounts, asSync, resolvePgp, usePrefs } from "@/lib/prefs";
 import { DEFAULT_SUMMARY } from "@/lib/summary";
 
 const mount = () =>
@@ -275,5 +275,85 @@ describe("préférences · toujours autoriser MCP", () => {
     expect(result.current.mcpConfirmSend).toBe(true);
     expect(stored().mcpAlwaysAllow).toEqual({});
     expect(stored().mcpConfirmSend).toBe(true);
+  });
+});
+
+describe("préférences · PGP par compte", () => {
+  it("démarre sans réglage explicite et suit les défauts globaux", () => {
+    const { result } = mount();
+
+    expect(result.current.pgpAccounts).toEqual({});
+    expect(accountPgp(result.current, "perso")).toEqual({ enabled: true, encrypt: true, sign: true });
+    expect(resolvePgp(result.current, "perso")).toEqual({ enabled: true, encrypt: true, sign: true });
+    expect(resolvePgp(result.current, undefined)).toEqual({ enabled: true, encrypt: true, sign: true });
+  });
+
+  it("relit un record partiel et complète avec les défauts globaux", () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({
+        pgpEncrypt: false,
+        pgpSign: true,
+        pgpAccounts: {
+          perso: { sign: false },
+          pro: { enabled: false, encrypt: true },
+          gmail: "oui",
+          muet: {},
+        },
+      }),
+    );
+    const { result } = mount();
+
+    expect(result.current.pgpAccounts).toEqual({
+      perso: { enabled: true, encrypt: false, sign: false },
+      pro: { enabled: false, encrypt: true, sign: true },
+    });
+    expect(result.current.pgpEncrypt).toBe(false);
+    expect(result.current.pgpSign).toBe(true);
+  });
+
+  it("expose un parseur tolérant pour la migration", () => {
+    const fallback = { encrypt: true, sign: false };
+    expect(asPgpAccounts(undefined, fallback)).toEqual({});
+    expect(asPgpAccounts("tout", fallback)).toEqual({});
+    expect(asPgpAccounts({ a: null, b: 4 }, fallback)).toEqual({});
+    expect(asPgpAccounts({ a: { enabled: "non", encrypt: 1 } }, fallback)).toEqual({});
+    expect(asPgpAccounts({ a: { encrypt: false } }, fallback)).toEqual({
+      a: { enabled: true, encrypt: false, sign: false },
+    });
+  });
+
+  it("résout l'interrupteur maître sur le chiffrement, la signature et le déchiffrement", () => {
+    const prefs = {
+      pgpEncrypt: true,
+      pgpSign: true,
+      pgpAccounts: { pro: { enabled: false, encrypt: true, sign: true } },
+    };
+
+    expect(resolvePgp(prefs, "pro")).toEqual({ enabled: false, encrypt: false, sign: false });
+    expect(resolvePgp(prefs, "perso")).toEqual({ enabled: true, encrypt: true, sign: true });
+    expect(accountPgp(prefs, "pro")).toEqual({ enabled: false, encrypt: true, sign: true });
+  });
+
+  it("enregistre un compte sans toucher aux autres ni aux défauts globaux", () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({ pgpSign: false, pgpAccounts: { pro: { enabled: false, encrypt: true, sign: true } } }),
+    );
+    const { result } = mount();
+
+    act(() => result.current.setAccountPgp("perso", { sign: false }));
+
+    expect(result.current.pgpAccounts).toEqual({
+      pro: { enabled: false, encrypt: true, sign: true },
+      perso: { enabled: true, encrypt: true, sign: false },
+    });
+    expect(stored().pgpAccounts).toEqual(result.current.pgpAccounts);
+    expect(result.current.pgpSign).toBe(false);
+
+    act(() => result.current.setAccountPgp("perso", { enabled: false }));
+
+    expect(result.current.pgpAccounts.perso).toEqual({ enabled: false, encrypt: true, sign: false });
+    expect(resolvePgp(result.current, "perso")).toEqual({ enabled: false, encrypt: false, sign: false });
   });
 });

@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { errorText } from "@/lib/api";
 import { useMailStore } from "@/lib/store";
-import { usePrefs } from "@/lib/prefs";
+import { accountPgp, resolvePgp, usePrefs } from "@/lib/prefs";
 import {
   PGP_STATE,
   formatFingerprint,
@@ -65,15 +65,16 @@ async function copy(text: string) {
 }
 
 export function PgpScreen({ onClose }: { onClose: () => void }) {
-  const { notify } = useMailStore();
+  const { notify, accounts } = useMailStore();
   const {
     pgpEncrypt,
     pgpSign,
+    pgpAccounts,
+    setAccountPgp,
     attachPublicKey,
-    setPgpEncrypt,
-    setPgpSign,
     setAttachPublicKey,
   } = usePrefs();
+  const [pgpAccount, setPgpAccount] = useState<string | null>(null);
 
   const [keys, setKeys] = useState<PgpKey[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -115,6 +116,10 @@ export function PgpScreen({ onClose }: { onClose: () => void }) {
       controller.abort();
     };
   }, [load]);
+
+  const payload = { pgpEncrypt, pgpSign, pgpAccounts };
+  const pgpTarget = accounts.find((item) => item.id === pgpAccount) ?? accounts[0] ?? null;
+  const pgpEntry = pgpTarget ? accountPgp(payload, pgpTarget.id) : null;
 
   const feedback = (text: string) => {
     try {
@@ -531,25 +536,78 @@ export function PgpScreen({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        <SectionTitle>Par défaut</SectionTitle>
+        <SectionTitle hint={`${accounts.length} compte${accounts.length > 1 ? "s" : ""}`}>
+          Par compte
+        </SectionTitle>
         <BlurFade delay={0.1}>
+          {pgpTarget && pgpEntry ? (
+            <>
+              <div className="mx-4 mb-2 flex flex-wrap gap-1.5">
+                {accounts.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    aria-pressed={pgpTarget.id === item.id}
+                    onClick={() => setPgpAccount(item.id)}
+                    className={cn(
+                      "focus-ring inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10.5px] font-bold transition-colors",
+                      pgpTarget.id === item.id
+                        ? "border-accent-ring bg-accent-soft text-accent-ink"
+                        : "border-line bg-surface text-ink-soft",
+                    )}
+                  >
+                    <span className="size-2 rounded-full" style={{ backgroundColor: item.color }} />
+                    {item.label}
+                    {resolvePgp(payload, item.id).enabled ? (
+                      <Check className="size-3" strokeWidth={3} />
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+              <Card className="mx-4 divide-y divide-line/80 overflow-hidden">
+                <ToggleRow
+                  icon={<ShieldCheck className="size-4" />}
+                  label={`PGP pour ${pgpTarget.label}`}
+                  hint="Chiffrer, signer et déchiffrer ses messages"
+                  checked={pgpEntry.enabled}
+                  onChange={(value) => setAccountPgp(pgpTarget.id, { enabled: value })}
+                />
+                <ToggleRow
+                  icon={<PenLine className="size-4" />}
+                  label="Signer ses messages"
+                  hint="Signature détachée, vérifiable"
+                  checked={pgpEntry.sign}
+                  onChange={(value) => setAccountPgp(pgpTarget.id, { sign: value })}
+                />
+                <ToggleRow
+                  icon={<Lock className="size-4" />}
+                  label="Chiffrer ses messages"
+                  hint="Quand une clé valide et utilisable existe pour chaque destinataire"
+                  checked={pgpEntry.encrypt}
+                  onChange={(value) => setAccountPgp(pgpTarget.id, { encrypt: value })}
+                />
+                {pgpEntry.enabled ? null : (
+                  <p className="px-3.5 py-2.5 text-[10.5px] leading-relaxed font-semibold text-ink-muted">
+                    PGP désactivé : ce compte ne signe pas, ne chiffre pas et ne déchiffre pas.
+                  </p>
+                )}
+              </Card>
+            </>
+          ) : (
+            <Card className="mx-4 px-3.5 py-4 text-center">
+              <p className="text-[12px] font-bold text-ink">Aucun compte</p>
+              <p className="mt-1 text-[10.5px] font-medium text-ink-muted">
+                Ajoute un compte pour lui donner son propre réglage PGP.
+              </p>
+            </Card>
+          )}
+        </BlurFade>
+
+        <SectionTitle>Tous les comptes</SectionTitle>
+        <BlurFade delay={0.12}>
           <Card className="mx-4 divide-y divide-line/80 overflow-hidden">
             <ToggleRow
-              icon={<Lock className="size-4" />}
-              label="Chiffrer les messages"
-              hint="Quand une clé valide et utilisable existe pour chaque destinataire"
-              checked={pgpEncrypt}
-              onChange={setPgpEncrypt}
-            />
-            <ToggleRow
-              icon={<PenLine className="size-4" />}
-              label="Signer mes messages"
-              hint="Signature détachée, vérifiable"
-              checked={pgpSign}
-              onChange={setPgpSign}
-            />
-            <ToggleRow
-              icon={<ShieldCheck className="size-4" />}
+              icon={<KeyRound className="size-4" />}
               label="Joindre ma clé publique"
               hint="Aux nouveaux destinataires"
               checked={attachPublicKey}

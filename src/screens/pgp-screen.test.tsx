@@ -2,25 +2,52 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { PgpKey } from "@/lib/pgp";
 
-const { listKeys, generateKey, importKey, exportKey, deleteKey, notify } = vi.hoisted(() => ({
-  listKeys: vi.fn(),
-  generateKey: vi.fn(),
-  importKey: vi.fn(),
-  exportKey: vi.fn(),
-  deleteKey: vi.fn(),
-  notify: vi.fn(),
-}));
+const { listKeys, generateKey, importKey, exportKey, deleteKey, notify, setAccountPgp, setAttachPublicKey } =
+  vi.hoisted(() => ({
+    listKeys: vi.fn(),
+    generateKey: vi.fn(),
+    importKey: vi.fn(),
+    exportKey: vi.fn(),
+    deleteKey: vi.fn(),
+    notify: vi.fn(),
+    setAccountPgp: vi.fn(),
+    setAttachPublicKey: vi.fn(),
+  }));
+
+const ACCOUNTS = [
+  {
+    id: "perso",
+    label: "Perso",
+    email: "roman@lavande.mail",
+    provider: "IMAP · lavande.mail",
+    color: "#8b7cf6",
+    tone: 0,
+    synced: "à l'instant",
+  },
+  {
+    id: "pro",
+    label: "Studio",
+    email: "roman@studio-lilas.fr",
+    provider: "IMAP · OVH",
+    color: "#38bdf8",
+    tone: 2,
+    synced: "il y a 2 min",
+  },
+];
 
 vi.mock("@/lib/pgp-api", () => ({ listKeys, generateKey, importKey, exportKey, deleteKey }));
-vi.mock("@/lib/store", () => ({ useMailStore: () => ({ notify }) }));
-vi.mock("@/lib/prefs", () => ({
+vi.mock("@/lib/store", () => ({
+  useMailStore: () => ({ notify, accounts: ACCOUNTS }),
+}));
+vi.mock("@/lib/prefs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/prefs")>()),
   usePrefs: () => ({
     pgpEncrypt: true,
     pgpSign: true,
+    pgpAccounts: {},
     attachPublicKey: false,
-    setPgpEncrypt: vi.fn(),
-    setPgpSign: vi.fn(),
-    setAttachPublicKey: vi.fn(),
+    setAccountPgp,
+    setAttachPublicKey,
   }),
 }));
 
@@ -58,6 +85,7 @@ beforeEach(() => {
   exportKey.mockReset();
   deleteKey.mockReset().mockResolvedValue(undefined);
   notify.mockReset();
+  setAccountPgp.mockReset();
 });
 
 describe("PgpScreen", () => {
@@ -110,5 +138,22 @@ describe("PgpScreen", () => {
 
     await waitFor(() => expect(deleteKey).toHaveBeenCalledWith(KEY.fingerprint));
     expect(notify).toHaveBeenCalledWith("Clé supprimée · Roman");
+  });
+
+  it("règle le PGP compte par compte, sans toucher aux autres", async () => {
+    render(<PgpScreen onClose={() => {}} />);
+
+    expect(await screen.findByText("PGP pour Perso")).toBeTruthy();
+    expect(screen.getByRole("switch", { name: /PGP pour Perso/ }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    fireEvent.click(screen.getByRole("switch", { name: /Signer ses messages/ }));
+    fireEvent.click(screen.getByRole("switch", { name: /PGP pour Perso/ }));
+
+    expect(setAccountPgp).toHaveBeenCalledWith("perso", { sign: false });
+    expect(setAccountPgp).toHaveBeenCalledWith("perso", { enabled: false });
+
+    fireEvent.click(screen.getByRole("button", { name: /Studio/ }));
+    expect(await screen.findByText("PGP pour Studio")).toBeTruthy();
   });
 });

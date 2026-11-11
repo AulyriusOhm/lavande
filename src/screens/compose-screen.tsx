@@ -24,7 +24,7 @@ import { IconButton } from "@/components/ui/primitives";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { RichEditor } from "@/components/ui/rich-editor";
 import { ensureHtml, htmlToText, textToHtml, isHtmlEmpty, sanitizeHtml } from "@/lib/rich-text";
-import { activeSignature, usePrefs } from "@/lib/prefs";
+import { activeSignature, resolvePgp, usePrefs } from "@/lib/prefs";
 
 export type { ComposeDraft };
 
@@ -67,7 +67,8 @@ export function ComposeScreen({
   onHeaderDoubleClick?: () => void;
 }) {
   const { accounts, mails, openThread, saveToDrafts } = useMailStore();
-  const { signatures, llm, aiReplyEnabled } = usePrefs();
+  const prefs = usePrefs();
+  const { signatures, llm, aiReplyEnabled } = prefs;
   const accountSignature = activeSignature(signatures, draft.account);
   const [showCc, setShowCc] = useState(Boolean(draft.cc.trim()));
   const [showCci, setShowCci] = useState(Boolean(draft.cci.trim()));
@@ -241,7 +242,10 @@ export function ComposeScreen({
           <select
             id="compose-from"
             value={draft.account}
-            onChange={(event) => update({ account: event.target.value })}
+            onChange={(event) => {
+              const pgp = resolvePgp(prefs, event.target.value);
+              update({ account: event.target.value, pgpEncrypt: pgp.encrypt, pgpSign: pgp.sign });
+            }}
             className="min-w-0 flex-1 cursor-pointer bg-transparent text-[13px] font-semibold text-ink outline-none"
           >
             {accounts.map((entry) => (

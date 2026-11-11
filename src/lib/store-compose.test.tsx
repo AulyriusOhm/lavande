@@ -140,3 +140,55 @@ describe("recherche globale (démo)", () => {
     expect(found.length).toBeGreaterThan(0);
   });
 });
+
+describe("PGP du compte à la composition", () => {
+  const setPgp = (pgpAccounts: Record<string, unknown>) =>
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({ pgpEncrypt: true, pgpSign: true, pgpAccounts }),
+    );
+
+  it("un nouveau brouillon suit le PGP de son compte, pas le global", () => {
+    setPgp({ perso: { encrypt: false, sign: true } });
+    const { result } = mount();
+
+    act(() => result.current.startBlankDraft());
+
+    expect(result.current.composeDraft?.account).toBe("perso");
+    expect(result.current.composeDraft?.pgpEncrypt).toBe(false);
+    expect(result.current.composeDraft?.pgpSign).toBe(true);
+  });
+
+  it("répondre suit le compte du message d'origine", () => {
+    setPgp({ pro: { enabled: false } });
+    const { result } = mount();
+    const target = MAILS.find((mail) => mail.account === "pro")!;
+
+    act(() => result.current.replyTo(target));
+
+    expect(result.current.composeDraft?.account).toBe("pro");
+    expect(result.current.composeDraft?.pgpEncrypt).toBe(false);
+    expect(result.current.composeDraft?.pgpSign).toBe(false);
+  });
+
+  it("transférer suit le compte du message d'origine", () => {
+    setPgp({ perso: { sign: false } });
+    const { result } = mount();
+    const target = MAILS.find((mail) => mail.account === "perso")!;
+
+    act(() => result.current.forwardMail(target));
+
+    expect(result.current.composeDraft?.pgpEncrypt).toBe(true);
+    expect(result.current.composeDraft?.pgpSign).toBe(false);
+  });
+
+  it("sans réglage de compte, les défauts globaux restent la référence", () => {
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ pgpEncrypt: false, pgpSign: true }));
+    const { result } = mount();
+
+    act(() => result.current.startBlankDraft());
+
+    expect(result.current.composeDraft?.pgpEncrypt).toBe(false);
+    expect(result.current.composeDraft?.pgpSign).toBe(true);
+  });
+});

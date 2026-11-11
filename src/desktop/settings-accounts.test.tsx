@@ -152,3 +152,38 @@ describe("Réglages · dossiers synchronisés", () => {
     expect(screen.queryByLabelText("Synchroniser Boîte de réception")).toBeNull();
   });
 });
+
+describe("Réglages · PGP par compte", () => {
+  const saved = () => JSON.parse(window.localStorage.getItem("lavande.prefs") ?? "{}") as Record<string, unknown>;
+
+  it("affiche l'interrupteur du compte et enregistre sa coupure", async () => {
+    stubFetch();
+    mount();
+
+    const master = await screen.findByRole("switch", { name: /PGP pour Perso/ });
+    expect(master.getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByText(/PGP désactivé : ce compte/)).toBeNull();
+
+    fireEvent.click(master);
+
+    expect(await screen.findByText(/PGP désactivé : ce compte/)).toBeTruthy();
+    await waitFor(() =>
+      expect(saved().pgpAccounts).toEqual({ a1: { enabled: false, encrypt: true, sign: true } }),
+    );
+    expect(screen.getByRole("switch", { name: /PGP pour Perso/ }).getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("règle la signature du compte sans toucher au chiffrement", async () => {
+    stubFetch();
+    mount();
+
+    fireEvent.click(await screen.findByRole("switch", { name: /Signer ses messages/ }));
+
+    await waitFor(() =>
+      expect(saved().pgpAccounts).toEqual({ a1: { enabled: true, encrypt: true, sign: false } }),
+    );
+    expect(screen.getByRole("switch", { name: /Chiffrer ses messages/ }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+  });
+});

@@ -19,6 +19,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  ShieldCheck,
   Sparkles,
   Sun,
   SunMoon,
@@ -50,7 +51,7 @@ import {
   mcpTypeAllowed,
   useMcpLog,
 } from "@/lib/mcp";
-import { activeSignature, mergeFlags, usePrefs } from "@/lib/prefs";
+import { accountPgp, activeSignature, mergeFlags, usePrefs } from "@/lib/prefs";
 import { APP_VERSION, phaseLabel, useUpdater } from "@/lib/updater";
 import { llmProbe, llmReady } from "@/lib/llm";
 import type { SummaryConfig } from "@/lib/summary";
@@ -262,9 +263,9 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   const {
     pgpEncrypt,
     pgpSign,
+    pgpAccounts,
+    setAccountPgp,
     attachPublicKey,
-    setPgpEncrypt,
-    setPgpSign,
     setAttachPublicKey,
     mcpConfirmSend,
     calendarEnabled,
@@ -291,6 +292,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   const [hex, setHex] = useState(accent);
   const [openServer, setOpenServer] = useState<string | null>(null);
   const [signatureAccount, setSignatureAccount] = useState<string | null>(null);
+  const [pgpAccount, setPgpAccount] = useState<string | null>(null);
   const [generateForm, setGenerateForm] = useState(false);
   const [generateName, setGenerateName] = useState("");
   const [generateEmail, setGenerateEmail] = useState("");
@@ -320,6 +322,10 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   const publicKeys = keys?.filter((key) => !key.has_secret).length ?? 0;
   const signatureTarget = accounts.find((item) => item.id === signatureAccount) ?? accounts[0] ?? null;
   const signedAccounts = accounts.filter((item) => activeSignature(signatures, item.id)).length;
+  const pgpSettings = { pgpEncrypt, pgpSign, pgpAccounts };
+  const pgpTarget = accounts.find((item) => item.id === pgpAccount) ?? accounts[0] ?? null;
+  const pgpEntry = pgpTarget ? accountPgp(pgpSettings, pgpTarget.id) : null;
+  const pgpAccountsOn = accounts.filter((item) => accountPgp(pgpSettings, item.id).enabled).length;
 
   const openGenerate = () => {
     setGenerateName(accounts[0]?.label ?? "");
@@ -909,30 +915,81 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                     )}
                   </Surface>
 
-                  <Surface className="divide-y divide-line overflow-hidden">
-                    <ToggleRow
-                      icon={<Lock className="size-4" />}
-                      label="Chiffrer les messages"
-                      hint="Quand une clé valide existe pour chaque destinataire"
-                      checked={pgpEncrypt}
-                      onChange={setPgpEncrypt}
-                    />
-                    <ToggleRow
-                      icon={<PenLine className="size-4" />}
-                      label="Signer mes messages"
-                      hint="Signature détachée, vérifiable"
-                      checked={pgpSign}
-                      onChange={setPgpSign}
-                    />
-                    <ToggleRow
-                      icon={<KeyRound className="size-4" />}
-                      label="Joindre ma clé publique"
-                      hint="Aux nouveaux destinataires"
-                      checked={attachPublicKey}
-                      onChange={setAttachPublicKey}
-                    />
+                  <Surface className="overflow-hidden">
+                    <div className="border-b border-line px-3.5 py-2">
+                      <div className="flex items-center gap-1.5">
+                        <SectionLabel>Par compte</SectionLabel>
+                        <span className="text-[10.5px] font-semibold text-ink-muted">
+                          {pgpAccountsOn} sur {accounts.length}
+                        </span>
+                      </div>
+                      {accounts.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {accounts.map((item) => (
+                            <DChip
+                              key={item.id}
+                              active={pgpTarget?.id === item.id}
+                              onClick={() => setPgpAccount(item.id)}
+                            >
+                              <span
+                                className="size-2 rounded-full"
+                                style={{ backgroundColor: item.color }}
+                              />
+                              {item.label}
+                              {accountPgp(pgpSettings, item.id).enabled ? (
+                                <Check className="size-3" strokeWidth={3} />
+                              ) : null}
+                            </DChip>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-1 text-[11px] font-medium text-ink-muted">
+                          Ajoute un compte pour régler son PGP.
+                        </p>
+                      )}
+                    </div>
+                    {pgpTarget && pgpEntry ? (
+                      <div className="divide-y divide-line">
+                        <ToggleRow
+                          icon={<ShieldCheck className="size-4" />}
+                          label={`PGP pour ${pgpTarget.label}`}
+                          hint="Chiffrer, signer et déchiffrer ses messages"
+                          checked={pgpEntry.enabled}
+                          onChange={(value) => setAccountPgp(pgpTarget.id, { enabled: value })}
+                        />
+                        <ToggleRow
+                          icon={<PenLine className="size-4" />}
+                          label="Signer ses messages"
+                          hint="Signature détachée, vérifiable"
+                          checked={pgpEntry.sign}
+                          onChange={(value) => setAccountPgp(pgpTarget.id, { sign: value })}
+                        />
+                        <ToggleRow
+                          icon={<Lock className="size-4" />}
+                          label="Chiffrer ses messages"
+                          hint="Quand une clé valide existe pour chaque destinataire"
+                          checked={pgpEntry.encrypt}
+                          onChange={(value) => setAccountPgp(pgpTarget.id, { encrypt: value })}
+                        />
+                        {pgpEntry.enabled ? null : (
+                          <p className="px-3.5 py-2 text-[10.5px] leading-snug font-semibold text-ink-muted">
+                            PGP désactivé : ce compte ne signe pas, ne chiffre pas et ne déchiffre pas.
+                          </p>
+                        )}
+                      </div>
+                    ) : null}
                   </Surface>
                 </div>
+
+                <Surface className="mt-3 overflow-hidden">
+                  <ToggleRow
+                    icon={<KeyRound className="size-4" />}
+                    label="Joindre ma clé publique"
+                    hint="Aux nouveaux destinataires · tous les comptes"
+                    checked={attachPublicKey}
+                    onChange={setAttachPublicKey}
+                  />
+                </Surface>
 
                 <Surface className="mt-3 overflow-hidden">
                   <div className="flex items-center gap-2 border-b border-line px-3.5 py-2">

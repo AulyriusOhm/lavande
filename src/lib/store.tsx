@@ -17,7 +17,7 @@ import type { SummaryMailInput, SummaryResult, SummaryTask } from "@/lib/summary
 import { llmReady } from "@/lib/llm";
 import { TODAY_ISO } from "@/lib/calendar";
 import type { CalendarEvent } from "@/lib/calendar";
-import { activeSignature, usePrefs } from "@/lib/prefs";
+import { activeSignature, resolvePgp, usePrefs } from "@/lib/prefs";
 import { suggestionsInWindow, usePlanning } from "@/lib/planning-store";
 import { mailApi, errorText } from "@/lib/api";
 import type { LiveEvent } from "@/lib/api";
@@ -151,6 +151,10 @@ const MailStoreContext = createContext<MailStoreValue | null>(null);
 
 export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const prefs = usePrefs();
+  const pgpPrefs = useMemo(
+    () => ({ pgpEncrypt: prefs.pgpEncrypt, pgpSign: prefs.pgpSign, pgpAccounts: prefs.pgpAccounts }),
+    [prefs.pgpEncrypt, prefs.pgpSign, prefs.pgpAccounts],
+  );
   // Interrupteurs de synchronisation : le maître coupe tous les domaines.
   const mailSyncOn = prefs.sync.enabled && prefs.sync.mails;
   const planning = usePlanning();
@@ -731,6 +735,10 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         );
       }
       if (mail.bodyFetched) return;
+      if (mail.pgp === "encrypted" && !resolvePgp(pgpPrefs, mail.account).enabled) {
+        notify("PGP désactivé pour ce compte · message chiffré laissé fermé");
+        return;
+      }
       const source = mail.source;
       mailApi
         .message(source.accountId, source.folderPath, source.uid)
@@ -749,7 +757,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         })
         .catch((error: unknown) => notify(`Corps du message indisponible · ${errorText(error)}`));
     },
-    [adjustCounts, flagsFor, folderRecords, mode, notify],
+    [adjustCounts, flagsFor, folderRecords, mode, notify, pgpPrefs],
   );
 
   const closeMessage = useCallback(() => setOpenMail(null), []);
@@ -932,15 +940,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [composeDraft, composeTitle, composeDetached]);
 
-  const blankDraft = useCallback(
-    () =>
-      baseDraft(
-        account === ALL_ACCOUNTS || !account ? accounts[0]?.id ?? "" : account,
-        prefs.pgpEncrypt,
-        prefs.pgpSign,
-      ),
-    [account, accounts, prefs.pgpEncrypt, prefs.pgpSign],
-  );
+  const blankDraft = useCallback(() => {
+    const sender = account === ALL_ACCOUNTS || !account ? accounts[0]?.id ?? "" : account;
+    const pgp = resolvePgp(pgpPrefs, sender);
+    return baseDraft(sender, pgp.encrypt, pgp.sign);
+  }, [account, accounts, pgpPrefs]);
 
   const startBlankDraft = useCallback(() => {
     setComposeDraft(blankDraft());
@@ -967,6 +971,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const replyTo = useCallback(
     (mail: Mail) => {
       const start = () => {
+        const pgp = resolvePgp(pgpPrefs, mail.account);
         const quoted = mail.body
           .join("\n")
           .split("\n")
@@ -977,7 +982,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           ...(mail.messageId ? [mail.messageId] : []),
         ];
         setComposeDraft({
-          ...baseDraft(mail.account, prefs.pgpEncrypt, prefs.pgpSign, mail.threadId ?? mail.id),
+          ...baseDraft(mail.account, pgp.encrypt, pgp.sign, mail.threadId ?? mail.id),
           to: mail.email,
           subject: /^re\s*:/i.test(mail.subject.trim()) ? mail.subject : `Re: ${mail.subject}`,
           body: `\n\n---\nLe ${mail.date ?? mail.time}, ${mail.name} a écrit :\n${quoted}`,
@@ -994,14 +999,15 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       }
       start();
     },
-    [composeDetached, composeDraft, notify, prefs.pgpEncrypt, prefs.pgpSign],
+    [composeDetached, composeDraft, notify, pgpPrefs],
   );
 
   const forwardMail = useCallback(
     (mail: Mail) => {
       const start = () => {
+        const pgp = resolvePgp(pgpPrefs, mail.account);
         setComposeDraft({
-          ...baseDraft(mail.account, prefs.pgpEncrypt, prefs.pgpSign),
+          ...baseDraft(mail.account, pgp.encrypt, pgp.sign),
           subject: /^tr\s*:/i.test(mail.subject.trim()) ? mail.subject : `Tr: ${mail.subject}`,
           body: `\n\n--- Message transféré ---\nDe : ${mail.name} <${mail.email}>\nDate : ${
             mail.date ?? mail.time
@@ -1017,7 +1023,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       }
       start();
     },
-    [composeDetached, composeDraft, notify, prefs.pgpEncrypt, prefs.pgpSign],
+    [composeDetached, composeDraft, notify, pgpPrefs],
   );
 
   const sendDraft = useCallback(
