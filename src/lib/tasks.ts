@@ -147,6 +147,8 @@ export type MailSuggestion = {
   dueTone: Task["dueTone"];
   tone: number;
   description: string;
+  /** Horodatage (ms) du mail source : base du filtre de fenêtre des suggestions IA. */
+  timestamp?: number;
 };
 
 export const MAIL_SUGGESTIONS: MailSuggestion[] = [

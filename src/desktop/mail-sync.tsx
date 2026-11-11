@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, CloudOff, Loader2, RefreshCw, Trash2, X } from "lucide-react";
+import { AlertTriangle, CloudOff, Info, Loader2, RefreshCw, Trash2, X } from "lucide-react";
 import { errorText, mailApi, type ApiFolder, type ApiFolderRole } from "@/lib/api";
 import { useMailStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -89,6 +89,19 @@ export function MailSyncPanel() {
 
   return (
     <div className="space-y-3">
+      <Surface className="px-3.5 py-3">
+        <p className="flex items-start gap-2 text-[11.5px] leading-relaxed font-medium text-ink-soft">
+          <Info className="mt-0.5 size-4 shrink-0 text-accent-ink" />
+          <span>
+            <span className="font-bold text-ink">La synchronisation</span> met à jour la copie locale de
+            vos mails (le « cache ») avec votre serveur : nouveaux messages, lus/non-lus, suppressions.
+            Elle est automatique pour la boîte de réception et à la demande pour les autres dossiers.
+            <span className="font-bold text-ink"> Désynchroniser</span> un dossier vide uniquement cette
+            copie locale — rien n'est supprimé sur le serveur ; le prochain sync le relira.
+          </span>
+        </p>
+      </Surface>
+
       <Surface className="flex flex-wrap items-center gap-2 px-3.5 py-2">
         <SectionLabel>Cache local</SectionLabel>
         <span className="text-[10.5px] font-semibold text-ink-muted">

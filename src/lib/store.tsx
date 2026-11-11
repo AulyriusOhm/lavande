@@ -12,12 +12,13 @@ import { threadOf } from "@/lib/threads";
 import type { Thread } from "@/lib/threads";
 import type { MailSuggestion, Task } from "@/lib/tasks";
 import { dueToneFor, formatDueDate } from "@/lib/tasks";
-import { currentPeriod, generateSummary } from "@/lib/summary";
+import { currentPeriod, generateSummary, recentMails, suggestTasks } from "@/lib/summary";
 import type { SummaryMailInput, SummaryResult, SummaryTask } from "@/lib/summary";
+import { llmReady } from "@/lib/llm";
 import { EVENTS, TODAY_ISO } from "@/lib/calendar";
 import type { CalendarEvent } from "@/lib/calendar";
 import { activeSignature, usePrefs } from "@/lib/prefs";
-import { usePlanning } from "@/lib/planning-store";
+import { suggestionsInWindow, usePlanning } from "@/lib/planning-store";
 import { mailApi, errorText } from "@/lib/api";
 import type { LiveEvent } from "@/lib/api";
 import type { NewAccount } from "@/lib/api";
@@ -56,7 +57,7 @@ const summaryAccount = (value: string | undefined): MailSuggestion["account"] =>
 /** Une tâche proposée par le résumé devient une suggestion EN ATTENTE, jamais une tâche. */
 function summarySuggestion(task: SummaryTask, mail: Mail | undefined, period: string): MailSuggestion {
   const day = ISO_DAY.test(task.due) ? task.due : "";
-  return {
+  const suggestion: MailSuggestion = {
     id: `summary:${task.mailId ?? "sans-mail"}:${normalize(task.title)}`,
     mailId: task.mailId ?? "",
     account: summaryAccount(mail?.account),
@@ -68,6 +69,8 @@ function summarySuggestion(task: SummaryTask, mail: Mail | undefined, period: st
     tone: mail?.tone ?? 0,
     description: `${period} · ${task.due && task.due !== "aucune" ? `échéance ${task.due}` : "sans échéance"}`,
   };
+  if (typeof mail?.timestamp === "number") suggestion.timestamp = mail.timestamp;
+  return suggestion;
 }
 
 function loadEvents(): CalendarEvent[] {
@@ -175,7 +178,7 @@ const MailStoreContext = createContext<MailStoreValue | null>(null);
 export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const prefs = usePrefs();
   const planning = usePlanning();
-  const { tasks, suggestions, setTasks } = planning;
+  const { tasks, suggestions: storedSuggestions, setTasks } = planning;
   const [mode, setMode] = useState<MailMode>(mailMode);
   const [phase, setPhase] = useState<BackendPhase>(() => (mode === "demo" ? "ready" : "loading"));
   const [backendError, setBackendError] = useState<string | null>(null);
@@ -209,6 +212,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const summaryRun = useRef<string | null>(null);
   const summaryRunning = useRef(false);
+  const taskRun = useRef<string | null>(null);
+  const taskRunning = useRef(false);
   const composeBus = useRef<ComposeBus | null>(null);
   const composeStateRef = useRef<ComposeState>({ draft: null, title: "Nouveau message", detached: false });
   const lastPostedCompose = useRef("");
@@ -1241,6 +1246,53 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
   const inboxMails = useMemo(() => mails.filter((mail) => mail.folder === "inbox"), [mails]);
 
+  /** Suggestions affichées : celles dont le mail source est encore dans la fenêtre configurée. */
+  const suggestions = useMemo(
+    () => suggestionsInWindow(storedSuggestions, prefs.aiTasks.windowHours),
+    [storedSuggestions, prefs.aiTasks.windowHours],
+  );
+
+  /** Entrée minimale du moteur : expéditeur, objet, aperçu et horodatage, rien d'autre. */
+  const summaryInputs = useCallback(
+    (list: Mail[]): SummaryMailInput[] =>
+      list.flatMap((mail) =>
+        typeof mail.timestamp === "number"
+          ? [
+              {
+                id: mail.id,
+                from: mail.name,
+                subject: mail.subject,
+                snippet: mail.preview,
+                timestamp: mail.timestamp,
+              },
+            ]
+          : [],
+      ),
+    [],
+  );
+
+  /**
+   * Transforme des tâches extraites en SUGGESTIONS en attente de validation.
+   * Dédup par mail + intitulé : une même action ne devient jamais deux suggestions.
+   */
+  const proposeTasks = useCallback(
+    (proposed: SummaryTask[], byId: Map<string, Mail>, label: string) => {
+      const known = new Set([
+        ...planning.suggestions.map((entry) => `${entry.mailId}:${normalize(entry.proposal)}`),
+        ...planning.tasks.map((entry) => `${entry.mailId ?? ""}:${normalize(entry.title)}`),
+      ]);
+      for (const task of proposed) {
+        const key = `${task.mailId ?? ""}:${normalize(task.title)}`;
+        if (known.has(key)) continue;
+        known.add(key);
+        const mail = task.mailId ? byId.get(task.mailId) : undefined;
+        planning.proposeSuggestion(summarySuggestion(task, mail, label));
+      }
+    },
+    [planning],
+  );
+
+
   /**
    * Recalcule le résumé de la plage courante. Le LLM n'est sollicité que si la
    * plage a changé ou sur demande explicite (force) ; en démo, jamais de réseau.
@@ -1258,19 +1310,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       summaryRunning.current = true;
       setSummaryLoading(true);
       try {
-        const inputs: SummaryMailInput[] = inboxMails.flatMap((mail) =>
-          typeof mail.timestamp === "number"
-            ? [
-                {
-                  id: mail.id,
-                  from: mail.name,
-                  subject: mail.subject,
-                  snippet: mail.preview,
-                  timestamp: mail.timestamp,
-                },
-              ]
-            : [],
-        );
+        const inputs = summaryInputs(inboxMails);
         const result = await generateSummary(
           mode === "demo" ? { ...prefs.summary, llmConsent: false } : prefs.summary,
           prefs.llm,
@@ -1279,18 +1319,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         );
         setSummary(result);
         if (result.mailCount > 0) summaryRun.current = result.period.id;
-        const byId = new Map(inboxMails.map((mail) => [mail.id, mail]));
-        const known = new Set([
-          ...suggestions.map((entry) => `${entry.mailId}:${normalize(entry.proposal)}`),
-          ...tasks.map((entry) => `${entry.mailId ?? ""}:${normalize(entry.title)}`),
-        ]);
-        for (const task of result.tasks) {
-          const key = `${task.mailId ?? ""}:${normalize(task.title)}`;
-          if (known.has(key)) continue;
-          known.add(key);
-          const mail = task.mailId ? byId.get(task.mailId) : undefined;
-          planning.proposeSuggestion(summarySuggestion(task, mail, result.period.label));
-        }
+        proposeTasks(result.tasks, new Map(inboxMails.map((mail) => [mail.id, mail])), result.period.label);
       } catch (error) {
         notify(`Résumé indisponible · ${errorText(error)}`);
       } finally {
@@ -1298,13 +1327,46 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         setSummaryLoading(false);
       }
     },
-    [inboxMails, mode, notify, planning, prefs.llm, prefs.summary, suggestions, tasks],
+    [inboxMails, mode, notify, prefs.llm, prefs.summary, proposeTasks, summaryInputs],
   );
+
+  /**
+   * Propose des tâches extraites des mails de la fenêtre configurée. Le LLM n'est
+   * sollicité qu'une fois par contenu de fenêtre (signature window+mails), et
+   * jamais en démo : pas de réseau, pas de boucle, aucune création automatique.
+   */
+  const refreshTaskSuggestions = useCallback(async () => {
+    const config = prefs.aiTasks;
+    if (!config.enabled || !prefs.planningEnabled) {
+      taskRun.current = null;
+      return;
+    }
+    if (mode !== "api" || !llmReady(prefs.llm) || taskRunning.current) return;
+    const recent = recentMails(summaryInputs(inboxMails), config.windowHours);
+    if (recent.length === 0) return;
+    const signature = `${config.windowHours}:${recent.map((mail) => mail.id).join(",")}`;
+    if (taskRun.current === signature) return;
+    taskRunning.current = true;
+    try {
+      const proposed = await suggestTasks({ windowHours: config.windowHours }, prefs.llm, recent);
+      taskRun.current = signature;
+      if (proposed.length === 0) return;
+      proposeTasks(proposed, new Map(inboxMails.map((mail) => [mail.id, mail])), "Suggestion IA");
+    } finally {
+      taskRunning.current = false;
+    }
+  }, [inboxMails, mode, prefs.aiTasks, prefs.llm, prefs.planningEnabled, proposeTasks, summaryInputs]);
 
   const refreshSummaryRef = useRef(refreshSummary);
   useEffect(() => {
     refreshSummaryRef.current = refreshSummary;
   }, [refreshSummary]);
+
+  const refreshTaskSuggestionsRef = useRef(refreshTaskSuggestions);
+  useEffect(() => {
+    refreshTaskSuggestionsRef.current = refreshTaskSuggestions;
+  }, [refreshTaskSuggestions]);
+
 
   useEffect(() => {
     summaryRun.current = null;
@@ -1317,6 +1379,19 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (phase !== "ready" || isComposeWindow()) return;
     void refreshSummaryRef.current();
+  }, [inboxMails.length, phase]);
+
+  useEffect(() => {
+    taskRun.current = null;
+    if (phase !== "ready" || isComposeWindow()) return;
+    void refreshTaskSuggestionsRef.current();
+    const timer = window.setInterval(() => void refreshTaskSuggestionsRef.current(), SUMMARY_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [mode, phase, prefs.aiTasks]);
+
+  useEffect(() => {
+    if (phase !== "ready" || isComposeWindow()) return;
+    void refreshTaskSuggestionsRef.current();
   }, [inboxMails.length, phase]);
 
   const resolvedOpenMail = useMemo(

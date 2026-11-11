@@ -91,7 +91,7 @@ function projectTask(doc: Doc): Task {
 function projectSuggestion(doc: Doc): MailSuggestion | null {
   const raw = doc.raw;
   if (raw.status !== "pending") return null;
-  return {
+  const suggestion: MailSuggestion = {
     id: doc.id,
     mailId: text(raw.mailId),
     account: oneOf(["perso", "pro", "gmail"] as const, raw.account, "perso"),
@@ -103,6 +103,10 @@ function projectSuggestion(doc: Doc): MailSuggestion | null {
     tone: typeof raw.tone === "number" ? raw.tone : 0,
     description: text(raw.description),
   };
+  if (typeof raw.timestamp === "number" && Number.isFinite(raw.timestamp)) {
+    suggestion.timestamp = raw.timestamp;
+  }
+  return suggestion;
 }
 
 function sameValue(left: unknown, right: unknown): boolean {
@@ -152,6 +156,7 @@ function suggestionFields(
     dueTone: suggestion.dueTone,
     tone: suggestion.tone,
     description: suggestion.description,
+    ...(suggestion.timestamp === undefined ? {} : { timestamp: suggestion.timestamp }),
   };
 }
 
@@ -171,6 +176,34 @@ export function projectSuggestions(state: SyncState): MailSuggestion[] {
   return visibleDocs(state.docs, "suggestion")
     .map(projectSuggestion)
     .filter((entry): entry is MailSuggestion => entry !== null);
+}
+
+/** Fenêtre par défaut du filtre d'affichage des suggestions issues des mails. */
+export const DEFAULT_SUGGESTION_WINDOW_HOURS = 48;
+
+/**
+ * Une suggestion issue d'un mail reste affichée tant que ce mail est dans la
+ * fenêtre. Les suggestions sans horodatage (démo, saisie manuelle) sont gardées.
+ */
+export function suggestionInWindow(
+  suggestion: MailSuggestion,
+  windowHours = DEFAULT_SUGGESTION_WINDOW_HOURS,
+  now = Date.now(),
+): boolean {
+  if (typeof suggestion.timestamp !== "number" || !Number.isFinite(suggestion.timestamp)) return true;
+  const hours =
+    typeof windowHours === "number" && Number.isFinite(windowHours) && windowHours > 0
+      ? windowHours
+      : DEFAULT_SUGGESTION_WINDOW_HOURS;
+  return suggestion.timestamp >= now - hours * 3_600_000;
+}
+
+export function suggestionsInWindow(
+  suggestions: MailSuggestion[],
+  windowHours = DEFAULT_SUGGESTION_WINDOW_HOURS,
+  now = Date.now(),
+): MailSuggestion[] {
+  return suggestions.filter((suggestion) => suggestionInWindow(suggestion, windowHours, now));
 }
 
 function hasPlanningDocs(state: SyncState): boolean {

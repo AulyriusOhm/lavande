@@ -14,7 +14,7 @@ export const SWIPE_ACTIONS: { id: SwipeActionId; label: string }[] = [
 const STORAGE_KEY = "lavande.prefs";
 
 import { EMPTY_LLM, type LlmConfig } from "@/lib/llm";
-import { DEFAULT_SUMMARY, type SummaryConfig } from "@/lib/summary";
+import { DEFAULT_AI_TASKS, DEFAULT_SUMMARY, type AiTasksConfig, type SummaryConfig } from "@/lib/summary";
 
 export type AccountSignature = { html: string; enabled: boolean };
 
@@ -33,6 +33,8 @@ export type Prefs = {
   /** Suggestions de réponse générées par le LLM (sinon repli local). */
   aiReplyEnabled: boolean;
   summary: SummaryConfig;
+  /** Suggestions de tâches extraites des mails récents par le LLM. */
+  aiTasks: AiTasksConfig;
 };
 
 const DEFAULTS: Prefs = {
@@ -49,6 +51,7 @@ const DEFAULTS: Prefs = {
   llm: EMPTY_LLM,
   aiReplyEnabled: true,
   summary: DEFAULT_SUMMARY,
+  aiTasks: DEFAULT_AI_TASKS,
 };
 
 type PrefsContextValue = Prefs & {
@@ -64,6 +67,7 @@ type PrefsContextValue = Prefs & {
   setLlm: (patch: Partial<LlmConfig>) => void;
   setAiReplyEnabled: (value: boolean) => void;
   setSummary: (patch: Partial<SummaryConfig>) => void;
+  setAiTasks: (patch: Partial<AiTasksConfig>) => void;
 };
 
 const PrefsContext = createContext<PrefsContextValue | null>(null);
@@ -125,6 +129,18 @@ const asSummary = (value: unknown): SummaryConfig => {
   };
 };
 
+const asAiTasks = (value: unknown): AiTasksConfig => {
+  if (!value || typeof value !== "object") return { ...DEFAULT_AI_TASKS };
+  const { enabled, windowHours } = value as Record<string, unknown>;
+  return {
+    enabled: asBoolean(enabled, DEFAULT_AI_TASKS.enabled),
+    windowHours:
+      typeof windowHours === "number" && Number.isFinite(windowHours) && windowHours >= 1
+        ? Math.min(168, Math.round(windowHours))
+        : DEFAULT_AI_TASKS.windowHours,
+  };
+};
+
 export function activeSignature(
   signatures: Record<string, AccountSignature>,
   accountId: string,
@@ -156,6 +172,7 @@ function read(): Prefs {
     llm: asLlm(stored.llm),
     aiReplyEnabled: asBoolean(stored.aiReplyEnabled, DEFAULTS.aiReplyEnabled),
     summary: asSummary(stored.summary),
+    aiTasks: asAiTasks(stored.aiTasks),
   };
 }
 
@@ -215,6 +232,12 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const setAiTasks = useCallback(
+    (patch: Partial<AiTasksConfig>) =>
+      setPrefs((current) => ({ ...current, aiTasks: { ...current.aiTasks, ...patch } })),
+    [],
+  );
+
   const value = useMemo<PrefsContextValue>(
     () => ({
       ...prefs,
@@ -230,6 +253,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setLlm,
       setAiReplyEnabled,
       setSummary,
+      setAiTasks,
     }),
     [
       prefs,
@@ -245,6 +269,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setLlm,
       setAiReplyEnabled,
       setSummary,
+      setAiTasks,
     ],
   );
 

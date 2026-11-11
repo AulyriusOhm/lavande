@@ -275,7 +275,7 @@ export function InboxScreen({
                   ) : null}
                 </div>
                 {summary ? (
-                  <p className="mt-2 line-clamp-2 text-[12.5px] leading-relaxed font-medium text-ink">
+                  <p className="mt-2 text-[12.5px] leading-relaxed font-medium text-ink">
                     {summary.text}
                   </p>
                 ) : (

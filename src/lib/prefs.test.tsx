@@ -111,3 +111,39 @@ describe("préférences · suggestions de réponse IA", () => {
     expect(stored().aiReplyEnabled).toBe(false);
   });
 });
+
+describe("préférences · suggestions de tâches IA", () => {
+  it("démarre activé sur une fenêtre de 48 h", () => {
+    expect(mount().result.current.aiTasks).toEqual({ enabled: true, windowHours: 48 });
+  });
+
+  it("relit une configuration complète", () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({ aiTasks: { enabled: false, windowHours: 6 } }),
+    );
+    expect(mount().result.current.aiTasks).toEqual({ enabled: false, windowHours: 6 });
+  });
+
+  it("ignore les valeurs invalides et borne la fenêtre à 1-168 h", () => {
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ aiTasks: { enabled: "oui", windowHours: 0 } }));
+    expect(mount().result.current.aiTasks).toEqual({ enabled: true, windowHours: 48 });
+
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ aiTasks: { windowHours: 900 } }));
+    expect(mount().result.current.aiTasks.windowHours).toBe(168);
+
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ aiTasks: { windowHours: 12.4 } }));
+    expect(mount().result.current.aiTasks.windowHours).toBe(12);
+  });
+
+  it("met à jour partiellement et persiste le résultat, sans toucher aux résumés", () => {
+    const { result } = mount();
+
+    act(() => result.current.setAiTasks({ windowHours: 12 }));
+    act(() => result.current.setAiTasks({ enabled: false }));
+
+    expect(result.current.aiTasks).toEqual({ enabled: false, windowHours: 12 });
+    expect(result.current.summary).toEqual(DEFAULT_SUMMARY);
+    expect(stored().aiTasks).toMatchObject({ enabled: false, windowHours: 12 });
+  });
+});

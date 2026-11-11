@@ -236,7 +236,7 @@ function MorningSummary({
         </div>
 
         {summary ? (
-          <p className="mt-1 line-clamp-2 text-[12.5px] leading-[1.55] font-medium text-ink-soft">{summary.text}</p>
+          <p className="mt-1 text-[12.5px] leading-[1.55] font-medium text-ink-soft">{summary.text}</p>
         ) : (
           <p className="mt-1 line-clamp-2 text-[12.5px] leading-[1.55] font-medium text-ink-soft">
             <span className="font-bold text-ink">{unread} conversations non lues</span>, {attachments} avec des pièces

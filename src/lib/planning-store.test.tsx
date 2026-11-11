@@ -1,9 +1,9 @@
 import { StrictMode, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { PlanningProvider, usePlanning } from "@/lib/planning-store";
+import { PlanningProvider, suggestionsInWindow, usePlanning } from "@/lib/planning-store";
 import { MAIL_SUGGESTIONS, TASKS } from "@/lib/tasks";
-import type { Task } from "@/lib/tasks";
+import type { MailSuggestion, Task } from "@/lib/tasks";
 import { createTask } from "@/screens/new-task-sheet";
 import { LOCAL_SCHEMA_VERSION, docKey, promotedTaskId, suggestionId, type Doc } from "@/lib/sync/merge";
 import { createDevice, createMemoryStorage, emptyState, type SyncStorage } from "@/lib/sync/storage";
@@ -179,5 +179,52 @@ describe("PlanningProvider", () => {
 
     const second = mount(storage);
     expect(second.result.current.tasks.some((task) => task.id === "t7")).toBe(false);
+  });
+});
+
+describe("suggestions · fenêtre temporelle", () => {
+  const H = 3_600_000;
+  const now = Date.now();
+  const suggestion = (id: string, timestamp?: number): MailSuggestion => ({
+    id,
+    mailId: `mail-${id}`,
+    account: "perso",
+    from: "Camille",
+    subject: "Maquettes",
+    proposal: `Action ${id}`,
+    due: "sans échéance",
+    dueTone: "soft",
+    tone: 0,
+    description: "",
+    ...(timestamp === undefined ? {} : { timestamp }),
+  });
+
+  it("garde les suggestions sans horodatage et écarte celles hors fenêtre", () => {
+    const list = [suggestion("demo"), suggestion("recente", now - 2 * H), suggestion("vieille", now - 60 * H)];
+
+    expect(suggestionsInWindow(list, 48, now).map((entry) => entry.id)).toEqual(["demo", "recente"]);
+    expect(suggestionsInWindow(list, 1, now).map((entry) => entry.id)).toEqual(["demo"]);
+    expect(suggestionsInWindow(list, 999, now).map((entry) => entry.id)).toEqual(["demo", "recente", "vieille"]);
+  });
+
+  it("persiste l'horodatage du mail source avec la suggestion", () => {
+    const storage = createMemoryStorage();
+    const first = mount(storage);
+    const proposed = suggestion("ia-tache", now - H);
+
+    act(() => {
+      first.result.current.proposeSuggestion(proposed);
+    });
+
+    const stored = first.result.current.suggestions.find((entry) => entry.proposal === proposed.proposal);
+    expect(stored?.timestamp).toBe(now - H);
+    const raw = Object.values(storage.read().docs).find((doc) => doc.raw.proposal === proposed.proposal);
+    expect(raw?.raw.timestamp).toBe(now - H);
+    first.unmount();
+
+    const second = mount(storage);
+    expect(second.result.current.suggestions.find((entry) => entry.proposal === proposed.proposal)?.timestamp).toBe(
+      now - H,
+    );
   });
 });

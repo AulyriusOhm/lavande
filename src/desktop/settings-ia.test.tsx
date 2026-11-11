@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { DesktopSettings } from "@/desktop/settings";
 import { MailStoreProvider } from "@/lib/store";
@@ -92,5 +92,44 @@ describe("Réglages · section IA", () => {
       await screen.findByText(/Échec · Le modèle a répondu 401 · \{"error":"MissingSessionID"\}/),
     ).toBeTruthy();
     expect(screen.getAllByText("échec").length).toBeGreaterThan(0);
+  });
+});
+
+describe("Réglages · suggestions de tâches IA", () => {
+  const stored = () => JSON.parse(window.localStorage.getItem("lavande.prefs") ?? "{}") as Record<string, unknown>;
+
+  it("bascule l'option et borne la fenêtre entre 1 et 168 heures", async () => {
+    stubFetch(() => response({}));
+    mount();
+
+    const toggle = screen.getByRole("switch", { name: /Suggestions de tâches IA/ });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(stored().aiTasks).toMatchObject({ enabled: false }));
+
+    const field = screen.getByLabelText(
+      "Fenêtre des mails analysés pour les suggestions de tâches",
+    ) as HTMLInputElement;
+    expect(field.value).toBe("48");
+
+    fireEvent.change(field, { target: { value: "12" } });
+    await waitFor(() => expect(stored().aiTasks).toMatchObject({ enabled: false, windowHours: 12 }));
+
+    fireEvent.change(field, { target: { value: "900" } });
+    await waitFor(() => expect(stored().aiTasks).toMatchObject({ windowHours: 168 }));
+
+    fireEvent.change(field, { target: { value: "0" } });
+    await waitFor(() => expect(stored().aiTasks).toMatchObject({ windowHours: 1 }));
+  });
+
+  it("rappelle qu'aucun modèle n'est configuré et que rien n'est créé sans validation", () => {
+    stubFetch(() => response({}));
+    mount();
+
+    expect(screen.getByText(/Le LLM analyse vos mails récents pour proposer des tâches/)).toBeTruthy();
+    expect(
+      screen.getByText("Aucun modèle configuré · aucune suggestion générée (section IA)."),
+    ).toBeTruthy();
   });
 });

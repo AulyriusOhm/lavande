@@ -75,6 +75,7 @@ const SECTIONS = [
   { id: "synchro-mails", label: "Synchro des mails" },
   { id: "ia", label: "IA" },
   { id: "resumes", label: "Résumés" },
+  { id: "taches-ia", label: "Suggestions de tâches" },
   { id: "assistant", label: "Serveurs MCP" },
   { id: "apropos", label: "À propos" },
 ] as const;
@@ -92,6 +93,12 @@ const clampHours = (value: string, max: number): number => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 0;
   return Math.min(max, Math.max(0, Math.round(parsed)));
+};
+
+const clampWindowHours = (value: string): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 48;
+  return Math.min(168, Math.max(1, Math.round(parsed)));
 };
 
 type SummaryHourKey = "morningStart" | "middayStart" | "eveningStart";
@@ -153,6 +160,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     setAiReplyEnabled,
     summary: summaryConfig,
     setSummary,
+    aiTasks,
+    setAiTasks,
   } = usePrefs();
   const { notify, accounts, mode, openConnect, askRemoveAccount, renameAccount } = useMailStore();
   const [active, setActive] = useState<SectionId>("comptes");
@@ -1019,6 +1028,49 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                         ? "Modèle configuré · les résumés sont analysés par l'IA."
                         : "Modèle configuré · en attente de votre accord pour l'analyse."
                       : "Aucun modèle configuré · les résumés restent locaux (section IA)."}
+                  </p>
+                </Surface>
+              </Block>
+
+              <Block
+                id="taches-ia"
+                label="Suggestions de tâches"
+                hint={aiTasks.enabled ? `mails des ${aiTasks.windowHours} h` : "désactivées"}
+              >
+                <Surface className="divide-y divide-line overflow-hidden">
+                  <ToggleRow
+                    icon={<ListChecks className="size-4" />}
+                    label="Suggestions de tâches IA"
+                    hint="Extraire des tâches actionnables des mails de la fenêtre · tout reste à valider"
+                    checked={aiTasks.enabled}
+                    onChange={(value) => setAiTasks({ enabled: value })}
+                  />
+                </Surface>
+
+                <Surface className="mt-3 p-4">
+                  <label className="grid gap-1">
+                    <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                      Fenêtre des mails (heures)
+                    </span>
+                    <TextInput
+                      aria-label="Fenêtre des mails analysés pour les suggestions de tâches"
+                      type="number"
+                      min={1}
+                      max={168}
+                      value={aiTasks.windowHours}
+                      onChange={(event) => setAiTasks({ windowHours: clampWindowHours(event.target.value) })}
+                    />
+                  </label>
+                  <p className="mt-3 text-[10.5px] font-semibold text-ink-muted">
+                    Le LLM analyse vos mails récents pour proposer des tâches ; aucune tâche n'est créée sans
+                    votre validation.
+                  </p>
+                  <p className="mt-1.5 text-[10.5px] font-semibold text-ink-muted">
+                    {llmReady(llm)
+                      ? aiTasks.enabled
+                        ? "Modèle configuré · les suggestions sont générées à partir des mails de la fenêtre."
+                        : "Modèle configuré · suggestions de tâches désactivées."
+                      : "Aucun modèle configuré · aucune suggestion générée (section IA)."}
                   </p>
                 </Surface>
               </Block>
