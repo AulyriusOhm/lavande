@@ -481,6 +481,12 @@ export const mailApi = {
       body: input,
       timeout: LONG_TIMEOUT,
     }),
+  saveDraft: (id: string, input: SendInput) =>
+    request<void>(`${accountPath(id)}/drafts`, {
+      method: "POST",
+      body: input,
+      timeout: LONG_TIMEOUT,
+    }),
 };
 
 export function errorText(error: unknown): string {

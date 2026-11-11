@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMailStore } from "@/lib/store";
-import { aiComposeReply, composeReply, replySuggestions, userPart, type ReplySuggestion } from "@/lib/assist";
+import { aiComposeReply, composeReply, replySuggestions, threadConversation, userPart, type ReplySuggestion } from "@/lib/assist";
 import { llmReady } from "@/lib/llm";
 import { ReplySuggestSheet, RewriteSheet } from "@/screens/assist-sheet";
 import { IconButton } from "@/components/ui/primitives";
@@ -66,8 +66,8 @@ export function ComposeScreen({
   onHeaderPointerDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
   onHeaderDoubleClick?: () => void;
 }) {
-  const { accounts } = useMailStore();
-  const { signatures, llm } = usePrefs();
+  const { accounts, mails, openThread, saveToDrafts } = useMailStore();
+  const { signatures, llm, aiReplyEnabled } = usePrefs();
   const accountSignature = activeSignature(signatures, draft.account);
   const [showCc, setShowCc] = useState(Boolean(draft.cc.trim()));
   const [showCci, setShowCci] = useState(Boolean(draft.cci.trim()));
@@ -154,6 +154,11 @@ export function ComposeScreen({
       return;
     }
     onClose();
+  };
+
+  const handleSaveDraft = async () => {
+    setConfirmClose(false);
+    if (await saveToDrafts(draft)) onClose();
   };
 
   const applySuggestion = (suggestion: ReplySuggestion) => {
@@ -475,11 +480,11 @@ export function ComposeScreen({
         {confirmClose && (
           <div
             role="alertdialog"
-            aria-label="Confirmer la fermeture du brouillon"
-            className="mb-2 flex items-center gap-2 rounded-2xl bg-surface-2 px-3 py-2"
+            aria-label="Enregistrer ou supprimer le brouillon"
+            className="mb-2 flex flex-wrap items-center gap-2 rounded-2xl bg-surface-2 px-3 py-2"
           >
             <p className="min-w-0 flex-1 text-[11.5px] font-semibold text-ink-soft">
-              Fermer et perdre ce message ?
+              Enregistrer ce message avant de fermer ?
             </p>
             <button
               type="button"
@@ -491,9 +496,16 @@ export function ComposeScreen({
             <button
               type="button"
               onClick={onClose}
+              className="rounded-full px-2.5 py-1 text-[11px] font-bold text-rose-600"
+            >
+              Supprimer
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSaveDraft()}
               className="rounded-full bg-accent px-2.5 py-1 text-[11px] font-bold text-accent-contrast"
             >
-              Fermer
+              Brouillons
             </button>
           </div>
         )}
@@ -540,7 +552,9 @@ export function ComposeScreen({
         suggestions={suggestions}
         generate={async (brief) => {
           const input = { subject: draft.subject, to: draft.to, body: htmlToText(draft.body) };
-          return llmReady(llm) ? aiComposeReply(llm, input, brief) : composeReply({ ...input, brief });
+          if (!llmReady(llm) || !aiReplyEnabled) return composeReply({ ...input, brief });
+          const conversation = threadConversation(openThread?.messages, mails ?? [], draft.threadId);
+          return aiComposeReply(llm, { ...input, conversation }, brief);
         }}
         onPick={applySuggestion}
         onClose={() => setSuggestOpen(false)}

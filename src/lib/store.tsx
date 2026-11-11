@@ -149,6 +149,7 @@ export type MailStoreValue = {
   resumeCompose: () => void;
   minimizeCompose: () => void;
   closeCompose: () => void;
+  saveToDrafts: (draft: ComposeDraft) => Promise<boolean>;
   detachCompose: () => void;
   dockCompose: () => void;
   detachClosed: () => void;
@@ -887,6 +888,25 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     setComposeDraft(null);
   }, []);
 
+  const saveToDrafts = useCallback(
+    async (draft: ComposeDraft): Promise<boolean> => {
+      if (mode !== "api") {
+        notify("Brouillon enregistré (démo)");
+        return true;
+      }
+      try {
+        await mailApi.saveDraft(draft.account, sendInputOf(draft));
+        notify("Brouillon enregistré");
+        setRevision((value) => value + 1);
+        return true;
+      } catch (error) {
+        notify(`Brouillon non enregistré · ${errorText(error)}`);
+        return false;
+      }
+    },
+    [mode, notify],
+  );
+
   const detachCompose = useCallback(() => {
     setComposeDetached(true);
     setComposeOpen(false);
@@ -1372,6 +1392,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       replyTo,
       forwardMail,
       sendDraft,
+      saveToDrafts,
       retryBackend,
       refreshMailbox: bootstrap,
       useDemo,
@@ -1443,6 +1464,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       replyTo,
       forwardMail,
       sendDraft,
+      saveToDrafts,
       retryBackend,
       useDemo,
       syncFolder,

@@ -30,6 +30,8 @@ export type Prefs = {
   mcpEnabled: Record<string, boolean>;
   signatures: Record<string, AccountSignature>;
   llm: LlmConfig;
+  /** Suggestions de réponse générées par le LLM (sinon repli local). */
+  aiReplyEnabled: boolean;
   summary: SummaryConfig;
 };
 
@@ -45,6 +47,7 @@ const DEFAULTS: Prefs = {
   mcpEnabled: {},
   signatures: {},
   llm: EMPTY_LLM,
+  aiReplyEnabled: true,
   summary: DEFAULT_SUMMARY,
 };
 
@@ -59,6 +62,7 @@ type PrefsContextValue = Prefs & {
   setMcpEnabled: (serverId: string, value: boolean) => void;
   setSignature: (accountId: string, patch: Partial<AccountSignature>) => void;
   setLlm: (patch: Partial<LlmConfig>) => void;
+  setAiReplyEnabled: (value: boolean) => void;
   setSummary: (patch: Partial<SummaryConfig>) => void;
 };
 
@@ -150,6 +154,7 @@ function read(): Prefs {
     mcpEnabled: asFlags(stored.mcpEnabled),
     signatures: asSignatures(stored.signatures),
     llm: asLlm(stored.llm),
+    aiReplyEnabled: asBoolean(stored.aiReplyEnabled, DEFAULTS.aiReplyEnabled),
     summary: asSummary(stored.summary),
   };
 }
@@ -202,6 +207,8 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const setAiReplyEnabled = useCallback((value: boolean) => patch("aiReplyEnabled", value), [patch]);
+
   const setSummary = useCallback(
     (patch: Partial<SummaryConfig>) =>
       setPrefs((current) => ({ ...current, summary: { ...current.summary, ...patch } })),
@@ -221,6 +228,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setMcpEnabled,
       setSignature,
       setLlm,
+      setAiReplyEnabled,
       setSummary,
     }),
     [
@@ -235,6 +243,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setMcpEnabled,
       setSignature,
       setLlm,
+      setAiReplyEnabled,
       setSummary,
     ],
   );

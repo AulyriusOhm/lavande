@@ -717,3 +717,47 @@ async fn folder_is_purged() {
         "le serveur expose encore {server:?} dans « {folder} »"
     );
 }
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn a_composition_saved_as_a_draft_lands_in_the_drafts_folder() {
+    let daemon = Daemon::start().await;
+    let client = daemon.client();
+    add_account(&client, &daemon).await;
+    sync(&client, &daemon, None).await;
+
+    let response = client
+        .get(daemon.url(&format!("/api/accounts/{ACCOUNT}/folders")))
+        .send()
+        .await
+        .expect("GET folders");
+    let folders: Vec<Value> = response.json().await.expect("dossiers");
+    let drafts = folders
+        .iter()
+        .find(|folder| folder["role"] == "drafts")
+        .expect("dossier Brouillons")["path"]
+        .as_str()
+        .expect("chemin")
+        .to_string();
+
+    let subject = unique("[live-api-draft] brouillon");
+    let response = client
+        .post(daemon.url(&format!("/api/accounts/{ACCOUNT}/drafts")))
+        .json(&json!({
+            "to": [{ "email": account().email }],
+            "cc": [], "bcc": [],
+            "subject": subject,
+            "text": "corps du brouillon"
+        }))
+        .send()
+        .await
+        .expect("POST drafts");
+    let status = response.status();
+    let body = response.text().await.expect("corps");
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    sync(&client, &daemon, Some(drafts.as_str())).await;
+    let uid = find(&threads(&client, &daemon, &drafts).await, &subject);
+    let stored = message(&client, &daemon, &drafts, uid).await;
+    assert_eq!(stored["subject"], subject, "{stored}");
+}

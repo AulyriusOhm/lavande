@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { WandSparkles, X } from "lucide-react";
+import { Sparkles, WandSparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { aiRewrite, replaceUserPart, rewriteBody, rewriteOptions, userPart, type ReplySuggestion, type RewriteOption } from "@/lib/assist";
@@ -92,7 +92,8 @@ function OptionCard({
       )}
     >
       {badge && (
-        <span className="inline-flex items-center rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-bold tracking-[0.12em] text-accent-ink uppercase">
+        <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-bold tracking-[0.12em] text-accent-ink uppercase">
+          {badge === "IA" && <Sparkles aria-hidden className="size-3" />}
           {badge}
         </span>
       )}
@@ -163,7 +164,7 @@ export function ReplySuggestSheet({
     <Sheet
       open={open}
       title="Suggestion de réponse"
-      subtitle="Propositions à partir du fil · générées localement pour la maquette"
+      subtitle="Propositions à partir de toute la conversation du fil"
       onClose={onClose}
     >
       <div className="mt-3 rounded-2xl border border-line bg-surface-2/60 p-3">

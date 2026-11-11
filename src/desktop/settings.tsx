@@ -149,6 +149,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     signatures,
     llm,
     setLlm,
+    aiReplyEnabled,
+    setAiReplyEnabled,
     summary: summaryConfig,
     setSummary,
   } = usePrefs();
@@ -933,6 +935,16 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                       ? "IA active · les propositions utilisent le modèle configuré."
                       : "IA inactive · propositions locales uniquement."}
                   </p>
+                </Surface>
+
+                <Surface className="mt-3 divide-y divide-line overflow-hidden">
+                  <ToggleRow
+                    icon={<Sparkles className="size-4" />}
+                    label="Suggestions de réponse IA"
+                    hint="Le modèle lit toute la conversation du fil · désactivable, repli sur les réponses locales"
+                    checked={aiReplyEnabled}
+                    onChange={setAiReplyEnabled}
+                  />
                 </Surface>
               </Block>
 

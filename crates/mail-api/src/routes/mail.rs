@@ -48,6 +48,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/accounts/{id}/delete", post(delete_message))
         .route("/api/accounts/{id}/purge", post(purge_folder))
         .route("/api/accounts/{id}/send", post(send))
+        .route("/api/accounts/{id}/drafts", post(save_draft))
 }
 
 #[derive(Deserialize)]
@@ -383,6 +384,46 @@ async fn send(
             }
         }
     }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Saves the composition as a draft in the Drafts folder (IMAP APPEND with
+/// `\Draft`). No SMTP submission and no encryption: a draft must stay editable.
+async fn save_draft(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<SendRequest>,
+) -> Result<StatusCode, ApiError> {
+    let config = state.account(&id).await?;
+    let mut outgoing = request.into_outgoing(Address {
+        name: None,
+        email: config.email.clone(),
+    })?;
+    outgoing.pgp_sign = false;
+    outgoing.pgp_encrypt = false;
+    let drafts_folder = state
+        .store()
+        .list_folders(&id)?
+        .into_iter()
+        .find(|folder| folder.role == FolderRole::Drafts)
+        .ok_or_else(|| {
+            ApiError::bad_request("config", "Aucun dossier Brouillons pour ce compte")
+        })?;
+    let email = smtp::build_message(&outgoing)?;
+    let raw = email.formatted();
+    let keys = state.pgp().keyring().await.unwrap_or_default();
+    let mut session = imap::connect_with(&config, state.tls()).await?;
+    imap::append_draft(
+        &mut session,
+        state.store(),
+        &id,
+        &drafts_folder.path,
+        &raw,
+        &keys,
+    )
+    .await?;
+    logout(session).await;
+    tracing::info!(account = %id, "brouillon enregistré");
     Ok(StatusCode::NO_CONTENT)
 }
 

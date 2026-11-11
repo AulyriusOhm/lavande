@@ -91,3 +91,23 @@ describe("préférences · résumés", () => {
     expect(stored().summary).toMatchObject({ llmConsent: true, eveningStart: 20 });
   });
 });
+
+describe("préférences · suggestions de réponse IA", () => {
+  it("active le LLM par défaut et relit un réglage désactivé", () => {
+    expect(mount().result.current.aiReplyEnabled).toBe(true);
+
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ aiReplyEnabled: false }));
+    const { result } = mount();
+    expect(result.current.aiReplyEnabled).toBe(false);
+  });
+
+  it("ignore une valeur non booléenne et persiste le changement", () => {
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ aiReplyEnabled: "non" }));
+    const { result } = mount();
+    expect(result.current.aiReplyEnabled).toBe(true);
+
+    act(() => result.current.setAiReplyEnabled(false));
+    expect(result.current.aiReplyEnabled).toBe(false);
+    expect(stored().aiReplyEnabled).toBe(false);
+  });
+});

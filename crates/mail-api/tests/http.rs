@@ -945,3 +945,27 @@ async fn encrypting_to_a_recipient_without_a_key_lists_the_missing_one() {
     assert!(message.contains("camille@studio-lilas.fr"), "{message}");
     assert!(message.contains("marc@mail.fr"), "{message}");
 }
+
+#[tokio::test]
+async fn saving_a_draft_without_a_drafts_folder_is_a_400() {
+    let directory = tempfile::tempdir().expect("répertoire temporaire");
+    seed(directory.path(), &[account("perso")]);
+    let state = state_in(directory.path()).await;
+    let (status, body) = call(
+        &state,
+        post(
+            "/api/accounts/perso/drafts",
+            &json!({
+                "to": [{ "email": "camille@studio-lilas.fr" }],
+                "subject": "Planning",
+                "text": "Bonjour"
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json(&body)["error"],
+        "Aucun dossier Brouillons pour ce compte"
+    );
+}

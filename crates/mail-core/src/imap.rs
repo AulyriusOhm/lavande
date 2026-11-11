@@ -817,6 +817,26 @@ pub async fn append_sent(
     Ok(())
 }
 
+/// APPENDs a draft to the Drafts folder with the `\Draft` flag, then reconciles
+/// so the copy is visible immediately. Unlike a sent copy, a draft is not
+/// deduplicated by Message-ID: saving again creates a new draft revision.
+pub async fn append_draft(
+    session: &mut ImapSession,
+    store: &Store,
+    account_id: &str,
+    folder_path: &str,
+    raw: &[u8],
+    keys: &PgpKeyring,
+) -> Result<(), MailError> {
+    session.select(folder_path).await.map_err(imap_error)?;
+    session
+        .append(folder_path, Some("(\\Draft \\Seen)"), None, raw)
+        .await
+        .map_err(imap_error)?;
+    reconcile(session, store, account_id, folder_path, None, keys).await?;
+    Ok(())
+}
+
 /// Pushes `\Answered` on the message the user replied to.
 pub async fn mark_answered(
     session: &mut ImapSession,
