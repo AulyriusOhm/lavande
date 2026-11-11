@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   AlertTriangle,
@@ -45,6 +45,25 @@ type DesktopEvent = CalendarEvent & { description?: string };
 
 const DAY_FMT = new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "long" });
 
+const NARROW_QUERY = "(max-width: 1024px)";
+
+function useNarrowViewport() {
+  const [narrow, setNarrow] = useState(() =>
+    typeof window.matchMedia === "function" ? window.matchMedia(NARROW_QUERY).matches : false,
+  );
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia(NARROW_QUERY);
+    const sync = () => setNarrow(query.matches);
+    sync();
+    query.addEventListener?.("change", sync);
+    return () => query.removeEventListener?.("change", sync);
+  }, []);
+
+  return narrow;
+}
+
 const TONE_PILL = [
   "bg-accent-soft text-accent-ink",
   "bg-sky-500/12 text-sky-700 dark:text-sky-300",
@@ -87,6 +106,7 @@ export function DesktopCalendar({ onNewEvent }: { onNewEvent: () => void }) {
   const [view, setView] = useState({ year: CURRENT_YEAR, month: CURRENT_MONTH });
   const [direction, setDirection] = useState(0);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const narrow = useNarrowViewport();
 
   const cells = monthGrid(view.year, view.month);
   const offset = cells.findIndex((cell) => cell !== null);
@@ -156,17 +176,38 @@ export function DesktopCalendar({ onNewEvent }: { onNewEvent: () => void }) {
   const dayLabel = `${dayEvents.length} événement${dayEvents.length > 1 ? "s" : ""}`;
 
   return (
-    <div className="flex h-full min-h-0 w-full">
-      <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex shrink-0 items-center gap-3 border-b border-line px-6 py-3.5">
-          <PaneTitle hint={`${monthCount} événement${monthCount > 1 ? "s" : ""}`}>Agenda</PaneTitle>
+    <div
+      data-testid="calendar-layout"
+      className={cn("flex h-full min-h-0 w-full", narrow ? "flex-col overflow-y-auto" : "flex-row")}
+    >
+      <section className={cn("flex min-h-0 min-w-0 flex-1 flex-col", narrow && "min-h-[520px]")}>
+        <header
+          data-testid="calendar-header"
+          className={cn(
+            "flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-line",
+            narrow ? "px-4 py-3" : "px-6 py-3.5",
+          )}
+        >
+          <PaneTitle hint={narrow ? undefined : `${monthCount} événement${monthCount > 1 ? "s" : ""}`}>
+            Agenda
+          </PaneTitle>
 
-          <div className="ml-auto flex shrink-0 items-center gap-3">
-            <div className="flex items-center gap-1">
+          <div
+            className={cn(
+              "ml-auto flex min-w-0 flex-wrap items-center justify-end",
+              narrow ? "gap-2" : "gap-3",
+            )}
+          >
+            <div className="flex min-w-0 items-center gap-1">
               <DIconButton label="Mois précédent" onClick={() => shiftMonth(-1)}>
                 <ChevronLeft className="size-4" strokeWidth={2.2} />
               </DIconButton>
-              <span className="min-w-[188px] text-center text-[22px] leading-none font-extrabold tracking-[-0.035em] text-ink tabular-nums">
+              <span
+                className={cn(
+                  "min-w-0 truncate text-center leading-none font-extrabold tracking-[-0.035em] text-ink tabular-nums",
+                  narrow ? "text-[17px]" : "min-w-[188px] text-[22px]",
+                )}
+              >
                 {monthLabel(view.month)} {view.year}
               </span>
               <DIconButton label="Mois suivant" onClick={() => shiftMonth(1)}>
@@ -194,7 +235,7 @@ export function DesktopCalendar({ onNewEvent }: { onNewEvent: () => void }) {
           ))}
         </div>
 
-        <div className="relative min-h-0 flex-1 overflow-hidden">
+        <div data-testid="grid-viewport" className="relative min-h-0 flex-1 overflow-auto">
           <AnimatePresence mode="wait" initial={false}>
             <motion.div
               key={monthKey}
@@ -217,7 +258,7 @@ export function DesktopCalendar({ onNewEvent }: { onNewEvent: () => void }) {
               <div
                 key={cell.iso}
                 className={cn(
-                  "flex min-h-0 flex-col gap-1 overflow-hidden border-b border-line p-2",
+                  "flex min-h-[84px] flex-col gap-1 overflow-hidden border-b border-line p-2",
                   (index + 1) % 7 === 0 ? "border-r-0" : "border-r",
                   cell.inMonth ? "bg-surface" : "bg-surface-2/40 opacity-45",
                   cell.inMonth && index % 7 >= 5 && "bg-surface-2/60",
@@ -266,22 +307,24 @@ export function DesktopCalendar({ onNewEvent }: { onNewEvent: () => void }) {
         </div>
       </section>
 
-      <aside className="flex w-[440px] shrink-0 flex-col border-l border-line">
+      <aside
+        data-testid="day-panel"
+        className={cn(
+          "flex min-h-0 shrink-0 flex-col border-line",
+          narrow ? "w-full border-t" : "min-w-[320px] w-[32%] max-w-[440px] border-l",
+        )}
+      >
         <div className="shrink-0 border-b border-line px-6 py-4">
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-3">
             <SectionLabel>Journée</SectionLabel>
-            <span className="ml-auto text-[11.5px] font-semibold text-ink-muted">{dayLabel}</span>
-            <DButton variant="soft" size="md" onClick={onNewEvent}>
-              <Plus className="size-4" strokeWidth={2.6} />
-              Ajouter
-            </DButton>
+            <span className="ml-auto truncate text-[11.5px] font-semibold text-ink-muted">{dayLabel}</span>
           </div>
           <p className="mt-2 truncate text-[22px] leading-tight font-extrabold tracking-[-0.035em] text-ink">
             {longDate(selectedDate)}
           </p>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 pt-4 pb-[96px]">
+        <div className={cn("min-h-0 px-5 pt-4", narrow ? "pb-6" : "flex-1 overflow-y-auto pb-[96px]")}>
           {detail ? (
             <div className="space-y-3">
               <DButton variant="ghost" size="sm" onClick={() => setDetailId(null)}>
