@@ -49,8 +49,21 @@ export function InboxScreen({
   const [filter, setFilter] = useState<Filter>("all");
   const [compact, setCompact] = useState(false);
   const [sizes, setSizes] = useState({ hero: 0, card: 0, bar: 0 });
-  const { mode, syncing, syncFolder, threadsLoading, hasMore, loadMore, folderPath, folderOptions, accountById, folderStats } =
-    useMailStore();
+  const {
+    mode,
+    syncing,
+    syncFolder,
+    threadsLoading,
+    hasMore,
+    loadMore,
+    folderPath,
+    folderOptions,
+    accountById,
+    folderStats,
+    summary,
+    summaryLoading,
+    refreshSummary,
+  } = useMailStore();
 
   useEffect(() => {
     setFilter("all");
@@ -228,21 +241,53 @@ export function InboxScreen({
                 <ChevronUp className="size-3.5" />
               </motion.button>
 
+              {summary ? (
+                <motion.button
+                  type="button"
+                  onClick={() => void refreshSummary(true)}
+                  disabled={summaryLoading}
+                  aria-label="Régénérer le résumé"
+                  style={{ opacity: cardExpand }}
+                  className={cn(
+                    "absolute top-2.5 right-11 z-10 grid size-7 place-items-center rounded-full bg-surface/80 text-accent-ink",
+                    compact && "pointer-events-none",
+                  )}
+                >
+                  <RefreshCw className={cn("size-3.5", summaryLoading && "animate-spin")} />
+                </motion.button>
+              ) : null}
+
               <motion.div ref={cardRef} style={{ opacity: cardBody }} className="p-4">
                 <div className="flex items-center gap-2">
                   <span className="grid size-6 place-items-center rounded-full bg-accent/15">
                     <Sparkles className="size-3.5 text-accent-ink" strokeWidth={2.4} />
                   </span>
-                  <p className="text-[10.5px] font-bold tracking-[0.14em] text-accent-ink uppercase">Résumé du matin</p>
+                  <p className="text-[10.5px] font-bold tracking-[0.14em] text-accent-ink uppercase">
+                    {summary?.period.label ?? "Résumé du matin"}
+                  </p>
+                  {summary ? (
+                    <span
+                      data-testid="summary-source-mobile"
+                      className="ml-auto rounded-full bg-surface px-2 py-0.5 text-[10px] font-bold text-accent-ink"
+                    >
+                      {summary.source === "llm" ? "IA" : "local"}
+                    </span>
+                  ) : null}
                 </div>
-                <p className="mt-2 text-[12.5px] leading-relaxed font-medium text-ink">
-                  <span className="font-bold">
-                    {unreadCount} conversation{unreadCount > 1 ? "s" : ""} non lue{unreadCount > 1 ? "s" : ""}
-                  </span>{" "}
-                  {mode === "api"
-                    ? `dans « ${heading} ».`
-                    : "dans ta boîte de réception. Camille veut un retour sur les maquettes v3 avant vendredi."}
-                </p>
+                {summary ? (
+                  <p className="mt-2 line-clamp-2 text-[12.5px] leading-relaxed font-medium text-ink">
+                    {summary.text}
+                  </p>
+                ) : (
+                  <p className="mt-2 text-[12.5px] leading-relaxed font-medium text-ink">
+                    <span className="font-bold">
+                      {unreadCount} conversation{unreadCount > 1 ? "s" : ""} non lue{unreadCount > 1 ? "s" : ""}
+                    </span>{" "}
+                    {mode === "api"
+                      ? `dans « ${heading} ».`
+                      : "dans ta boîte de réception. Camille veut un retour sur les maquettes v3 avant vendredi."}
+                  </p>
+                )}
                 <div className="mt-3 flex gap-1.5">
                   <span className="rounded-full bg-surface px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
                     {attachmentThreads} conversation{attachmentThreads > 1 ? "s" : ""} avec pièce
@@ -257,14 +302,16 @@ export function InboxScreen({
               <motion.button
                 type="button"
                 onClick={expand}
-                aria-label="Réafficher le résumé du matin"
+                aria-label={`Réafficher le ${(summary?.period.label ?? "Résumé du matin").toLowerCase()}`}
                 style={{ opacity: cardCompact }}
                 className="absolute inset-0 flex w-full items-center gap-2 px-4 text-left"
               >
                 <Sparkles className="size-3.5 shrink-0 text-accent-ink" strokeWidth={2.4} />
-                <p className="truncate text-[11px] font-bold text-accent-ink">Résumé du matin</p>
+                <p className="truncate text-[11px] font-bold text-accent-ink">
+                  {summary?.period.label ?? "Résumé du matin"}
+                </p>
                 <span className="shrink-0 rounded-full bg-surface px-2 py-0.5 text-[10px] font-bold text-accent-ink">
-                  {unreadCount} non lus
+                  {summary ? `${summary.mailCount} mail${summary.mailCount > 1 ? "s" : ""}` : `${unreadCount} non lus`}
                 </span>
                 <ChevronDown className="ml-auto size-3.5 shrink-0 text-accent-ink/70" />
               </motion.button>

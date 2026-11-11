@@ -298,7 +298,7 @@ const KINDS: readonly ApiErrorKind[] = [
 ];
 
 type RequestOptions = {
-  method?: "GET" | "POST" | "DELETE";
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
   body?: unknown;
   timeout?: number;
   signal?: AbortSignal;
@@ -386,9 +386,18 @@ export const mailApi = {
   createAccount: (input: NewAccount) =>
     request<ApiAccount>("/accounts", { method: "POST", body: input }),
 
+  renameAccount: (id: string, label: string) =>
+    request<ApiAccount | void>(accountPath(id), { method: "PATCH", body: { label } }),
+
   deleteAccount: (id: string) => request<void>(accountPath(id), { method: "DELETE" }),
 
   folders: (id: string) => request<ApiFolder[]>(`${accountPath(id)}/folders`),
+
+  /** Purge le cache local d'un dossier ; le prochain sync le relit sur le serveur. */
+  desyncFolder: (id: string, folderPath: string) =>
+    request<void>(`${accountPath(id)}/folders/${encodeURIComponent(folderPath)}/local`, {
+      method: "DELETE",
+    }),
 
   folderCounts: (id: string) => request<ApiFolderCount[]>(`${accountPath(id)}/folder-counts`),
 

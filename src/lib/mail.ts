@@ -80,6 +80,8 @@ export type Mail = {
   html?: string;
   time: string;
   date?: string;
+  /** Horodatage réel (ms) : base du filtrage des résumés périodiques. */
+  timestamp?: number;
   unread: boolean;
   starred: boolean;
   pgp: PgpState;
@@ -96,6 +98,11 @@ export const TONES = [
   "from-teal-200 to-emerald-200 text-teal-900",
   "from-amber-200 to-rose-200 text-amber-900",
 ];
+
+/** Horodatage des fixtures : relatif au chargement, pour que la fenêtre des
+ *  résumés périodiques reste peuplée dans la démo (les libellés restent figés). */
+const DEMO_LOADED_AT = Date.now();
+const minutesAgo = (minutes: number) => DEMO_LOADED_AT - minutes * 60_000;
 
 export const MAILS: Mail[] = [
   {
@@ -114,6 +121,7 @@ export const MAILS: Mail[] = [
     ],
     time: "11:02",
     date: "mardi 10 novembre 2026 · 11:02",
+    timestamp: minutesAgo(45),
     unread: true,
     starred: false,
     pgp: "none",
@@ -136,6 +144,7 @@ export const MAILS: Mail[] = [
     ],
     time: "10:12",
     date: "mardi 10 novembre 2026 · 10:12",
+    timestamp: minutesAgo(106),
     unread: false,
     starred: false,
     pgp: "none",
@@ -154,6 +163,7 @@ export const MAILS: Mail[] = [
     body: ["Parfait Marc, merci.", "Je lance la phase 2 lundi, je te transmets le planning dans la journée."],
     time: "10:12",
     date: "mardi 10 novembre 2026 · 10:12",
+    timestamp: minutesAgo(105),
     unread: false,
     starred: false,
     pgp: "encrypted",
@@ -177,6 +187,7 @@ export const MAILS: Mail[] = [
     ],
     time: "09:41",
     date: "mardi 10 novembre 2026 · 09:41",
+    timestamp: minutesAgo(160),
     unread: true,
     starred: true,
     pgp: "encrypted",
@@ -203,6 +214,7 @@ export const MAILS: Mail[] = [
     ],
     time: "08:47",
     date: "mardi 10 novembre 2026 · 08:47",
+    timestamp: minutesAgo(250),
     unread: true,
     starred: true,
     pgp: "encrypted",
@@ -225,6 +237,7 @@ export const MAILS: Mail[] = [
     ],
     time: "08:12",
     date: "mardi 10 novembre 2026 · 08:12",
+    timestamp: minutesAgo(330),
     unread: true,
     starred: false,
     pgp: "signed",
@@ -245,6 +258,7 @@ export const MAILS: Mail[] = [
     ],
     time: "Hier",
     date: "lundi 9 novembre 2026 · 18:24",
+    timestamp: minutesAgo(1_300),
     unread: false,
     starred: false,
     pgp: "none",
@@ -265,6 +279,7 @@ export const MAILS: Mail[] = [
     ],
     time: "Hier",
     date: "lundi 9 novembre 2026 · 18:02",
+    timestamp: minutesAgo(1_340),
     unread: false,
     starred: false,
     pgp: "encrypted",
@@ -285,6 +300,7 @@ export const MAILS: Mail[] = [
     ],
     time: "Hier",
     date: "lundi 9 novembre 2026 · 17:08",
+    timestamp: minutesAgo(1_420),
     unread: true,
     starred: false,
     pgp: "none",
@@ -305,6 +321,7 @@ export const MAILS: Mail[] = [
     ],
     time: "Hier",
     date: "lundi 9 novembre 2026 · 09:15",
+    timestamp: minutesAgo(2_000),
     unread: false,
     starred: false,
     pgp: "signed",
@@ -324,6 +341,7 @@ export const MAILS: Mail[] = [
     ],
     time: "dim.",
     date: "dimanche 8 novembre 2026 · 21:40",
+    timestamp: minutesAgo(2_900),
     unread: false,
     starred: false,
     pgp: "none",
@@ -344,6 +362,7 @@ export const MAILS: Mail[] = [
     ],
     time: "lun.",
     date: "lundi 9 novembre 2026 · 14:02",
+    timestamp: minutesAgo(1_560),
     unread: false,
     starred: false,
     pgp: "signed",
@@ -365,6 +384,7 @@ export const MAILS: Mail[] = [
     ],
     time: "03:12",
     date: "mardi 10 novembre 2026 · 03:12",
+    timestamp: minutesAgo(700),
     unread: true,
     starred: false,
     pgp: "none",
@@ -384,6 +404,7 @@ export const MAILS: Mail[] = [
     ],
     time: "11 sept.",
     date: "vendredi 11 septembre 2026 · 11:02",
+    timestamp: minutesAgo(86_400),
     unread: false,
     starred: true,
     pgp: "encrypted",

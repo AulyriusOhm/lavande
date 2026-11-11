@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import type { FolderId, Mail, MailAttachment } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
+import type { SummaryResult } from "@/lib/summary";
 import { downloadAttachment } from "@/lib/attachments";
 import type { Thread } from "@/lib/threads";
 import { threadsInFolder } from "@/lib/threads";
@@ -153,28 +154,42 @@ function MorningSummary({
   attachments,
   encrypted,
   demo,
+  summary,
+  loading,
   onToggle,
   onOpen,
+  onRefresh,
 }: {
   open: boolean;
   unread: number;
   attachments: number;
   encrypted: number;
   demo: boolean;
+  summary: SummaryResult | null;
+  loading: boolean;
   onToggle: () => void;
   onOpen: (id: string) => void;
+  onRefresh: () => void;
 }) {
+  const label = summary?.period.label ?? "Résumé du matin";
+  const source = summary ? (summary.source === "llm" ? "IA" : "local") : null;
+
   if (!open) {
     return (
       <button
         type="button"
         onClick={onToggle}
-        aria-label="Déplier le résumé du matin"
+        aria-label={`Déplier le ${label.toLowerCase()}`}
         className="focus-ring flex h-[52px] w-full items-center gap-2 rounded-full border border-accent-ring/60 bg-accent-soft px-4 text-[11.5px] font-bold text-accent-ink transition-colors duration-200 hover:border-accent-ring"
       >
         <Sparkles className="size-4 shrink-0" strokeWidth={2.4} />
         <span className="truncate">
-          Résumé du matin{demo ? ` · ${TO_DO} à traiter` : ` · ${unread} non lus`}
+          {label}
+          {summary
+            ? ` · ${summary.mailCount} mail${summary.mailCount > 1 ? "s" : ""}`
+            : demo
+              ? ` · ${TO_DO} à traiter`
+              : ` · ${unread} non lus`}
         </span>
         <ChevronDown className="ml-auto size-4 shrink-0" />
       </button>
@@ -194,24 +209,41 @@ function MorningSummary({
             <Sparkles className="size-4" strokeWidth={2.4} />
           </span>
           <p className="min-w-0 truncate text-[11px] font-bold tracking-[0.16em] text-accent-ink uppercase">
-            Résumé du matin
+            {label}
           </p>
           <span className="shrink-0 text-[11px] font-semibold text-ink-muted">
             <NumberTicker value={unread} /> non lus
           </span>
-          <span className="ml-auto shrink-0 rounded-full border border-accent-ring/60 bg-surface/80 px-2 py-0.5 text-[10px] font-bold text-accent-ink">
-            {demo ? `${TO_DO} à traiter` : `${attachments} fichiers`}
+          <span
+            data-testid={source ? "summary-source" : "summary-badge"}
+            className="ml-auto shrink-0 rounded-full border border-accent-ring/60 bg-surface/80 px-2 py-0.5 text-[10px] font-bold text-accent-ink"
+          >
+            {source ?? (demo ? `${TO_DO} à traiter` : `${attachments} fichiers`)}
           </span>
-          <DIconButton label="Replier le résumé du matin" onClick={onToggle} className="size-7">
+          {summary ? (
+            <DIconButton
+              label="Régénérer le résumé"
+              onClick={onRefresh}
+              className="size-7"
+              disabled={loading}
+            >
+              <RefreshCw className={cn("size-4", loading && "animate-spin")} />
+            </DIconButton>
+          ) : null}
+          <DIconButton label={`Replier le ${label.toLowerCase()}`} onClick={onToggle} className="size-7">
             <ChevronUp className="size-4" />
           </DIconButton>
         </div>
 
-        <p className="mt-1 line-clamp-2 text-[12.5px] leading-[1.55] font-medium text-ink-soft">
-          <span className="font-bold text-ink">{unread} conversations non lues</span>, {attachments} avec des pièces
-          jointes, {encrypted} chiffrées.
-          {demo ? " Camille attend un retour sur la v3 avant vendredi." : ""}
-        </p>
+        {summary ? (
+          <p className="mt-1 line-clamp-2 text-[12.5px] leading-[1.55] font-medium text-ink-soft">{summary.text}</p>
+        ) : (
+          <p className="mt-1 line-clamp-2 text-[12.5px] leading-[1.55] font-medium text-ink-soft">
+            <span className="font-bold text-ink">{unread} conversations non lues</span>, {attachments} avec des pièces
+            jointes, {encrypted} chiffrées.
+            {demo ? " Camille attend un retour sur la v3 avant vendredi." : ""}
+          </p>
+        )}
       </div>
 
       {demo ? (
@@ -392,7 +424,6 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
     syncFolder,
     folderOptions,
     folderPath,
-    openConnect,
     accountById,
     folder,
     openMail,
@@ -413,6 +444,9 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
     forwardMail,
     folderStats,
     accountUnread,
+    summary,
+    summaryLoading,
+    refreshSummary,
   } = useMailStore();
   const { dark, setDark } = useTheme();
   const [filter, setFilter] = useState<Filter>("all");
@@ -533,7 +567,7 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
     <>
       <div className="grid h-full min-h-0 grid-cols-[248px_420px_minmax(0,1fr)]" data-testid="desktop-inbox">
         <aside className="flex min-h-0 flex-col border-r border-line">
-          <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-2.5 pt-4 pb-[104px]">
+          <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-2.5 pt-4 pb-2">
             <div className="flex min-h-full flex-col">
               <div className="flex items-center gap-2 px-1.5">
                 <span
@@ -572,16 +606,6 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                     icon={<span className="size-2 rounded-full" style={{ backgroundColor: entry.color }} />}
                   />
                 ))}
-                <button
-                  type="button"
-                  onClick={openConnect}
-                  className="focus-ring flex h-9 w-full items-center gap-2.5 rounded-[11px] px-2.5 text-[12.5px] font-semibold text-ink-muted transition-colors duration-200 hover:bg-surface-2 hover:text-ink"
-                >
-                  <span className="grid w-4 shrink-0 place-items-center">
-                    <PenLine className="size-4" />
-                  </span>
-                  <span className="truncate">Ajouter un compte</span>
-                </button>
               </div>
 
               <SectionLabel className="mt-4 mb-1.5 px-2.5">Dossiers</SectionLabel>
@@ -606,7 +630,7 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                     />
                   );
                 })}
-                {folderOptions.some((entry) => entry.id === "trash") && (
+                {folder === "trash" && (
                   <div className="pt-1">
                     <EmptyTrashButton
                       count={folderStats("trash").total}
@@ -617,48 +641,48 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                 )}
               </div>
 
-              <div className="mt-auto pt-4">
-                <div className="rounded-[16px] border border-line bg-surface-2/60 p-2.5">
-                  <div className="flex items-center gap-1.5">
-                    <Lock className="size-3.5 shrink-0 text-accent-ink" strokeWidth={2.6} />
-                    <p className="text-[11px] font-bold text-ink">PGP</p>
-                    {myKey && pgpState ? (
-                      <Badge tone={pgpTone} className="ml-auto">
-                        {PGP_STATE[pgpState].label}
-                      </Badge>
-                    ) : (
-                      <span className="ml-auto text-[10px] font-semibold text-ink-muted">
-                        {pgpKeys === null ? "chargement…" : "aucune clé"}
-                      </span>
-                    )}
-                  </div>
-                  {myKey && pgpState ? (
-                    <>
-                      <p className="mt-1.5 truncate text-[10.5px] font-semibold text-ink-muted">
-                        {keyLabel(myKey)} ·{" "}
-                        <span className="tabular-nums">{shortFingerprint(myKey.fingerprint)}</span>
-                      </p>
-                      <p className="mt-0.5 text-[10px] font-medium text-ink-muted">
-                        {myKey.expires_at ? `Expire le ${formatKeyDate(myKey.expires_at)}` : "Sans expiration"}
-                      </p>
-                      {pgpState !== "valid" ? (
-                        <p
-                          className={cn(
-                            "mt-1.5 text-[10px] font-semibold",
-                            pgpTone === "amber" ? "text-amber-700" : "text-rose-600",
-                          )}
-                        >
-                          {PGP_STATE[pgpState].hint}
-                        </p>
-                      ) : null}
-                    </>
-                  ) : (
-                    <p className="mt-1.5 text-[10px] font-medium text-ink-muted">
-                      {pgpKeys === null ? "Chargement de la clé…" : "Aucune clé PGP"}
-                    </p>
-                  )}
-                </div>
+            </div>
+          </div>
+          <div className="shrink-0 px-2.5 pb-4 pt-2">
+            <div className="rounded-[16px] border border-line bg-surface-2/60 p-2.5">
+              <div className="flex items-center gap-1.5">
+                <Lock className="size-3.5 shrink-0 text-accent-ink" strokeWidth={2.6} />
+                <p className="text-[11px] font-bold text-ink">PGP</p>
+                {myKey && pgpState ? (
+                  <Badge tone={pgpTone} className="ml-auto">
+                    {PGP_STATE[pgpState].label}
+                  </Badge>
+                ) : (
+                  <span className="ml-auto text-[10px] font-semibold text-ink-muted">
+                    {pgpKeys === null ? "chargement…" : "aucune clé"}
+                  </span>
+                )}
               </div>
+              {myKey && pgpState ? (
+                <>
+                  <p className="mt-1.5 truncate text-[10.5px] font-semibold text-ink-muted">
+                    {keyLabel(myKey)} ·{" "}
+                    <span className="tabular-nums">{shortFingerprint(myKey.fingerprint)}</span>
+                  </p>
+                  <p className="mt-0.5 text-[10px] font-medium text-ink-muted">
+                    {myKey.expires_at ? `Expire le ${formatKeyDate(myKey.expires_at)}` : "Sans expiration"}
+                  </p>
+                  {pgpState !== "valid" ? (
+                    <p
+                      className={cn(
+                        "mt-1.5 text-[10px] font-semibold",
+                        pgpTone === "amber" ? "text-amber-700" : "text-rose-600",
+                      )}
+                    >
+                      {PGP_STATE[pgpState].hint}
+                    </p>
+                  ) : null}
+                </>
+              ) : (
+                <p className="mt-1.5 text-[10px] font-medium text-ink-muted">
+                  {pgpKeys === null ? "Chargement de la clé…" : "Aucune clé PGP"}
+                </p>
+              )}
             </div>
           </div>
         </aside>
@@ -719,8 +743,11 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                 attachments={attachmentThreads}
                 encrypted={encryptedThreads}
                 demo={mode === "demo"}
+                summary={summary}
+                loading={summaryLoading}
                 onToggle={() => setSummaryOpen(!summaryOpen)}
                 onOpen={openById}
+                onRefresh={() => void refreshSummary(true)}
               />
             </div>
           ) : null}

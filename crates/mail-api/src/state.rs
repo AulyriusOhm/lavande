@@ -179,6 +179,21 @@ impl AppState {
         stored.into_config(secrets)
     }
 
+    /// Updates the label of one account only: the email, the endpoints and the
+    /// secrets stay untouched.
+    pub async fn rename_account(&self, id: &str, label: &str) -> Result<StoredAccount, ApiError> {
+        let mut accounts = self.stored_accounts()?;
+        let account = accounts
+            .iter_mut()
+            .find(|account| account.id == id)
+            .ok_or_else(|| ApiError::not_found(format!("compte « {id} » inconnu")))?;
+        account.label = label.to_string();
+        let renamed = account.clone();
+        self.save_accounts(&mut accounts).await?;
+        self.store.upsert_account(id, label, &renamed.email)?;
+        Ok(renamed)
+    }
+
     pub async fn add_account(
         &self,
         config: &AccountConfig,

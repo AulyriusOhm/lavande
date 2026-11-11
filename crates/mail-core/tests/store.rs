@@ -552,6 +552,64 @@ fn clear_folder_empties_one_folder_only() {
         .is_some());
 }
 
+/// The local desync: messages and attachments go, the folder row stays with a
+/// cleared sync baseline, so the next pass fetches it again.
+#[test]
+fn reset_folder_forgets_messages_and_sync_baseline() {
+    let store = open();
+    let mut mail = message(1, "t1", "Marc", "A", 10);
+    mail.attachments.push(AttachmentMeta {
+        filename: "a.png".to_string(),
+        mime: "image/png".to_string(),
+        size: 8,
+        inline: false,
+    });
+    store.upsert_message(&mail).expect("m1");
+    store
+        .upsert_message(&message(2, "t1", "Marc", "B", 11))
+        .expect("m2");
+    let mut sent = message(9, "t2", "Roman", "C", 12);
+    sent.folder_path = "Sent".to_string();
+    store.upsert_message(&sent).expect("sent");
+    let synced = store
+        .get_folder("perso", "INBOX")
+        .expect("folder")
+        .expect("present");
+    store
+        .upsert_folder(&Folder {
+            last_sync_at: Some(date(10)),
+            modseq: Some(90060115205545359),
+            ..synced
+        })
+        .expect("synced");
+
+    let dropped = store.reset_folder("perso", "INBOX").expect("reset");
+    assert_eq!(dropped, 2);
+    assert!(store
+        .messages_in_folder("perso", "INBOX", -1, 0)
+        .expect("list")
+        .is_empty());
+    assert!(store
+        .get_message("perso", "INBOX", 1)
+        .expect("get")
+        .is_none());
+    let folder = store
+        .get_folder("perso", "INBOX")
+        .expect("folder")
+        .expect("present");
+    assert!(folder.modseq.is_none());
+    assert!(folder.last_sync_at.is_none());
+    assert_eq!(folder.uidnext, 10);
+    assert_eq!(folder.uidvalidity, 7);
+    assert_eq!(
+        store
+            .messages_in_folder("perso", "Sent", -1, 0)
+            .expect("sent")
+            .len(),
+        1
+    );
+}
+
 #[test]
 fn list_accounts_returns_id_label_email() {
     let store = open();

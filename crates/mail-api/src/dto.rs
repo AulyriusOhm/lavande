@@ -209,6 +209,11 @@ pub struct PurgeRequest {
     pub folder_path: String,
 }
 
+#[derive(Deserialize)]
+pub struct RenameRequest {
+    pub label: String,
+}
+
 #[derive(Serialize)]
 pub struct PurgeResponse {
     pub removed: usize,

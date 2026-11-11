@@ -8,7 +8,7 @@ import { Kbd } from "@/desktop/ui";
 export const DESKTOP_TABS = [
   { id: "inbox", label: "Boîte", icon: Inbox },
   { id: "calendar", label: "Agenda", icon: CalendarDays },
-  { id: "planning", label: "Planif.", icon: ListChecks },
+  { id: "planning", label: "Planification", icon: ListChecks },
   { id: "settings", label: "Réglages", icon: Settings2 },
 ] as const;
 

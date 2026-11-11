@@ -213,6 +213,7 @@ export function messageToMail(
     html: message.body_html ?? undefined,
     time: shortTime(message.date),
     date: longDate(message.date),
+    timestamp: parseDate(message.date)?.getTime(),
     unread: message.flags.unread,
     starred: message.flags.starred,
     pgp: message.pgp,

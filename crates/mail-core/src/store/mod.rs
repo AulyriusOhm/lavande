@@ -447,6 +447,20 @@ impl Store {
         Ok(deleted)
     }
 
+    /// Local desync: forgets the messages stored for a folder and clears its
+    /// sync baseline, so the next pass fetches the folder again from the
+    /// server.
+    pub fn reset_folder(&self, account_id: &str, folder_path: &str) -> Result<usize, MailError> {
+        let deleted = self.clear_folder(account_id, folder_path)?;
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE folders SET modseq = NULL, last_sync_at = NULL \
+             WHERE account_id = ?1 AND path = ?2",
+            params![account_id, folder_path],
+        )?;
+        Ok(deleted)
+    }
+
     /// Moves the messages replying to `message_id` into `thread_id`. Returns
     /// how many rows changed.
     pub fn relink_replies(

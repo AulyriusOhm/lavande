@@ -6,11 +6,14 @@ import { notifyNewMail, setUnreadBadge } from "@/lib/notify";
 import type { NoticeData } from "@/components/ui/notice";
 import { ACCOUNTS, ALL_ACCOUNTS } from "@/lib/accounts";
 import type { Account } from "@/lib/accounts";
-import { MAILS, folderLabel, mailMatches } from "@/lib/mail";
+import { MAILS, folderLabel, mailMatches, normalize } from "@/lib/mail";
 import type { FolderId, Mail } from "@/lib/mail";
 import { threadOf } from "@/lib/threads";
 import type { Thread } from "@/lib/threads";
 import type { MailSuggestion, Task } from "@/lib/tasks";
+import { dueToneFor, formatDueDate } from "@/lib/tasks";
+import { currentPeriod, generateSummary } from "@/lib/summary";
+import type { SummaryMailInput, SummaryResult, SummaryTask } from "@/lib/summary";
 import { EVENTS, TODAY_ISO } from "@/lib/calendar";
 import type { CalendarEvent } from "@/lib/calendar";
 import { activeSignature, usePrefs } from "@/lib/prefs";
@@ -43,6 +46,29 @@ export type BackendPhase = "loading" | "ready" | "offline" | "empty";
 
 const PAGE_SIZE = 50;
 const EVENTS_KEY = "lavande.events.v1";
+const SUMMARY_TICK_MS = 5 * 60_000;
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const SUMMARY_ACCOUNTS = ["perso", "pro", "gmail"] as const;
+
+const summaryAccount = (value: string | undefined): MailSuggestion["account"] =>
+  SUMMARY_ACCOUNTS.find((entry) => entry === value) ?? "perso";
+
+/** Une tâche proposée par le résumé devient une suggestion EN ATTENTE, jamais une tâche. */
+function summarySuggestion(task: SummaryTask, mail: Mail | undefined, period: string): MailSuggestion {
+  const day = ISO_DAY.test(task.due) ? task.due : "";
+  return {
+    id: `summary:${task.mailId ?? "sans-mail"}:${normalize(task.title)}`,
+    mailId: task.mailId ?? "",
+    account: summaryAccount(mail?.account),
+    from: task.from || mail?.name || "Résumé",
+    subject: mail?.subject ?? "",
+    proposal: task.title,
+    due: day ? formatDueDate(day) : "sans échéance",
+    dueTone: day ? dueToneFor(day) : "soft",
+    tone: mail?.tone ?? 0,
+    description: `${period} · ${task.due && task.due !== "aucune" ? `échéance ${task.due}` : "sans échéance"}`,
+  };
+}
 
 function loadEvents(): CalendarEvent[] {
   try {
@@ -87,6 +113,9 @@ export type MailStoreValue = {
   removeTarget: Account | null;
   tasks: Task[];
   suggestions: MailSuggestion[];
+  summary: SummaryResult | null;
+  summaryLoading: boolean;
+  refreshSummary: (force?: boolean) => Promise<void>;
   events: CalendarEvent[];
   selectedDate: string;
   openMail: Mail | null;
@@ -134,6 +163,7 @@ export type MailStoreValue = {
   openConnect: () => void;
   closeConnect: () => void;
   createAccount: (input: NewAccount) => Promise<void>;
+  renameAccount: (id: string, label: string) => Promise<void>;
   askRemoveAccount: (account: Account) => void;
   cancelRemoveAccount: () => void;
   confirmRemoveAccount: () => void;
@@ -174,6 +204,10 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   );
   const [composeTitle, setComposeTitle] = useState(persistedCompose?.title ?? "Nouveau message");
   const [composeDetached, setComposeDetached] = useState(false);
+  const [summary, setSummary] = useState<SummaryResult | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const summaryRun = useRef<string | null>(null);
+  const summaryRunning = useRef(false);
   const composeBus = useRef<ComposeBus | null>(null);
   const composeStateRef = useRef<ComposeState>({ draft: null, title: "Nouveau message", detached: false });
   const lastPostedCompose = useRef("");
@@ -1147,6 +1181,23 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     [notify],
   );
 
+  const renameAccount = useCallback(
+    async (id: string, label: string) => {
+      const clean = label.trim();
+      if (!clean) return;
+      try {
+        await mailApi.renameAccount(id, clean);
+        setAccounts((current) =>
+          current.map((entry) => (entry.id === id ? { ...entry, label: clean } : entry)),
+        );
+        notify(`Compte renommé · ${clean}`);
+      } catch (error) {
+        notify(errorText(error));
+      }
+    },
+    [notify],
+  );
+
   const askRemoveAccount = useCallback((target: Account) => setRemoveTarget(target), []);
   const cancelRemoveAccount = useCallback(() => setRemoveTarget(null), []);
 
@@ -1167,6 +1218,86 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       })
       .catch((error: unknown) => notify(errorText(error)));
   }, [bootstrap, notify, removeTarget]);
+
+  const inboxMails = useMemo(() => mails.filter((mail) => mail.folder === "inbox"), [mails]);
+
+  /**
+   * Recalcule le résumé de la plage courante. Le LLM n'est sollicité que si la
+   * plage a changé ou sur demande explicite (force) ; en démo, jamais de réseau.
+   */
+  const refreshSummary = useCallback(
+    async (force = false) => {
+      if (!prefs.summary.enabled) {
+        setSummary(null);
+        return;
+      }
+      if (summaryRunning.current) return;
+      const now = new Date();
+      const period = currentPeriod(prefs.summary, now);
+      if (!force && summaryRun.current === period.id) return;
+      summaryRunning.current = true;
+      setSummaryLoading(true);
+      try {
+        const inputs: SummaryMailInput[] = inboxMails.flatMap((mail) =>
+          typeof mail.timestamp === "number"
+            ? [
+                {
+                  id: mail.id,
+                  from: mail.name,
+                  subject: mail.subject,
+                  snippet: mail.preview,
+                  timestamp: mail.timestamp,
+                },
+              ]
+            : [],
+        );
+        const result = await generateSummary(
+          mode === "demo" ? { ...prefs.summary, llmConsent: false } : prefs.summary,
+          prefs.llm,
+          inputs,
+          now,
+        );
+        setSummary(result);
+        if (result.mailCount > 0) summaryRun.current = result.period.id;
+        const byId = new Map(inboxMails.map((mail) => [mail.id, mail]));
+        const known = new Set([
+          ...suggestions.map((entry) => `${entry.mailId}:${normalize(entry.proposal)}`),
+          ...tasks.map((entry) => `${entry.mailId ?? ""}:${normalize(entry.title)}`),
+        ]);
+        for (const task of result.tasks) {
+          const key = `${task.mailId ?? ""}:${normalize(task.title)}`;
+          if (known.has(key)) continue;
+          known.add(key);
+          const mail = task.mailId ? byId.get(task.mailId) : undefined;
+          planning.proposeSuggestion(summarySuggestion(task, mail, result.period.label));
+        }
+      } catch (error) {
+        notify(`Résumé indisponible · ${errorText(error)}`);
+      } finally {
+        summaryRunning.current = false;
+        setSummaryLoading(false);
+      }
+    },
+    [inboxMails, mode, notify, planning, prefs.llm, prefs.summary, suggestions, tasks],
+  );
+
+  const refreshSummaryRef = useRef(refreshSummary);
+  useEffect(() => {
+    refreshSummaryRef.current = refreshSummary;
+  }, [refreshSummary]);
+
+  useEffect(() => {
+    summaryRun.current = null;
+    if (phase !== "ready" || isComposeWindow()) return;
+    void refreshSummaryRef.current();
+    const timer = window.setInterval(() => void refreshSummaryRef.current(), SUMMARY_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [mode, phase, prefs.summary]);
+
+  useEffect(() => {
+    if (phase !== "ready" || isComposeWindow()) return;
+    void refreshSummaryRef.current();
+  }, [inboxMails.length, phase]);
 
   const resolvedOpenMail = useMemo(
     () => (openMail ? (mails.find((entry) => entry.id === openMail.id) ?? openMail) : null),
@@ -1199,6 +1330,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       removeTarget,
       tasks,
       suggestions,
+      summary,
+      summaryLoading,
+      refreshSummary,
       events,
       selectedDate,
       openMail: resolvedOpenMail,
@@ -1246,6 +1380,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       openConnect,
       closeConnect,
       createAccount,
+      renameAccount,
       askRemoveAccount,
       cancelRemoveAccount,
       confirmRemoveAccount,
@@ -1271,6 +1406,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       removeTarget,
       tasks,
       suggestions,
+      summary,
+      summaryLoading,
+      refreshSummary,
       events,
       selectedDate,
       resolvedOpenMail,
@@ -1312,6 +1450,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       openConnect,
       closeConnect,
       createAccount,
+      renameAccount,
       askRemoveAccount,
       cancelRemoveAccount,
       confirmRemoveAccount,

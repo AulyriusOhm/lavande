@@ -45,6 +45,7 @@ export type PlanningValue = {
   suggestions: MailSuggestion[];
   setTasks: Dispatch<SetStateAction<Task[]>>;
   addSuggestion: (suggestion: MailSuggestion) => void;
+  proposeSuggestion: (suggestion: MailSuggestion) => void;
   dismissSuggestion: (suggestion: MailSuggestion) => void;
   readOnlyIds: Set<string>;
   sync: SyncStatus;
@@ -283,6 +284,16 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
     [emit],
   );
 
+  const proposeSuggestion = useCallback(
+    (suggestion: MailSuggestion) => {
+      const id = suggestionDocId(suggestion);
+      const known = visibleDocs(syncStorage.read().docs, "suggestion");
+      if (known.some((doc) => doc.id === id)) return;
+      emit("suggestion", id, suggestionFields(suggestion, "pending"));
+    },
+    [emit, syncStorage],
+  );
+
   const dismissSuggestion = useCallback(
     (suggestion: MailSuggestion) => {
       emit("suggestion", suggestionDocId(suggestion), { status: "dismissed" });
@@ -307,6 +318,7 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
       suggestions,
       setTasks,
       addSuggestion,
+      proposeSuggestion,
       dismissSuggestion,
       readOnlyIds,
       sync: engine.getStatus(),
@@ -314,7 +326,7 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
       unpromote,
       engine,
     }),
-    [addSuggestion, dismissSuggestion, engine, readOnlyIds, setTasks, suggestions, syncNow, tasks, unpromote, state],
+    [addSuggestion, proposeSuggestion, dismissSuggestion, engine, readOnlyIds, setTasks, suggestions, syncNow, tasks, unpromote, state],
   );
 
   return <PlanningContext.Provider value={value}>{children}</PlanningContext.Provider>;

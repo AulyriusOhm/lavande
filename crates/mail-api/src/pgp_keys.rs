@@ -71,8 +71,17 @@ impl PgpStore {
         Ok(keyring)
     }
 
+    /// Metadata of every key, with the secret flag as the keyring file stored
+    /// it: the public key alone can never tell.
     pub fn keys(&self) -> Result<Vec<PgpKeyInfo>, ApiError> {
-        Ok(self.public_keyring()?.infos())
+        let mut infos = Vec::new();
+        for stored in self.load()?.keys {
+            let mut info = PgpKey::parse(&stored.public).map_err(key_error)?.info();
+            info.has_secret = stored.has_secret;
+            infos.push(info);
+        }
+        infos.sort_by(|left, right| left.user_id.cmp(&right.user_id));
+        Ok(infos)
     }
 
     /// Generates a key pair; the private half goes to the secret store and the

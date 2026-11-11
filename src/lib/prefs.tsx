@@ -14,6 +14,7 @@ export const SWIPE_ACTIONS: { id: SwipeActionId; label: string }[] = [
 const STORAGE_KEY = "lavande.prefs";
 
 import { EMPTY_LLM, type LlmConfig } from "@/lib/llm";
+import { DEFAULT_SUMMARY, type SummaryConfig } from "@/lib/summary";
 
 export type AccountSignature = { html: string; enabled: boolean };
 
@@ -29,6 +30,7 @@ export type Prefs = {
   mcpEnabled: Record<string, boolean>;
   signatures: Record<string, AccountSignature>;
   llm: LlmConfig;
+  summary: SummaryConfig;
 };
 
 const DEFAULTS: Prefs = {
@@ -43,6 +45,7 @@ const DEFAULTS: Prefs = {
   mcpEnabled: {},
   signatures: {},
   llm: EMPTY_LLM,
+  summary: DEFAULT_SUMMARY,
 };
 
 type PrefsContextValue = Prefs & {
@@ -56,6 +59,7 @@ type PrefsContextValue = Prefs & {
   setMcpEnabled: (serverId: string, value: boolean) => void;
   setSignature: (accountId: string, patch: Partial<AccountSignature>) => void;
   setLlm: (patch: Partial<LlmConfig>) => void;
+  setSummary: (patch: Partial<SummaryConfig>) => void;
 };
 
 const PrefsContext = createContext<PrefsContextValue | null>(null);
@@ -97,6 +101,26 @@ const asLlm = (value: unknown): LlmConfig => {
   };
 };
 
+const hour = (value: unknown, fallback: number): number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 23 ? value : fallback;
+
+const asSummary = (value: unknown): SummaryConfig => {
+  if (!value || typeof value !== "object") return { ...DEFAULT_SUMMARY };
+  const { enabled, llmConsent, morningStart, middayStart, eveningStart, lookbackHours } =
+    value as Record<string, unknown>;
+  return {
+    enabled: asBoolean(enabled, DEFAULT_SUMMARY.enabled),
+    llmConsent: asBoolean(llmConsent, DEFAULT_SUMMARY.llmConsent),
+    morningStart: hour(morningStart, DEFAULT_SUMMARY.morningStart),
+    middayStart: hour(middayStart, DEFAULT_SUMMARY.middayStart),
+    eveningStart: hour(eveningStart, DEFAULT_SUMMARY.eveningStart),
+    lookbackHours:
+      typeof lookbackHours === "number" && Number.isFinite(lookbackHours) && lookbackHours > 0
+        ? Math.min(72, Math.round(lookbackHours))
+        : DEFAULT_SUMMARY.lookbackHours,
+  };
+};
+
 export function activeSignature(
   signatures: Record<string, AccountSignature>,
   accountId: string,
@@ -126,6 +150,7 @@ function read(): Prefs {
     mcpEnabled: asFlags(stored.mcpEnabled),
     signatures: asSignatures(stored.signatures),
     llm: asLlm(stored.llm),
+    summary: asSummary(stored.summary),
   };
 }
 
@@ -177,6 +202,12 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const setSummary = useCallback(
+    (patch: Partial<SummaryConfig>) =>
+      setPrefs((current) => ({ ...current, summary: { ...current.summary, ...patch } })),
+    [],
+  );
+
   const value = useMemo<PrefsContextValue>(
     () => ({
       ...prefs,
@@ -190,6 +221,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setMcpEnabled,
       setSignature,
       setLlm,
+      setSummary,
     }),
     [
       prefs,
@@ -203,6 +235,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setMcpEnabled,
       setSignature,
       setLlm,
+      setSummary,
     ],
   );
 

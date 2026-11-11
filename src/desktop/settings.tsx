@@ -14,6 +14,7 @@ import {
   Lock,
   Moon,
   PenLine,
+  PlugZap,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -39,7 +40,8 @@ import { exportKey, generateKey, listKeys } from "@/lib/pgp-api";
 import { MCP_LOG, MCP_SCOPES, MCP_SERVERS, mcpCounts } from "@/lib/mcp";
 import type { McpLogEntry } from "@/lib/mcp";
 import { activeSignature, mergeFlags, usePrefs } from "@/lib/prefs";
-import { llmReady } from "@/lib/llm";
+import { llmProbe, llmReady } from "@/lib/llm";
+import type { SummaryConfig } from "@/lib/summary";
 import { ACCENT_PRESETS, useTheme } from "@/lib/theme";
 import { useMailStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -48,6 +50,7 @@ import { SignatureEditor } from "@/components/signature-editor";
 import { SyncSettings } from "@/components/sync-settings";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { NumberTicker } from "@/components/ui/number-ticker";
+import { MailSyncPanel } from "@/desktop/mail-sync";
 import {
   Badge,
   DChip,
@@ -69,7 +72,9 @@ const SECTIONS = [
   { id: "modules", label: "Modules" },
   { id: "securite", label: "Sécurité" },
   { id: "synchronisation", label: "Synchronisation" },
+  { id: "synchro-mails", label: "Synchro des mails" },
   { id: "ia", label: "IA" },
+  { id: "resumes", label: "Résumés" },
   { id: "assistant", label: "Serveurs MCP" },
   { id: "apropos", label: "À propos" },
 ] as const;
@@ -82,6 +87,18 @@ const serverName = (tool: string) =>
   MCP_SERVERS.find((server) => server.tools.some((entry) => entry.name === tool))?.name ?? "hors ligne";
 
 const durationOf = (entry: McpLogEntry) => `${18 + ((entry.detail.length * 7) % 240)} ms`;
+
+const clampHours = (value: string, max: number): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.min(max, Math.max(0, Math.round(parsed)));
+};
+
+type SummaryHourKey = "morningStart" | "middayStart" | "eveningStart";
+
+const hourPatch = (key: SummaryHourKey, value: string): Partial<SummaryConfig> => ({
+  [key]: clampHours(value, 23),
+});
 
 function usePgpKeys() {
   const [keys, setKeys] = useState<PgpKey[] | null>(null);
@@ -112,7 +129,7 @@ function usePgpKeys() {
   return { keys, error, loading, load };
 }
 
-export function DesktopSettings() {
+export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   const { accent, dark, brand, setAccent, setDark, reset } = useTheme();
   const {
     pgpEncrypt,
@@ -132,8 +149,10 @@ export function DesktopSettings() {
     signatures,
     llm,
     setLlm,
+    summary: summaryConfig,
+    setSummary,
   } = usePrefs();
-  const { notify, accounts, mode, openConnect, askRemoveAccount } = useMailStore();
+  const { notify, accounts, mode, openConnect, askRemoveAccount, renameAccount } = useMailStore();
   const [active, setActive] = useState<SectionId>("comptes");
   const [hex, setHex] = useState(accent);
   const [openServer, setOpenServer] = useState<string | null>(null);
@@ -144,6 +163,11 @@ export function DesktopSettings() {
   const [generating, setGenerating] = useState(false);
   const [exporting, setExporting] = useState<string | null>(null);
   const { keys, error: keysError, loading: keysLoading, load: loadKeys } = usePgpKeys();
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [savingRename, setSavingRename] = useState(false);
+  const [probing, setProbing] = useState(false);
+  const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => setHex(accent), [accent]);
 
@@ -199,6 +223,44 @@ export function DesktopSettings() {
       notify(`Export impossible · ${errorText(failure)}`);
     } finally {
       setExporting(null);
+    }
+  };
+
+  const startRename = (id: string, label: string) => {
+    setRenaming(id);
+    setRenameValue(label);
+  };
+
+  const runRename = async (id: string) => {
+    const label = renameValue.trim();
+    if (!label) {
+      notify("Nom de compte requis");
+      return;
+    }
+    setSavingRename(true);
+    try {
+      await renameAccount(id, label);
+      setRenaming(null);
+    } finally {
+      setSavingRename(false);
+    }
+  };
+
+  const updateLlm = (patch: { endpoint?: string; model?: string; apiKey?: string }) => {
+    setProbe(null);
+    setLlm(patch);
+  };
+
+  const runProbe = async () => {
+    setProbing(true);
+    setProbe(null);
+    try {
+      const answer = await llmProbe(llm);
+      setProbe({ ok: true, text: answer });
+    } catch (failure) {
+      setProbe({ ok: false, text: failure instanceof Error ? failure.message : "échec inconnu" });
+    } finally {
+      setProbing(false);
     }
   };
 
@@ -287,18 +349,59 @@ export function DesktopSettings() {
                             {item.synced}
                           </span>
                         </div>
-                        {mode === "api" && (
-                          <div className="mt-2 flex justify-end">
-                            <DButton
-                              variant="danger"
-                              size="sm"
-                              onClick={() => askRemoveAccount(item)}
-                            >
-                              <Trash2 className="size-3.5" />
-                              Retirer
-                            </DButton>
-                          </div>
-                        )}
+                        {mode === "api" &&
+                          (renaming === item.id ? (
+                            <div className="mt-2 flex items-center gap-1.5">
+                              <TextInput
+                                aria-label={`Nouveau nom pour ${item.email}`}
+                                value={renameValue}
+                                autoFocus
+                                onChange={(event) => setRenameValue(event.target.value)}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") void runRename(item.id);
+                                  if (event.key === "Escape") setRenaming(null);
+                                }}
+                                className="h-8 text-[11.5px] font-semibold"
+                              />
+                              <DButton
+                                variant="primary"
+                                size="sm"
+                                disabled={savingRename}
+                                onClick={() => void runRename(item.id)}
+                              >
+                                {savingRename ? (
+                                  <Loader2 className="size-3.5 animate-spin" />
+                                ) : (
+                                  <Check className="size-3.5" />
+                                )}
+                                Valider
+                              </DButton>
+                              <DButton
+                                variant="plain"
+                                size="sm"
+                                disabled={savingRename}
+                                onClick={() => setRenaming(null)}
+                              >
+                                Annuler
+                              </DButton>
+                            </div>
+                          ) : (
+                            <div className="mt-2 flex justify-end gap-1.5">
+                              <DButton
+                                variant="ghost"
+                                size="sm"
+                                aria-label={`Renommer ${item.label}`}
+                                onClick={() => startRename(item.id, item.label)}
+                              >
+                                <PenLine className="size-3.5" />
+                                Renommer
+                              </DButton>
+                              <DButton variant="danger" size="sm" onClick={() => askRemoveAccount(item)}>
+                                <Trash2 className="size-3.5" />
+                                Retirer
+                              </DButton>
+                            </div>
+                          ))}
                       </Surface>
                     ))}
                     <button
@@ -680,10 +783,16 @@ export function DesktopSettings() {
                         ? "chargement…"
                         : `${keys.filter((key) => key.has_secret).length} secrète(s) · ${publicKeys} publique(s)`}
                     </span>
+                    {onOpenPgp ? (
+                      <DButton variant="soft" size="sm" className="ml-auto" onClick={onOpenPgp}>
+                        <KeyRound className="size-3.5" />
+                        Gérer mes clés PGP
+                      </DButton>
+                    ) : null}
                     <DButton
                       variant="ghost"
                       size="sm"
-                      className="ml-auto"
+                      className={onOpenPgp ? undefined : "ml-auto"}
                       disabled={keysLoading}
                       onClick={() => void loadKeys()}
                     >
@@ -747,6 +856,10 @@ export function DesktopSettings() {
                 <SyncSettings variant="desktop" />
               </Block>
 
+              <Block id="synchro-mails" label="Synchro des mails" hint="cache local par dossier">
+                <MailSyncPanel />
+              </Block>
+
               <Block id="ia" label="Intelligence artificielle" hint="suggestions & réécriture">
                 <Surface className="p-4">
                   <p className="text-[12px] font-semibold leading-relaxed text-ink-soft">
@@ -760,7 +873,7 @@ export function DesktopSettings() {
                         aria-label="Endpoint du modèle"
                         placeholder="https://api.openai.com/v1"
                         value={llm.endpoint}
-                        onChange={(event) => setLlm({ endpoint: event.target.value })}
+                        onChange={(event) => updateLlm({ endpoint: event.target.value })}
                       />
                     </label>
                     <label className="grid gap-1">
@@ -769,7 +882,7 @@ export function DesktopSettings() {
                         aria-label="Nom du modèle"
                         placeholder="gpt-4o-mini"
                         value={llm.model}
-                        onChange={(event) => setLlm({ model: event.target.value })}
+                        onChange={(event) => updateLlm({ model: event.target.value })}
                       />
                     </label>
                     <label className="grid gap-1">
@@ -779,14 +892,121 @@ export function DesktopSettings() {
                         type="password"
                         placeholder="sk-…"
                         value={llm.apiKey}
-                        onChange={(event) => setLlm({ apiKey: event.target.value })}
+                        onChange={(event) => updateLlm({ apiKey: event.target.value })}
                       />
                     </label>
                   </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <DButton
+                      variant="primary"
+                      size="sm"
+                      disabled={!llmReady(llm) || probing}
+                      onClick={() => void runProbe()}
+                    >
+                      {probing ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <PlugZap className="size-3.5" />
+                      )}
+                      {probing ? "Test en cours…" : "Tester la connexion"}
+                    </DButton>
+                    {probe ? (
+                      <Badge tone={probe.ok ? "green" : "rose"}>
+                        {probe.ok ? "connexion établie" : "échec"}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  {probe ? (
+                    <p
+                      className={cn(
+                        "mt-2 rounded-xl px-2.5 py-2 text-[10.5px] leading-relaxed font-semibold break-words",
+                        probe.ok
+                          ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                          : "bg-rose-500/10 text-rose-600 dark:text-rose-300",
+                      )}
+                    >
+                      {probe.ok ? `Réponse du modèle · ${probe.text}` : `Échec · ${probe.text}`}
+                    </p>
+                  ) : null}
                   <p className="mt-2.5 text-[10.5px] font-semibold text-ink-muted">
                     {llmReady(llm)
                       ? "IA active · les propositions utilisent le modèle configuré."
                       : "IA inactive · propositions locales uniquement."}
+                  </p>
+                </Surface>
+              </Block>
+
+              <Block
+                id="resumes"
+                label="Résumés"
+                hint={summaryConfig.enabled ? "matin · midi · soir" : "désactivés"}
+              >
+                <Surface className="divide-y divide-line overflow-hidden">
+                  <ToggleRow
+                    icon={<Sparkles className="size-4" />}
+                    label="Résumés périodiques"
+                    hint="Un résumé de la boîte de réception matin, midi et soir"
+                    checked={summaryConfig.enabled}
+                    onChange={(value) => setSummary({ enabled: value })}
+                  />
+                  <ToggleRow
+                    icon={<Lock className="size-4" />}
+                    label="Autoriser l'analyse de mes mails par le LLM"
+                    hint="Sans accord, le résumé reste local (compteurs et expéditeurs)"
+                    checked={summaryConfig.llmConsent}
+                    onChange={(value) => setSummary({ llmConsent: value })}
+                  />
+                </Surface>
+
+                <Surface className="mt-3 p-4">
+                  <p className="text-[12px] leading-relaxed font-semibold text-ink-soft">
+                    Avec votre accord, seuls l'expéditeur, l'objet et les premières lignes des messages de
+                    la période sont envoyés au modèle configuré, sans pièce jointe ni action possible. Le
+                    texte renvoyé est affiché tel quel, et les tâches qu'il propose restent des suggestions
+                    à valider.
+                  </p>
+                  <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                    {([
+                      { key: "morningStart", label: "Matin" },
+                      { key: "middayStart", label: "Midi" },
+                      { key: "eveningStart", label: "Soir" },
+                    ] as const).map((field) => (
+                      <label key={field.key} className="grid gap-1">
+                        <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                          {field.label} · début (h)
+                        </span>
+                        <TextInput
+                          aria-label={`Heure de début du résumé ${field.label.toLowerCase()}`}
+                          type="number"
+                          min={0}
+                          max={23}
+                          value={summaryConfig[field.key]}
+                          onChange={(event) => setSummary(hourPatch(field.key, event.target.value))}
+                        />
+                      </label>
+                    ))}
+                    <label className="grid gap-1">
+                      <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                        Fenêtre (h)
+                      </span>
+                      <TextInput
+                        aria-label="Fenêtre du résumé du matin en heures"
+                        type="number"
+                        min={1}
+                        max={72}
+                        value={summaryConfig.lookbackHours}
+                        onChange={(event) =>
+                          setSummary({ lookbackHours: clampHours(event.target.value, 72) })
+                        }
+                      />
+                    </label>
+                  </div>
+                  <p className="mt-3 text-[10.5px] font-semibold text-ink-muted">
+                    {llmReady(llm)
+                      ? summaryConfig.llmConsent
+                        ? "Modèle configuré · les résumés sont analysés par l'IA."
+                        : "Modèle configuré · en attente de votre accord pour l'analyse."
+                      : "Aucun modèle configuré · les résumés restent locaux (section IA)."}
                   </p>
                 </Surface>
               </Block>

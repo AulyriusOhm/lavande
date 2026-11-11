@@ -281,8 +281,8 @@ export function SettingsScreen({
         <Card className="mx-5 divide-y divide-line/80 overflow-hidden">
           <Row
             icon={<KeyRound className="size-4" />}
-            label="Chiffrement PGP"
-            hint="1 clé secrète · 3 destinataires"
+            label="Gérer mes clés PGP"
+            hint="Générer, importer, exporter et supprimer"
             onClick={onOpenPgp}
           >
             <ChevronRight className="size-4 text-ink-muted" />

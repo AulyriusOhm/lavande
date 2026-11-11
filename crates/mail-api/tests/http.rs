@@ -76,6 +76,28 @@ fn post(uri: &str, payload: &Value) -> Request<Body> {
         .expect("requête")
 }
 
+fn patch(uri: &str, payload: &Value) -> Request<Body> {
+    Request::builder()
+        .method("PATCH")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .expect("requête")
+}
+
+fn folder(path: &str, modseq: Option<u64>) -> lavande_mail::model::Folder {
+    lavande_mail::model::Folder {
+        account_id: "perso".to_string(),
+        path: path.to_string(),
+        name: path.to_string(),
+        role: lavande_mail::model::FolderRole::Inbox,
+        uidvalidity: 1,
+        uidnext: 9,
+        last_sync_at: None,
+        modseq,
+    }
+}
+
 fn delete(uri: &str) -> Request<Body> {
     Request::builder()
         .method("DELETE")
@@ -252,6 +274,113 @@ async fn threads_of_an_unknown_account_is_a_404() {
     let (status, body) = call(&state, get("/api/accounts/absent/folders/INBOX/threads")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json(&body)["kind"], "store");
+}
+
+#[tokio::test]
+async fn renaming_an_account_keeps_its_identity() {
+    let (directory, state) = state().await;
+    seed(directory.path(), &[account("perso")]);
+
+    let (status, body) = call(
+        &state,
+        patch("/api/accounts/perso", &json!({ "label": "  Maison  " })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let renamed = json(&body);
+    assert_eq!(renamed["id"], "perso");
+    assert_eq!(renamed["label"], "Maison");
+    assert_eq!(renamed["email"], "roman@lavande.mail");
+    assert_eq!(renamed["username"], "roman@lavande.mail");
+
+    let (_status, listed) = call(&state, get("/api/accounts")).await;
+    assert_eq!(json(&listed)[0]["label"], "Maison");
+    let config = state.account("perso").await.expect("compte");
+    assert_eq!(config.label, "Maison");
+    assert_eq!(config.email, "roman@lavande.mail");
+    assert_eq!(
+        state.store().list_accounts().expect("comptes")[0].1,
+        "Maison"
+    );
+    assert!(
+        state
+            .secrets()
+            .get("perso")
+            .await
+            .expect("secret")
+            .is_some(),
+        "le mot de passe du compte survit au renommage"
+    );
+
+    let (status, body) = call(
+        &state,
+        patch("/api/accounts/perso", &json!({ "label": "   " })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json(&body)["kind"], "config");
+
+    let (status, body) = call(
+        &state,
+        patch("/api/accounts/absent", &json!({ "label": "Maison" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json(&body)["kind"], "store");
+}
+
+#[tokio::test]
+async fn desyncing_a_folder_purges_it_locally() {
+    let (directory, state) = state().await;
+    seed(directory.path(), &[account("perso")]);
+    state
+        .store()
+        .upsert_folder(&folder("INBOX", Some(4242)))
+        .expect("dossier");
+    state
+        .store()
+        .upsert_folder(&folder("Archive", None))
+        .expect("dossier");
+    state
+        .store()
+        .upsert_message(&text_message())
+        .expect("message");
+    let mut archived = text_message();
+    archived.uid = 8;
+    archived.folder_path = "Archive".to_string();
+    state.store().upsert_message(&archived).expect("message");
+
+    let (status, body) = call(&state, delete("/api/accounts/perso/folders/INBOX/local")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(body.is_empty());
+    assert!(state
+        .store()
+        .messages_in_folder("perso", "INBOX", -1, 0)
+        .expect("liste")
+        .is_empty());
+    let inbox = state
+        .store()
+        .get_folder("perso", "INBOX")
+        .expect("dossier")
+        .expect("présent");
+    assert!(inbox.modseq.is_none(), "modseq réinitialisé");
+    assert!(inbox.last_sync_at.is_none(), "last_sync_at réinitialisé");
+    assert_eq!(
+        state
+            .store()
+            .messages_in_folder("perso", "Archive", -1, 0)
+            .expect("liste")
+            .len(),
+        1,
+        "les autres dossiers sont intacts"
+    );
+
+    let (status, body) = call(&state, delete("/api/accounts/perso/folders/Nope/local")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json(&body)["kind"], "store");
+
+    let (status, _) = call(&state, delete("/api/accounts/absent/folders/INBOX/local")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[test]
@@ -623,6 +752,50 @@ async fn a_generated_key_never_leaks_its_private_half() {
             .is_some(),
         "la clé privée vit dans le store de secrets"
     );
+}
+
+#[tokio::test]
+async fn a_listed_key_reports_the_secret_it_stores() {
+    let (directory, state) = state().await;
+    let (generated, _public) = state
+        .pgp()
+        .generate("Roman", "roman@lavande.mail")
+        .await
+        .expect("génération");
+    assert!(generated.has_secret);
+
+    let listed = state.pgp().keys().expect("trousseau");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].fingerprint, generated.fingerprint);
+    assert!(
+        listed[0].has_secret,
+        "la liste doit relire le drapeau stocké, pas la clé publique"
+    );
+
+    let (status, body) = call(&state, get("/api/pgp/keys")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json(&body)["keys"][0]["has_secret"], true);
+
+    let key_file = fs::read_to_string(directory.path().join("pgp-keys.json")).expect("trousseau");
+    assert!(key_file.contains("\"has_secret\": true"), "{key_file}");
+
+    let public_only = lavande_mail::pgp::generate_key("Camille", "camille@studio-lilas.fr")
+        .expect("génération")
+        .public_armored()
+        .expect("clé publique");
+    state.pgp().import(&public_only).await.expect("import");
+    let listed = state.pgp().keys().expect("trousseau");
+    assert_eq!(listed.len(), 2);
+    let imported = listed
+        .iter()
+        .find(|key| key.email.as_deref() == Some("camille@studio-lilas.fr"))
+        .expect("clé importée");
+    assert!(!imported.has_secret, "clé publique seule : aucun secret");
+    let kept = listed
+        .iter()
+        .find(|key| key.fingerprint == generated.fingerprint)
+        .expect("clé générée");
+    assert!(kept.has_secret, "la clé générée garde son secret");
 }
 
 #[tokio::test]

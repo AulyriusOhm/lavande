@@ -1,0 +1,144 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { DesktopSettings } from "@/desktop/settings";
+import { MailStoreProvider } from "@/lib/store";
+import { PlanningProvider } from "@/lib/planning-store";
+import { PrefsProvider } from "@/lib/prefs";
+import { ThemeProvider } from "@/lib/theme";
+import { createMemoryStorage } from "@/lib/sync/storage";
+import type { ApiAccount, ApiFolder } from "@/lib/api";
+
+vi.stubEnv("VITE_MAIL_BACKEND", "api");
+
+const ACCOUNT: ApiAccount = {
+  id: "a1",
+  label: "Perso",
+  email: "roman@lavande.mail",
+  username: "roman",
+  imap: { host: "imap.lavande.mail", port: 993, encryption: "tls" },
+  smtp: { host: "smtp.lavande.mail", port: 465, encryption: "tls" },
+  folders: 2,
+};
+
+const FOLDERS: ApiFolder[] = [
+  {
+    account_id: "a1",
+    path: "INBOX",
+    name: "Boîte de réception",
+    role: "inbox",
+    uidvalidity: 7,
+    uidnext: 42,
+    last_sync_at: "2026-03-12T10:00:00Z",
+  },
+  {
+    account_id: "a1",
+    path: "Archives",
+    name: "Archives",
+    role: "archive",
+    uidvalidity: 8,
+    uidnext: 9,
+    last_sync_at: null,
+  },
+];
+
+const WHEN = new Intl.DateTimeFormat("fr-FR", { dateStyle: "short", timeStyle: "short" });
+
+const response = (payload: unknown, status = 200): Response =>
+  ({
+    ok: status < 400,
+    status,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  }) as unknown as Response;
+
+const noContent = (): Response => ({ ok: true, status: 204 }) as unknown as Response;
+
+function stubFetch() {
+  const state = { label: ACCOUNT.label, purged: [] as string[] };
+  const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    if (url.endsWith("/pgp/keys")) return response({ keys: [] });
+    if (url === "/api/accounts" ) return response([{ ...ACCOUNT, label: state.label }]);
+    if (method === "PATCH" && url === "/api/accounts/a1") {
+      state.label = (JSON.parse(String(init?.body)) as { label: string }).label;
+      return response({ ...ACCOUNT, label: state.label });
+    }
+    if (url.endsWith("/folders")) {
+      return response(FOLDERS.filter((folder) => !state.purged.includes(folder.path)));
+    }
+    if (method === "DELETE" && url.endsWith("/local")) {
+      const path = decodeURIComponent(url.split("/folders/")[1].replace(/\/local$/, ""));
+      state.purged.push(path);
+      return noContent();
+    }
+    return response([]);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return { fetchMock, state };
+}
+
+function mount() {
+  return render(
+    <PrefsProvider>
+      <ThemeProvider>
+        <PlanningProvider storage={createMemoryStorage()}>
+          <MailStoreProvider>
+            <DesktopSettings />
+          </MailStoreProvider>
+        </PlanningProvider>
+      </ThemeProvider>
+    </PrefsProvider>,
+  );
+}
+
+beforeEach(() => {
+  window.localStorage.clear();
+});
+
+describe("Réglages · comptes", () => {
+  it("renomme un compte et met à jour l'affichage", async () => {
+    const { fetchMock, state } = stubFetch();
+    mount();
+
+    fireEvent.click(await screen.findByLabelText("Renommer Perso"));
+    fireEvent.change(screen.getByLabelText("Nouveau nom pour roman@lavande.mail"), {
+      target: { value: "Bureau" },
+    });
+    fireEvent.click(screen.getByText("Valider"));
+
+    await waitFor(() => expect(state.label).toBe("Bureau"));
+    const patch = fetchMock.mock.calls.find(([, init]) => init?.method === "PATCH");
+    expect(patch?.[1]?.body).toBe(JSON.stringify({ label: "Bureau" }));
+    expect((await screen.findAllByText("Bureau")).length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText("Renommer Perso")).toBeNull();
+  });
+});
+
+describe("Réglages · synchro des mails", () => {
+  it("liste les dossiers avec leur dernière synchro", async () => {
+    stubFetch();
+    mount();
+
+    expect(await screen.findByText(`INBOX · uidnext 42`)).toBeTruthy();
+    expect(screen.getByText(`Archives · uidnext 9`)).toBeTruthy();
+    expect(screen.getByText(WHEN.format(new Date("2026-03-12T10:00:00Z")))).toBeTruthy();
+    expect(screen.getByText("jamais")).toBeTruthy();
+    expect(screen.getByText("Réception")).toBeTruthy();
+    expect(screen.getByText("Archives", { selector: "p" })).toBeTruthy();
+  });
+
+  it("désynchronise un dossier après confirmation", async () => {
+    const { state } = stubFetch();
+    mount();
+
+    fireEvent.click(await screen.findByLabelText("Désynchroniser Boîte de réception"));
+    expect(screen.getByText("Purger le cache local ?")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Confirmer la désynchronisation de Boîte de réception"));
+
+    await waitFor(() => expect(state.purged).toEqual(["INBOX"]));
+    await waitFor(() => expect(screen.queryByText("INBOX · uidnext 42")).toBeNull());
+    expect(screen.getByText("Archives · uidnext 9")).toBeTruthy();
+  });
+});

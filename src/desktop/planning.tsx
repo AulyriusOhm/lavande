@@ -110,9 +110,12 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
       {suggestions.length > 0 ? (
         <div className="mt-4 flex shrink-0 gap-3 overflow-x-auto px-6 pb-1">
           {suggestions.map((suggestion, index) => (
-            <article
+            <motion.article
               key={suggestion.id}
               data-testid="suggestion-card"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, delay: index * 0.05, ease: [0.22, 1, 0.36, 1] }}
               className="relative w-[272px] shrink-0 rounded-[20px] border border-dashed border-accent-ring/70 bg-accent-soft/40 p-3"
             >
               {index === 0 ? <BorderBeam /> : null}
@@ -154,7 +157,7 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
                   <EyeOff className="size-3.5" />
                 </DIconButton>
               </div>
-            </article>
+            </motion.article>
           ))}
         </div>
       ) : null}
@@ -263,6 +266,11 @@ function TaskCard({
   const doneCount = subtasks.filter((subtask) => subtask.done).length;
 
   return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+    >
     <button
       type="button"
       draggable
@@ -312,6 +320,7 @@ function TaskCard({
         ) : null}
       </span>
     </button>
+    </motion.div>
   );
 }
 

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import {
   AlertTriangle,
   CalendarDays,
@@ -84,6 +85,7 @@ function EventPill({ event, onOpen }: { event: CalendarEvent; onOpen?: () => voi
 export function DesktopCalendar({ onNewEvent }: { onNewEvent: () => void }) {
   const { events, mails, selectedDate, setSelectedDate, openMessage } = useMailStore();
   const [view, setView] = useState({ year: CURRENT_YEAR, month: CURRENT_MONTH });
+  const [direction, setDirection] = useState(0);
   const [detailId, setDetailId] = useState<string | null>(null);
 
   const cells = monthGrid(view.year, view.month);
@@ -135,6 +137,7 @@ export function DesktopCalendar({ onNewEvent }: { onNewEvent: () => void }) {
   };
 
   const shiftMonth = (delta: number) => {
+    setDirection(delta);
     const next = new Date(view.year, view.month + delta, 1);
     const year = next.getFullYear();
     const month = next.getMonth();
@@ -191,7 +194,17 @@ export function DesktopCalendar({ onNewEvent }: { onNewEvent: () => void }) {
           ))}
         </div>
 
-        <div data-testid="month-grid" className="grid min-h-0 flex-1 grid-cols-7 auto-rows-fr">
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={monthKey}
+              initial={{ opacity: 0, x: direction * 48 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: direction * -48 }}
+              transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+              data-testid="month-grid"
+              className="grid h-full min-h-0 grid-cols-7 auto-rows-fr"
+            >
           {cells.map((_, index) => {
             const cell = dateAt(index);
             const list = byDay.get(cell.iso) ?? [];
@@ -248,6 +261,8 @@ export function DesktopCalendar({ onNewEvent }: { onNewEvent: () => void }) {
               </div>
             );
           })}
+            </motion.div>
+          </AnimatePresence>
         </div>
       </section>
 

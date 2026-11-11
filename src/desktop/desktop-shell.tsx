@@ -12,6 +12,7 @@ import { DesktopCompose } from "@/desktop/compose";
 import { DesktopCalendar, NewEventDialog } from "@/desktop/calendar";
 import { DesktopPlanning, NewTaskDialog } from "@/desktop/planning";
 import { DesktopSettings } from "@/desktop/settings";
+import { PgpScreen } from "@/screens/pgp-screen";
 import { DesktopComposePage } from "@/desktop/compose-page";
 import { isComposeWindow } from "@/lib/compose-bus";
 import { useEscapeLayer } from "@/desktop/escape";
@@ -32,6 +33,7 @@ function DesktopMain() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [newEventOpen, setNewEventOpen] = useState(false);
+  const [pgpOpen, setPgpOpen] = useState(false);
 
   const openMailId = openMail?.id ?? null;
   useEffect(() => {
@@ -69,6 +71,7 @@ function DesktopMain() {
   }, []);
 
   useEscapeLayer(connectOpen, closeConnect);
+  useEscapeLayer(pgpOpen, () => setPgpOpen(false));
 
   if (mode === "api" && phase === "loading") {
     return (
@@ -95,12 +98,23 @@ function DesktopMain() {
     >
       <BackendBanner variant="desktop" />
       <main className="relative min-h-0 flex-1">
-        {view === "inbox" && <DesktopInbox onOpenSearch={() => setSearchOpen(true)} />}
-        {view === "calendar" && <DesktopCalendar onNewEvent={() => setNewEventOpen(true)} />}
-        {view === "planning" && (
-          <DesktopPlanning onNewTask={() => setNewTaskOpen(true)} onOpenSync={() => changeView("settings")} />
-        )}
-        {view === "settings" && <DesktopSettings />}
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={view}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            className="h-full min-h-0"
+          >
+            {view === "inbox" && <DesktopInbox onOpenSearch={() => setSearchOpen(true)} />}
+            {view === "calendar" && <DesktopCalendar onNewEvent={() => setNewEventOpen(true)} />}
+            {view === "planning" && (
+              <DesktopPlanning onNewTask={() => setNewTaskOpen(true)} onOpenSync={() => changeView("settings")} />
+            )}
+            {view === "settings" && <DesktopSettings onOpenPgp={() => setPgpOpen(true)} />}
+          </motion.div>
+        </AnimatePresence>
       </main>
 
       <DesktopDock
@@ -118,6 +132,29 @@ function DesktopMain() {
       <NewEventDialog open={newEventOpen} onClose={() => setNewEventOpen(false)} />
       <Notice notice={notices[0] ?? null} onClose={dismissNotice} />
       <AccountRemoveDialog variant="dialog" />
+
+      <AnimatePresence>
+        {pgpOpen && (
+          <motion.div
+            key="pgp"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="absolute inset-0 z-[60] grid place-items-center bg-ink/25 p-6 backdrop-blur-[2px]"
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 12, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
+              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+              className="h-[min(760px,100%)] w-[min(900px,100%)] overflow-hidden rounded-[28px] border border-line bg-canvas shadow-[0_44px_96px_-48px_var(--accent)]"
+            >
+              <PgpScreen onClose={() => setPgpOpen(false)} />
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {connectOpen && (
