@@ -38,9 +38,9 @@ processus de l'app (écoute `127.0.0.1:8790`, données dans le stockage privé d
 processus, aucun sidecar. Le front vise cette base dès qu'il tourne dans la coquille.
 
 ```bash
-npm run android:build           # release arm64 signé → dist/android/Lavande.apk
+npm run android:build           # release arm64 signé → artifacts/apk/Lavande.apk
 npm run android:build:debug     # debug universel (inspecteur WebView, plus lent)
-adb install -r dist/android/Lavande.apk
+adb install -r artifacts/apk/Lavande.apk
 ```
 
 Le build passe par `scripts/build-android-release.sh` (voir aussi `docs/android.md`) : clé de
@@ -50,11 +50,42 @@ seront refusées par Android.
 Le portail sert l'app sous `/lavande/` : il faut `npm run dev:portal` (base `/lavande/`), sinon Vite
 renvoie l'index avec des chemins absolus et la page reste blanche (`404` sur `/src/main.tsx`).
 
+### Bureau Linux (RPM)
+
+La même coquille, en paquet Fedora/RHEL : le binaire embarque le démon mail, comme l'APK. La vue PC
+s'ouvre directement au lancement (pas de `?desktop` à ajouter).
+
+```bash
+npx tauri build --bundles rpm   # → src-tauri/target/release/bundle/rpm/Lavande-0.1.0-1.x86_64.rpm
+```
+
+Il faut `build-essential`, `pkg-config`, `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`,
+`libayatana-appindicator3-dev`, `librsvg2-dev` et `rpm` (`rpmbuild`). Sur une machine qui n'a pas ces
+paquets et pas de `sudo`, la même commande tourne dans un conteneur Debian avec le dépôt monté en
+lecture seule.
+
+
 
 Première ouverture : l'écran de connexion demande libellé, adresse, identifiant, hôtes/ports IMAP et
 SMTP, chiffrement (TLS implicite ou STARTTLS) et mot de passe. Le serveur **teste la connexion avant
 d'enregistrer** quoi que ce soit. Sans démon joignable, un bandeau explique comment le démarrer et
 propose la démo.
+
+Pour un fournisseur qui n'accepte plus le mot de passe (Gmail, Outlook/Hotmail), le bouton
+**Google / Microsoft** demande un consentement OAuth2 : il ouvre le navigateur du système (plugin
+`opener` dans la coquille Tauri, `window.open` côté web), et un lien de secours s'affiche dans la
+carte si l'ouverture est bloquée. Le `client_id` d'application est le seul prérequis :
+
+- **livré dans les paquets** : `.env.production` porte l'identifiant Microsoft de Lavande
+  (`VITE_OAUTH_CLIENT_ID`), donc `npm run android:build` et `npx tauri build` le figent dans le bundle ;
+  le champ et le guide disparaissent de l'écran de connexion, l'utilisateur clique simplement
+  **Microsoft** ; pour livrer un autre identifiant, surchargez la variable au build ;
+- **sinon**, le champ du formulaire l'accepte (ou `LAVANDE_MAIL_MICROSOFT_CLIENT_ID` /
+  `LAVANDE_MAIL_GOOGLE_CLIENT_ID` côté démon), et l'app affiche les étapes d'inscription avec l'adresse
+  de retour à copier — voir [`docs/mail-core.md`](./docs/mail-core.md#oauth2-apioauth).
+
+Un `client_id` public (PKCE) n'est pas un secret : il est visible sur l'écran de consentement, c'est
+l'identité de l'application. Seul le `refresh_token` reste dans le démon.
 
 Pour essayer sans vraie boîte : `scripts/mail-test-server.sh start`, puis connecte
 `roman@lavande.test` / `secret` en IMAP `localhost:3993`, SMTP `localhost:3465`, TLS implicite — le
@@ -105,7 +136,7 @@ réattribué, réponse qui rejoint son thread, XOAUTH2), ignorés par défaut pa
 
 ```bash
 scripts/mail-test-server.sh start     # conteneur lavande-mail-test, certificat auto-signé
-npm run mail:test:live                # 9 tests, --test-threads=1 obligatoire
+npm run mail:test:live                # 11 tests, --test-threads=1 obligatoire
 scripts/mail-test-server.sh stop      # ou `reset` (stop + start), `status`
 ```
 
@@ -117,8 +148,10 @@ scripts/mail-test-server.sh stop      # ou `reset` (stop + start), `status`
   tirés que pour les nouveaux UID, par lots de 500.
 - Push via IMAP **IDLE sur INBOX** (SSE vers le front) : un mail arrive sans clic ; les autres
   dossiers restent à la demande.
-- Aucune suppression poussée vers le serveur : le crate supprime localement et déplace, mais n'expose
-  pas `STORE \Deleted` + `EXPUNGE` côté client.
+- Suppression définitive poussée vers le serveur (`STORE \Deleted` + `UID EXPUNGE`) : `/delete` et
+  `/purge` côté démon. Sans `UIDPLUS`, supprimer **un** message est refusé (l'`EXPUNGE` disponible
+  emporterait ceux qu'un autre client a marqués) ; vider un dossier reste un `EXPUNGE` dossier-wide
+  assumé et `removed` en rapporte le compte côté serveur.
 - Un seul dossier synchronisé par appel (`move_message` réconcilie en plus sa destination) ;
   `sync_account` ne fait que INBOX + Sent ; aucun retry réseau.
 - HTML des mails assaini à l'ingestion (liens sûrs, **images retirées**) ; les mails purement
@@ -211,6 +244,9 @@ le compte et les non-lus sont dans la puce de compte et dans la barre.
 ## Maquette PC (`?desktop`)
 
 La même application en géométrie bureau : `/lavande/?desktop`, le mobile restant sur `/lavande/`.
+L'application packagée suit la coquille : **le bureau (RPM) ouvre directement la vue PC**, Android ouvre
+le plein écran mobile (`src/lib/native.ts`, `resolveShell`). Dans un navigateur, `/lavande/` garde la
+maquette mobile encadrée et `?desktop` force la vue PC.
 Mêmes fixtures, même store (`src/lib/store.tsx`), mêmes règles d'annulation — seule la mise en page change.
 
 | Zone | Choix PC |
@@ -244,7 +280,7 @@ de statut factice (`NativeShell` dans `src/App.tsx`). Toujours sans backend, mê
 | **APK de production** (release, arm64, signé) | `npm run android:build` |
 | APK de débogage (inspecteur WebView, **lent**) | `npm run android:build:debug` |
 
-APK : `dist/android/Lavande.apk`, installation `adb install -r`. Le build release n'est pas cosmétique :
+APK : `artifacts/apk/Lavande.apk`, installation `adb install -r`. Le build release n'est pas cosmétique :
 en debug, la WebView active l'inspecteur V8 et le rendu devient saccadé sur téléphone.
 
 Le rendu natif s'aperçoit aussi dans un navigateur avec `?app` :

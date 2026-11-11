@@ -52,7 +52,7 @@ clone ou après un `rm -rf src-tauri/gen`.
 ## Construire l'APK
 
 ```bash
-npm run android:build     # release, arm64, signé → dist/android/Lavande.apk
+npm run android:build     # release, arm64, signé → artifacts/apk/Lavande.apk
 ```
 
 Le script `scripts/build-android-release.sh` enchaîne : `patch-android.mjs`, `tauri android build --apk -t aarch64`,
@@ -88,7 +88,7 @@ mesurés dans `src-tauri/target/*` allaient de 112 à 127 Mo **avant** `strip`.
 | Fichier | Rôle |
 | --- | --- |
 | `src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk` | sortie Gradle, non signée |
-| `dist/android/Lavande.apk` | APK release signé, prêt à installer (`dist/` est ignoré par git) |
+| `artifacts/apk/Lavande.apk` | APK release signé, prêt à installer (`artifacts/` est ignoré par git ; `dist/` est effacé par `npm run build`) |
 
 Les deux sont produits par le même script :
 
@@ -102,7 +102,7 @@ Par USB, `adb` étant dans le `PATH` après `source scripts/android-env.sh` :
 
 ```bash
 adb devices
-adb install -r dist/android/Lavande.apk
+adb install -r artifacts/apk/Lavande.apk
 ```
 
 Sans câble : transférer l'APK sur le téléphone (cloud, Bluetooth, `scp`), l'ouvrir depuis le gestionnaire

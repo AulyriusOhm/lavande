@@ -303,11 +303,20 @@ Comportements à connaître :
 - `set_flags` ne pousse que `\Seen` (inversé depuis `unread`) et `\Flagged` ; `\Answered` est lu
   mais **jamais écrit**. Deux `UID STORE` séparés : `+FLAGS` puis `-FLAGS`.
 - `move_message` : `UID MOVE` si la capacité `MOVE` est annoncée, sinon `UID COPY` +
-  `+FLAGS (\Deleted)` + `UID EXPUNGE` (le flux d'`EXPUNGE` est consommé jusqu'au bout). Côté base, la
+  `+FLAGS (\Deleted)` + `UID EXPUNGE` (le flux d'`EXPUNGE` est consommé jusqu'au bout). Ce repli
+  exige `UIDPLUS` : sans lui, l'appel est refusé **avant** la copie (voir les limites). Côté base, la
   ligne source est **supprimée** (`store.delete_message`) et le dossier destination est **réconcilié**
   (`reconcile(…, None)`) : la ligne locale de la destination est réinsérée avec l'UID réellement
   attribué par le serveur (GreenMail réattribue l'UID au `MOVE`, vérifié en réseau), corps compris.
   Aucun UID n'est supposé conservé, aucune ligne n'est déplacée à la main.
+- `delete_message` : `UIDPLUS` est vérifié **avant** de poser `\Deleted` ; sans lui, `MailError::Imap`
+  (502 côté API) et rien n'est modifié, ni côté serveur ni en base. Avec lui : `STORE +FLAGS
+  (\Deleted)` puis `UID EXPUNGE <uid>`, puis suppression de la ligne locale.
+- `empty_folder` : `UID STORE 1:*` + expunge du dossier, et `removed` est le nombre de réponses
+  `EXPUNGE` réellement reçues du serveur — la seule mesure de ce que le dossier a perdu. Le
+  nettoyage local est `store.clear_folder` (lignes et pièces jointes du dossier, ligne du dossier
+  gardée) : un dossier jamais synchronisé est vidé côté serveur sans qu'aucun UID local ne soit
+  connu. Serveur d'abord, store ensuite : un échec IMAP laisse la base intacte.
 - `create_folder` : un dossier déjà existant n'est pas une erreur (détection par le mot `exist` dans
   le message d'erreur).
 
@@ -635,7 +644,7 @@ Erreurs : `{ "error": "message lisible", "kind": "config|auth|imap|smtp|tls|oaut
 
 | Méthode | Chemin | Corps | Réponse |
 | --- | --- | --- | --- |
-| GET | `/api/health` | — | `{ "status": "ok", "version": "0.1.0" }` |
+| GET | `/api/health` | — | `{ "status": "ok", "version": "0.1.0", "public_url": "http://127.0.0.1:8790" }` |
 | GET | `/api/accounts` | — | `[AccountSummary]` (jamais de secret) |
 | POST | `/api/accounts` | `AccountConfig` | 201 `AccountSummary`, 400 config, 409 id pris, 401/502 connexion refusée |
 | DELETE | `/api/accounts/{id}` | — | 204 (purge base + `accounts.json`), 404 |
@@ -646,6 +655,8 @@ Erreurs : `{ "error": "message lisible", "kind": "config|auth|imap|smtp|tls|oaut
 | GET | `/api/accounts/{id}/folders/{path}/messages/{uid}?fetch_body=true` | — | `Message` (corps rapatrié à la demande) |
 | POST | `/api/accounts/{id}/flags` | `{ folder_path, uid, unread, starred }` | 204 (serveur d'abord, store ensuite) |
 | POST | `/api/accounts/{id}/move` | `{ from_path, uid, to_path }` | 204 (UID local réaligné sur celui du serveur) |
+| POST | `/api/accounts/{id}/delete` | `{ folder_path, uid }` | 204 (serveur d'abord, store ensuite) ; 502 si le serveur n'annonce pas `UIDPLUS` (rien n'est modifié) |
+| POST | `/api/accounts/{id}/purge` | `{ folder_path }` | 200 `{ removed }`, `removed` = nombre de messages **expurgés côté serveur** (dossier vidé des deux côtés) |
 | POST | `/api/accounts/{id}/send` | `SendRequest` | 204 |
 | POST | `/api/oauth/start` | `OAuthStartRequest` | 201 `{ session, auth_url, redirect_uri }` |
 | GET | `/api/oauth/callback?code=…&state=…` | — | page HTML autonome (jamais de jeton) |
@@ -699,17 +710,31 @@ le démon (`http://127.0.0.1:8790/api/oauth/callback`, surchargeable par `LAVAND
    endpoints `imap`/`smtp` (typiquement ceux renvoyés par `/api/discover`), et `client_id`
    (facultatif si `LAVANDE_MAIL_<PROVIDER>_CLIENT_ID` est défini ; `*_CLIENT_SECRET` de même).
    Réponse : `{ session, auth_url, redirect_uri }`.
-2. Le client ouvre `auth_url` dans le navigateur ; l'utilisateur consent.
+2. Le client ouvre `auth_url` dans le navigateur ; l'utilisateur consent. Ouverture côté front :
+   `window.open` dans une page web (l'onglet est pré-ouvert **avant** la requête, sinon le bloqueur de
+   pop-ups le refuse), et le plugin Tauri `opener` dans la coquille packagée, où `window.open` ne fait
+   rien. Un lien de secours (« Ouvrir la page de consentement ») reste affiché dans la carte pendant
+   l'attente du consentement.
 3. Le fournisseur redirige le navigateur vers `redirect_uri` ; le démon échange le code
    (`grant_type=authorization_code` + `code_verifier`), obtient le `refresh_token`, **teste la
    connexion IMAP** (XOAUTH2 + `LIST`) puis enregistre le compte comme `POST /api/accounts`.
    La page renvoyée est autonome (« Compte connecté » ou « Connexion refusée : … »).
 4. `GET /api/oauth/status?session=…` permet au front de suivre l'issue sans voir de jeton.
 
-Sessions en mémoire, TTL 10 minutes, `state` à usage unique. **Aucun identifiant d'application n'est
-embarqué** dans le projet : il faut enregistrer une application OAuth chez Google/Microsoft (type
-« installed app », redirection `http://127.0.0.1:8790/api/oauth/callback`) ou renseigner l'endpoint
-`custom`.
+Sessions en mémoire, TTL 10 minutes, `state` à usage unique.
+
+L'identifiant d'application Microsoft est **livré dans le build** (`.env.production`,
+`VITE_OAUTH_CLIENT_ID`) : inscription « Lavande », comptes « Any Entra ID Tenant + Personal Microsoft
+accounts », plateforme *Public client/native*, redirection
+`http://127.0.0.1:8790/api/oauth/callback`, *public client flows* autorisés, permissions déléguées
+`IMAP.AccessAsUser.All` + `SMTP.Send`. Un client public PKCE n'a pas de secret : l'identifiant est
+visible sur l'écran de consentement, seul le `refresh_token` reste dans le démon. Pour livrer un autre
+identifiant (Google, ou une inscription à vous), reconstruisez avec `VITE_OAUTH_CLIENT_ID=…` ; sans
+identifiant livré, l'écran de connexion réaffiche le champ et le guide d'inscription.
+
+Le `redirect_uri` est `public_url` du démon : le port livré (`8790`) est celui de l'inscription. Changer
+`LAVANDE_MAIL_BIND` ou `LAVANDE_MAIL_PUBLIC_URL` impose d'enregistrer la même adresse chez le
+fournisseur, sinon il répond `AADSTS50011`.
 
 ### Événements (`/api/events`)
 
@@ -834,6 +859,9 @@ généré par le script dans `$LAVANDE_MAIL_TEST_DIR` (défaut `~/.cache/lavande
 | `flags_reach_the_server` | `set_flags` pousse bien `\Seen` + `\Flagged` (relus par une session neuve via `fetch_flags`), puis le retrait de l'étoile est effectif |
 | `flags_from_another_client_are_pulled` | flags modifiés côté serveur par une session brute (`+FLAGS (\Seen \Flagged)`) : la synchro suivante les ramène (`flags_updated >= 1`, `unread == false`, `starred == true`) sans retélécharger le message |
 | `expunged_message_disappears_locally` | message expurgé côté serveur (`+FLAGS (\Deleted)` + `UID EXPUNGE`) : la synchro suivante le supprime en base (`removed >= 1`, `get_message` → `None`, absent du listing) |
+| `delete_reaches_the_server` | `delete_message` sur un message synchronisé : la ligne locale disparaît et une session brute ne voit plus l'UID côté serveur ; un second appel sur le même UID reste `Ok` (message déjà absent des deux côtés) |
+| `empty_folder_clears_both_sides` | `empty_folder` sur un dossier dédié (message déplacé par `move_message`) : `removed >= 1` (réponses `EXPUNGE` du serveur), store vide et aucune UID côté serveur |
+| `empty_folder_counts_a_never_synced_folder` | message copié par une session brute dans un dossier **jamais synchronisé** (aucune ligne locale), puis `empty_folder` : `removed >= 1` (un compte basé sur le store rendrait `0`) et le dossier est vide côté serveur |
 | `unchanged_folder_reports_nothing` | deux synchros d'affilée sans changement : `inserted`, `flags_updated` et `removed` à 0 et `uidvalidity_changed == false` (la réconciliation est idempotente) |
 | `move_keeps_store_in_step_with_server` | `create_folder` deux fois (idempotent), `move_message` INBOX → Archive (capacité `MOVE`) : la ligne INBOX disparaît, la ligne Archive réapparaît **avec l'UID réattribué par le serveur** et son corps, `fetch_body` fonctionne dessus, et une session neuve confirme que tous les UID locaux d'Archive existent côté serveur |
 | `reply_joins_the_thread` | une réponse (`In-Reply-To` + `References` = `Message-ID` du parent) rejoint le thread du parent : `thread_id` identique, un seul thread de `count == 2` |
@@ -869,10 +897,18 @@ Variables lues par `scripts/mail-test-server.sh` : `LAVANDE_MAIL_TEST_DIR`, `…
 - **OAuth2 sans identifiant embarqué** : un `client_id` doit être enregistré (ou fourni par
   l'environnement). Le parcours n'est validé qu'avec un fournisseur factice et GreenMail, pas contre
   Google/Microsoft en vrai.
-- **Aucune suppression poussée vers le serveur.** Le crate sait supprimer **localement**
-  (`Store::delete_message`/`delete_messages`) et déplacer (`imap::move_message`), mais il n'expose ni
-  `STORE \Deleted` + `EXPUNGE` ni `UID EXPUNGE` comme opération publique : supprimer depuis le client
-  ne supprime rien côté serveur (et la ligne locale reviendra à la synchro suivante).
+- **Suppression définitive : refus sans `UIDPLUS` pour un message, `EXPUNGE` dossier-wide assumé
+  pour un dossier.** `imap::delete_message` exige `UIDPLUS` et le vérifie **avant** de marquer quoi
+  que ce soit : sans lui, l'`EXPUNGE` disponible emporte *tous* les messages déjà marqués `\Deleted`
+  du dossier, y compris ceux qu'un autre client a marqués, et l'IMAP ne permet pas de restreindre
+  l'expunge à un seul message. La suppression d'un message est donc refusée (`MailError::Imap`,
+  502 côté API) plutôt que de risquer d'en détruire plusieurs. `imap::empty_folder` garde le
+  `EXPUNGE` dossier-wide : vider le dossier est précisément l'intention, y compris pour les
+  messages marqués par un autre client. Les deux sont exposés par le démon
+  (`/api/accounts/{id}/delete`, `/api/accounts/{id}/purge`) ; `removed` sur `/purge` compte les
+  réponses `EXPUNGE` du serveur. Un message déjà absent côté serveur ne fait pas échouer `delete_message`
+  (`STORE` et `UID EXPUNGE` répondent `OK` sur un UID inconnu) et la ligne locale est supprimée
+  quand même ; une ligne locale déjà absente est tolérée de la même façon.
 - **Pas de reprise réseau.** Aucun retry, aucun timeout applicatif sur `TcpStream::connect`, pas de
   reconnexion : une coupure remonte en `MailError::Imap`/`Io` et l'appelant doit réessayer.
 - **Un seul dossier par appel de `sync_folder`.** `sync_account` se limite à `Inbox` + `Sent` ; les
