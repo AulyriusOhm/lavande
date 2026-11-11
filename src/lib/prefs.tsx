@@ -14,6 +14,7 @@ export const SWIPE_ACTIONS: { id: SwipeActionId; label: string }[] = [
 const STORAGE_KEY = "lavande.prefs";
 
 import { EMPTY_LLM, type LlmConfig } from "@/lib/llm";
+import { setMcpRights } from "@/lib/mcp";
 import { DEFAULT_AI_TASKS, DEFAULT_SUMMARY, type AiTasksConfig, type SummaryConfig } from "@/lib/summary";
 
 export type AccountSignature = { html: string; enabled: boolean };
@@ -39,6 +40,8 @@ export type Prefs = {
   calendarEnabled: boolean;
   planningEnabled: boolean;
   mcpEnabled: Record<string, boolean>;
+  /** Types d'action MCP dispensés de demande d'approbation. */
+  mcpAlwaysAllow: Record<string, boolean>;
   signatures: Record<string, AccountSignature>;
   llm: LlmConfig;
   /** Suggestions de réponse générées par le LLM (sinon repli local). */
@@ -60,6 +63,7 @@ const DEFAULTS: Prefs = {
   calendarEnabled: true,
   planningEnabled: true,
   mcpEnabled: {},
+  mcpAlwaysAllow: {},
   signatures: {},
   llm: EMPTY_LLM,
   aiReplyEnabled: true,
@@ -73,10 +77,11 @@ type PrefsContextValue = Prefs & {
   setPgpEncrypt: (value: boolean) => void;
   setPgpSign: (value: boolean) => void;
   setAttachPublicKey: (value: boolean) => void;
-  setMcpConfirmSend: (value: boolean) => void;
   setCalendarEnabled: (value: boolean) => void;
   setPlanningEnabled: (value: boolean) => void;
   setMcpEnabled: (serverId: string, value: boolean) => void;
+  setMcpAlwaysAllow: (type: string, value: boolean) => void;
+  resetMcpAllowances: () => void;
   setSignature: (accountId: string, patch: Partial<AccountSignature>) => void;
   setLlm: (patch: Partial<LlmConfig>) => void;
   setAiReplyEnabled: (value: boolean) => void;
@@ -194,6 +199,7 @@ function read(): Prefs {
     calendarEnabled: asBoolean(stored.calendarEnabled, DEFAULTS.calendarEnabled),
     planningEnabled: asBoolean(stored.planningEnabled, DEFAULTS.planningEnabled),
     mcpEnabled: asFlags(stored.mcpEnabled),
+    mcpAlwaysAllow: asFlags(stored.mcpAlwaysAllow),
     signatures: asSignatures(stored.signatures),
     llm: asLlm(stored.llm),
     aiReplyEnabled: asBoolean(stored.aiReplyEnabled, DEFAULTS.aiReplyEnabled),
@@ -210,6 +216,14 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
   }, [prefs]);
 
+  useEffect(() => {
+    setMcpRights({
+      enabled: prefs.mcpEnabled,
+      alwaysAllow: prefs.mcpAlwaysAllow,
+      confirmSend: prefs.mcpConfirmSend,
+    });
+  }, [prefs.mcpEnabled, prefs.mcpAlwaysAllow, prefs.mcpConfirmSend]);
+
   const patch = useCallback(<K extends keyof Prefs>(key: K, value: Prefs[K]) => {
     setPrefs((current) => ({ ...current, [key]: value }));
   }, []);
@@ -222,7 +236,6 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
   const setPgpEncrypt = useCallback((value: boolean) => patch("pgpEncrypt", value), [patch]);
   const setPgpSign = useCallback((value: boolean) => patch("pgpSign", value), [patch]);
   const setAttachPublicKey = useCallback((value: boolean) => patch("attachPublicKey", value), [patch]);
-  const setMcpConfirmSend = useCallback((value: boolean) => patch("mcpConfirmSend", value), [patch]);
   const setCalendarEnabled = useCallback((value: boolean) => patch("calendarEnabled", value), [patch]);
   const setPlanningEnabled = useCallback((value: boolean) => patch("planningEnabled", value), [patch]);
   const setMcpEnabled = useCallback(
@@ -231,6 +244,18 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
         ...current,
         mcpEnabled: { ...current.mcpEnabled, [serverId]: value },
       })),
+    [],
+  );
+  const setMcpAlwaysAllow = useCallback(
+    (type: string, value: boolean) =>
+      setPrefs((current) => ({
+        ...current,
+        mcpAlwaysAllow: { ...current.mcpAlwaysAllow, [type]: value },
+      })),
+    [],
+  );
+  const resetMcpAllowances = useCallback(
+    () => setPrefs((current) => ({ ...current, mcpAlwaysAllow: {}, mcpConfirmSend: DEFAULTS.mcpConfirmSend })),
     [],
   );
   const setSignature = useCallback(
@@ -278,10 +303,11 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setPgpEncrypt,
       setPgpSign,
       setAttachPublicKey,
-      setMcpConfirmSend,
       setCalendarEnabled,
       setPlanningEnabled,
       setMcpEnabled,
+      setMcpAlwaysAllow,
+      resetMcpAllowances,
       setSignature,
       setLlm,
       setAiReplyEnabled,
@@ -295,10 +321,11 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setPgpEncrypt,
       setPgpSign,
       setAttachPublicKey,
-      setMcpConfirmSend,
       setCalendarEnabled,
       setPlanningEnabled,
       setMcpEnabled,
+      setMcpAlwaysAllow,
+      resetMcpAllowances,
       setSignature,
       setLlm,
       setAiReplyEnabled,

@@ -228,3 +228,52 @@ describe("préférences · synchronisation", () => {
     expect(asSync({ kanban: false, mails: "oui" })).toEqual({ ...DEFAULT_SYNC, kanban: false });
   });
 });
+
+describe("préférences · toujours autoriser MCP", () => {
+  it("démarre sans aucun type autorisé d'avance", () => {
+    const { result } = mount();
+    expect(result.current.mcpAlwaysAllow).toEqual({});
+    expect(result.current.mcpConfirmSend).toBe(true);
+  });
+
+  it("relit les types autorisés en ignorant les valeurs invalides", () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({ mcpAlwaysAllow: { envoi: true, suppression: false, brouillon: "oui", 12: true } }),
+    );
+
+    expect(mount().result.current.mcpAlwaysAllow).toEqual({ envoi: true, suppression: false, 12: true });
+  });
+
+  it("tolère une valeur absente ou d'un autre type", () => {
+    expect(mount().result.current.mcpAlwaysAllow).toEqual({});
+
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ mcpAlwaysAllow: "tout" }));
+    expect(mount().result.current.mcpAlwaysAllow).toEqual({});
+  });
+
+  it("persiste un type autorisé puis le révoque", () => {
+    const { result } = mount();
+
+    act(() => result.current.setMcpAlwaysAllow("envoi", true));
+    expect(stored().mcpAlwaysAllow).toEqual({ envoi: true });
+
+    act(() => result.current.setMcpAlwaysAllow("envoi", false));
+    expect(result.current.mcpAlwaysAllow).toEqual({ envoi: false });
+  });
+
+  it("réinitialise les autorisations et le garde-fou historique d'envoi", () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({ mcpAlwaysAllow: { envoi: true, suppression: true }, mcpConfirmSend: false }),
+    );
+    const { result } = mount();
+
+    act(() => result.current.resetMcpAllowances());
+
+    expect(result.current.mcpAlwaysAllow).toEqual({});
+    expect(result.current.mcpConfirmSend).toBe(true);
+    expect(stored().mcpAlwaysAllow).toEqual({});
+    expect(stored().mcpConfirmSend).toBe(true);
+  });
+});

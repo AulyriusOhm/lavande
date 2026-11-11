@@ -13,6 +13,7 @@ import { DesktopCalendar, NewEventDialog } from "@/desktop/calendar";
 import { DesktopPlanning, NewTaskDialog } from "@/desktop/planning";
 import { DesktopSettings } from "@/desktop/settings";
 import { PgpScreen } from "@/screens/pgp-screen";
+import { McpApprovalHost } from "@/screens/mcp-screen";
 import { DesktopComposePage } from "@/desktop/compose-page";
 import { isComposeWindow } from "@/lib/compose-bus";
 import { useEscapeLayer } from "@/desktop/escape";
@@ -155,6 +156,7 @@ function DesktopMain() {
       <NewEventDialog open={newEventOpen} onClose={() => setNewEventOpen(false)} />
       <Notice notice={notices[0] ?? null} onClose={dismissNotice} />
       <AccountRemoveDialog variant="dialog" />
+      <McpApprovalHost />
 
       <AnimatePresence>
         {pgpOpen && (

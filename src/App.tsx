@@ -13,7 +13,7 @@ import { Dock, TABS, type TabId } from "@/components/dock";
 import { AccountSwitchSheet, InboxScreen as InboxView, MailboxSheet } from "@/screens/inbox-screen";
 import { SearchScreen } from "@/screens/search-screen";
 import { CalendarScreen as CalendarView } from "@/screens/calendar-screen";
-import { McpScreen } from "@/screens/mcp-screen";
+import { McpApprovalHost, McpScreen } from "@/screens/mcp-screen";
 import { PlanningScreen as PlanningView } from "@/screens/planning-screen";
 import { TaskScreen } from "@/screens/task-screen";
 import { NewTaskSheet, createTask } from "@/screens/new-task-sheet";
@@ -808,6 +808,7 @@ function PhoneApp({ native }: { native?: boolean }) {
 
       <Notice notice={notices[0] ?? null} onClose={dismissNotice} />
       <AccountRemoveDialog />
+      <McpApprovalHost />
       <ShortcutsOverlay
         open={helpOpen}
         onClose={() => setHelpOpen(false)}

@@ -19,7 +19,6 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
-  ShieldCheck,
   Sparkles,
   Sun,
   SunMoon,
@@ -41,8 +40,16 @@ import {
   type PgpKey,
 } from "@/lib/pgp";
 import { exportKey, generateKey, listKeys } from "@/lib/pgp-api";
-import { MCP_LOG, MCP_SCOPES, MCP_SERVERS, mcpCounts } from "@/lib/mcp";
-import type { McpLogEntry } from "@/lib/mcp";
+import {
+  MCP_ACTION_TYPES,
+  MCP_SCOPES,
+  MCP_SERVERS,
+  mcpActionType,
+  mcpCounts,
+  mcpLogClock,
+  mcpTypeAllowed,
+  useMcpLog,
+} from "@/lib/mcp";
 import { activeSignature, mergeFlags, usePrefs } from "@/lib/prefs";
 import { APP_VERSION, phaseLabel, useUpdater } from "@/lib/updater";
 import { llmProbe, llmReady } from "@/lib/llm";
@@ -69,6 +76,8 @@ const KEY_TONE = { valid: "green", expired: "amber", revoked: "rose" } as const;
 
 const SCOPE_TONE = { lecture: "neutral", écriture: "amber", signature: "green" } as const;
 
+const LOG_TONE = { succès: "green", échec: "rose", refusé: "amber" } as const;
+
 const MCP_SECTIONS =
   import.meta.env.VITE_PLATFORM === "android" ? [] : ([{ id: "assistant", label: "Serveurs MCP" }] as const);
 
@@ -90,11 +99,6 @@ const SECTIONS = [
 type SectionId = (typeof SECTIONS)[number]["id"];
 
 const anchor = (id: SectionId) => `reglages-${id}`;
-
-const serverName = (tool: string) =>
-  MCP_SERVERS.find((server) => server.tools.some((entry) => entry.name === tool))?.name ?? "hors ligne";
-
-const durationOf = (entry: McpLogEntry) => `${18 + ((entry.detail.length * 7) % 240)} ms`;
 
 const clampHours = (value: string, max: number): number => {
   const parsed = Number(value);
@@ -263,13 +267,15 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     setPgpSign,
     setAttachPublicKey,
     mcpConfirmSend,
-    setMcpConfirmSend,
     calendarEnabled,
     planningEnabled,
     setCalendarEnabled,
     setPlanningEnabled,
     mcpEnabled,
     setMcpEnabled,
+    mcpAlwaysAllow,
+    setMcpAlwaysAllow,
+    resetMcpAllowances,
     signatures,
     llm,
     setLlm,
@@ -306,6 +312,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     mcpEnabled,
   );
   const counts = mcpCounts((server) => enabled[server.id]);
+  const log = useMcpLog();
+  const allowances = { alwaysAllow: mcpAlwaysAllow, confirmSend: mcpConfirmSend };
   const myKey = keys?.find((key) => key.has_secret) ?? null;
   const myState = myKey ? keyState(myKey) : null;
   const expiringSoon = myKey ? !isExpired(myKey) && isExpired(myKey, new Date(Date.now() + 90 * 864e5)) : false;
@@ -923,15 +931,6 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                       checked={attachPublicKey}
                       onChange={setAttachPublicKey}
                     />
-                    {import.meta.env.VITE_PLATFORM === "android" ? null : (
-                      <ToggleRow
-                        icon={<ShieldCheck className="size-4" />}
-                        label="Confirmer avant chaque envoi"
-                        hint="mail.send et les écritures attendent ta validation"
-                        checked={mcpConfirmSend}
-                        onChange={setMcpConfirmSend}
-                      />
-                    )}
                   </Surface>
                 </div>
 
@@ -1314,37 +1313,81 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                     })}
                   </Surface>
 
+                  <Surface className="mt-3 overflow-hidden">
+                    <div className="flex items-center gap-2 border-b border-line px-3.5 py-2">
+                      <SectionLabel>Toujours autoriser</SectionLabel>
+                      <span className="text-[10.5px] font-semibold text-ink-muted">
+                        par type d'action
+                      </span>
+                      <DButton variant="plain" size="sm" className="ml-auto" onClick={resetMcpAllowances}>
+                        <RotateCcw className="size-3" />
+                        Tout redemander
+                      </DButton>
+                    </div>
+                    <div className="divide-y divide-line/70">
+                      {MCP_ACTION_TYPES.map((action) => {
+                        const isAllowed = mcpTypeAllowed(action.id, allowances);
+                        return (
+                          <div key={action.id} className="flex items-center gap-3 px-3.5 py-2">
+                            <div className="min-w-0 flex-1 leading-tight">
+                              <p className="text-[11.5px] font-bold text-ink">{action.id}</p>
+                              <p className="text-[10.5px] font-medium text-ink-muted">{action.hint}</p>
+                            </div>
+                            <Switch
+                              checked={isAllowed}
+                              onChange={(value) => setMcpAlwaysAllow(action.id, value)}
+                              label={`Toujours autoriser · ${action.id}`}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </Surface>
+
                   <Surface className="mt-3 overflow-x-auto">
-                    <table className="w-full border-collapse text-left">
-                      <thead>
-                        <tr className="border-b border-line bg-surface-2/60 text-[10px] font-bold tracking-[0.16em] text-ink-muted uppercase">
-                          <th className="px-3 py-2 font-bold">Heure</th>
-                          <th className="py-2 pr-3 font-bold">Serveur</th>
-                          <th className="py-2 pr-3 font-bold">Outil</th>
-                          <th className="py-2 pr-3 font-bold">Verdict</th>
-                          <th className="py-2 pr-3 text-right font-bold">Durée</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {MCP_LOG.map((entry) => (
-                          <tr key={entry.time + entry.tool} className="border-b border-line/70 last:border-0">
-                            <td className="px-3 py-2 font-mono text-[11px] font-semibold text-ink-muted tabular-nums">
-                              {entry.time}
-                            </td>
-                            <td className="py-2 pr-3 text-[11.5px] font-semibold text-ink-soft">
-                              {serverName(entry.tool)}
-                            </td>
-                            <td className="py-2 pr-3 font-mono text-[11px] font-bold text-accent-ink">{entry.tool}</td>
-                            <td className="py-2 pr-3">
-                              <Badge tone={entry.status === "succès" ? "green" : "rose"}>{entry.status}</Badge>
-                            </td>
-                            <td className="py-2 pr-3 text-right font-mono text-[10.5px] font-semibold text-ink-muted tabular-nums">
-                              {durationOf(entry)}
-                            </td>
+                    {log.length === 0 ? (
+                      <p className="px-3.5 py-4 text-[11px] font-medium text-ink-muted">
+                        Aucune action journalisée.
+                      </p>
+                    ) : (
+                      <table className="w-full border-collapse text-left">
+                        <thead>
+                          <tr className="border-b border-line bg-surface-2/60 text-[10px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                            <th className="px-3 py-2 font-bold">Heure</th>
+                            <th className="py-2 pr-3 font-bold">Serveur</th>
+                            <th className="py-2 pr-3 font-bold">Outil</th>
+                            <th className="py-2 pr-3 font-bold">Verdict</th>
+                            <th className="py-2 pr-3 font-bold">Type</th>
+                            <th className="py-2 pr-3 font-bold">Détail</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {log.map((entry, index) => (
+                            <tr key={`${entry.time}-${index}`} className="border-b border-line/70 last:border-0">
+                              <td className="px-3 py-2 font-mono text-[11px] font-semibold text-ink-muted tabular-nums">
+                                {mcpLogClock(entry.time)}
+                              </td>
+                              <td className="py-2 pr-3 text-[11.5px] font-semibold text-ink-soft">
+                                <span className="block truncate">{entry.server}</span>
+                                <span className="block truncate text-[10px] font-medium text-ink-muted">
+                                  {entry.agent}
+                                </span>
+                              </td>
+                              <td className="py-2 pr-3 font-mono text-[11px] font-bold text-accent-ink">{entry.tool}</td>
+                              <td className="py-2 pr-3">
+                                <Badge tone={LOG_TONE[entry.status]}>{entry.status}</Badge>
+                              </td>
+                              <td className="py-2 pr-3 text-[10.5px] font-semibold text-ink-muted">
+                                {mcpActionType(entry.tool) ?? "lecture"}
+                              </td>
+                              <td className="min-w-[220px] py-2 pr-3 text-[11px] font-medium break-words text-ink-soft">
+                                {entry.detail}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
                   </Surface>
                 </Block>
               )}

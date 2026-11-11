@@ -4,18 +4,30 @@ import {
   Blocks,
   Globe,
   Plug,
+  RotateCcw,
   ShieldCheck,
   Terminal,
 } from "lucide-react";
-import { MCP_LOG, MCP_SCOPES, MCP_SERVERS, mcpCounts } from "@/lib/mcp";
+import {
+  MCP_ACTION_TYPES,
+  MCP_SCOPES,
+  MCP_SERVERS,
+  mcpCallsLastDay,
+  mcpCounts,
+  mcpLogClock,
+  mcpTypeAllowed,
+  useMcpLog,
+} from "@/lib/mcp";
 import { mergeFlags, usePrefs } from "@/lib/prefs";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { NumberTicker } from "@/components/ui/number-ticker";
-import { Switch, ToggleRow } from "@/components/ui/primitives";
+import { Switch, SwitchTrack } from "@/components/ui/primitives";
 import { ShinyText } from "@/components/ui/animated-text";
+
+export { McpApprovalDialog as McpApprovalHost } from "@/components/mcp-approval";
 
 const SCOPE_STYLE: Record<string, string> = {
   lecture: "bg-surface-2 text-ink-soft",
@@ -23,15 +35,30 @@ const SCOPE_STYLE: Record<string, string> = {
   signature: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
 };
 
+const STATUS_STYLE: Record<string, string> = {
+  succès: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
+  échec: "bg-red-500/12 text-red-700 dark:text-red-300",
+  refusé: "bg-amber-500/14 text-amber-700 dark:text-amber-300",
+};
+
 export function McpScreen({ onClose }: { onClose?: () => void }) {
   const { brand } = useTheme();
-  const { mcpEnabled, setMcpEnabled, mcpConfirmSend, setMcpConfirmSend } = usePrefs();
+  const {
+    mcpEnabled,
+    setMcpEnabled,
+    mcpAlwaysAllow,
+    setMcpAlwaysAllow,
+    resetMcpAllowances,
+    mcpConfirmSend,
+  } = usePrefs();
+  const log = useMcpLog();
 
   const enabled = mergeFlags(
     Object.fromEntries(MCP_SERVERS.map((server) => [server.id, server.status === "connected"])),
     mcpEnabled,
   );
   const counts = mcpCounts((server) => enabled[server.id]);
+  const allowed = { alwaysAllow: mcpAlwaysAllow, confirmSend: mcpConfirmSend };
 
   return (
     <div className="relative h-full overflow-y-auto no-scrollbar pb-32">
@@ -63,7 +90,7 @@ export function McpScreen({ onClose }: { onClose?: () => void }) {
           {[
             { label: "Serveurs actifs", value: counts.activeServers, icon: Plug },
             { label: "Outils actifs", value: counts.activeTools, icon: Terminal },
-            { label: "Appels / 24 h", value: 42, icon: Activity },
+            { label: "Appels / 24 h", value: mcpCallsLastDay(log), icon: Activity },
           ].map((stat) => {
             const Icon = stat.icon;
             return (
@@ -161,58 +188,91 @@ export function McpScreen({ onClose }: { onClose?: () => void }) {
 
       <div className="mt-5 flex items-baseline justify-between px-5">
         <h2 className="text-[10.5px] font-bold tracking-[0.16em] text-ink-soft uppercase">Journal</h2>
-        <span className="text-[10.5px] font-medium text-ink-muted">aujourd'hui</span>
+        <span className="text-[10.5px] font-medium text-ink-muted">
+          {log.length > 0 ? `${log.length} action${log.length > 1 ? "s" : ""}` : "à jour"}
+        </span>
       </div>
 
       <BlurFade delay={0.25}>
         <div className="mx-4 mt-3 rounded-3xl border border-line bg-surface p-1">
-          {MCP_LOG.map((entry, index) => (
-            <div
-              key={entry.time + entry.tool}
-              className={cn("px-2.5 py-2.5", index > 0 && "border-t border-line/70")}
-            >
-              <div className="flex items-center gap-2.5">
-                <span className="w-9 shrink-0 font-mono text-[10px] font-semibold text-ink-muted">
-                  {entry.time}
-                </span>
-                <span className="shrink-0 rounded-lg bg-accent-soft px-1.5 py-0.5 font-mono text-[10px] font-bold text-accent-ink">
-                  {entry.tool}
-                </span>
-                <span
-                  className={cn(
-                    "ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-bold",
-                    entry.status === "succès"
-                      ? "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300"
-                      : "bg-red-500/12 text-red-700 dark:text-red-300",
-                  )}
-                >
-                  {entry.status}
-                </span>
+          {log.length === 0 ? (
+            <p className="px-3 py-4 text-center text-[11px] font-medium text-ink-muted">
+              Aucune action journalisée.
+            </p>
+          ) : (
+            log.map((entry, index) => (
+              <div
+                key={`${entry.time}-${index}`}
+                className={cn("px-2.5 py-2.5", index > 0 && "border-t border-line/70")}
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className="w-9 shrink-0 font-mono text-[10px] font-semibold text-ink-muted tabular-nums">
+                    {mcpLogClock(entry.time)}
+                  </span>
+                  <span className="shrink-0 rounded-lg bg-accent-soft px-1.5 py-0.5 font-mono text-[10px] font-bold text-accent-ink">
+                    {entry.tool}
+                  </span>
+                  <span
+                    className={cn(
+                      "ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-bold",
+                      STATUS_STYLE[entry.status],
+                    )}
+                  >
+                    {entry.status}
+                  </span>
+                </div>
+                <p className="mt-1 pl-[46px] text-[10.5px] leading-relaxed font-medium break-words text-ink-soft">
+                  <span className="font-bold text-ink-muted">{entry.agent}</span> · {entry.detail}
+                </p>
               </div>
-              <p className="mt-1 pl-[46px] text-[10.5px] leading-relaxed font-medium text-ink-soft">
-                <span className="font-bold text-ink-muted">{entry.agent}</span> · {entry.detail}
-              </p>
-            </div>
-          ))}
+            ))
+          )}
         </div>
       </BlurFade>
 
       <BlurFade delay={0.3}>
         <div className="mx-4 mt-3 overflow-hidden rounded-3xl border border-line bg-surface">
-          <p className="px-3.5 pt-3 text-[10.5px] font-bold tracking-[0.14em] text-ink-muted uppercase">
-            Permissions
+          <div className="flex items-center gap-2 px-3.5 pt-3">
+            <p className="text-[10.5px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+              Permissions
+            </p>
+            <button
+              type="button"
+              onClick={resetMcpAllowances}
+              className="focus-ring ml-auto inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-[10px] font-bold text-ink-soft"
+            >
+              <RotateCcw className="size-2.5" />
+              Tout redemander
+            </button>
+          </div>
+          <p className="px-3.5 pt-1.5 text-[10px] leading-relaxed font-medium text-ink-muted">
+            Les lectures passent librement ; chaque écriture demande ton accord, sauf les types que tu
+            autorises d'avance.
           </p>
-          <ToggleRow
-            icon={<ShieldCheck className="size-4" />}
-            label="Exiger une confirmation avant chaque envoi"
-            hint="mail.send et les écritures attendent ta validation"
-            checked={mcpConfirmSend}
-            onChange={setMcpConfirmSend}
-          />
-          <p className="px-3.5 pb-3 text-[10px] leading-relaxed font-medium text-ink-muted">
-            Un jeton par agent, portée limitée, révocable. Aucune permission n'est accordée sans ton
-            accord.
-          </p>
+          <div className="mt-1.5 divide-y divide-line/70">
+            {MCP_ACTION_TYPES.map((action) => {
+              const isAllowed = mcpTypeAllowed(action.id, allowed);
+              return (
+                <button
+                  key={action.id}
+                  type="button"
+                  role="switch"
+                  aria-checked={isAllowed}
+                  onClick={() => setMcpAlwaysAllow(action.id, !isAllowed)}
+                  className="focus-row flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-surface-2/70"
+                >
+                  <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-surface-2 text-ink-soft">
+                    <ShieldCheck className="size-4" />
+                  </span>
+                  <span className="min-w-0 flex-1 leading-tight">
+                    <span className="block text-[12px] font-bold text-ink">Toujours autoriser · {action.id}</span>
+                    <span className="block text-[10px] font-medium text-ink-muted">{action.hint}</span>
+                  </span>
+                  <SwitchTrack checked={isAllowed} />
+                </button>
+              );
+            })}
+          </div>
         </div>
       </BlurFade>
     </div>
