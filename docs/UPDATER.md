@@ -140,3 +140,32 @@ Exemple de manifeste :
   sinon le build échoue.
 - Aucune limite de débit ni authentification côté serveur : le manifeste est
   public, les paquets sont signés.
+
+## Ce qui manque pour activer l'auto-updater (à faire)
+
+Le code est en place, mais **aucune mise à jour ne peut encore être distribuée**
+tant que les points ci-dessous ne sont pas faits :
+
+1. **Héberger l'endpoint.** `https://lavande.mail/updates/` n'existe pas. Choisir
+   un hébergement (serveur statique HTTPS, ou releases Gitea/GitHub — voir
+   « Endpoint »), y déposer les fichiers, et au besoin mettre à jour
+   `plugins.updater.endpoints` dans `src-tauri/tauri.conf.json`.
+2. **Sauvegarder la clé privée.** `.tauri/lavande-updater.key` n'est que sur ce
+   poste. La copier dans un gestionnaire de secrets / une sauvegarde chiffrée.
+   Perdue = chaîne de mise à jour cassée (il faudra republier un installeur complet).
+3. **Publier une première release.** Incrémenter la version (`tauri.conf.json` +
+   `package.json`, ex. 0.1.0 → 0.2.0), construire les paquets, lancer
+   `npm run release:updater -- --notes "…"`, puis déposer `latest.json` + paquets +
+   `.sig` sur l'endpoint. Sans une version supérieure publiée, l'app restera « à jour ».
+4. **Construire l'AppImage.** Le build actuel ne produit que le RPM. L'AppImage est
+   le format le plus fiable pour l'auto-update Linux (mise à jour en place). Le
+   bundler télécharge `linuxdeploy`/`appimagetool` (réseau requis au build).
+5. **Tester le flux de bout en bout.** Vérifier avec une vraie mise à jour hébergée :
+   détection → téléchargement → vérification de signature → installation →
+   redémarrage. Pas encore fait.
+6. **Prérequis d'installation RPM.** Le poste cible doit avoir polkit (`pkexec`) ou
+   `sudo` pour `rpm -U`. À confirmer sur la machine de l'utilisateur ; sinon
+   privilégier l'AppImage.
+7. **(Optionnel) Vérification au démarrage.** Aujourd'hui la vérification silencieuse
+   n'a lieu qu'à l'ouverture des Réglages (1×/session). On peut ajouter une
+   vérification au lancement + notification si une mise à jour est disponible.
