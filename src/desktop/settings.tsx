@@ -44,6 +44,7 @@ import { exportKey, generateKey, listKeys } from "@/lib/pgp-api";
 import { MCP_LOG, MCP_SCOPES, MCP_SERVERS, mcpCounts } from "@/lib/mcp";
 import type { McpLogEntry } from "@/lib/mcp";
 import { activeSignature, mergeFlags, usePrefs } from "@/lib/prefs";
+import { APP_VERSION, phaseLabel, useUpdater } from "@/lib/updater";
 import { llmProbe, llmReady } from "@/lib/llm";
 import type { SummaryConfig } from "@/lib/summary";
 import { ACCENT_PRESETS, useTheme, type ThemeMode } from "@/lib/theme";
@@ -79,6 +80,7 @@ const SECTIONS = [
   { id: "resumes", label: "Résumés" },
   { id: "taches-ia", label: "Suggestions de tâches" },
   { id: "assistant", label: "Serveurs MCP" },
+  { id: "mise-a-jour", label: "Mise à jour" },
   { id: "apropos", label: "À propos" },
 ] as const;
 
@@ -246,6 +248,8 @@ function usePgpKeys() {
 }
 
 export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
+  const updater = useUpdater();
+  const updateState = phaseLabel(updater.phase);
   const { accent, mode: themeMode, brand, setAccent, setMode: setThemeMode, reset } = useTheme();
   const {
     pgpEncrypt,
@@ -1332,6 +1336,88 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                       ))}
                     </tbody>
                   </table>
+                </Surface>
+              </Block>
+
+              <Block
+                id="mise-a-jour"
+                label="Mise à jour"
+                hint={`v${updater.current ?? APP_VERSION}`}
+              >
+                <Surface className="p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="leading-tight">
+                      <SectionLabel>Version installée</SectionLabel>
+                      <p className="mt-1 text-[15px] font-extrabold tracking-[-0.02em] text-ink tabular-nums">
+                        v{updater.current ?? APP_VERSION}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <DButton
+                        variant="soft"
+                        size="sm"
+                        disabled={!updater.supported || updater.busy}
+                        onClick={() => void updater.check()}
+                      >
+                        <RefreshCw
+                          className={cn("size-3.5", updater.phase.kind === "checking" && "animate-spin")}
+                        />
+                        Vérifier les mises à jour
+                      </DButton>
+                      {updater.canInstall ? (
+                        <DButton
+                          variant="primary"
+                          size="sm"
+                          disabled={updater.busy}
+                          onClick={() => void updater.install()}
+                        >
+                          <Download className="size-3.5" />
+                          Installer et redémarrer
+                        </DButton>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <Badge tone={updateState.tone}>{updateState.label}</Badge>
+                    {updater.phase.kind === "current" ? (
+                      <span className="inline-flex items-center gap-1 text-[10.5px] font-semibold text-ink-muted">
+                        <Check className="size-3" strokeWidth={3} />
+                        Aucune version plus récente sur le serveur.
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {updater.phase.kind === "downloading" ? (
+                    <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-surface-2">
+                      <div
+                        className={cn(
+                          "h-full rounded-full bg-accent transition-[width] duration-300",
+                          updater.phase.percent === null && "animate-pulse",
+                        )}
+                        style={{ width: `${updater.phase.percent ?? 35}%` }}
+                      />
+                    </div>
+                  ) : null}
+
+                  {updater.phase.kind === "available" && updater.phase.notes ? (
+                    <p className="mt-2.5 max-h-40 overflow-y-auto rounded-xl bg-surface-2/70 px-2.5 py-2 text-[11px] leading-relaxed font-medium whitespace-pre-line text-ink-soft">
+                      {updater.phase.notes}
+                    </p>
+                  ) : null}
+
+                  {updater.phase.kind === "error" ? (
+                    <p className="mt-2.5 flex items-start gap-1.5 rounded-xl bg-rose-500/10 px-2.5 py-2 text-[10.5px] font-semibold text-rose-600 dark:text-rose-300">
+                      <AlertTriangle className="mt-px size-3.5 shrink-0" />
+                      {updater.phase.message}
+                    </p>
+                  ) : null}
+
+                  <p className="mt-3 text-[10.5px] leading-relaxed font-semibold text-ink-muted">
+                    {updater.supported
+                      ? "Le paquet est signé et vérifié avant installation ; l'application redémarre ensuite sur la nouvelle version."
+                      : "La mise à jour automatique n'existe que dans l'application de bureau (paquet RPM ou AppImage) : sur Android, l'APK se réinstalle à la main."}
+                  </p>
                 </Surface>
               </Block>
 

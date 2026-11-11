@@ -139,7 +139,8 @@ export const TASKS: Task[] = [
 export type MailSuggestion = {
   id: string;
   mailId: string;
-  account: "perso" | "pro" | "gmail";
+  /** Identifiant de la boîte source (compte réel : `alpha`, `perso`, `gmail`…). */
+  account: string;
   from: string;
   subject: string;
   proposal: string;
@@ -147,6 +148,8 @@ export type MailSuggestion = {
   dueTone: Task["dueTone"];
   tone: number;
   description: string;
+  /** Suggestion produite par l'IA (résumé LLM ou extraction de tâches). */
+  ai?: boolean;
   /** Horodatage (ms) du mail source : base du filtre de fenêtre des suggestions IA. */
   timestamp?: number;
 };

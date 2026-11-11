@@ -10,6 +10,9 @@ import { LOCAL_SCHEMA_VERSION, docKey, promotedTaskId, suggestionId, type Doc } 
 import { randomDek, wrapForDevice } from "@/lib/sync/crypto";
 import { createDevice, createMemoryStorage, emptyState, type SyncStorage } from "@/lib/sync/storage";
 
+// Ce fichier teste les fixtures semées par le provider : il tourne en mode démo.
+vi.stubEnv("VITE_MAIL_BACKEND", "demo");
+
 function wrapperFor(storage: SyncStorage) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
@@ -67,6 +70,23 @@ describe("PlanningProvider", () => {
     expect(Object.keys(storage.read().docs).filter((key) => key.startsWith("task:"))).toHaveLength(TASKS.length);
     expect(Object.keys(storage.read().docs).filter((key) => key.startsWith("suggestion:"))).toHaveLength(MAIL_SUGGESTIONS.length);
     expect(storage.read().outbox).toHaveLength(0);
+  });
+
+  it("ne sème aucune fixture en mode api", () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    window.localStorage.clear();
+    const storage = createMemoryStorage();
+    try {
+      const { result } = mount(storage);
+
+      expect(result.current.tasks).toHaveLength(0);
+      expect(result.current.suggestions).toHaveLength(0);
+      expect(result.current.events).toHaveLength(0);
+      expect(Object.keys(storage.read().docs)).toHaveLength(0);
+      expect(storage.read().outbox).toHaveLength(0);
+    } finally {
+      vi.stubEnv("VITE_MAIL_BACKEND", "demo");
+    }
   });
 
   it("setTasks bascule un état et le persiste pour un nouveau provider", () => {
@@ -213,6 +233,37 @@ describe("suggestions · fenêtre temporelle", () => {
     expect(suggestionsInWindow(list, 48, now).map((entry) => entry.id)).toEqual(["demo", "recente"]);
     expect(suggestionsInWindow(list, 1, now).map((entry) => entry.id)).toEqual(["demo"]);
     expect(suggestionsInWindow(list, 999, now).map((entry) => entry.id)).toEqual(["demo", "recente", "vieille"]);
+  });
+
+  it("projette les fixtures démo comme non-IA, avec leur compte", () => {
+    const { result } = mount(createMemoryStorage());
+
+    const ovh = result.current.suggestions.find((entry) => entry.proposal === "Envoyer la facture au comptable");
+    expect(ovh?.account).toBe("pro");
+    expect(ovh?.ai).toBeUndefined();
+  });
+
+  it("persiste le flag IA et l'identifiant de compte réel", () => {
+    const storage = createMemoryStorage();
+    const first = mount(storage);
+    const proposed: MailSuggestion = { ...suggestion("ia-boite"), account: "alpha-42", ai: true };
+
+    act(() => {
+      first.result.current.proposeSuggestion(proposed);
+    });
+
+    const stored = first.result.current.suggestions.find((entry) => entry.proposal === proposed.proposal);
+    expect(stored?.ai).toBe(true);
+    expect(stored?.account).toBe("alpha-42");
+    const raw = Object.values(storage.read().docs).find((doc) => doc.raw.proposal === proposed.proposal);
+    expect(raw?.raw.ai).toBe(true);
+    expect(raw?.raw.account).toBe("alpha-42");
+    first.unmount();
+
+    const second = mount(storage);
+    const projected = second.result.current.suggestions.find((entry) => entry.proposal === proposed.proposal);
+    expect(projected?.ai).toBe(true);
+    expect(projected?.account).toBe("alpha-42");
   });
 
   it("persiste l'horodatage du mail source avec la suggestion", () => {

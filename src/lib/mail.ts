@@ -413,3 +413,17 @@ export const MAILS: Mail[] = [
 ];
 
 export const RECENT_SEARCHES = ["camille", "factures", "devis signé", "figma"];
+
+export type FrequentContact = { name: string; email: string; tone: number; count: number };
+
+/** Contacts réellement présents dans la boîte, du plus fréquent au moins fréquent. */
+export function frequentContacts(mails: Mail[]): FrequentContact[] {
+  const seen = new Map<string, FrequentContact>();
+  for (const mail of mails) {
+    if (mail.folder === "sent") continue;
+    const entry = seen.get(mail.email) ?? { name: mail.name, email: mail.email, tone: mail.tone, count: 0 };
+    entry.count += 1;
+    seen.set(mail.email, entry);
+  }
+  return Array.from(seen.values()).sort((a, b) => b.count - a.count);
+}

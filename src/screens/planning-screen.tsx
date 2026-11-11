@@ -3,6 +3,8 @@ import { AnimatePresence, motion, useMotionValue, useSpring, useTransform } from
 import { Check, ChevronRight, EyeOff, ListChecks, Mail, Plus, Sparkles } from "lucide-react";
 import type { MailSuggestion, Task, TaskState } from "@/lib/tasks";
 import { TASK_STATES, sortTasks, stateMeta } from "@/lib/tasks";
+import { sourceAccountLabel } from "@/lib/accounts";
+import { useMailStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { SwipeAction } from "@/components/ui/swipe-action";
@@ -49,6 +51,7 @@ export function PlanningScreen({
   onOpenSync?: () => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
+  const { accounts } = useMailStore();
   const [localMoving, setLocalMoving] = useState<Task | null>(null);
   const [headerH, setHeaderH] = useState(0);
   const [edges, setEdges] = useState({ left: false, right: false });
@@ -307,6 +310,21 @@ export function PlanningScreen({
                         <p className="mt-0.5 flex items-start gap-1 text-[10.5px] font-medium text-ink-muted">
                           <Mail className="mt-0.5 size-2.5 shrink-0" />
                           <span className="line-clamp-2">{suggestion.subject}</span>
+                        </p>
+                        <p className="mt-0.5 flex items-center gap-1 text-[10px] font-semibold text-ink-muted">
+                          {suggestion.ai ? (
+                            <span
+                              data-testid="suggestion-ai"
+                              title="Suggéré par l'IA"
+                              className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-accent-soft px-1.5 py-0.5 text-[9.5px] font-bold text-accent-ink"
+                            >
+                              <Sparkles className="size-2.5" strokeWidth={2.6} />
+                              IA
+                            </span>
+                          ) : null}
+                          <span data-testid="suggestion-account" className="truncate">
+                            {sourceAccountLabel(accounts, suggestion.account)}
+                          </span>
                         </p>
                       </div>
                       <span className="shrink-0 rounded-full bg-surface-2 px-1.5 py-0.5 text-[9.5px] font-extrabold whitespace-nowrap text-accent-ink">

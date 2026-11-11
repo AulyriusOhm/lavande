@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { Check, EyeOff, Mail, Plus, Trash2, X } from "lucide-react";
+import { Check, EyeOff, Mail, Plus, Sparkles, Trash2, X } from "lucide-react";
 import type { Mail as MailType } from "@/lib/mail";
 import type { MailSuggestion, Task, TaskState } from "@/lib/tasks";
 import {
@@ -15,6 +15,7 @@ import {
 import { capitalizeFirst } from "@/lib/calendar";
 import { insertAt } from "@/lib/draft";
 import { useMailStore } from "@/lib/store";
+import { sourceAccountLabel } from "@/lib/accounts";
 import { useEscapeLayer } from "@/desktop/escape";
 import { cn } from "@/lib/utils";
 import { Badge, DButton, DChip, DIconButton, PaneTitle, SectionLabel, TextArea, TextInput } from "@/desktop/ui";
@@ -38,7 +39,7 @@ const FIELD = "mt-1.5";
 type Selection = { kind: "task"; id: string } | { kind: "suggestion"; suggestion: MailSuggestion } | null;
 
 export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => void; onOpenSync: () => void }) {
-  const { tasks, setTasks, suggestions, addSuggestion, dismissSuggestion, notify, openMessage, mails } =
+  const { tasks, setTasks, suggestions, addSuggestion, dismissSuggestion, notify, openMessage, mails, accounts } =
     useMailStore();
   const [selection, setSelection] = useState<Selection>(null);
   const [dragging, setDragging] = useState<string | null>(null);
@@ -125,7 +126,22 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
                 className="focus-ring block w-full cursor-pointer text-left"
               >
                 <span className="flex items-center gap-1.5">
-                  <Badge tone="accent">mail</Badge>
+                  <span
+                    data-testid="suggestion-account"
+                    className="inline-flex h-[18px] shrink-0 items-center rounded-full bg-accent-soft px-1.5 text-[9.5px] font-extrabold whitespace-nowrap text-accent-ink"
+                  >
+                    {sourceAccountLabel(accounts, suggestion.account)}
+                  </span>
+                  {suggestion.ai ? (
+                    <span
+                      data-testid="suggestion-ai"
+                      title="Suggéré par l'IA"
+                      className="inline-flex size-[18px] shrink-0 items-center justify-center rounded-full bg-surface text-accent-ink"
+                    >
+                      <Sparkles className="size-2.5" strokeWidth={2.6} />
+                      <span className="sr-only">Suggéré par l'IA</span>
+                    </span>
+                  ) : null}
                   <span className="truncate text-[11px] font-bold text-ink">{suggestion.from}</span>
                 </span>
                 <span className="mt-1 block truncate text-[10.5px] font-medium text-ink-muted">

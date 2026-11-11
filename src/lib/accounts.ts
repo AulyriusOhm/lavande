@@ -45,3 +45,9 @@ export const ALL_ACCOUNTS = "all";
 export function accountById(id: string) {
   return ACCOUNTS.find((account) => account.id === id);
 }
+
+/** Libellé lisible d'une boîte source, sans jamais casser l'affichage si l'id est inconnu. */
+export function sourceAccountLabel(accounts: Account[], id: string | undefined): string {
+  if (!id) return "Boîte";
+  return accounts.find((account) => account.id === id)?.label ?? id;
+}

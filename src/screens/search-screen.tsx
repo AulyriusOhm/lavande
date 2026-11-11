@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { RotateCcw, Search, X } from "lucide-react";
 import type { Mail } from "@/lib/mail";
-import { RECENT_SEARCHES, normalize } from "@/lib/mail";
+import { frequentContacts, normalize } from "@/lib/mail";
+import { readRecentSearches, writeRecentSearches } from "@/lib/recent-searches";
 import { buildThreads } from "@/lib/threads";
 import { useMailStore } from "@/lib/store";
 import { useTheme } from "@/lib/theme";
@@ -11,37 +12,7 @@ import { ShinyText } from "@/components/ui/animated-text";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { ThreadRow } from "@/components/thread-row";
 
-const CONTACTS = [
-  { name: "Camille Rousseau", email: "camille@studio-lilas.fr", tone: 0 },
-  { name: "Léa Fontaine", email: "lea@atelier-nova.co", tone: 3 },
-  { name: "Marc Delaunay", email: "marc.delaunay@mail.fr", tone: 1 },
-  { name: "Anaïs Petit", email: "anais.petit@gmail.com", tone: 4 },
-  { name: "Hugo Vidal", email: "hugo.vidal@proton.me", tone: 2 },
-];
-
 const SCOPES = ["Tout", "Non lus", "Fichiers", "Contacts"] as const;
-
-const RECENT_KEY = "lavande.recent-searches";
-
-function readRecent(): string[] {
-  try {
-    const raw = window.localStorage.getItem(RECENT_KEY);
-    if (raw === null) return RECENT_SEARCHES;
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return RECENT_SEARCHES;
-    return parsed.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
-  } catch {
-    return RECENT_SEARCHES;
-  }
-}
-
-function writeRecent(next: string[]) {
-  try {
-    window.localStorage.setItem(RECENT_KEY, JSON.stringify(next));
-  } catch {
-    return;
-  }
-}
 
 type Scope = (typeof SCOPES)[number];
 
@@ -63,16 +34,16 @@ export function SearchScreen({
   const { brand } = useTheme();
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<Scope>("Tout");
-  const [recent, setRecent] = useState<string[]>(readRecent);
+  const [recent, setRecent] = useState<string[]>(readRecentSearches);
 
   const commitRecent = (next: string[]) => {
     setRecent(next);
-    writeRecent(next);
+    writeRecentSearches(next);
   };
 
   const trimmed = query.trim();
 
-  const { searchMails } = useMailStore();
+  const { searchMails, mails } = useMailStore();
   const [found, setFound] = useState<Mail[]>([]);
   const [searching, setSearching] = useState(false);
 
@@ -111,13 +82,15 @@ export function SearchScreen({
     [results, scope],
   );
 
+  const allContacts = useMemo(() => frequentContacts(mails), [mails]);
+
   const contacts = useMemo(() => {
     const needle = normalize(trimmed);
     if (!needle) return [];
-    return CONTACTS.filter(
+    return allContacts.filter(
       (contact) => normalize(contact.name).includes(needle) || normalize(contact.email).includes(needle),
     );
-  }, [trimmed]);
+  }, [allContacts, trimmed]);
 
   const resetSearch = () => {
     setQuery("");
@@ -223,7 +196,7 @@ export function SearchScreen({
               Contacts fréquents
             </p>
             <div className="mt-3 flex gap-3 overflow-x-auto pb-1 no-scrollbar">
-              {CONTACTS.map((contact) => (
+              {allContacts.slice(0, 8).map((contact) => (
                 <button
                   key={contact.email}
                   type="button"

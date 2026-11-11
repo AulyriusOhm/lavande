@@ -6,7 +6,6 @@ import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { DEFAULT_SUMMARY } from "@/lib/summary";
-import { MAIL_SUGGESTIONS } from "@/lib/tasks";
 import { LOCAL_SCHEMA_VERSION, docKey, type Doc } from "@/lib/sync/merge";
 import { createDevice, createMemoryStorage, emptyState, type SyncStorage } from "@/lib/sync/storage";
 
@@ -171,6 +170,8 @@ describe("suggestions de tâches IA · fenêtre des 48 h", () => {
     expect(proposal?.mailId).toBe(MAIL_ID);
     expect(proposal?.due).toBe("ven 20 nov");
     expect(proposal?.timestamp).toBe(Date.parse(RECEIVED));
+    expect(proposal?.ai).toBe(true);
+    expect(proposal?.account).toBe(ALPHA);
     expect(result.current.tasks.some((task) => task.title === "Envoyer le compte rendu")).toBe(false);
     expect(llmCalls).toHaveLength(1);
     expect(llmCalls[0].system).toContain("NON FIABLE");
@@ -187,7 +188,7 @@ describe("suggestions de tâches IA · fenêtre des 48 h", () => {
     await new Promise((resolve) => window.setTimeout(resolve, 30));
 
     expect(llmCalls).toHaveLength(0);
-    expect(result.current.suggestions).toHaveLength(MAIL_SUGGESTIONS.length);
+    expect(result.current.suggestions).toHaveLength(0);
   });
 
   it("respecte une fenêtre personnalisée plus courte", async () => {
@@ -202,7 +203,7 @@ describe("suggestions de tâches IA · fenêtre des 48 h", () => {
     await new Promise((resolve) => window.setTimeout(resolve, 30));
 
     expect(llmCalls).toHaveLength(0);
-    expect(result.current.suggestions).toHaveLength(MAIL_SUGGESTIONS.length);
+    expect(result.current.suggestions).toHaveLength(0);
   });
 
   it("ne sollicite pas le modèle quand la préférence est désactivée", async () => {
@@ -215,7 +216,7 @@ describe("suggestions de tâches IA · fenêtre des 48 h", () => {
     await new Promise((resolve) => window.setTimeout(resolve, 30));
 
     expect(llmCalls).toHaveLength(0);
-    expect(result.current.suggestions).toHaveLength(MAIL_SUGGESTIONS.length);
+    expect(result.current.suggestions).toHaveLength(0);
   });
 });
 

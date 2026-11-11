@@ -10,3 +10,7 @@ artifacts
 
 # Jeton Bearer injecté par nginx, généré par deploy/dev-proxy.sh (secret local).
 deploy/nginx/lavande-token.inc
+
+# Clé privée de signature des mises à jour de bureau : jamais commitée.
+# La clé publique correspondante vit dans src-tauri/tauri.conf.json.
+.tauri/*.key

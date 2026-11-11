@@ -10,6 +10,7 @@ import {
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { MAIL_SUGGESTIONS, TASKS, TASK_STATES, sortTasks, taskFromSuggestion } from "@/lib/tasks";
 import { EVENTS, type CalendarEvent } from "@/lib/calendar";
+import { mailMode } from "@/lib/mail-backend";
 import { usePrefs } from "@/lib/prefs";
 import type { MailSuggestion, Subtask, Task, TaskState } from "@/lib/tasks";
 import { createClock, type Clock } from "@/lib/sync/clock";
@@ -99,7 +100,7 @@ function projectSuggestion(doc: Doc): MailSuggestion | null {
   const suggestion: MailSuggestion = {
     id: doc.id,
     mailId: text(raw.mailId),
-    account: oneOf(["perso", "pro", "gmail"] as const, raw.account, "perso"),
+    account: text(raw.account),
     from: text(raw.from),
     subject: text(raw.subject),
     proposal: text(raw.proposal),
@@ -108,6 +109,7 @@ function projectSuggestion(doc: Doc): MailSuggestion | null {
     tone: typeof raw.tone === "number" ? raw.tone : 0,
     description: text(raw.description),
   };
+  if (raw.ai === true) suggestion.ai = true;
   if (typeof raw.timestamp === "number" && Number.isFinite(raw.timestamp)) {
     suggestion.timestamp = raw.timestamp;
   }
@@ -154,6 +156,7 @@ function suggestionFields(
     ...(taskId === undefined ? {} : { taskId }),
     mailId: suggestion.mailId,
     account: suggestion.account,
+    ...(suggestion.ai ? { ai: true } : {}),
     from: suggestion.from,
     subject: suggestion.subject,
     proposal: suggestion.proposal,
@@ -241,7 +244,10 @@ export function projectEvents(state: SyncState): CalendarEvent[] {
 
 const LEGACY_EVENTS_KEY = "lavande.events.v1";
 
-/** Migration : reprend les événements déjà stockés localement, sinon la démo. */
+/**
+ * Migration : reprend les événements déjà stockés localement. En mode api, un
+ * planning vierge reste vierge : seules les données réelles sont reprises.
+ */
 function initialEvents(): CalendarEvent[] {
   try {
     const raw = window.localStorage.getItem(LEGACY_EVENTS_KEY);
@@ -259,9 +265,9 @@ function initialEvents(): CalendarEvent[] {
       }
     }
   } catch {
-    // stockage corrompu : on repart des événements de démonstration
+    // stockage corrompu : on repart d'un planning vide (ou de la démo)
   }
-  return EVENTS;
+  return mailMode() === "demo" ? EVENTS : [];
 }
 
 /** Fenêtre par défaut du filtre d'affichage des suggestions issues des mails. */
@@ -368,6 +374,9 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
   useEffect(() => {
     if (seeded.current) return;
     seeded.current = true;
+    // Les fixtures de la maquette ne sont semées qu'en mode démo : en api le
+    // planning démarre vide et ne contient que les données de l'utilisateur.
+    if (mailMode() !== "demo") return;
     const initial = syncStorage.read();
     if (!hasPlanningDocs(initial)) {
       for (const task of TASKS) emit("task", task.id, taskFields(task));

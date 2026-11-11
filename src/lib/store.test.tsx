@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { PlanningProvider } from "@/lib/planning-store";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
@@ -7,6 +7,9 @@ import { PrefsProvider } from "@/lib/prefs";
 import { MAIL_SUGGESTIONS, TASKS } from "@/lib/tasks";
 import { promotedTaskId } from "@/lib/sync/merge";
 import { createMemoryStorage } from "@/lib/sync/storage";
+
+// Ce fichier teste les tâches et suggestions semées : il tourne en mode démo.
+vi.stubEnv("VITE_MAIL_BACKEND", "demo");
 
 function mount() {
   const storage = createMemoryStorage();

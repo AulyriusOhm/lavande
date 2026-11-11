@@ -173,10 +173,10 @@ describe("résumé périodique · tâches proposées", () => {
 
     expect(result.current.summary?.text).toBe(SUMMARY_JSON.resume);
     expect(result.current.summary?.mailCount).toBe(THREADS.length);
-    expect(result.current.tasks).toHaveLength(TASKS.length);
+    expect(result.current.tasks).toHaveLength(0);
     expect(result.current.tasks.some((task) => task.title === "Répondre à Camille")).toBe(false);
 
-    expect(result.current.suggestions).toHaveLength(MAIL_SUGGESTIONS.length + 2);
+    expect(result.current.suggestions).toHaveLength(2);
     const proposals = result.current.suggestions.map((entry) => entry.proposal);
     expect(proposals).toContain("Répondre à Camille");
     expect(proposals).toContain("Classer la facture OVH");
@@ -184,6 +184,9 @@ describe("résumé périodique · tâches proposées", () => {
     expect(linked?.mailId).toBe(`${ALPHA}:INBOX:1`);
     expect(linked?.subject).toBe("Maquettes v3");
     expect(linked?.due).toBe("ven 20 nov");
+    expect(linked?.ai).toBe(true);
+    expect(linked?.account).toBe(ALPHA);
+    expect(MAIL_SUGGESTIONS.every((entry) => entry.ai === undefined)).toBe(true);
   });
 
   it("ne propose pas deux fois la même tâche lors d'une régénération", async () => {
@@ -193,14 +196,14 @@ describe("résumé périodique · tâches proposées", () => {
     const { result } = mount();
 
     await waitFor(() => expect(result.current.summary?.source).toBe("llm"), { timeout: 3000 });
-    expect(result.current.suggestions).toHaveLength(MAIL_SUGGESTIONS.length + 2);
+    expect(result.current.suggestions).toHaveLength(2);
 
     await act(async () => {
       await result.current.refreshSummary(true);
     });
 
-    expect(result.current.suggestions).toHaveLength(MAIL_SUGGESTIONS.length + 2);
-    expect(result.current.tasks).toHaveLength(TASKS.length);
+    expect(result.current.suggestions).toHaveLength(2);
+    expect(result.current.tasks).toHaveLength(0);
     expect(result.current.summary?.generatedAt).toBeGreaterThan(0);
   });
 });

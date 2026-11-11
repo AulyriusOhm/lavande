@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useMailStore } from "@/lib/store";
 import { usePrefs } from "@/lib/prefs";
@@ -16,6 +16,8 @@ import { PgpScreen } from "@/screens/pgp-screen";
 import { DesktopComposePage } from "@/desktop/compose-page";
 import { isComposeWindow } from "@/lib/compose-bus";
 import { useEscapeLayer } from "@/desktop/escape";
+import { defineShortcuts, useShortcuts } from "@/lib/shortcuts";
+import { ShortcutsOverlay } from "@/components/shortcuts-overlay";
 
 export function DesktopApp() {
   if (isComposeWindow()) return <DesktopComposePage />;
@@ -34,6 +36,7 @@ function DesktopMain() {
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [newEventOpen, setNewEventOpen] = useState(false);
   const [pgpOpen, setPgpOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const openMailId = openMail?.id ?? null;
   useEffect(() => {
@@ -59,19 +62,110 @@ function DesktopMain() {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setSearchOpen(true);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  const toggleHelp = useCallback(() => setHelpOpen((current) => !current), []);
+
+  const shortcuts = useMemo(
+    () =>
+      defineShortcuts([
+        {
+          id: "view-inbox",
+          keys: "mod+1",
+          group: "Navigation",
+          label: "Boîte de réception",
+          description: "Revenir aux messages",
+          allowInInput: true,
+          run: () => changeView("inbox"),
+        },
+        {
+          id: "view-calendar",
+          keys: "mod+2",
+          group: "Navigation",
+          label: "Agenda",
+          description: "Ouvrir le calendrier",
+          allowInInput: true,
+          when: () => calendarEnabled,
+          run: () => changeView("calendar"),
+        },
+        {
+          id: "view-planning",
+          keys: "mod+3",
+          group: "Navigation",
+          label: "Planification",
+          description: "Ouvrir les tâches",
+          allowInInput: true,
+          when: () => planningEnabled,
+          run: () => changeView("planning"),
+        },
+        {
+          id: "view-settings",
+          keys: "mod+4",
+          group: "Navigation",
+          label: "Réglages",
+          description: "Ouvrir les réglages",
+          allowInInput: true,
+          run: () => changeView("settings"),
+        },
+        {
+          id: "compose",
+          keys: "mod+n",
+          group: "Actions",
+          label: "Nouveau message",
+          description: "Ouvrir la rédaction",
+          allowInInput: true,
+          run: openComposer,
+        },
+        {
+          id: "create",
+          keys: "mod+shift+n",
+          group: "Actions",
+          label: view === "calendar" ? "Nouveau rendez-vous" : "Nouvelle tâche",
+          description: view === "calendar" ? "Ajouter un rendez-vous à l’agenda" : "Ajouter une tâche",
+          allowInInput: true,
+          run: () => (view === "calendar" ? setNewEventOpen(true) : setNewTaskOpen(true)),
+        },
+        {
+          id: "search",
+          keys: "mod+k",
+          group: "Actions",
+          label: "Rechercher",
+          description: "Chercher dans tous les comptes",
+          allowInInput: true,
+          run: () => setSearchOpen(true),
+        },
+        {
+          id: "settings-shortcut",
+          keys: "mod+,",
+          group: "Actions",
+          label: "Réglages",
+          description: "Préférences et comptes",
+          allowInInput: true,
+          run: () => changeView("settings"),
+        },
+        {
+          id: "help",
+          keys: "mod+/",
+          group: "Aide",
+          label: "Raccourcis clavier",
+          description: "Afficher ou masquer cette liste",
+          allowInInput: true,
+          run: toggleHelp,
+        },
+        {
+          id: "help-question",
+          keys: "?",
+          group: "Aide",
+          label: "Raccourcis clavier",
+          description: "Afficher ou masquer cette liste",
+          run: toggleHelp,
+        },
+      ]),
+    [changeView, calendarEnabled, planningEnabled, view, openComposer, toggleHelp],
+  );
+  const mod = useShortcuts(shortcuts);
 
   useEscapeLayer(connectOpen, closeConnect);
   useEscapeLayer(pgpOpen, () => setPgpOpen(false));
+  useEscapeLayer(helpOpen, () => setHelpOpen(false));
 
   if (mode === "api" && phase === "loading") {
     return (
@@ -178,6 +272,13 @@ function DesktopMain() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <ShortcutsOverlay
+        open={helpOpen}
+        onClose={() => setHelpOpen(false)}
+        shortcuts={shortcuts}
+        mod={mod}
+      />
     </div>
   );
 }

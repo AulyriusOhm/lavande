@@ -48,10 +48,6 @@ export type BackendPhase = "loading" | "ready" | "offline" | "empty";
 const PAGE_SIZE = 50;
 const SUMMARY_TICK_MS = 5 * 60_000;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
-const SUMMARY_ACCOUNTS = ["perso", "pro", "gmail"] as const;
-
-const summaryAccount = (value: string | undefined): MailSuggestion["account"] =>
-  SUMMARY_ACCOUNTS.find((entry) => entry === value) ?? "perso";
 
 /** Une tâche proposée par le résumé devient une suggestion EN ATTENTE, jamais une tâche. */
 function summarySuggestion(task: SummaryTask, mail: Mail | undefined, period: string): MailSuggestion {
@@ -59,7 +55,8 @@ function summarySuggestion(task: SummaryTask, mail: Mail | undefined, period: st
   const suggestion: MailSuggestion = {
     id: `summary:${task.mailId ?? "sans-mail"}:${normalize(task.title)}`,
     mailId: task.mailId ?? "",
-    account: summaryAccount(mail?.account),
+    account: mail?.account ?? "",
+    ai: true,
     from: task.from || mail?.name || "Résumé",
     subject: mail?.subject ?? "",
     proposal: task.title,

@@ -537,7 +537,7 @@ function NewEventForm({ onClose }: { onClose: () => void }) {
             <TextInput
               value={people}
               onChange={(event) => setPeople(event.target.value)}
-              placeholder="Camille Rousseau, Léa Fontaine"
+              placeholder="Invités (noms ou e-mails)"
             />
           </Field>
 

@@ -461,7 +461,7 @@ export function PgpScreen({ onClose }: { onClose: () => void }) {
                     className={cn(FIELD, "mt-1.5 text-[12.5px]")}
                     value={email}
                     onChange={(event) => setEmail(event.target.value)}
-                    placeholder="roman@lavande.mail"
+                    placeholder="nom@exemple.fr"
                     autoComplete="email"
                   />
                 </div>
