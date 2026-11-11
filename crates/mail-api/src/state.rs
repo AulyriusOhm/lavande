@@ -14,6 +14,7 @@ use crate::discovery::{Discovery, DiscoveryEndpoints};
 use crate::error::ApiError;
 use crate::events::Events;
 use crate::oauth_flow::Sessions;
+use crate::pgp_keys::PgpStore;
 use crate::secrets::{SecretBackend, Secrets};
 use crate::token;
 
@@ -29,6 +30,7 @@ pub struct AppState {
     discovery: Discovery,
     sessions: Sessions,
     events: Events,
+    pgp: PgpStore,
     public_url: String,
 }
 
@@ -58,6 +60,7 @@ impl AppState {
         let store = Store::open(data_dir.join(DATABASE_FILE))?;
         store.migrate()?;
         let secrets = Secrets::open(backend, data_dir).await?;
+        let pgp = PgpStore::open(data_dir, secrets.clone());
         let token = token::load_or_create(data_dir)?;
         let state = Self {
             store,
@@ -68,6 +71,7 @@ impl AppState {
             discovery: Discovery::new(endpoints)?,
             sessions: Sessions::default(),
             events: Events::default(),
+            pgp,
             public_url: env_url(),
         };
         state.migrate_inline_secrets().await?;
@@ -132,6 +136,10 @@ impl AppState {
 
     pub fn secrets(&self) -> &Secrets {
         &self.secrets
+    }
+
+    pub fn pgp(&self) -> &PgpStore {
+        &self.pgp
     }
 
     /// Accounts without their secrets: listing, duplicate and existence checks.

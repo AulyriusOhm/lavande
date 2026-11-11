@@ -442,3 +442,221 @@ async fn a_corrupt_secret_file_is_an_error() {
     let error = state.account("perso").await.expect_err("secret illisible");
     assert!(error.message().contains("corrompu"), "{error}");
 }
+
+#[tokio::test]
+async fn the_keyring_starts_empty() {
+    let (_directory, state) = state().await;
+    let (status, body) = call(&state, get("/api/pgp/keys")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json(&body)["keys"], json!([]));
+}
+
+#[tokio::test]
+async fn a_generated_key_never_leaks_its_private_half() {
+    let (directory, state) = state().await;
+    let (status, body) = call(
+        &state,
+        post(
+            "/api/pgp/keys/generate",
+            &json!({ "name": "Roman", "email": "roman@lavande.mail" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let payload = json(&body);
+    let key = &payload["key"];
+    let fingerprint = key["fingerprint"].as_str().expect("empreinte").to_string();
+    assert_eq!(fingerprint.len(), 40);
+    assert_eq!(fingerprint.to_uppercase(), fingerprint);
+    assert_eq!(key["user_id"], "Roman <roman@lavande.mail>");
+    assert_eq!(key["name"], "Roman");
+    assert_eq!(key["email"], "roman@lavande.mail");
+    assert_eq!(key["has_secret"], true);
+    assert_eq!(key["revoked"], false);
+    assert_eq!(key["expired"], false);
+    assert!(key["created_at"].is_string());
+    let public_key = payload["public_key"].as_str().expect("clé publique");
+    assert!(public_key.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----"));
+    assert!(!public_key.contains("PRIVATE"));
+    assert!(
+        !String::from_utf8_lossy(&body).contains("PRIVATE KEY"),
+        "jamais de clé privée dans la réponse"
+    );
+
+    let (_status, listed) = call(&state, get("/api/pgp/keys")).await;
+    let keys = json(&listed)["keys"].as_array().expect("liste").clone();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0]["fingerprint"], fingerprint);
+
+    let (status, exported) =
+        call(&state, get(&format!("/api/pgp/keys/{fingerprint}/export"))).await;
+    assert_eq!(status, StatusCode::OK);
+    let exported = json(&exported);
+    assert_eq!(exported["public_key"], public_key);
+
+    let private = directory.path().join("pgp-keys.json");
+    let text = fs::read_to_string(&private).expect("trousseau");
+    assert!(!text.contains("PRIVATE KEY"), "{text}");
+    let mode = fs::metadata(&private)
+        .expect("fichier")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+    assert!(
+        state
+            .secrets()
+            .get(&format!("pgp:{fingerprint}"))
+            .await
+            .expect("secret")
+            .is_some(),
+        "la clé privée vit dans le store de secrets"
+    );
+}
+
+#[tokio::test]
+async fn an_imported_public_key_is_listed_and_exportable() {
+    let (_directory, state) = state().await;
+    let generated = state
+        .pgp()
+        .generate("Camille", "camille@studio-lilas.fr")
+        .await
+        .expect("génération");
+    let public_key = generated.1;
+    let fingerprint = generated.0.fingerprint;
+
+    let (status, body) = call(
+        &state,
+        post("/api/pgp/keys/import", &json!({ "armored": public_key })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let key = json(&body)["key"].clone();
+    assert_eq!(key["fingerprint"], fingerprint);
+    assert_eq!(key["has_secret"], true, "l'import garde la clé secrète");
+}
+
+#[tokio::test]
+async fn an_invalid_armored_key_is_a_400() {
+    let (_directory, state) = state().await;
+    let (status, body) = call(
+        &state,
+        post("/api/pgp/keys/import", &json!({ "armored": "pas une clé" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let payload = json(&body);
+    assert_eq!(payload["kind"], "config");
+    assert!(
+        payload["error"]
+            .as_str()
+            .expect("message")
+            .starts_with("clé PGP illisible"),
+        "{payload}"
+    );
+}
+
+#[tokio::test]
+async fn an_invalid_address_is_a_400() {
+    let (_directory, state) = state().await;
+    let (status, body) = call(
+        &state,
+        post(
+            "/api/pgp/keys/generate",
+            &json!({ "name": "Roman", "email": "pas-une-adresse" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json(&body)["kind"], "config");
+}
+
+#[tokio::test]
+async fn an_unknown_fingerprint_is_a_404() {
+    let (_directory, state) = state().await;
+    let unknown = "0".repeat(40);
+    let (status, body) = call(&state, get(&format!("/api/pgp/keys/{unknown}/export"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(json(&body)["error"]
+        .as_str()
+        .expect("message")
+        .contains("inconnue"));
+    let (status, _) = call(&state, delete(&format!("/api/pgp/keys/{unknown}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_deleted_key_leaves_the_keyring() {
+    let (directory, state) = state().await;
+    let (fingerprint, _public) = {
+        let (key, public) = state
+            .pgp()
+            .generate("Roman", "roman@lavande.mail")
+            .await
+            .expect("génération");
+        (key.fingerprint, public)
+    };
+    let (status, _) = call(&state, delete(&format!("/api/pgp/keys/{fingerprint}"))).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_status, body) = call(&state, get("/api/pgp/keys")).await;
+    assert_eq!(json(&body)["keys"], json!([]));
+    assert_eq!(
+        state
+            .secrets()
+            .get(&format!("pgp:{fingerprint}"))
+            .await
+            .expect("secret"),
+        None
+    );
+    let text = fs::read_to_string(directory.path().join("pgp-keys.json")).expect("trousseau");
+    assert!(!text.contains(&fingerprint), "{text}");
+}
+
+#[tokio::test]
+async fn sending_a_signed_message_without_a_key_is_a_400() {
+    let directory = tempfile::tempdir().expect("répertoire temporaire");
+    seed(directory.path(), &[account("perso")]);
+    let state = state_in(directory.path()).await;
+    let (status, body) = call(
+        &state,
+        post(
+            "/api/accounts/perso/send",
+            &json!({
+                "to": [{ "email": "camille@studio-lilas.fr" }],
+                "subject": "Planning",
+                "text": "Bonjour",
+                "pgp_sign": true
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json(&body)["error"],
+        "Aucune clé secrète pour signer ce message"
+    );
+}
+
+#[tokio::test]
+async fn encrypting_to_a_recipient_without_a_key_lists_the_missing_one() {
+    let directory = tempfile::tempdir().expect("répertoire temporaire");
+    seed(directory.path(), &[account("perso")]);
+    let state = state_in(directory.path()).await;
+    let (status, body) = call(
+        &state,
+        post(
+            "/api/accounts/perso/send",
+            &json!({
+                "to": [{ "email": "camille@studio-lilas.fr" }],
+                "cc": [{ "email": "marc@mail.fr" }],
+                "subject": "Planning",
+                "text": "Bonjour",
+                "pgp_encrypt": true
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let message = json(&body)["error"].as_str().expect("message").to_string();
+    assert!(message.contains("camille@studio-lilas.fr"), "{message}");
+    assert!(message.contains("marc@mail.fr"), "{message}");
+}

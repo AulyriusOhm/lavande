@@ -6,4 +6,5 @@ pub mod discover;
 pub mod events;
 pub mod mail;
 pub mod oauth;
+pub mod pgp;
 pub mod search;

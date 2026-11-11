@@ -1,5 +1,6 @@
 //! SMTP submission through `lettre`, with the same TLS roots as IMAP.
 
+use lettre::address::Envelope;
 use lettre::message::header::ContentType;
 use lettre::message::{Attachment, Mailbox, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::{Credentials, Mechanism};
@@ -29,6 +30,10 @@ pub struct OutgoingMessage {
     pub in_reply_to: Option<String>,
     pub references: Vec<String>,
     pub attachments: Vec<OutgoingAttachment>,
+    /// Sign with the secret key matching the sender's address.
+    pub pgp_sign: bool,
+    /// Encrypt with the public keys of every recipient.
+    pub pgp_encrypt: bool,
 }
 
 /// Sends one message against the webpki roots. `Message-ID` is left to lettre.
@@ -53,6 +58,34 @@ pub async fn send_built_with(
     email: Message,
     tls_options: &TlsOptions,
 ) -> Result<(), MailError> {
+    transport(cfg, tls_options)
+        .await?
+        .send(email)
+        .await
+        .map_err(|error| MailError::Smtp(error.to_string()))?;
+    Ok(())
+}
+
+/// Sends RFC 5322 bytes built elsewhere (PGP/MIME): the envelope carries the
+/// recipients, the payload travels verbatim.
+pub async fn send_raw_with(
+    cfg: &AccountConfig,
+    raw: &[u8],
+    envelope: &Envelope,
+    tls_options: &TlsOptions,
+) -> Result<(), MailError> {
+    transport(cfg, tls_options)
+        .await?
+        .send_raw(envelope, raw)
+        .await
+        .map_err(|error| MailError::Smtp(error.to_string()))?;
+    Ok(())
+}
+
+async fn transport(
+    cfg: &AccountConfig,
+    tls_options: &TlsOptions,
+) -> Result<AsyncSmtpTransport<Tokio1Executor>, MailError> {
     let builder = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(cfg.smtp.host.clone())
         .port(cfg.smtp.port)
         .tls(tls(&cfg.smtp, tls_options)?);
@@ -80,12 +113,7 @@ pub async fn send_built_with(
         }
     };
 
-    builder
-        .build()
-        .send(email)
-        .await
-        .map_err(|error| MailError::Smtp(error.to_string()))?;
-    Ok(())
+    Ok(builder.build())
 }
 
 fn tls(endpoint: &Endpoint, options: &TlsOptions) -> Result<Tls, MailError> {
@@ -134,27 +162,50 @@ pub fn build_message(message: &OutgoingMessage) -> Result<Message, MailError> {
         builder = builder.references(format!("<{reference}>"));
     }
 
-    let email = match (message.html.as_deref(), message.attachments.is_empty()) {
-        (None, true) => builder.body(message.text.clone()),
-        (Some(html), true) => builder.multipart(MultiPart::alternative_plain_html(
-            message.text.clone(),
-            html.to_string(),
-        )),
-        (html, false) => {
-            let body = match html {
-                Some(html) => {
-                    MultiPart::alternative_plain_html(message.text.clone(), html.to_string())
-                }
-                None => MultiPart::mixed().singlepart(SinglePart::plain(message.text.clone())),
-            };
-            let mut parts = MultiPart::mixed().multipart(body);
-            for attachment in &message.attachments {
-                parts = parts.singlepart(attachment_part(attachment)?);
-            }
-            builder.multipart(parts)
-        }
+    let email = match body_of(message)? {
+        Body::Plain(part) => builder.singlepart(part),
+        Body::Multi(part) => builder.multipart(part),
     };
     email.map_err(|error| MailError::Smtp(error.to_string()))
+}
+
+/// The MIME entity of the body (its `Content-Type` header and its content):
+/// what PGP/MIME signs and encrypts.
+pub fn body_entity(message: &OutgoingMessage) -> Result<Vec<u8>, MailError> {
+    Ok(match body_of(message)? {
+        Body::Plain(part) => part.formatted(),
+        Body::Multi(part) => part.formatted(),
+    })
+}
+
+enum Body {
+    Plain(SinglePart),
+    Multi(MultiPart),
+}
+
+fn body_of(message: &OutgoingMessage) -> Result<Body, MailError> {
+    Ok(
+        match (message.html.as_deref(), message.attachments.is_empty()) {
+            (None, true) => Body::Plain(SinglePart::plain(message.text.clone())),
+            (Some(html), true) => Body::Multi(MultiPart::alternative_plain_html(
+                message.text.clone(),
+                html.to_string(),
+            )),
+            (html, false) => {
+                let body = match html {
+                    Some(html) => {
+                        MultiPart::alternative_plain_html(message.text.clone(), html.to_string())
+                    }
+                    None => MultiPart::mixed().singlepart(SinglePart::plain(message.text.clone())),
+                };
+                let mut parts = MultiPart::mixed().multipart(body);
+                for attachment in &message.attachments {
+                    parts = parts.singlepart(attachment_part(attachment)?);
+                }
+                Body::Multi(parts)
+            }
+        },
+    )
 }
 
 fn attachment_part(attachment: &OutgoingAttachment) -> Result<SinglePart, MailError> {

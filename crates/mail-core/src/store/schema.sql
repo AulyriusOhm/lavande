@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS messages (
     preview TEXT,
     body_text TEXT,
     body_html TEXT,
+    pgp_detail TEXT,
     PRIMARY KEY (account_id, folder_path, uid)
 );
 

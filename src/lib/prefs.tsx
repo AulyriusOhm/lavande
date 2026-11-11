@@ -13,6 +13,8 @@ export const SWIPE_ACTIONS: { id: SwipeActionId; label: string }[] = [
 
 const STORAGE_KEY = "lavande.prefs";
 
+export type AccountSignature = { html: string; enabled: boolean };
+
 export type Prefs = {
   swipeLeft: SwipeActionId;
   swipeRight: SwipeActionId;
@@ -23,6 +25,7 @@ export type Prefs = {
   calendarEnabled: boolean;
   planningEnabled: boolean;
   mcpEnabled: Record<string, boolean>;
+  signatures: Record<string, AccountSignature>;
 };
 
 const DEFAULTS: Prefs = {
@@ -35,6 +38,7 @@ const DEFAULTS: Prefs = {
   calendarEnabled: true,
   planningEnabled: true,
   mcpEnabled: {},
+  signatures: {},
 };
 
 type PrefsContextValue = Prefs & {
@@ -46,6 +50,7 @@ type PrefsContextValue = Prefs & {
   setCalendarEnabled: (value: boolean) => void;
   setPlanningEnabled: (value: boolean) => void;
   setMcpEnabled: (serverId: string, value: boolean) => void;
+  setSignature: (accountId: string, patch: Partial<AccountSignature>) => void;
 };
 
 const PrefsContext = createContext<PrefsContextValue | null>(null);
@@ -65,6 +70,27 @@ const asFlags = (value: unknown): Record<string, boolean> =>
     ? Object.fromEntries(Object.entries(value).filter(([, enabled]) => typeof enabled === "boolean"))
     : {};
 
+const asSignatures = (value: unknown): Record<string, AccountSignature> => {
+  if (!value || typeof value !== "object") return {};
+  const out: Record<string, AccountSignature> = {};
+  for (const [id, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (!entry || typeof entry !== "object") continue;
+    const { html, enabled } = entry as { html?: unknown; enabled?: unknown };
+    if (typeof html !== "string") continue;
+    out[id] = { html, enabled: typeof enabled === "boolean" ? enabled : true };
+  }
+  return out;
+};
+
+export function activeSignature(
+  signatures: Record<string, AccountSignature>,
+  accountId: string,
+): string | null {
+  const entry = signatures[accountId];
+  if (!entry || !entry.enabled || !entry.html.trim()) return null;
+  return entry.html;
+}
+
 function read(): Prefs {
   let stored: Record<string, unknown> = {};
   try {
@@ -83,6 +109,7 @@ function read(): Prefs {
     calendarEnabled: asBoolean(stored.calendarEnabled, DEFAULTS.calendarEnabled),
     planningEnabled: asBoolean(stored.planningEnabled, DEFAULTS.planningEnabled),
     mcpEnabled: asFlags(stored.mcpEnabled),
+    signatures: asSignatures(stored.signatures),
   };
 }
 
@@ -116,6 +143,17 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       })),
     [],
   );
+  const setSignature = useCallback(
+    (accountId: string, patch: Partial<AccountSignature>) =>
+      setPrefs((current) => ({
+        ...current,
+        signatures: {
+          ...current.signatures,
+          [accountId]: { ...(current.signatures[accountId] ?? { html: "", enabled: true }), ...patch },
+        },
+      })),
+    [],
+  );
 
   const value = useMemo<PrefsContextValue>(
     () => ({
@@ -128,6 +166,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setCalendarEnabled,
       setPlanningEnabled,
       setMcpEnabled,
+      setSignature,
     }),
     [
       prefs,
@@ -139,6 +178,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setCalendarEnabled,
       setPlanningEnabled,
       setMcpEnabled,
+      setSignature,
     ],
   );
 

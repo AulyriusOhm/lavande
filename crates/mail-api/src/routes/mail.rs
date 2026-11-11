@@ -8,10 +8,11 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use lavande_mail::config::FolderMapping;
+use lavande_mail::config::{AccountConfig, FolderMapping};
 use lavande_mail::imap::{self, ImapSession};
 use lavande_mail::model::{Address, Flags, FolderRole, Message, Thread};
-use lavande_mail::smtp;
+use lavande_mail::pgp;
+use lavande_mail::smtp::{self, OutgoingMessage};
 use lavande_mail::sync as mail_sync;
 use serde::Deserialize;
 
@@ -66,6 +67,7 @@ async fn sync(
     };
     let config = state.account(&id).await?;
     let mapping = FolderMapping::default();
+    let keys = state.pgp().keyring().await?;
     let reports: Vec<FolderReport> = match request.folder_path {
         Some(folder_path) => {
             let mut session = imap::connect_with(&config, state.tls()).await?;
@@ -75,12 +77,13 @@ async fn sync(
                 &config.id,
                 &folder_path,
                 &mapping,
+                &keys,
             )
             .await?;
             logout(session).await;
             vec![FolderReport::new(folder_path, report)]
         }
-        None => mail_sync::sync_account_with(state.store(), &config, &mapping, state.tls())
+        None => mail_sync::sync_account_keys(state.store(), &config, &mapping, state.tls(), &keys)
             .await?
             .into_iter()
             .map(|(folder_path, report)| FolderReport::new(folder_path, report))
@@ -120,8 +123,9 @@ async fn message(
         return Ok(Json(stored));
     }
 
+    let keys = state.pgp().keyring().await?;
     let mut session = imap::connect_with(&config, state.tls()).await?;
-    imap::fetch_body(&mut session, state.store(), &id, &folder_path, uid).await?;
+    imap::fetch_body(&mut session, state.store(), &id, &folder_path, uid, &keys).await?;
     logout(session).await;
     let message = state
         .store()
@@ -162,6 +166,7 @@ async fn move_message(
     ApiJson(request): ApiJson<MoveRequest>,
 ) -> Result<StatusCode, ApiError> {
     let config = state.account(&id).await?;
+    let keys = state.pgp().keyring().await?;
     let mut session = imap::connect_with(&config, state.tls()).await?;
     imap::move_message(
         &mut session,
@@ -170,6 +175,7 @@ async fn move_message(
         &request.from_path,
         request.uid,
         &request.to_path,
+        &keys,
     )
     .await?;
     logout(session).await;
@@ -219,17 +225,17 @@ async fn send(
         name: None,
         email: config.email.clone(),
     })?;
-    let email = smtp::build_message(&outgoing)?;
-    let raw = email.formatted();
-    let message_id = email
-        .headers()
-        .get_raw("Message-ID")
-        .map(|value| value.trim_matches(|c| c == '<' || c == '>').to_string());
-    smtp::send_built_with(&config, email, state.tls()).await?;
-    tracing::info!(account = %id, "message envoyé");
+    let (raw, message_id) = submit(&state, &config, &outgoing).await?;
+    tracing::info!(
+        account = %id,
+        signe = outgoing.pgp_sign,
+        chiffre = outgoing.pgp_encrypt,
+        "message envoyé"
+    );
 
     // Best effort: the mail is gone, a failing Sent copy or \Answered push
     // must not turn a successful send into an error.
+    let keys = state.pgp().keyring().await.unwrap_or_default();
     let sent_folder = state
         .store()
         .list_folders(&id)?
@@ -246,6 +252,7 @@ async fn send(
                         &folder.path,
                         &raw,
                         message_id.as_deref(),
+                        &keys,
                     )
                     .await
                     {
@@ -272,6 +279,65 @@ async fn send(
         }
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Signs and/or encrypts when asked, then submits. Returns the exact bytes
+/// that went out and the `Message-ID` the Sent copy must be matched with.
+async fn submit(
+    state: &Arc<AppState>,
+    config: &AccountConfig,
+    outgoing: &OutgoingMessage,
+) -> Result<(Vec<u8>, Option<String>), ApiError> {
+    if !outgoing.pgp_sign && !outgoing.pgp_encrypt {
+        let email = smtp::build_message(outgoing)?;
+        let raw = email.formatted();
+        let message_id = email
+            .headers()
+            .get_raw("Message-ID")
+            .map(|value| value.trim_matches(|c| c == '<' || c == '>').to_string());
+        smtp::send_built_with(config, email, state.tls()).await?;
+        return Ok((raw, message_id));
+    }
+
+    let keyring = state.pgp().keyring().await?;
+    let signer = keyring.secret_for(&config.email);
+    if outgoing.pgp_sign && signer.is_none() {
+        return Err(ApiError::bad_request(
+            "config",
+            "Aucune clé secrète pour signer ce message",
+        ));
+    }
+    let mut recipients = Vec::new();
+    let mut missing: Vec<String> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    if outgoing.pgp_encrypt {
+        for recipient in outgoing.to.iter().chain(&outgoing.cc).chain(&outgoing.bcc) {
+            if seen
+                .iter()
+                .any(|email| email.eq_ignore_ascii_case(&recipient.email))
+            {
+                continue;
+            }
+            seen.push(recipient.email.clone());
+            match keyring.public_for(&recipient.email) {
+                Some(key) => recipients.push(key),
+                None => missing.push(recipient.email.clone()),
+            }
+        }
+        if !missing.is_empty() {
+            return Err(ApiError::bad_request(
+                "config",
+                format!("Aucune clé publique pour : {}", missing.join(", ")),
+            ));
+        }
+    }
+    let sealed = pgp::mime::seal(outgoing, signer, &recipients)?;
+    smtp::send_raw_with(config, &sealed.raw, &sealed.envelope, state.tls()).await?;
+    let message_id = sealed
+        .message_id
+        .trim_matches(|c| c == '<' || c == '>')
+        .to_string();
+    Ok((sealed.raw, Some(message_id)))
 }
 
 async fn logout(mut session: ImapSession) {

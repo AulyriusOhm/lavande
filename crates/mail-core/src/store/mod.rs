@@ -12,12 +12,13 @@ use serde::Serialize;
 
 use crate::error::MailError;
 use crate::model::{AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState, Thread};
+use crate::pgp::PgpDetail;
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const MESSAGE_COLUMNS: &str = "account_id, folder_path, uid, uidvalidity, thread_id, message_id, \
      in_reply_to, references_json, from_json, to_json, cc_json, subject, date, unread, starred, \
-     answered, size, pgp, preview, body_text, body_html";
+     answered, size, pgp, preview, body_text, body_html, pgp_detail";
 
 pub struct Store {
     conn: Mutex<Connection>,
@@ -62,6 +63,7 @@ impl Store {
         tracing::debug!(version, target = SCHEMA_VERSION, "mail store migration");
         if version < SCHEMA_VERSION {
             conn.execute_batch(SCHEMA)?;
+            add_missing_columns(&conn)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(())
@@ -181,9 +183,10 @@ impl Store {
         tx.execute(
             "INSERT OR REPLACE INTO messages (account_id, folder_path, uid, uidvalidity, \
              thread_id, message_id, in_reply_to, references_json, from_json, to_json, cc_json, \
-             subject, date, unread, starred, answered, size, pgp, preview, body_text, body_html) \
+             subject, date, unread, starred, answered, size, pgp, preview, body_text, body_html, \
+             pgp_detail) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, \
-             ?17, ?18, ?19, ?20, ?21)",
+             ?17, ?18, ?19, ?20, ?21, ?22)",
             params![
                 message.account_id,
                 message.folder_path,
@@ -206,6 +209,7 @@ impl Store {
                 message.preview,
                 message.body_text,
                 message.body_html,
+                to_json_option(&message.pgp_detail)?,
             ],
         )?;
         tx.execute(
@@ -381,12 +385,20 @@ impl Store {
         uid: u32,
         text: Option<&str>,
         html: Option<&str>,
+        pgp_detail: Option<&PgpDetail>,
     ) -> Result<(), MailError> {
         let conn = self.conn()?;
         let updated = conn.execute(
-            "UPDATE messages SET body_text = ?4, body_html = ?5 \
+            "UPDATE messages SET body_text = ?4, body_html = ?5, pgp_detail = ?6 \
              WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
-            params![account_id, folder_path, uid, text, html],
+            params![
+                account_id,
+                folder_path,
+                uid,
+                text,
+                html,
+                pgp_detail.map(to_json).transpose()?
+            ],
         )?;
         require_one(updated, "message")
     }
@@ -777,6 +789,7 @@ struct MessageRow {
     preview: String,
     body_text: Option<String>,
     body_html: Option<String>,
+    pgp_detail: Option<String>,
 }
 
 impl MessageRow {
@@ -803,6 +816,7 @@ impl MessageRow {
             preview: row.get(18)?,
             body_text: row.get(19)?,
             body_html: row.get(20)?,
+            pgp_detail: row.get(21)?,
         })
     }
 
@@ -828,6 +842,7 @@ impl MessageRow {
             },
             size: self.size,
             pgp: PgpState::from_db(&self.pgp),
+            pgp_detail: from_json(self.pgp_detail.as_deref().unwrap_or_default())?,
             preview: self.preview,
             body_text: self.body_text,
             body_html: self.body_html,
@@ -838,6 +853,29 @@ impl MessageRow {
 
 fn to_json<T: Serialize>(value: &T) -> Result<String, MailError> {
     Ok(serde_json::to_string(value)?)
+}
+
+fn to_json_option<T: Serialize>(value: &Option<T>) -> Result<Option<String>, MailError> {
+    value.as_ref().map(to_json).transpose()
+}
+
+/// Adds the columns a database created by an older schema misses.
+fn add_missing_columns(conn: &Connection) -> Result<(), MailError> {
+    if !column_exists(conn, "messages", "pgp_detail")? {
+        conn.execute("ALTER TABLE messages ADD COLUMN pgp_detail TEXT", [])?;
+    }
+    Ok(())
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, MailError> {
+    let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        if row.get::<_, String>(1)? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn from_json<T: DeserializeOwned + Default>(raw: &str) -> Result<T, MailError> {
@@ -915,6 +953,7 @@ mod tests {
                 flags: Flags::default(),
                 size: 10,
                 pgp: PgpState::None,
+                pgp_detail: None,
                 preview: String::new(),
                 body_text: None,
                 body_html: None,

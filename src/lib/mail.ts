@@ -1,3 +1,5 @@
+import type { ApiPgpDetail } from "@/lib/api";
+
 export type PgpState = "none" | "signed" | "encrypted";
 
 export type FolderId = "inbox" | "spam" | "sent" | "drafts" | "archive" | "trash" | "other";
@@ -69,6 +71,7 @@ export type Mail = {
   unread: boolean;
   starred: boolean;
   pgp: PgpState;
+  pgp_detail?: ApiPgpDetail | null;
   attachments?: { name: string; size: string }[];
   tone: number;
 };

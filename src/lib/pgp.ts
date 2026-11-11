@@ -1,71 +1,19 @@
+import type { ApiPgpDetail, ApiPgpState } from "@/lib/api";
+
+/** Clé telle que le démon la renvoie (`PgpKeyInfo`). */
 export type PgpKey = {
-  id: string;
-  name: string;
-  email?: string;
   fingerprint: string;
+  key_id: string;
+  user_id: string;
+  name: string | null;
+  email: string | null;
   algorithm: string;
-  created: string;
-  expires: string;
-  verified: boolean;
-  trust: "ultimate" | "full" | "marginal";
-  secret?: boolean;
-  tone?: number;
-  revoked?: boolean;
-  invalid?: boolean;
+  created_at: string;
+  expires_at: string | null;
+  has_secret: boolean;
+  revoked: boolean;
+  expired: boolean;
 };
-
-export const MY_KEY: PgpKey = {
-  id: "own",
-  name: "Roman",
-  email: "roman@lavande.mail",
-  fingerprint: "9F3A 71C4 D0B8 5E62 4A17  88CD 2B90 7F31 AE45 6C08",
-  algorithm: "Curve25519 · Ed25519",
-  created: "12/03/2026",
-  expires: "12/03/2028",
-  verified: true,
-  trust: "ultimate",
-  secret: true,
-  tone: 2,
-};
-
-export const CONTACT_KEYS: PgpKey[] = [
-  {
-    id: "camille",
-    name: "Camille Rousseau",
-    email: "camille@studio-lilas.fr",
-    fingerprint: "4B71 0E9C 55A2 B3D8 6F14  2C90 77DE 1A3B 09F5 22C7",
-    algorithm: "RSA 4096",
-    created: "04/11/2025",
-    expires: "04/11/2027",
-    verified: true,
-    trust: "full",
-    tone: 0,
-  },
-  {
-    id: "marc",
-    name: "Marc Delaunay",
-    email: "marc.delaunay@mail.fr",
-    fingerprint: "A1D4 62F0 8C33 5B97 E2D1  40A8 6C15 9B7E 3D02 84F1",
-    algorithm: "Curve25519 · Ed25519",
-    created: "19/01/2026",
-    expires: "19/01/2028",
-    verified: true,
-    trust: "full",
-    tone: 1,
-  },
-  {
-    id: "lea",
-    name: "Léa Fontaine",
-    email: "lea@atelier-nova.co",
-    fingerprint: "77C2 9D31 40E8 A6B5 1F3C  8B62 D904 5AE7 2C18 63B0",
-    algorithm: "RSA 3072",
-    created: "02/06/2024",
-    expires: "02/06/2026",
-    verified: false,
-    trust: "marginal",
-    tone: 3,
-  },
-];
 
 export const PGP_STATE = {
   valid: {
@@ -86,19 +34,84 @@ export const PGP_STATE = {
   },
 } as const;
 
-export type PgpState = keyof typeof PGP_STATE;
+export type PgpKeyState = "valid" | "expired" | "revoked";
 
-function parseFrDate(value: string) {
-  const [day, month, year] = value.split("/").map(Number);
-  return new Date(year, month - 1, day);
+function timestamp(value: string | null): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
 }
 
-export function isExpired(key: PgpKey, now = new Date()) {
-  return parseFrDate(key.expires).getTime() < now.getTime();
+export function isExpired(key: PgpKey, now = new Date()): boolean {
+  if (key.expired) return true;
+  const expires = timestamp(key.expires_at);
+  return expires !== null && expires <= now.getTime();
 }
 
-export function keyState(key: PgpKey, now = new Date()): PgpState {
+export function keyState(key: PgpKey, now = new Date()): PgpKeyState {
   if (key.revoked) return "revoked";
-  if (key.invalid) return "invalid";
   return isExpired(key, now) ? "expired" : "valid";
 }
+
+export function formatKeyDate(value: string | null): string {
+  const parsed = timestamp(value);
+  if (parsed === null) return "—";
+  return new Date(parsed).toLocaleDateString("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
+export function formatFingerprint(fingerprint: string): string {
+  const clean = fingerprint.replace(/\s+/g, "").toUpperCase();
+  return clean.replace(/(.{4})(?=.)/g, "$1 ");
+}
+
+export function shortFingerprint(fingerprint: string): string {
+  const clean = fingerprint.replace(/\s+/g, "").toUpperCase();
+  return clean.length <= 16 ? formatFingerprint(clean) : `…${formatFingerprint(clean.slice(-16))}`;
+}
+
+export function keyLabel(key: PgpKey): string {
+  return key.name?.trim() || key.email?.trim() || key.user_id;
+}
+
+export function keyUsage(key: PgpKey): string {
+  return key.has_secret ? "secrète" : "publique";
+}
+
+export type PgpVerification = "verified" | "invalid" | "unverified";
+
+export type PgpMessageStatus = {
+  state: ApiPgpState;
+  /** `null` quand le serveur ne fournit pas `pgp_detail`. */
+  verification: PgpVerification | null;
+  decrypted: boolean;
+  signer: string | null;
+  error: string | null;
+};
+
+/** Statut PGP d'un message lu, à partir de `mail.pgp` et `mail.pgp_detail`. */
+export function messagePgpStatus(message: {
+  pgp: ApiPgpState;
+  pgp_detail?: ApiPgpDetail | null;
+}): PgpMessageStatus | null {
+  if (message.pgp === "none") return null;
+  const detail = message.pgp_detail ?? null;
+  const verification: PgpVerification | null = detail
+    ? detail.verified === true
+      ? "verified"
+      : detail.verified === false
+        ? "invalid"
+        : "unverified"
+    : null;
+  return {
+    state: message.pgp,
+    verification,
+    decrypted: detail?.decrypted ?? false,
+    signer: detail?.signer ?? null,
+    error: detail?.error ?? null,
+  };
+}
+

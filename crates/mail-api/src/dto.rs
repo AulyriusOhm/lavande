@@ -7,6 +7,8 @@ use base64::Engine;
 use lavande_mail::config::{Encryption, Endpoint};
 use lavande_mail::imap::SyncReport;
 use lavande_mail::model::Address;
+use lavande_mail::pgp::PgpKeyInfo;
+use lavande_mail::sanitize_html;
 use lavande_mail::smtp::{OutgoingAttachment, OutgoingMessage};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -230,6 +232,42 @@ pub struct SendRequest {
     pub references: Vec<String>,
     #[serde(default)]
     pub attachments: Vec<AttachmentDto>,
+    #[serde(default)]
+    pub pgp_sign: bool,
+    #[serde(default)]
+    pub pgp_encrypt: bool,
+}
+
+#[derive(Deserialize)]
+pub struct PgpGenerateRequest {
+    pub name: String,
+    pub email: String,
+}
+
+#[derive(Deserialize)]
+pub struct PgpImportRequest {
+    pub armored: String,
+}
+
+#[derive(Serialize)]
+pub struct PgpKeysResponse {
+    pub keys: Vec<PgpKeyInfo>,
+}
+
+#[derive(Serialize)]
+pub struct PgpGeneratedResponse {
+    pub key: PgpKeyInfo,
+    pub public_key: String,
+}
+
+#[derive(Serialize)]
+pub struct PgpImportedResponse {
+    pub key: PgpKeyInfo,
+}
+
+#[derive(Serialize)]
+pub struct PgpExportResponse {
+    pub public_key: String,
 }
 
 #[derive(Deserialize)]
@@ -293,10 +331,12 @@ impl SendRequest {
             bcc: addresses(self.bcc)?,
             subject: self.subject,
             text: self.text,
-            html: self.html,
+            html: self.html.and_then(|html| sanitize_html(&html)),
             in_reply_to: self.in_reply_to,
             references: self.references,
             attachments,
+            pgp_sign: self.pgp_sign,
+            pgp_encrypt: self.pgp_encrypt,
         })
     }
 }
@@ -305,4 +345,60 @@ fn addresses(dtos: Vec<AddressDto>) -> Result<Vec<Address>, ApiError> {
     dtos.into_iter()
         .map(AddressDto::into_address)
         .collect::<Result<Vec<_>, ApiError>>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn sender() -> Address {
+        Address {
+            name: None,
+            email: "roman@lavande.mail".to_string(),
+        }
+    }
+
+    #[test]
+    fn the_html_of_a_sent_message_is_sanitized() {
+        let request: SendRequest = serde_json::from_value(json!({
+            "to": [{ "email": "camille@studio-lilas.fr" }],
+            "subject": "Planning",
+            "text": "Bonjour",
+            "html": "<p>Bonjour<script>alert(1)</script><img src=x onerror=alert(1)></p>",
+            "pgp_sign": true,
+            "pgp_encrypt": true,
+        }))
+        .expect("requête");
+        let outgoing = request.into_outgoing(sender()).expect("message sortant");
+        assert_eq!(outgoing.html.as_deref(), Some("<p>Bonjour</p>"));
+        assert!(outgoing.pgp_sign);
+        assert!(outgoing.pgp_encrypt);
+    }
+
+    #[test]
+    fn pgp_is_off_by_default() {
+        let request: SendRequest = serde_json::from_value(json!({
+            "to": [{ "email": "camille@studio-lilas.fr" }],
+            "subject": "Planning",
+            "text": "Bonjour",
+        }))
+        .expect("requête");
+        let outgoing = request.into_outgoing(sender()).expect("message sortant");
+        assert!(!outgoing.pgp_sign);
+        assert!(!outgoing.pgp_encrypt);
+    }
+
+    #[test]
+    fn html_without_visible_text_is_dropped() {
+        let request: SendRequest = serde_json::from_value(json!({
+            "to": [{ "email": "camille@studio-lilas.fr" }],
+            "subject": "Planning",
+            "text": "Bonjour",
+            "html": "<script>alert(1)</script>",
+        }))
+        .expect("requête");
+        let outgoing = request.into_outgoing(sender()).expect("message sortant");
+        assert_eq!(outgoing.html, None);
+    }
 }

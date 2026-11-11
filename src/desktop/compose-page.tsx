@@ -8,10 +8,12 @@ import type { ComposeBus, ComposeState } from "@/lib/compose-bus";
 import { isTauriShell } from "@/lib/open-external";
 import { mailApi, errorText } from "@/lib/api";
 import { sendInputOf } from "@/lib/mail-backend";
+import { activeSignature, usePrefs } from "@/lib/prefs";
 import type { ComposeDraft } from "@/lib/draft";
 
 export function DesktopComposePage() {
   const { mode, phase } = useMailStore();
+  const { signatures } = usePrefs();
   const [state, setState] = useState<ComposeState>(() => {
     const persisted = loadPersistedCompose();
     return {
@@ -122,7 +124,7 @@ export function DesktopComposePage() {
     if (orphan || !busRef.current) {
       if (mode === "api") {
         mailApi
-          .send(draft.account, sendInputOf(draft))
+          .send(draft.account, sendInputOf(draft, activeSignature(signatures, draft.account)))
           .then(() => {
             setSent(true);
             window.setTimeout(closeSelf, 700);

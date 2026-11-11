@@ -27,6 +27,7 @@ use crate::error::MailError;
 use crate::mime;
 use crate::model::{Flags, Folder, FolderRole, Message};
 use crate::oauth::{xoauth2_payload, OAuth2Provider, XOAuth2Authenticator};
+use crate::pgp::PgpKeyring;
 use crate::store::Store;
 use crate::threading;
 use crate::tls::TlsOptions;
@@ -184,8 +185,9 @@ pub async fn sync_folder(
     account_id: &str,
     folder_path: &str,
     mapping: &FolderMapping,
+    keys: &PgpKeyring,
 ) -> Result<SyncReport, MailError> {
-    reconcile(session, store, account_id, folder_path, Some(mapping)).await
+    reconcile(session, store, account_id, folder_path, Some(mapping), keys).await
 }
 
 /// Brings one folder in step with the server: one metadata pass decides what
@@ -198,6 +200,7 @@ async fn reconcile(
     account_id: &str,
     folder_path: &str,
     mapping: Option<&FolderMapping>,
+    keys: &PgpKeyring,
 ) -> Result<SyncReport, MailError> {
     let mailbox = session.select(folder_path).await.map_err(imap_error)?;
     let uidvalidity = uidvalidity_of(&mailbox, account_id)?;
@@ -243,11 +246,14 @@ async fn reconcile(
         report.inserted += import_bodies(
             session,
             store,
-            account_id,
-            folder_path,
-            uidvalidity,
+            &Target {
+                account_id,
+                folder_path,
+                uidvalidity,
+            },
             batch,
             &server,
+            keys,
         )
         .await?;
     }
@@ -290,17 +296,25 @@ async fn server_state(session: &mut ImapSession) -> Result<HashMap<u32, (Flags, 
         .collect())
 }
 
+/// Where the bodies being imported go.
+struct Target<'a> {
+    account_id: &'a str,
+    folder_path: &'a str,
+    uidvalidity: u32,
+}
+
 /// Reads and stores the bodies of `uids` only. A uid the server answers
 /// without a body is skipped, not fatal.
 async fn import_bodies(
     session: &mut ImapSession,
     store: &Store,
-    account_id: &str,
-    folder_path: &str,
-    uidvalidity: u32,
+    target: &Target<'_>,
     uids: &[u32],
     server: &HashMap<u32, (Flags, u32)>,
+    keys: &PgpKeyring,
 ) -> Result<usize, MailError> {
+    let account_id = target.account_id;
+    let folder_path = target.folder_path;
     let selector = uids
         .iter()
         .map(u32::to_string)
@@ -322,7 +336,7 @@ async fn import_bodies(
         let Some((flags, size)) = server.get(&uid) else {
             continue;
         };
-        let parsed = match mime::parse_message(raw) {
+        let parsed = match mime::parse_message_with_keys(raw, keys) {
             Ok(parsed) => parsed,
             Err(error) => {
                 tracing::warn!(account = account_id, folder = folder_path, uid, %error, "message illisible, ignoré");
@@ -333,7 +347,7 @@ async fn import_bodies(
             account_id: account_id.to_string(),
             folder_path: folder_path.to_string(),
             uid,
-            uidvalidity,
+            uidvalidity: target.uidvalidity,
             thread_id: threading::thread_id(
                 account_id,
                 &parsed.subject,
@@ -352,6 +366,7 @@ async fn import_bodies(
             flags: *flags,
             size: *size,
             pgp: parsed.pgp,
+            pgp_detail: parsed.pgp_detail,
             preview: parsed.preview,
             body_text: parsed.body_text,
             body_html: parsed.body_html,
@@ -373,6 +388,7 @@ pub async fn fetch_body(
     account_id: &str,
     folder_path: &str,
     uid: u32,
+    keys: &PgpKeyring,
 ) -> Result<(), MailError> {
     session.select(folder_path).await.map_err(imap_error)?;
     let fetches: Vec<Fetch> = session
@@ -386,13 +402,14 @@ pub async fn fetch_body(
         .iter()
         .find_map(|fetch| fetch.body())
         .ok_or_else(|| MailError::Imap(format!("uid {uid} carries no body")))?;
-    let parsed = mime::parse_message(raw)?;
+    let parsed = mime::parse_message_with_keys(raw, keys)?;
     store.set_body(
         account_id,
         folder_path,
         uid,
         parsed.body_text.as_deref(),
         parsed.body_html.as_deref(),
+        parsed.pgp_detail.as_ref(),
     )
 }
 
@@ -462,6 +479,7 @@ pub async fn move_message(
     from_path: &str,
     uid: u32,
     to_path: &str,
+    keys: &PgpKeyring,
 ) -> Result<(), MailError> {
     session.select(from_path).await.map_err(imap_error)?;
     let capabilities = session.capabilities().await.map_err(imap_error)?;
@@ -482,7 +500,7 @@ pub async fn move_message(
         expunge(session, &uid.to_string(), ExpungeMode::Strict).await?;
     }
     store.delete_messages(account_id, from_path, &[uid])?;
-    reconcile(session, store, account_id, to_path, None).await?;
+    reconcile(session, store, account_id, to_path, None, keys).await?;
     Ok(())
 }
 
@@ -496,6 +514,7 @@ pub async fn append_sent(
     folder_path: &str,
     raw: &[u8],
     message_id: Option<&str>,
+    keys: &PgpKeyring,
 ) -> Result<(), MailError> {
     session.select(folder_path).await.map_err(imap_error)?;
     if let Some(id) = message_id {
@@ -511,7 +530,7 @@ pub async fn append_sent(
         .append(folder_path, Some("(\\Seen)"), None, raw)
         .await
         .map_err(imap_error)?;
-    reconcile(session, store, account_id, folder_path, None).await?;
+    reconcile(session, store, account_id, folder_path, None, keys).await?;
     Ok(())
 }
 

@@ -4,7 +4,7 @@ import type { ComposeDraft } from "@/lib/draft";
 import {
   Check,
   Image,
-  Link2,
+  PenLine,
   Lock,
   Minus,
   Paperclip,
@@ -20,6 +20,9 @@ import { composeReply, replySuggestions, rewriteBody, userPart, type ReplySugges
 import { ReplySuggestSheet, RewriteSheet } from "@/screens/assist-sheet";
 import { IconButton } from "@/components/ui/primitives";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
+import { RichEditor } from "@/components/ui/rich-editor";
+import { ensureHtml, htmlToText, textToHtml, isHtmlEmpty } from "@/lib/rich-text";
+import { activeSignature, usePrefs } from "@/lib/prefs";
 
 export type { ComposeDraft };
 
@@ -62,6 +65,8 @@ export function ComposeScreen({
   onHeaderDoubleClick?: () => void;
 }) {
   const { accounts } = useMailStore();
+  const { signatures } = usePrefs();
+  const accountSignature = activeSignature(signatures, draft.account);
   const [showCc, setShowCc] = useState(Boolean(draft.cc.trim()));
   const [showCci, setShowCci] = useState(Boolean(draft.cci.trim()));
   const [confirmSend, setConfirmSend] = useState(false);
@@ -70,7 +75,7 @@ export function ComposeScreen({
   const [rewriteOpen, setRewriteOpen] = useState(false);
 
   const suggestions = useMemo(
-    () => replySuggestions({ subject: draft.subject, to: draft.to, body: draft.body }),
+    () => replySuggestions({ subject: draft.subject, to: draft.to, body: htmlToText(draft.body) }),
     [draft.subject, draft.to, draft.body],
   );
   const isReply = /^re\s*:/i.test(draft.subject) || /a écrit\s*:/.test(draft.body);
@@ -112,14 +117,9 @@ export function ComposeScreen({
   };
 
   const applySuggestion = (suggestion: ReplySuggestion) => {
-    const rest = draft.body.trimStart();
+    const suggestionHtml = textToHtml(suggestion.text);
     update({
-      body:
-        draft.body.trim() === ""
-          ? suggestion.text
-          : rest.startsWith("---")
-            ? suggestion.text + "\n\n" + rest
-            : suggestion.text + "\n\n" + draft.body,
+      body: isHtmlEmpty(draft.body) ? suggestionHtml : suggestionHtml + ensureHtml(draft.body),
     });
     setSuggestOpen(false);
   };
@@ -300,26 +300,41 @@ export function ComposeScreen({
         <label htmlFor="compose-body" className="sr-only">
           Message
         </label>
-        <textarea
-          id="compose-body"
-          value={draft.body}
-          onChange={(event) => update({ body: event.target.value })}
-          placeholder="Écris ton message…"
-          className="mt-3 min-h-40 w-full flex-1 resize-none bg-transparent text-[13.5px] leading-[1.7] font-medium text-ink outline-none placeholder:text-ink-muted/70"
+        <RichEditor
+          value={ensureHtml(draft.body)}
+          onChange={(html) => update({ body: html })}
+          placeholder="Écris ton message… (Markdown supporté : **gras**, # titre, - liste)"
+          minHeight="11rem"
+          className="mt-3 flex-1"
         />
 
         <div className="flex flex-wrap items-center gap-2 pb-4">
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-accent-soft px-3 py-1.5 text-[11.5px] font-bold text-accent-ink">
-            <Check className="size-3.5" strokeWidth={3} />
-            Signature « Roman »
-          </span>
-          <button
-            type="button"
-            className="inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[11.5px] font-semibold text-ink-soft"
-          >
-            <Link2 className="size-3.5" />
-            Lien
-          </button>
+          {accountSignature ? (
+            <button
+              type="button"
+              onClick={() => update({ includeSignature: draft.includeSignature === false })}
+              aria-pressed={draft.includeSignature !== false}
+              title={
+                draft.includeSignature !== false
+                  ? "Retirer la signature de ce message"
+                  : "Ajouter la signature à ce message"
+              }
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11.5px] font-bold transition-colors",
+                draft.includeSignature !== false
+                  ? "bg-accent-soft text-accent-ink"
+                  : "border border-line text-ink-muted",
+              )}
+            >
+              <PenLine className="size-3.5" strokeWidth={2.6} />
+              {draft.includeSignature !== false ? "Signature activée" : "Signature désactivée"}
+            </button>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-[11.5px] font-semibold text-ink-muted">
+              <PenLine className="size-3.5" strokeWidth={2.6} />
+              Aucune signature · à créer dans les réglages
+            </span>
+          )}
         </div>
       </div>
 
@@ -409,7 +424,7 @@ export function ComposeScreen({
             aria-haspopup="dialog"
             aria-label="Corriger ou reformuler le message"
             title="Corriger / reformuler"
-            disabled={!userPart(draft.body).trim() || sent}
+            disabled={!userPart(htmlToText(draft.body)).trim() || sent}
             onClick={() => setRewriteOpen(true)}
             className="grid size-11 shrink-0 place-items-center rounded-full border border-line bg-surface text-ink-soft transition-transform active:scale-95 disabled:pointer-events-none disabled:opacity-40"
           >
@@ -422,7 +437,7 @@ export function ComposeScreen({
         open={suggestOpen}
         suggestions={suggestions}
         generate={(brief) =>
-          composeReply({ subject: draft.subject, to: draft.to, body: draft.body, brief })
+          composeReply({ subject: draft.subject, to: draft.to, body: htmlToText(draft.body), brief })
         }
         onPick={applySuggestion}
         onClose={() => setSuggestOpen(false)}
@@ -431,7 +446,7 @@ export function ComposeScreen({
         open={rewriteOpen}
         body={draft.body}
         onApply={(id) => {
-          update({ body: rewriteBody(id, draft.body) });
+          update({ body: textToHtml(rewriteBody(id, htmlToText(draft.body))) });
           setRewriteOpen(false);
         }}
         onClose={() => setRewriteOpen(false)}

@@ -64,6 +64,7 @@ fn message(uid: u32, folder: &str, unread: bool) -> Message {
         },
         size: 10,
         pgp: PgpState::None,
+        pgp_detail: None,
         preview: String::new(),
         body_text: None,
         body_html: None,

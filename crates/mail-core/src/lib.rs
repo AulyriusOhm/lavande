@@ -7,6 +7,7 @@ pub mod imap;
 pub mod mime;
 pub mod model;
 pub mod oauth;
+pub mod pgp;
 pub mod smtp;
 pub mod store;
 pub mod sync;
@@ -16,11 +17,12 @@ pub mod tls;
 pub use config::{AccountConfig, AuthConfig, Encryption, Endpoint, FolderMapping};
 pub use error::MailError;
 pub use imap::SyncReport;
-pub use mime::{parse_message, sanitize_html, ParsedMessage};
+pub use mime::{parse_message, parse_message_with_keys, sanitize_html, ParsedMessage};
 pub use model::{
     thread_key, Address, AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState, Thread,
 };
 pub use oauth::{xoauth2_payload, OAuth2Provider, XOAuth2Authenticator};
+pub use pgp::{PgpDetail, PgpKey, PgpKeyInfo, PgpKeyring};
 pub use smtp::{OutgoingAttachment, OutgoingMessage};
 pub use store::Store;
 pub use threading::thread_id;

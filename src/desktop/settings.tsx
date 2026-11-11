@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -10,6 +10,7 @@ import {
   Globe,
   KeyRound,
   ListChecks,
+  Loader2,
   Lock,
   Moon,
   PenLine,
@@ -17,23 +18,38 @@ import {
   RefreshCw,
   RotateCcw,
   ShieldCheck,
+  Sparkles,
   Sun,
   Terminal,
   Trash2,
 } from "lucide-react";
-import { CONTACT_KEYS, MY_KEY, PGP_STATE, isExpired, keyState } from "@/lib/pgp";
+import { errorText } from "@/lib/api";
+import {
+  PGP_STATE,
+  formatFingerprint,
+  formatKeyDate,
+  isExpired,
+  keyLabel,
+  keyState,
+  keyUsage,
+  shortFingerprint,
+  type PgpKey,
+} from "@/lib/pgp";
+import { exportKey, generateKey, listKeys } from "@/lib/pgp-api";
 import { MCP_LOG, MCP_SCOPES, MCP_SERVERS, mcpCounts } from "@/lib/mcp";
 import type { McpLogEntry } from "@/lib/mcp";
-import { mergeFlags, usePrefs } from "@/lib/prefs";
+import { activeSignature, mergeFlags, usePrefs } from "@/lib/prefs";
 import { ACCENT_PRESETS, useTheme } from "@/lib/theme";
 import { useMailStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Avatar, Switch, ToggleRow } from "@/components/ui/primitives";
+import { SignatureEditor } from "@/components/signature-editor";
 import { SyncSettings } from "@/components/sync-settings";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import {
   Badge,
+  DChip,
   DButton,
   PaneTitle,
   SectionLabel,
@@ -41,14 +57,13 @@ import {
   TextInput,
 } from "@/desktop/ui";
 
-const TRUST_LABEL = { ultimate: "ultime", full: "complète", marginal: "marginale" } as const;
-
-const KEY_TONE = { valid: "green", expired: "amber", revoked: "rose", invalid: "rose" } as const;
+const KEY_TONE = { valid: "green", expired: "amber", revoked: "rose" } as const;
 
 const SCOPE_TONE = { lecture: "neutral", écriture: "amber", signature: "green" } as const;
 
 const SECTIONS = [
   { id: "comptes", label: "Comptes" },
+  { id: "signatures", label: "Signatures" },
   { id: "apparence", label: "Apparence" },
   { id: "modules", label: "Modules" },
   { id: "securite", label: "Sécurité" },
@@ -65,6 +80,35 @@ const serverName = (tool: string) =>
   MCP_SERVERS.find((server) => server.tools.some((entry) => entry.name === tool))?.name ?? "hors ligne";
 
 const durationOf = (entry: McpLogEntry) => `${18 + ((entry.detail.length * 7) % 240)} ms`;
+
+function usePgpKeys() {
+  const [keys, setKeys] = useState<PgpKey[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async (signal?: AbortSignal) => {
+    setError(null);
+    setLoading(true);
+    try {
+      const next = await listKeys(signal);
+      if (!signal?.aborted) setKeys(next);
+    } catch (failure) {
+      if (signal?.aborted || (failure instanceof DOMException && failure.name === "AbortError")) return;
+      setKeys([]);
+      setError(errorText(failure));
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
+
+  return { keys, error, loading, load };
+}
 
 export function DesktopSettings() {
   const { accent, dark, brand, setAccent, setDark, reset } = useTheme();
@@ -83,11 +127,19 @@ export function DesktopSettings() {
     setPlanningEnabled,
     mcpEnabled,
     setMcpEnabled,
+    signatures,
   } = usePrefs();
   const { notify, accounts, mode, openConnect, askRemoveAccount } = useMailStore();
   const [active, setActive] = useState<SectionId>("comptes");
   const [hex, setHex] = useState(accent);
   const [openServer, setOpenServer] = useState<string | null>(null);
+  const [signatureAccount, setSignatureAccount] = useState<string | null>(null);
+  const [generateForm, setGenerateForm] = useState(false);
+  const [generateName, setGenerateName] = useState("");
+  const [generateEmail, setGenerateEmail] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [exporting, setExporting] = useState<string | null>(null);
+  const { keys, error: keysError, loading: keysLoading, load: loadKeys } = usePgpKeys();
 
   useEffect(() => setHex(accent), [accent]);
 
@@ -96,8 +148,55 @@ export function DesktopSettings() {
     mcpEnabled,
   );
   const counts = mcpCounts((server) => enabled[server.id]);
-  const myState = keyState(MY_KEY);
-  const expiringSoon = !isExpired(MY_KEY) && isExpired(MY_KEY, new Date(Date.now() + 90 * 864e5));
+  const myKey = keys?.find((key) => key.has_secret) ?? null;
+  const myState = myKey ? keyState(myKey) : null;
+  const expiringSoon = myKey ? !isExpired(myKey) && isExpired(myKey, new Date(Date.now() + 90 * 864e5)) : false;
+  const publicKeys = keys?.filter((key) => !key.has_secret).length ?? 0;
+  const signatureTarget = accounts.find((item) => item.id === signatureAccount) ?? accounts[0] ?? null;
+  const signedAccounts = accounts.filter((item) => activeSignature(signatures, item.id)).length;
+
+  const openGenerate = () => {
+    setGenerateName(accounts[0]?.label ?? "");
+    setGenerateEmail(accounts[0]?.email ?? "");
+    setGenerateForm(true);
+  };
+
+  const runGenerate = async () => {
+    const name = generateName.trim();
+    const email = generateEmail.trim();
+    if (!name || !email) {
+      notify("Nom et adresse e-mail requis pour générer une clé");
+      return;
+    }
+    setGenerating(true);
+    try {
+      const result = await generateKey({ name, email });
+      await loadKeys();
+      setGenerateForm(false);
+      notify(`Clé générée · ${keyLabel(result.key)}`);
+    } catch (failure) {
+      notify(`Génération impossible · ${errorText(failure)}`);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const copyPublicKey = async (key: PgpKey) => {
+    setExporting(key.fingerprint);
+    try {
+      const armored = await exportKey(key.fingerprint);
+      try {
+        await navigator.clipboard.writeText(armored);
+        notify(`Clé publique de ${keyLabel(key)} copiée dans le presse-papiers`);
+      } catch {
+        notify("Export prêt, mais le presse-papiers est indisponible");
+      }
+    } catch (failure) {
+      notify(`Export impossible · ${errorText(failure)}`);
+    } finally {
+      setExporting(null);
+    }
+  };
 
   const goTo = (id: SectionId) => {
     setActive(id);
@@ -208,6 +307,38 @@ export function DesktopSettings() {
                     </button>
                   </div>
                 </BlurFade>
+              </Block>
+
+              <Block
+                id="signatures"
+                label="Signatures"
+                hint={`${signedAccounts} sur ${accounts.length} compte${accounts.length > 1 ? "s" : ""}`}
+              >
+                {signatureTarget ? (
+                  <BlurFade delay={0.04}>
+                    <div className="mb-2.5 flex flex-wrap items-center gap-1.5">
+                      {accounts.map((item) => (
+                        <DChip
+                          key={item.id}
+                          active={signatureTarget.id === item.id}
+                          onClick={() => setSignatureAccount(item.id)}
+                        >
+                          <span className="size-2 rounded-full" style={{ backgroundColor: item.color }} />
+                          {item.label}
+                          {activeSignature(signatures, item.id) ? <Check className="size-3" strokeWidth={3} /> : null}
+                        </DChip>
+                      ))}
+                    </div>
+                    <SignatureEditor account={signatureTarget} />
+                  </BlurFade>
+                ) : (
+                  <Surface className="p-4">
+                    <p className="text-[12.5px] font-bold text-ink">Aucun compte</p>
+                    <p className="mt-0.5 text-[11.5px] font-medium text-ink-muted">
+                      Ajoute un compte pour lui donner sa propre signature.
+                    </p>
+                  </Surface>
+                )}
               </Block>
 
               <Block id="apparence" label="Apparence" hint={brand}>
@@ -347,59 +478,162 @@ export function DesktopSettings() {
                 </Surface>
               </Block>
 
-              <Block id="securite" label="Sécurité & PGP" hint={`${CONTACT_KEYS.length} clés de contact`}>
+              <Block
+                id="securite"
+                label="Sécurité & PGP"
+                hint={
+                  keysError
+                    ? "clés indisponibles"
+                    : keys === null
+                      ? "chargement…"
+                      : `${keys.length} clé${keys.length > 1 ? "s" : ""}`
+                }
+              >
                 <div className="grid gap-3 md:grid-cols-2">
                   <Surface className={cn("p-4", expiringSoon && "border-amber-500/40 bg-amber-500/[0.04]")}>
                     <div className="flex items-center gap-1.5">
                       <SectionLabel>Ma clé</SectionLabel>
-                      <Badge tone={KEY_TONE[myState]} className="ml-auto">
-                        {PGP_STATE[myState].label}
-                      </Badge>
+                      {myKey && myState ? (
+                        <Badge tone={KEY_TONE[myState]} className="ml-auto">
+                          {PGP_STATE[myState].label}
+                        </Badge>
+                      ) : null}
                     </div>
-                    <p className="mt-2.5 text-[13px] font-bold text-ink">
-                      {MY_KEY.name}{" "}
-                      <span className="font-medium text-ink-soft">{"<" + (MY_KEY.email ?? "") + ">"}</span>
-                    </p>
-                    <p className="mt-1.5 font-mono text-[10.5px] leading-relaxed font-semibold break-all text-ink-soft">
-                      {MY_KEY.fingerprint}
-                    </p>
-                    <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-[10.5px]">
-                      <div className="col-span-2">
-                        <dt className="font-semibold text-ink-muted">Algorithme</dt>
-                        <dd className="font-bold text-ink">{MY_KEY.algorithm}</dd>
+
+                    {keys === null ? (
+                      <div className="mt-3 space-y-2">
+                        <div className="h-3.5 w-2/3 animate-pulse rounded-full bg-surface-2" />
+                        <div className="h-3 w-full animate-pulse rounded-full bg-surface-2" />
+                        <div className="h-3 w-1/2 animate-pulse rounded-full bg-surface-2" />
+                        <p className="sr-only">Chargement des clés PGP…</p>
                       </div>
-                      <div>
-                        <dt className="font-semibold text-ink-muted">Créée le</dt>
-                        <dd className="font-bold text-ink">{MY_KEY.created}</dd>
-                      </div>
-                      <div>
-                        <dt className="font-semibold text-ink-muted">Expire le</dt>
-                        <dd className="font-bold text-ink">{MY_KEY.expires}</dd>
-                      </div>
-                      <div>
-                        <dt className="font-semibold text-ink-muted">Confiance</dt>
-                        <dd className="font-bold text-ink">{TRUST_LABEL[MY_KEY.trust]}</dd>
-                      </div>
-                      <div>
-                        <dt className="font-semibold text-ink-muted">Usage</dt>
-                        <dd className="font-bold text-ink">secrète · signature</dd>
-                      </div>
-                    </dl>
-                    {expiringSoon || myState !== "valid" ? (
-                      <p className="mt-2.5 flex items-start gap-1.5 rounded-xl bg-amber-500/12 px-2.5 py-2 text-[10.5px] font-semibold text-amber-700 dark:text-amber-300">
-                        <AlertTriangle className="mt-px size-3.5 shrink-0" />
-                        {PGP_STATE[myState].hint}
-                      </p>
-                    ) : null}
-                    <DButton
-                      variant="ghost"
-                      size="sm"
-                      className="mt-3"
-                      onClick={() => notify("Clé publique exportée — maquette")}
-                    >
-                      <Download className="size-3.5" />
-                      Exporter la clé publique
-                    </DButton>
+                    ) : myKey && myState ? (
+                      <>
+                        <p className="mt-2.5 text-[13px] font-bold text-ink">
+                          {keyLabel(myKey)}
+                          {myKey.email ? (
+                            <span className="font-medium text-ink-soft">{` <${myKey.email}>`}</span>
+                          ) : null}
+                        </p>
+                        <p className="mt-1.5 font-mono text-[10.5px] leading-relaxed font-semibold break-all text-ink-soft">
+                          {formatFingerprint(myKey.fingerprint)}
+                        </p>
+                        <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-[10.5px]">
+                          <div className="col-span-2">
+                            <dt className="font-semibold text-ink-muted">Algorithme</dt>
+                            <dd className="font-bold text-ink">{myKey.algorithm}</dd>
+                          </div>
+                          <div>
+                            <dt className="font-semibold text-ink-muted">Créée le</dt>
+                            <dd className="font-bold text-ink">{formatKeyDate(myKey.created_at)}</dd>
+                          </div>
+                          <div>
+                            <dt className="font-semibold text-ink-muted">Expire le</dt>
+                            <dd className="font-bold text-ink">
+                              {myKey.expires_at ? formatKeyDate(myKey.expires_at) : "jamais"}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="font-semibold text-ink-muted">Usage</dt>
+                            <dd className="font-bold text-ink">{keyUsage(myKey)} · signature</dd>
+                          </div>
+                          <div>
+                            <dt className="font-semibold text-ink-muted">Identifiant</dt>
+                            <dd className="font-mono font-bold text-ink">{myKey.key_id}</dd>
+                          </div>
+                        </dl>
+                        {myState !== "valid" || expiringSoon ? (
+                          <p className="mt-2.5 flex items-start gap-1.5 rounded-xl bg-amber-500/12 px-2.5 py-2 text-[10.5px] font-semibold text-amber-700 dark:text-amber-300">
+                            <AlertTriangle className="mt-px size-3.5 shrink-0" />
+                            {PGP_STATE[myState].hint}
+                          </p>
+                        ) : null}
+                        <DButton
+                          variant="ghost"
+                          size="sm"
+                          className="mt-3"
+                          disabled={exporting === myKey.fingerprint}
+                          onClick={() => void copyPublicKey(myKey)}
+                        >
+                          {exporting === myKey.fingerprint ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <Download className="size-3.5" />
+                          )}
+                          Exporter la clé publique
+                        </DButton>
+                      </>
+                    ) : (
+                      <>
+                        <p className="mt-2.5 text-[12.5px] font-bold text-ink">Aucune clé secrète</p>
+                        <p className="mt-0.5 text-[11px] font-medium text-ink-muted">
+                          Génère une paire de clés pour chiffrer et signer tes messages depuis ce compte.
+                        </p>
+                        {keysError ? (
+                          <div className="mt-2.5 rounded-xl bg-rose-500/10 px-2.5 py-2">
+                            <p className="flex items-start gap-1.5 text-[10.5px] font-semibold text-rose-600 dark:text-rose-300">
+                              <AlertTriangle className="mt-px size-3.5 shrink-0" />
+                              {keysError}
+                            </p>
+                            <DButton
+                              variant="plain"
+                              size="sm"
+                              className="-ml-2 mt-0.5"
+                              disabled={keysLoading}
+                              onClick={() => void loadKeys()}
+                            >
+                              <RefreshCw className={cn("size-3.5", keysLoading && "animate-spin")} />
+                              Réessayer
+                            </DButton>
+                          </div>
+                        ) : null}
+                        {generateForm ? (
+                          <div className="mt-3 space-y-1.5">
+                            <TextInput
+                              aria-label="Nom de la clé"
+                              placeholder="Nom"
+                              value={generateName}
+                              onChange={(event) => setGenerateName(event.target.value)}
+                            />
+                            <TextInput
+                              aria-label="Adresse e-mail de la clé"
+                              type="email"
+                              placeholder="adresse@exemple.fr"
+                              value={generateEmail}
+                              onChange={(event) => setGenerateEmail(event.target.value)}
+                            />
+                            <div className="flex items-center gap-1.5">
+                              <DButton
+                                variant="primary"
+                                size="sm"
+                                disabled={generating}
+                                onClick={() => void runGenerate()}
+                              >
+                                {generating ? (
+                                  <Loader2 className="size-3.5 animate-spin" />
+                                ) : (
+                                  <KeyRound className="size-3.5" />
+                                )}
+                                {generating ? "Génération…" : "Générer"}
+                              </DButton>
+                              <DButton
+                                variant="plain"
+                                size="sm"
+                                disabled={generating}
+                                onClick={() => setGenerateForm(false)}
+                              >
+                                Annuler
+                              </DButton>
+                            </div>
+                          </div>
+                        ) : (
+                          <DButton variant="soft" size="sm" className="mt-3" onClick={openGenerate}>
+                            <Sparkles className="size-3.5" />
+                            Générer ma clé
+                          </DButton>
+                        )}
+                      </>
+                    )}
                   </Surface>
 
                   <Surface className="divide-y divide-line overflow-hidden">
@@ -434,25 +668,74 @@ export function DesktopSettings() {
                   </Surface>
                 </div>
 
-                <Surface className="mt-3 divide-y divide-line overflow-hidden">
-                  {CONTACT_KEYS.map((key) => {
-                    const state = keyState(key);
-                    return (
-                      <div key={key.id} className="flex items-center gap-2.5 px-3.5 py-2.5">
-                        <Avatar name={key.name} size={28} tone={key.tone ?? 0} rounded="rounded-[10px]" />
-                        <div className="min-w-0 flex-1 leading-tight">
-                          <p className="truncate text-[12px] font-bold text-ink">{key.name}</p>
-                          <p className="truncate font-mono text-[10px] font-medium text-ink-muted">
-                            {key.fingerprint.slice(0, 27)}…
-                          </p>
-                        </div>
-                        <span className="hidden shrink-0 text-[10.5px] font-semibold text-ink-muted lg:block">
-                          {isExpired(key) ? `expirée le ${key.expires}` : `expire le ${key.expires}`}
-                        </span>
-                        <Badge tone={KEY_TONE[state]}>{PGP_STATE[state].label}</Badge>
-                      </div>
-                    );
-                  })}
+                <Surface className="mt-3 overflow-hidden">
+                  <div className="flex items-center gap-2 border-b border-line px-3.5 py-2">
+                    <SectionLabel>Clés</SectionLabel>
+                    <span className="text-[10.5px] font-semibold text-ink-muted">
+                      {keys === null
+                        ? "chargement…"
+                        : `${keys.filter((key) => key.has_secret).length} secrète(s) · ${publicKeys} publique(s)`}
+                    </span>
+                    <DButton
+                      variant="ghost"
+                      size="sm"
+                      className="ml-auto"
+                      disabled={keysLoading}
+                      onClick={() => void loadKeys()}
+                    >
+                      <RefreshCw className={cn("size-3.5", keysLoading && "animate-spin")} />
+                      Rafraîchir
+                    </DButton>
+                  </div>
+                  <div className="divide-y divide-line">
+                    {keys === null ? (
+                      <p className="px-3.5 py-3 text-[11.5px] font-medium text-ink-muted">Chargement des clés…</p>
+                    ) : keys.length === 0 ? (
+                      <p className="px-3.5 py-3 text-[11.5px] font-medium text-ink-muted">
+                        {keysError ? "Clés PGP indisponibles pour le moment." : "Aucune clé PGP."}
+                      </p>
+                    ) : (
+                      keys.map((key, index) => {
+                        const state = keyState(key);
+                        const pending = exporting === key.fingerprint;
+                        return (
+                          <div key={key.fingerprint} className="flex items-center gap-2.5 px-3.5 py-2.5">
+                            <Avatar name={keyLabel(key)} size={28} tone={index % 4} rounded="rounded-[10px]" />
+                            <div className="min-w-0 flex-1 leading-tight">
+                              <p className="truncate text-[12px] font-bold text-ink">{keyLabel(key)}</p>
+                              <p className="truncate font-mono text-[10px] font-medium text-ink-muted">
+                                {shortFingerprint(key.fingerprint)}
+                              </p>
+                            </div>
+                            <span className="hidden shrink-0 text-[10.5px] font-semibold text-ink-muted lg:block">
+                              {key.algorithm}
+                            </span>
+                            <span className="hidden shrink-0 text-[10.5px] font-semibold text-ink-muted xl:block">
+                              {key.expires_at
+                                ? `${isExpired(key) ? "expirée" : "expire"} le ${formatKeyDate(key.expires_at)}`
+                                : "sans expiration"}
+                            </span>
+                            <Badge tone={key.has_secret ? "accent" : "neutral"}>{keyUsage(key)}</Badge>
+                            <Badge tone={KEY_TONE[state]}>{PGP_STATE[state].label}</Badge>
+                            <DButton
+                              variant="plain"
+                              size="sm"
+                              className="size-8 px-0"
+                              aria-label={`Exporter la clé publique de ${keyLabel(key)}`}
+                              disabled={pending}
+                              onClick={() => void copyPublicKey(key)}
+                            >
+                              {pending ? (
+                                <Loader2 className="size-3.5 animate-spin" />
+                              ) : (
+                                <Download className="size-3.5" />
+                              )}
+                            </DButton>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
                 </Surface>
               </Block>
 

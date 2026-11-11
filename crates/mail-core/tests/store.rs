@@ -1,5 +1,6 @@
 use chrono::{TimeZone, Utc};
 use lavande_mail::model::{Address, AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState};
+use lavande_mail::pgp::PgpDetail;
 use lavande_mail::store::FolderCount;
 use lavande_mail::Store;
 
@@ -58,6 +59,7 @@ fn message(uid: u32, thread: &str, name: &str, subject: &str, day: u32) -> Messa
         flags: Flags::default(),
         size: 1200,
         pgp: PgpState::None,
+        pgp_detail: None,
         preview: format!("preview {uid}"),
         body_text: Some("corps".to_string()),
         body_html: None,
@@ -159,7 +161,14 @@ fn flags_body_and_delete() {
     );
 
     store
-        .set_body("perso", "INBOX", 1, Some("texte"), Some("<p>html</p>"))
+        .set_body(
+            "perso",
+            "INBOX",
+            1,
+            Some("texte"),
+            Some("<p>html</p>"),
+            None,
+        )
         .expect("body");
     let stored = store
         .get_message("perso", "INBOX", 1)
@@ -695,4 +704,37 @@ fn search_messages_matches_subject_body_and_sender() {
         .search_messages("absent", "facture", 10)
         .expect("search")
         .is_empty());
+}
+
+#[test]
+fn pgp_detail_survives_a_round_trip() {
+    let store = open();
+    let mut stored = message(1, "t1", "Camille", "Chiffré", 1);
+    stored.pgp = PgpState::Encrypted;
+    stored.pgp_detail = Some(PgpDetail {
+        verified: Some(true),
+        signer: Some("Camille Rousseau <camille@studio-lilas.fr>".to_string()),
+        decrypted: true,
+        error: None,
+    });
+    store.upsert_message(&stored).expect("insertion");
+
+    let read = store
+        .get_message("perso", "INBOX", 1)
+        .expect("lecture")
+        .expect("message");
+    assert_eq!(read.pgp, PgpState::Encrypted);
+    assert_eq!(read.pgp_detail, stored.pgp_detail);
+}
+
+#[test]
+fn a_message_without_pgp_detail_reads_back_with_none() {
+    let store = open();
+    let stored = message(1, "t1", "Camille", "Clair", 1);
+    store.upsert_message(&stored).expect("insertion");
+    let read = store
+        .get_message("perso", "INBOX", 1)
+        .expect("lecture")
+        .expect("message");
+    assert_eq!(read.pgp_detail, None);
 }

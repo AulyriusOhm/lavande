@@ -39,6 +39,10 @@ pub enum AccountSecrets {
         client_secret: String,
         refresh_token: String,
     },
+    /// Clé privée OpenPGP armored, rangée par empreinte (`pgp:<EMPREINTE>`).
+    Pgp {
+        secret_key: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ComposeDraft } from "@/lib/draft";
 import { baseDraft, emptyDraft, firstRecipient, insertAt } from "@/lib/draft";
+import { htmlToText } from "@/lib/rich-text";
 import type { NoticeData } from "@/components/ui/notice";
 import { ACCOUNTS, ALL_ACCOUNTS } from "@/lib/accounts";
 import type { Account } from "@/lib/accounts";
@@ -11,7 +12,7 @@ import type { Thread } from "@/lib/threads";
 import type { MailSuggestion, Task } from "@/lib/tasks";
 import { EVENTS, TODAY_ISO } from "@/lib/calendar";
 import type { CalendarEvent } from "@/lib/calendar";
-import { usePrefs } from "@/lib/prefs";
+import { activeSignature, usePrefs } from "@/lib/prefs";
 import { usePlanning } from "@/lib/planning-store";
 import { mailApi, errorText } from "@/lib/api";
 import type { LiveEvent } from "@/lib/api";
@@ -976,7 +977,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     (draft: ComposeDraft) => {
       if (mode === "api") {
         mailApi
-          .send(draft.account, sendInputOf(draft))
+          .send(draft.account, sendInputOf(draft, activeSignature(prefs.signatures, draft.account)))
           .then(() => {
             setComposeOpen(false);
             setComposeDraft(null);
@@ -996,7 +997,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       if (!sender) return;
       const now = new Date();
       const time = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-      const body = draft.body.split("\n").filter((line) => line.trim() !== "");
+      const body = htmlToText(draft.body).split("\n").filter((line) => line.trim() !== "");
       const preview = body.find((line) => line.trim() !== "---" && !line.startsWith(">")) ?? "";
       const mail: Mail = {
         id: `sent-${now.getTime()}`,
@@ -1027,7 +1028,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       notify("Message envoyé");
       composeBus.current?.post({ kind: "sent" });
     },
-    [accounts, mode, notify],
+    [accounts, mode, notify, prefs.signatures],
   );
   sendDraftRef.current = sendDraft;
 

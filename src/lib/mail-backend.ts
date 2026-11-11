@@ -10,6 +10,7 @@ import type { Account } from "@/lib/accounts";
 import type { ComposeDraft } from "@/lib/draft";
 import type { FolderId, Mail } from "@/lib/mail";
 import { TONES, folderLabel } from "@/lib/mail";
+import { ensureHtml, htmlToText } from "@/lib/rich-text";
 
 export type MailMode = "api" | "demo";
 
@@ -220,6 +221,7 @@ export function messageToMail(
     unread: message.flags.unread,
     starred: message.flags.starred,
     pgp: message.pgp,
+    pgp_detail: message.pgp_detail ?? null,
     attachments: message.attachments.map((file) => ({ name: file.filename, size: size(file.size) })),
     tone: toneOf(message.from.email),
   };
@@ -261,15 +263,23 @@ export function splitAddresses(value: string): string[] {
     .filter(Boolean);
 }
 
-export function sendInputOf(draft: ComposeDraft): SendInput {
+export function sendInputOf(draft: ComposeDraft, signatureHtml?: string | null): SendInput {
   const recipients = (value: string) =>
     splitAddresses(value).map((email) => ({ name: null, email }));
+  const withSignature = draft.includeSignature !== false && Boolean(signatureHtml?.trim());
+  const bodyHtml = ensureHtml(draft.body);
+  const bodyText = htmlToText(draft.body);
+  const html = withSignature ? `${bodyHtml}<br>${signatureHtml}` : bodyHtml;
+  const text = withSignature ? `${bodyText}\n\n${htmlToText(signatureHtml ?? "")}` : bodyText;
   return {
     to: recipients(draft.to),
     cc: recipients(draft.cc),
     bcc: recipients(draft.cci),
     subject: draft.subject.trim() || "(sans objet)",
-    text: draft.body,
+    text,
+    ...(html ? { html } : {}),
+    pgp_encrypt: draft.pgpEncrypt,
+    pgp_sign: draft.pgpSign,
     ...(draft.inReplyTo ? { in_reply_to: draft.inReplyTo } : {}),
     ...(draft.references?.length ? { references: draft.references } : {}),
   };

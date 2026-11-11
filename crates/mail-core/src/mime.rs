@@ -7,6 +7,7 @@ use mail_parser::{Address as RawAddress, HeaderValue, MessageParser, MimeHeaders
 
 use crate::error::MailError;
 use crate::model::{Address, AttachmentMeta, PgpState};
+use crate::pgp::{self, PgpDetail, PgpKeyring};
 
 const PREVIEW_LEN: usize = 200;
 
@@ -24,7 +25,48 @@ pub struct ParsedMessage {
     pub body_html: Option<String>,
     pub attachments: Vec<AttachmentMeta>,
     pub pgp: PgpState,
+    pub pgp_detail: Option<PgpDetail>,
     pub preview: String,
+}
+
+/// Parses a message and, when it is PGP/MIME, verifies its signature and
+/// decrypts its body with the keys of `keyring`. The cleartext body of an
+/// encrypted message replaces the ciphertext; the envelope headers stay those
+/// of the outer message.
+pub fn parse_message_with_keys(
+    raw: &[u8],
+    keyring: &PgpKeyring,
+) -> Result<ParsedMessage, MailError> {
+    let mut parsed = parse_message(raw)?;
+    match parsed.pgp {
+        PgpState::None => {}
+        PgpState::Signed => parsed.pgp_detail = Some(pgp::mime::verify(raw, keyring)),
+        PgpState::Encrypted => {
+            let opened = pgp::mime::open(raw, keyring);
+            parsed.pgp_detail = Some(opened.detail);
+            match opened.entity {
+                Some(entity) => clear_body(&mut parsed, &entity),
+                None => {
+                    parsed.body_text = None;
+                    parsed.body_html = None;
+                    parsed.attachments.clear();
+                    parsed.preview = String::new();
+                }
+            }
+        }
+    }
+    Ok(parsed)
+}
+
+/// Replaces the body of `parsed` with the one of the decrypted MIME entity.
+fn clear_body(parsed: &mut ParsedMessage, entity: &[u8]) {
+    let Ok(inner) = parse_message(entity) else {
+        return;
+    };
+    parsed.body_text = inner.body_text;
+    parsed.body_html = inner.body_html;
+    parsed.attachments = inner.attachments;
+    parsed.preview = inner.preview;
 }
 
 /// Parses a raw RFC 5322 message. Decodes transfer encodings and RFC 2047
@@ -77,6 +119,7 @@ pub fn parse_message(raw: &[u8]) -> Result<ParsedMessage, MailError> {
         body_html,
         attachments,
         pgp: pgp_state(&message),
+        pgp_detail: None,
         preview,
     })
 }

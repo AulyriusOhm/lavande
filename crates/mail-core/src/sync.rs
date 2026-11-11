@@ -4,6 +4,7 @@ use crate::config::{AccountConfig, FolderMapping};
 use crate::error::MailError;
 use crate::imap::{self, SyncReport};
 use crate::model::FolderRole;
+use crate::pgp::PgpKeyring;
 use crate::store::Store;
 use crate::tls::TlsOptions;
 
@@ -26,6 +27,17 @@ pub async fn sync_account_with(
     mapping: &FolderMapping,
     tls_options: &TlsOptions,
 ) -> Result<Vec<(String, SyncReport)>, MailError> {
+    sync_account_keys(store, cfg, mapping, tls_options, &PgpKeyring::new()).await
+}
+
+/// `sync_account_with` plus the PGP keyring encrypted bodies are decrypted with.
+pub async fn sync_account_keys(
+    store: &Store,
+    cfg: &AccountConfig,
+    mapping: &FolderMapping,
+    tls_options: &TlsOptions,
+    keys: &PgpKeyring,
+) -> Result<Vec<(String, SyncReport)>, MailError> {
     cfg.validate()?;
     store.upsert_account(&cfg.id, &cfg.label, &cfg.email)?;
 
@@ -46,7 +58,7 @@ pub async fn sync_account_with(
         if folder.role == FolderRole::Other {
             continue;
         }
-        match imap::sync_folder(&mut session, store, &cfg.id, &folder.path, mapping).await {
+        match imap::sync_folder(&mut session, store, &cfg.id, &folder.path, mapping, keys).await {
             Ok(report) => reports.push((folder.path.clone(), report)),
             Err(error) => {
                 tracing::warn!(account = %cfg.id, folder = %folder.path, %error, "dossier non synchronisé");

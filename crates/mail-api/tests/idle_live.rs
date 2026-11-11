@@ -101,6 +101,8 @@ async fn idle_pushes_new_mail_without_a_manual_sync() {
         in_reply_to: None,
         references: Vec::new(),
         attachments: Vec::new(),
+        pgp_sign: false,
+        pgp_encrypt: false,
     };
     smtp::send_with(&config, &message, &tls())
         .await

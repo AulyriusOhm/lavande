@@ -373,6 +373,68 @@ async fn sent_message_is_found_by_a_sync() {
     );
 }
 
+async fn generate_key(client: &Client, daemon: &Daemon, email: &str) -> Value {
+    let response = client
+        .post(daemon.url("/api/pgp/keys/generate"))
+        .json(&json!({ "name": "Live", "email": email }))
+        .send()
+        .await
+        .expect("POST /api/pgp/keys/generate");
+    let status = response.status();
+    let body = response.text().await.expect("corps");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    serde_json::from_str(&body).expect("clé")
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn a_pgp_message_is_decrypted_and_verified_by_the_daemon() {
+    let daemon = Daemon::start().await;
+    let client = daemon.client();
+    add_account(&client, &daemon).await;
+
+    let key = generate_key(&client, &daemon, &account().email).await;
+    let fingerprint = key["key"]["fingerprint"].as_str().expect("empreinte");
+    let listed = client
+        .get(daemon.url("/api/pgp/keys"))
+        .send()
+        .await
+        .expect("GET keys")
+        .json::<Value>()
+        .await
+        .expect("clés");
+    assert_eq!(listed["keys"][0]["fingerprint"], fingerprint);
+
+    let subject = unique("[live-api-pgp] scelle");
+    let response = client
+        .post(daemon.url(&format!("/api/accounts/{ACCOUNT}/send")))
+        .json(&json!({
+            "to": [{ "email": account().email }],
+            "cc": [], "bcc": [],
+            "subject": subject,
+            "text": "corps chiffre",
+            "pgp_sign": true,
+            "pgp_encrypt": true,
+        }))
+        .send()
+        .await
+        .expect("POST send");
+    let status = response.status();
+    let body = response.text().await.expect("corps");
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    sync(&client, &daemon, Some(INBOX)).await;
+    let inbox = threads(&client, &daemon, INBOX).await;
+    let uid = find(&inbox, &subject);
+    let stored = message(&client, &daemon, INBOX, uid).await;
+    assert_eq!(stored["pgp"], "encrypted", "{stored}");
+    assert_eq!(stored["body_text"], "corps chiffre", "{stored}");
+    let detail = &stored["pgp_detail"];
+    assert_eq!(detail["decrypted"], true, "{stored}");
+    assert_eq!(detail["verified"], true, "{stored}");
+    assert_eq!(detail["signer"], key["key"]["user_id"].clone(), "{stored}");
+}
+
 #[tokio::test]
 #[ignore = "requires scripts/mail-test-server.sh start"]
 async fn flags_reach_the_server() {

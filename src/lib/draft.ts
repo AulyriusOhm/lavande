@@ -1,3 +1,5 @@
+import { isHtmlEmpty } from "@/lib/rich-text";
+
 export type ComposeDraft = {
   to: string;
   cc: string;
@@ -7,6 +9,7 @@ export type ComposeDraft = {
   account: string;
   pgpEncrypt: boolean;
   pgpSign: boolean;
+  includeSignature?: boolean;
   threadId?: string;
   inReplyTo?: string;
   references?: string[];
@@ -22,9 +25,9 @@ export function firstRecipient(value: string) {
 }
 
 export function emptyDraft(draft: ComposeDraft) {
-  return !draft.to.trim() && !draft.cc.trim() && !draft.cci.trim() && !draft.subject.trim() && !draft.body.trim();
+  return !draft.to.trim() && !draft.cc.trim() && !draft.cci.trim() && !draft.subject.trim() && isHtmlEmpty(draft.body);
 }
 
 export function baseDraft(account: string, pgpEncrypt: boolean, pgpSign: boolean, threadId?: string): ComposeDraft {
-  return { to: "", cc: "", cci: "", subject: "", body: "", account, pgpEncrypt, pgpSign, threadId };
+  return { to: "", cc: "", cci: "", subject: "", body: "", account, pgpEncrypt, pgpSign, includeSignature: true, threadId };
 }

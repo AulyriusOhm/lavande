@@ -10,6 +10,7 @@ pub mod dto;
 pub mod error;
 pub mod events;
 pub mod oauth_flow;
+pub mod pgp_keys;
 pub mod private_file;
 pub mod routes;
 pub mod secrets;
@@ -56,6 +57,7 @@ pub fn app(state: Arc<AppState>) -> Router {
         .merge(routes::discover::router())
         .merge(routes::mail::router())
         .merge(routes::oauth::router())
+        .merge(routes::pgp::router())
         .merge(routes::search::router())
         .merge(routes::events::router())
         .layer(axum::middleware::from_fn_with_state(

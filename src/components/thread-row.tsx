@@ -227,7 +227,7 @@ export function ThreadRow({
                   <span className="truncate">{pillLabel}</span>
                 </span>
               ) : null}
-              <PgpBadge state={mail.pgp} compact className="ml-auto" />
+              <PgpBadge state={mail.pgp} detail={mail.pgp_detail} compact className="ml-auto" />
             </div>
           )}
         </div>

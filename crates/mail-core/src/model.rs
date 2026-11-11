@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::pgp::PgpDetail;
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Address {
     pub name: Option<String>,
@@ -117,6 +119,8 @@ pub struct Message {
     pub flags: Flags,
     pub size: u32,
     pub pgp: PgpState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pgp_detail: Option<PgpDetail>,
     pub preview: String,
     pub body_text: Option<String>,
     pub body_html: Option<String>,

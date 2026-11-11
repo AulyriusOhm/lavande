@@ -52,6 +52,13 @@ export type ApiAttachment = {
   inline: boolean;
 };
 
+export type ApiPgpDetail = {
+  verified: boolean | null;
+  signer: string | null;
+  decrypted: boolean;
+  error: string | null;
+};
+
 export type ApiMessage = {
   account_id: string;
   folder_path: string;
@@ -69,6 +76,7 @@ export type ApiMessage = {
   flags: ApiFlags;
   size: number;
   pgp: ApiPgpState;
+  pgp_detail?: ApiPgpDetail | null;
   preview: string;
   body_text: string | null;
   body_html: string | null;
@@ -227,6 +235,8 @@ export type SendInput = {
   subject: string;
   text: string;
   html?: string;
+  pgp_encrypt?: boolean;
+  pgp_sign?: boolean;
   in_reply_to?: string;
   references?: string[];
   attachments?: { filename: string; mime: string; data_base64: string }[];
@@ -317,7 +327,7 @@ function transport(error: unknown): ApiError {
   return new ApiError(error instanceof Error ? error.message : "échec réseau", "network", 0);
 }
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), options.timeout ?? SHORT_TIMEOUT);
   const relay = () => controller.abort();

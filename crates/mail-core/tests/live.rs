@@ -22,7 +22,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use futures::TryStreamExt;
 use lavande_mail::config::{AccountConfig, AuthConfig, Encryption, Endpoint, FolderMapping};
 use lavande_mail::imap::{self, ImapSession};
-use lavande_mail::model::{Address, Flags, FolderRole, Message};
+use lavande_mail::model::{Address, Flags, FolderRole, Message, PgpState};
+use lavande_mail::pgp::{self, PgpKeyring};
 use lavande_mail::smtp::{self, OutgoingMessage};
 use lavande_mail::tls::TlsOptions;
 use lavande_mail::{MailError, Store};
@@ -121,6 +122,7 @@ async fn sync(cfg: &AccountConfig, store: &Store, folder: &str) -> imap::SyncRep
             ACCOUNT,
             folder,
             &FolderMapping::default(),
+            &PgpKeyring::new(),
         )
         .await,
     )
@@ -144,6 +146,8 @@ async fn send(cfg: &AccountConfig, subject: &str, body: &str, reply_to: Option<&
         in_reply_to: reply_to.map(str::to_string),
         references: reply_to.map(|id| vec![id.to_string()]).unwrap_or_default(),
         attachments: Vec::new(),
+        pgp_sign: false,
+        pgp_encrypt: false,
     };
     checked(
         "smtp send",
@@ -260,6 +264,7 @@ async fn smtp_send_then_sync_parses_message() {
             ACCOUNT,
             INBOX,
             &FolderMapping::default(),
+            &PgpKeyring::new(),
         )
         .await,
     );
@@ -283,12 +288,77 @@ async fn smtp_send_then_sync_parses_message() {
             ACCOUNT,
             INBOX,
             &FolderMapping::default(),
+            &PgpKeyring::new(),
         )
         .await,
     );
     assert_eq!(report.inserted, 0);
     assert_eq!(report.flags_updated, 0);
     assert_eq!(report.removed, 0);
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn a_pgp_message_comes_back_decrypted_and_verified() {
+    let cfg = account();
+    let store = store(&cfg);
+    let subject = unique("[live-pgp] scelle");
+    let key = pgp::generate_key("Live", &cfg.email).expect("keygen");
+    let secret = key
+        .secret()
+        .expect("secret half")
+        .to_armored_string(Default::default())
+        .expect("armor");
+
+    let message = OutgoingMessage {
+        from: Address {
+            name: Some("Live".to_string()),
+            email: cfg.email.clone(),
+        },
+        to: vec![Address {
+            name: None,
+            email: cfg.email.clone(),
+        }],
+        cc: Vec::new(),
+        bcc: Vec::new(),
+        subject: subject.clone(),
+        text: "corps chiffre".to_string(),
+        html: None,
+        in_reply_to: None,
+        references: Vec::new(),
+        attachments: Vec::new(),
+        pgp_sign: true,
+        pgp_encrypt: true,
+    };
+    let sealed = pgp::mime::seal(&message, key.secret(), &[key.public()]).expect("seal");
+    checked(
+        "smtp send sealed",
+        smtp::send_raw_with(&cfg, &sealed.raw, &sealed.envelope, &tls_options()).await,
+    );
+
+    let mut keyring = PgpKeyring::new();
+    keyring.insert_armored(&secret).expect("import secret");
+    let mut session = connect(&cfg).await;
+    checked(
+        "sync sealed",
+        imap::sync_folder(
+            &mut session,
+            &store,
+            ACCOUNT,
+            INBOX,
+            &FolderMapping::default(),
+            &keyring,
+        )
+        .await,
+    );
+
+    let stored = find(&store, INBOX, &subject);
+    assert_eq!(stored.pgp, PgpState::Encrypted);
+    assert_eq!(stored.body_text.as_deref(), Some("corps chiffre"));
+    let detail = stored.pgp_detail.expect("pgp detail");
+    assert!(detail.decrypted, "{detail:?}");
+    assert_eq!(detail.verified, Some(true), "{detail:?}");
+    assert_eq!(detail.signer.as_deref(), Some(key.info().user_id.as_str()));
 }
 
 #[tokio::test]
@@ -308,6 +378,7 @@ async fn flags_reach_the_server() {
             ACCOUNT,
             INBOX,
             &FolderMapping::default(),
+            &PgpKeyring::new(),
         )
         .await,
     );
@@ -452,13 +523,23 @@ async fn empty_folder_clears_both_sides() {
             ACCOUNT,
             INBOX,
             &FolderMapping::default(),
+            &PgpKeyring::new(),
         )
         .await,
     );
     let uid = find(&store, INBOX, &subject).uid;
     checked(
         "move to Purge",
-        imap::move_message(&mut session, &store, ACCOUNT, INBOX, uid, "Purge").await,
+        imap::move_message(
+            &mut session,
+            &store,
+            ACCOUNT,
+            INBOX,
+            uid,
+            "Purge",
+            &PgpKeyring::new(),
+        )
+        .await,
     );
 
     let removed = checked(
@@ -506,6 +587,7 @@ async fn empty_folder_counts_a_never_synced_folder() {
             ACCOUNT,
             INBOX,
             &FolderMapping::default(),
+            &PgpKeyring::new(),
         )
         .await,
     );
@@ -617,6 +699,7 @@ async fn move_keeps_store_in_step_with_server() {
             ACCOUNT,
             INBOX,
             &FolderMapping::default(),
+            &PgpKeyring::new(),
         )
         .await,
     );
@@ -624,7 +707,16 @@ async fn move_keeps_store_in_step_with_server() {
 
     checked(
         "move to Archive",
-        imap::move_message(&mut session, &store, ACCOUNT, INBOX, uid, "Archive").await,
+        imap::move_message(
+            &mut session,
+            &store,
+            ACCOUNT,
+            INBOX,
+            uid,
+            "Archive",
+            &PgpKeyring::new(),
+        )
+        .await,
     );
     assert!(
         checked("inbox lookup", store.get_message(ACCOUNT, INBOX, uid)).is_none(),
@@ -650,7 +742,15 @@ async fn move_keeps_store_in_step_with_server() {
     );
     checked(
         "fetch body",
-        imap::fetch_body(&mut session, &store, ACCOUNT, "Archive", archived.uid).await,
+        imap::fetch_body(
+            &mut session,
+            &store,
+            ACCOUNT,
+            "Archive",
+            archived.uid,
+            &PgpKeyring::new(),
+        )
+        .await,
     );
 
     let mut raw = connect(&cfg).await;

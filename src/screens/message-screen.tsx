@@ -7,7 +7,6 @@ import {
   CornerUpLeft,
   CornerUpRight,
   Download,
-  Lock,
   Paperclip,
   RotateCcw,
   ShieldCheck,
@@ -16,11 +15,13 @@ import {
 } from "lucide-react";
 import type { Mail } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
+import { messagePgpStatus } from "@/lib/pgp";
 import type { Thread } from "@/lib/threads";
 import { cn } from "@/lib/utils";
 import { Avatar, IconButton } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { MailBody } from "@/components/mail-body";
+import { PgpNotice, PgpStatusBadge } from "@/components/ui/pgp-badge";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { MeshGlow } from "@/components/ui/backdrops";
 
@@ -58,21 +59,12 @@ export function MessageScreen({
   const inTrash = folderMail.folder === "trash";
   const inArchive = folderMail.folder === "archive";
 
-  const pgpBanner = (message: Mail) =>
-    message.pgp === "none" ? null : (
-      <div className="mt-3 flex items-center gap-2 rounded-2xl bg-accent-soft/80 px-3 py-2">
-        {message.pgp === "encrypted" ? (
-          <Lock className="size-3.5 shrink-0 text-accent-ink" strokeWidth={2.6} />
-        ) : (
-          <ShieldCheck className="size-3.5 shrink-0 text-emerald-700 dark:text-emerald-300" strokeWidth={2.6} />
-        )}
-        <p className="text-[10.5px] leading-snug font-semibold text-accent-ink">
-          {message.pgp === "encrypted"
-            ? "Chiffré avec ta clé publique · déchiffré localement par le trousseau"
-            : "Signature PGP vérifiée sur la clé de l'expéditeur"}
-        </p>
-      </div>
-    );
+  const mailPgp = messagePgpStatus(mail);
+
+  const pgpBanner = (message: Mail) => {
+    const status = messagePgpStatus(message);
+    return status ? <PgpNotice status={status} /> : null;
+  };
 
   const attachmentList = (message: Mail) => {
     if (!message.attachments?.length) return null;
@@ -350,7 +342,17 @@ export function MessageScreen({
           )}
         </BlurFade>
 
-        {mail.pgp !== "none" && <BlurFade delay={0.09}>{pgpBanner(mail)}</BlurFade>}
+        {mailPgp && (
+          <BlurFade delay={0.09}>
+            <div className="mt-3 flex items-center gap-2">
+              <PgpStatusBadge status={mailPgp} />
+              <span className="text-[10.5px] font-semibold text-ink-muted">
+                {mail.pgp === "encrypted" ? "message chiffré" : "message signé"}
+              </span>
+            </div>
+            <PgpNotice status={mailPgp} />
+          </BlurFade>
+        )}
 
         <BlurFade delay={0.12}>
           <MailBody className="mt-5" html={mail.html} paragraphs={mail.body} />

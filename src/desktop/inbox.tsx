@@ -31,7 +31,8 @@ import { folderLabel } from "@/lib/mail";
 import type { Thread } from "@/lib/threads";
 import { threadsInFolder } from "@/lib/threads";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
-import { MY_KEY, PGP_STATE, keyState } from "@/lib/pgp";
+import { PGP_STATE, formatKeyDate, keyLabel, keyState, shortFingerprint, type PgpKey } from "@/lib/pgp";
+import { listKeys } from "@/lib/pgp-api";
 import { useMailStore } from "@/lib/store";
 import { useEscapeLayer } from "@/desktop/escape";
 import { useTheme } from "@/lib/theme";
@@ -414,6 +415,7 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [summaryOpen, setSummaryOpen] = useState(true);
   const [collapsedPrevious, setCollapsedPrevious] = useState<string[]>([]);
+  const [pgpKeys, setPgpKeys] = useState<PgpKey[] | null>(null);
 
   useEscapeLayer(Boolean(openMail), () => closeMessage());
 
@@ -430,13 +432,27 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
     setFilter("all");
   }, [folder, folderPath, account]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    listKeys(controller.signal)
+      .then((loaded) => {
+        if (!controller.signal.aborted) setPgpKeys(loaded);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setPgpKeys([]);
+      });
+    return () => controller.abort();
+  }, []);
+
   const openById = (id: string) => {
     const mail = mails.find((entry) => entry.id === id);
     if (mail) openMessage(mail);
   };
 
-  const pgpState = keyState(MY_KEY);
-  const pgpTone: "green" | "amber" | "rose" = pgpState === "valid" ? "green" : pgpState === "expired" ? "amber" : "rose";
+  const myKey = pgpKeys?.find((key) => key.has_secret) ?? null;
+  const pgpState = myKey ? keyState(myKey) : null;
+  const pgpTone: "green" | "amber" | "rose" =
+    pgpState === "expired" ? "amber" : pgpState === "revoked" ? "rose" : "green";
 
   const mail = openMail;
   const previous = openThread && mail ? openThread.messages.filter((message) => message.id !== mail.id) : [];
@@ -593,24 +609,41 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                   <div className="flex items-center gap-1.5">
                     <Lock className="size-3.5 shrink-0 text-accent-ink" strokeWidth={2.6} />
                     <p className="text-[11px] font-bold text-ink">PGP</p>
-                    <Badge tone={pgpTone} className="ml-auto">
-                      {PGP_STATE[pgpState].label}
-                    </Badge>
+                    {myKey && pgpState ? (
+                      <Badge tone={pgpTone} className="ml-auto">
+                        {PGP_STATE[pgpState].label}
+                      </Badge>
+                    ) : (
+                      <span className="ml-auto text-[10px] font-semibold text-ink-muted">
+                        {pgpKeys === null ? "chargement…" : "aucune clé"}
+                      </span>
+                    )}
                   </div>
-                  <p className="mt-1.5 truncate text-[10.5px] font-semibold text-ink-muted">
-                    {MY_KEY.name} · <span className="tabular-nums">{MY_KEY.fingerprint.slice(-9)}</span>
-                  </p>
-                  <p className="mt-0.5 text-[10px] font-medium text-ink-muted">Expire le {MY_KEY.expires}</p>
-                  {pgpState !== "valid" ? (
-                    <p
-                      className={cn(
-                        "mt-1.5 text-[10px] font-semibold",
-                        pgpTone === "amber" ? "text-amber-700" : "text-rose-600",
-                      )}
-                    >
-                      {PGP_STATE[pgpState].hint}
+                  {myKey && pgpState ? (
+                    <>
+                      <p className="mt-1.5 truncate text-[10.5px] font-semibold text-ink-muted">
+                        {keyLabel(myKey)} ·{" "}
+                        <span className="tabular-nums">{shortFingerprint(myKey.fingerprint)}</span>
+                      </p>
+                      <p className="mt-0.5 text-[10px] font-medium text-ink-muted">
+                        {myKey.expires_at ? `Expire le ${formatKeyDate(myKey.expires_at)}` : "Sans expiration"}
+                      </p>
+                      {pgpState !== "valid" ? (
+                        <p
+                          className={cn(
+                            "mt-1.5 text-[10px] font-semibold",
+                            pgpTone === "amber" ? "text-amber-700" : "text-rose-600",
+                          )}
+                        >
+                          {PGP_STATE[pgpState].hint}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p className="mt-1.5 text-[10px] font-medium text-ink-muted">
+                      {pgpKeys === null ? "Chargement de la clé…" : "Aucune clé PGP"}
                     </p>
-                  ) : null}
+                  )}
                 </div>
               </div>
             </div>
@@ -805,8 +838,13 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                         <ShieldCheck className="size-4 shrink-0" strokeWidth={2.6} />
                       )}
                       <p className="text-[12.5px] font-semibold">
-                        {mail.pgp === "encrypted" ? "Chiffré de bout en bout" : "Signature vérifiée"} ·{" "}
-                        <span className="tabular-nums">{MY_KEY.fingerprint.slice(-9)}</span>
+                        {mail.pgp === "encrypted" ? "Chiffré de bout en bout" : "Signature vérifiée"}
+                        {myKey ? (
+                          <>
+                            {" · "}
+                            <span className="tabular-nums">{shortFingerprint(myKey.fingerprint)}</span>
+                          </>
+                        ) : null}
                       </p>
                     </div>
                   ) : null}
