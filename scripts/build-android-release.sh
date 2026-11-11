@@ -15,6 +15,8 @@ source scripts/android-env.sh
 
 # Verrou distribution : mode api forcé et fixtures de maquette absentes du bundle.
 export VITE_DISTRIBUTION=1
+# Plateforme : les modules MCP sont aliasés vers des stubs, donc absents du bundle.
+export VITE_PLATFORM=android
 
 ALIAS="${LAVANDE_KEY_ALIAS:-lavande}"
 PASSWORD="${LAVANDE_KEYSTORE_PASSWORD:-lavande}"

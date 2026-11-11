@@ -35,11 +35,24 @@ const apiProxy = {
   ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
 };
 
+const srcDir = path.resolve(import.meta.dirname, "./src");
+
+// Sur Android, le code MCP n'est pas masqué : les modules sont remplacés à la
+// résolution par des stubs vides, donc absents du bundle.
+const alias =
+  process.env.VITE_PLATFORM === "android"
+    ? [
+        { find: "@/lib/mcp", replacement: path.join(srcDir, "lib/mcp.android.ts") },
+        { find: "@/screens/mcp-screen", replacement: path.join(srcDir, "screens/mcp-screen.android.tsx") },
+        { find: "@", replacement: srcDir },
+      ]
+    : { "@": srcDir };
+
 export default defineConfig({
   base: process.env.VITE_BASE ?? "/",
   plugins: [react(), tailwindcss()],
   resolve: {
-    alias: { "@": path.resolve(import.meta.dirname, "./src") },
+    alias,
   },
   server: {
     host: "0.0.0.0",

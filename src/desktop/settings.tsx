@@ -69,6 +69,9 @@ const KEY_TONE = { valid: "green", expired: "amber", revoked: "rose" } as const;
 
 const SCOPE_TONE = { lecture: "neutral", écriture: "amber", signature: "green" } as const;
 
+const MCP_SECTIONS =
+  import.meta.env.VITE_PLATFORM === "android" ? [] : ([{ id: "assistant", label: "Serveurs MCP" }] as const);
+
 const SECTIONS = [
   { id: "comptes", label: "Comptes" },
   { id: "signatures", label: "Signatures" },
@@ -79,7 +82,7 @@ const SECTIONS = [
   { id: "ia", label: "IA" },
   { id: "resumes", label: "Résumés" },
   { id: "taches-ia", label: "Suggestions de tâches" },
-  { id: "assistant", label: "Serveurs MCP" },
+  ...MCP_SECTIONS,
   { id: "mise-a-jour", label: "Mise à jour" },
   { id: "apropos", label: "À propos" },
 ] as const;
@@ -920,13 +923,15 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                       checked={attachPublicKey}
                       onChange={setAttachPublicKey}
                     />
-                    <ToggleRow
-                      icon={<ShieldCheck className="size-4" />}
-                      label="Confirmer avant chaque envoi"
-                      hint="mail.send et les écritures attendent ta validation"
-                      checked={mcpConfirmSend}
-                      onChange={setMcpConfirmSend}
-                    />
+                    {import.meta.env.VITE_PLATFORM === "android" ? null : (
+                      <ToggleRow
+                        icon={<ShieldCheck className="size-4" />}
+                        label="Confirmer avant chaque envoi"
+                        hint="mail.send et les écritures attendent ta validation"
+                        checked={mcpConfirmSend}
+                        onChange={setMcpConfirmSend}
+                      />
+                    )}
                   </Surface>
                 </div>
 
@@ -1215,132 +1220,134 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                 </Surface>
               </Block>
 
-              <Block
-                id="assistant"
-                label="Serveurs MCP"
-                hint={`${counts.activeServers} actifs · ${counts.activeTools} outils`}
-              >
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { label: "Serveurs actifs", value: counts.activeServers, icon: Blocks },
-                    { label: "Outils actifs", value: counts.activeTools, icon: Terminal },
-                    { label: "Outils installés", value: counts.installedTools, icon: Globe },
-                  ].map((stat) => {
-                    const Icon = stat.icon;
-                    return (
-                      <Surface key={stat.label} className="p-3">
-                        <Icon className="size-3.5 text-accent-ink" />
-                        <p className="mt-1.5 text-[19px] leading-none font-extrabold tracking-[-0.035em] text-ink">
-                          <NumberTicker value={stat.value} />
-                        </p>
-                        <p className="mt-0.5 text-[10.5px] font-semibold text-ink-muted">{stat.label}</p>
-                      </Surface>
-                    );
-                  })}
-                </div>
+              {import.meta.env.VITE_PLATFORM === "android" ? null : (
+                <Block
+                  id="assistant"
+                  label="Serveurs MCP"
+                  hint={`${counts.activeServers} actifs · ${counts.activeTools} outils`}
+                >
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { label: "Serveurs actifs", value: counts.activeServers, icon: Blocks },
+                      { label: "Outils actifs", value: counts.activeTools, icon: Terminal },
+                      { label: "Outils installés", value: counts.installedTools, icon: Globe },
+                    ].map((stat) => {
+                      const Icon = stat.icon;
+                      return (
+                        <Surface key={stat.label} className="p-3">
+                          <Icon className="size-3.5 text-accent-ink" />
+                          <p className="mt-1.5 text-[19px] leading-none font-extrabold tracking-[-0.035em] text-ink">
+                            <NumberTicker value={stat.value} />
+                          </p>
+                          <p className="mt-0.5 text-[10.5px] font-semibold text-ink-muted">{stat.label}</p>
+                        </Surface>
+                      );
+                    })}
+                  </div>
 
-                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                  {MCP_SCOPES.map((scope) => (
-                    <span key={scope.id} className="inline-flex items-center gap-1.5">
-                      <Badge tone={SCOPE_TONE[scope.id]}>{scope.id}</Badge>
-                      <span className="text-[10.5px] font-medium text-ink-muted">{scope.hint}</span>
-                    </span>
-                  ))}
-                </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                    {MCP_SCOPES.map((scope) => (
+                      <span key={scope.id} className="inline-flex items-center gap-1.5">
+                        <Badge tone={SCOPE_TONE[scope.id]}>{scope.id}</Badge>
+                        <span className="text-[10.5px] font-medium text-ink-muted">{scope.hint}</span>
+                      </span>
+                    ))}
+                  </div>
 
-                <Surface className="mt-3 divide-y divide-line overflow-hidden">
-                  {MCP_SERVERS.map((server) => {
-                    const isOn = enabled[server.id];
-                    const openTools = openServer === server.id;
-                    return (
-                      <div key={server.id}>
-                        <div className="flex items-center gap-3 px-3.5 py-2.5">
-                          <span
-                            className={cn(
-                              "size-2 shrink-0 rounded-full",
-                              isOn ? "bg-emerald-500" : "bg-ink-muted/40",
-                            )}
-                          />
-                          <div className="min-w-0 flex-1 leading-tight">
-                            <p className="truncate text-[12px] font-bold text-ink">{server.name}</p>
-                            <p className="truncate text-[10.5px] font-medium text-ink-muted">{server.description}</p>
-                          </div>
-                          <span className="hidden shrink-0 items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[9.5px] font-bold tracking-wide text-ink-muted uppercase sm:inline-flex">
-                            {server.transport === "stdio" ? (
-                              <Terminal className="size-2.5" />
-                            ) : (
-                              <Globe className="size-2.5" />
-                            )}
-                            {server.transport}
-                          </span>
-                          <button
-                            type="button"
-                            aria-expanded={openTools}
-                            onClick={() => setOpenServer(openTools ? null : server.id)}
-                            className="focus-ring flex shrink-0 items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[9.5px] font-bold text-ink-muted tabular-nums transition-colors hover:text-ink-soft"
-                          >
-                            {server.tools.length} outils
-                            <ChevronDown
-                              className={cn("size-2.5 transition-transform duration-200", openTools && "rotate-180")}
+                  <Surface className="mt-3 divide-y divide-line overflow-hidden">
+                    {MCP_SERVERS.map((server) => {
+                      const isOn = enabled[server.id];
+                      const openTools = openServer === server.id;
+                      return (
+                        <div key={server.id}>
+                          <div className="flex items-center gap-3 px-3.5 py-2.5">
+                            <span
+                              className={cn(
+                                "size-2 shrink-0 rounded-full",
+                                isOn ? "bg-emerald-500" : "bg-ink-muted/40",
+                              )}
                             />
-                          </button>
-                          <Switch
-                            checked={isOn}
-                            onChange={(value) => setMcpEnabled(server.id, value)}
-                            label={server.name}
-                          />
+                            <div className="min-w-0 flex-1 leading-tight">
+                              <p className="truncate text-[12px] font-bold text-ink">{server.name}</p>
+                              <p className="truncate text-[10.5px] font-medium text-ink-muted">{server.description}</p>
+                            </div>
+                            <span className="hidden shrink-0 items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[9.5px] font-bold tracking-wide text-ink-muted uppercase sm:inline-flex">
+                              {server.transport === "stdio" ? (
+                                <Terminal className="size-2.5" />
+                              ) : (
+                                <Globe className="size-2.5" />
+                              )}
+                              {server.transport}
+                            </span>
+                            <button
+                              type="button"
+                              aria-expanded={openTools}
+                              onClick={() => setOpenServer(openTools ? null : server.id)}
+                              className="focus-ring flex shrink-0 items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[9.5px] font-bold text-ink-muted tabular-nums transition-colors hover:text-ink-soft"
+                            >
+                              {server.tools.length} outils
+                              <ChevronDown
+                                className={cn("size-2.5 transition-transform duration-200", openTools && "rotate-180")}
+                              />
+                            </button>
+                            <Switch
+                              checked={isOn}
+                              onChange={(value) => setMcpEnabled(server.id, value)}
+                              label={server.name}
+                            />
+                          </div>
+                          {openTools ? (
+                            <ul className="space-y-1 border-t border-line/70 bg-surface-2/40 px-3.5 py-2 pl-9">
+                              {server.tools.map((tool) => (
+                                <li key={tool.name} className="flex items-baseline gap-2">
+                                  <code className="shrink-0 text-[10.5px] font-bold text-ink-soft">{tool.name}</code>
+                                  <span className="min-w-0 flex-1 truncate text-[10.5px] font-medium text-ink-muted">
+                                    {tool.description}
+                                  </span>
+                                  <Badge tone={SCOPE_TONE[tool.scope]}>{tool.scope}</Badge>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : null}
                         </div>
-                        {openTools ? (
-                          <ul className="space-y-1 border-t border-line/70 bg-surface-2/40 px-3.5 py-2 pl-9">
-                            {server.tools.map((tool) => (
-                              <li key={tool.name} className="flex items-baseline gap-2">
-                                <code className="shrink-0 text-[10.5px] font-bold text-ink-soft">{tool.name}</code>
-                                <span className="min-w-0 flex-1 truncate text-[10.5px] font-medium text-ink-muted">
-                                  {tool.description}
-                                </span>
-                                <Badge tone={SCOPE_TONE[tool.scope]}>{tool.scope}</Badge>
-                              </li>
-                            ))}
-                          </ul>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </Surface>
+                      );
+                    })}
+                  </Surface>
 
-                <Surface className="mt-3 overflow-x-auto">
-                  <table className="w-full border-collapse text-left">
-                    <thead>
-                      <tr className="border-b border-line bg-surface-2/60 text-[10px] font-bold tracking-[0.16em] text-ink-muted uppercase">
-                        <th className="px-3 py-2 font-bold">Heure</th>
-                        <th className="py-2 pr-3 font-bold">Serveur</th>
-                        <th className="py-2 pr-3 font-bold">Outil</th>
-                        <th className="py-2 pr-3 font-bold">Verdict</th>
-                        <th className="py-2 pr-3 text-right font-bold">Durée</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {MCP_LOG.map((entry) => (
-                        <tr key={entry.time + entry.tool} className="border-b border-line/70 last:border-0">
-                          <td className="px-3 py-2 font-mono text-[11px] font-semibold text-ink-muted tabular-nums">
-                            {entry.time}
-                          </td>
-                          <td className="py-2 pr-3 text-[11.5px] font-semibold text-ink-soft">
-                            {serverName(entry.tool)}
-                          </td>
-                          <td className="py-2 pr-3 font-mono text-[11px] font-bold text-accent-ink">{entry.tool}</td>
-                          <td className="py-2 pr-3">
-                            <Badge tone={entry.status === "succès" ? "green" : "rose"}>{entry.status}</Badge>
-                          </td>
-                          <td className="py-2 pr-3 text-right font-mono text-[10.5px] font-semibold text-ink-muted tabular-nums">
-                            {durationOf(entry)}
-                          </td>
+                  <Surface className="mt-3 overflow-x-auto">
+                    <table className="w-full border-collapse text-left">
+                      <thead>
+                        <tr className="border-b border-line bg-surface-2/60 text-[10px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                          <th className="px-3 py-2 font-bold">Heure</th>
+                          <th className="py-2 pr-3 font-bold">Serveur</th>
+                          <th className="py-2 pr-3 font-bold">Outil</th>
+                          <th className="py-2 pr-3 font-bold">Verdict</th>
+                          <th className="py-2 pr-3 text-right font-bold">Durée</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </Surface>
-              </Block>
+                      </thead>
+                      <tbody>
+                        {MCP_LOG.map((entry) => (
+                          <tr key={entry.time + entry.tool} className="border-b border-line/70 last:border-0">
+                            <td className="px-3 py-2 font-mono text-[11px] font-semibold text-ink-muted tabular-nums">
+                              {entry.time}
+                            </td>
+                            <td className="py-2 pr-3 text-[11.5px] font-semibold text-ink-soft">
+                              {serverName(entry.tool)}
+                            </td>
+                            <td className="py-2 pr-3 font-mono text-[11px] font-bold text-accent-ink">{entry.tool}</td>
+                            <td className="py-2 pr-3">
+                              <Badge tone={entry.status === "succès" ? "green" : "rose"}>{entry.status}</Badge>
+                            </td>
+                            <td className="py-2 pr-3 text-right font-mono text-[10.5px] font-semibold text-ink-muted tabular-nums">
+                              {durationOf(entry)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </Surface>
+                </Block>
+              )}
 
               <Block
                 id="mise-a-jour"

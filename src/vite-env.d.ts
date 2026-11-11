@@ -2,6 +2,7 @@
 
 interface ImportMetaEnv {
   readonly VITE_DISTRIBUTION?: "1";
+  readonly VITE_PLATFORM?: "android";
   readonly VITE_MAIL_BACKEND?: "api" | "demo";
   readonly VITE_OAUTH_CLIENT_ID?: string;
   readonly VITE_MICROSOFT_CLIENT_ID?: string;

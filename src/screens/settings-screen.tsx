@@ -387,19 +387,23 @@ export function SettingsScreen({
         </Card>
       </BlurFade>
 
-      <SectionTitle>Assistant</SectionTitle>
-      <BlurFade delay={0.18}>
-        <Card className="mx-5 divide-y divide-line/80 overflow-hidden">
-          <Row
-            icon={<Blocks className="size-4" />}
-            label="Serveurs MCP"
-            hint={`${mcp.activeServers} serveurs actifs · ${mcp.activeTools} outils actifs`}
-            onClick={onOpenMcp}
-          >
-            <ChevronRight className="size-4 text-ink-muted" />
-          </Row>
-        </Card>
-      </BlurFade>
+      {import.meta.env.VITE_PLATFORM === "android" ? null : (
+        <>
+          <SectionTitle>Assistant</SectionTitle>
+          <BlurFade delay={0.18}>
+            <Card className="mx-5 divide-y divide-line/80 overflow-hidden">
+              <Row
+                icon={<Blocks className="size-4" />}
+                label="Serveurs MCP"
+                hint={`${mcp.activeServers} serveurs actifs · ${mcp.activeTools} outils actifs`}
+                onClick={onOpenMcp}
+              >
+                <ChevronRight className="size-4 text-ink-muted" />
+              </Row>
+            </Card>
+          </BlurFade>
+        </>
+      )}
 
       <SectionTitle>Apparence</SectionTitle>
       <BlurFade delay={0.2}>
