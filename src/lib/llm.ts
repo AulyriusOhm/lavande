@@ -1,3 +1,5 @@
+import { isTauriShell } from "@/lib/open-external";
+
 export type LlmConfig = { endpoint: string; apiKey: string; model: string };
 
 export const EMPTY_LLM: LlmConfig = { endpoint: "", apiKey: "", model: "" };
@@ -19,6 +21,19 @@ export function llmReady(config: LlmConfig | null | undefined): boolean {
   return Boolean(config?.endpoint?.trim() && config?.apiKey?.trim() && config?.model?.trim());
 }
 
+/**
+ * En coquille Tauri, la requête passe par le plugin HTTP (côté Rust) : l'endpoint
+ * opencode.ai ne renvoie pas d'en-tête CORS, le fetch du webview échouerait
+ * (« Load failed »). Hors Tauri, fetch normal.
+ */
+async function llmFetch(url: string, init: RequestInit): Promise<Response> {
+  if (isTauriShell()) {
+    const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
+    return tauriFetch(url, init);
+  }
+  return fetch(url, init);
+}
+
 export async function llmChat(
   config: LlmConfig,
   system: string,
@@ -26,7 +41,7 @@ export async function llmChat(
   signal?: AbortSignal,
 ): Promise<string> {
   const base = config.endpoint.trim().replace(/\/+$/, "");
-  const response = await fetch(`${base}/chat/completions`, {
+  const response = await llmFetch(`${base}/chat/completions`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
