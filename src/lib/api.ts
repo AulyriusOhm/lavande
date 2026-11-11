@@ -113,6 +113,7 @@ export type ApiAccount = {
 export type ApiHealth = {
   status: string;
   version: string;
+  public_url?: string;
 };
 
 export type FolderReport = {
@@ -198,6 +199,19 @@ export type MoveInput = {
   from_path: string;
   uid: number;
   to_path: string;
+};
+
+export type DeleteInput = {
+  folder_path: string;
+  uid: number;
+};
+
+export type PurgeInput = {
+  folder_path: string;
+};
+
+export type PurgeResult = {
+  removed: number;
 };
 
 export type SendInput = {
@@ -344,6 +358,21 @@ export const mailApi = {
 
   move: (id: string, input: MoveInput) =>
     request<void>(`${accountPath(id)}/move`, { method: "POST", body: input }),
+
+  deleteMessage: (id: string, input: DeleteInput) =>
+    request<void>(`${accountPath(id)}/delete`, {
+      method: "POST",
+      body: input,
+      timeout: LONG_TIMEOUT,
+    }),
+
+  purgeFolder: (id: string, input: PurgeInput) =>
+    request<PurgeResult>(`${accountPath(id)}/purge`, {
+      method: "POST",
+      body: input,
+      timeout: LONG_TIMEOUT,
+    }),
+
 
   oauthStart: (input: OAuthStartInput) =>
     request<ApiOAuthStart>("/oauth/start", { method: "POST", body: input }),

@@ -18,7 +18,9 @@ import type { LiveEvent } from "@/lib/api";
 import type { NewAccount } from "@/lib/api";
 import {
   folderOptions as optionsOf,
+  folderOptionsForAll,
   folderPathOf,
+  folderTargets,
   loadMailbox,
   mailMode,
   messageToMail,
@@ -30,17 +32,22 @@ import type { FolderOption, FolderRecord, MailMode } from "@/lib/mail-backend";
 
 export type BackendPhase = "loading" | "ready" | "offline" | "empty";
 
+const PAGE_SIZE = 50;
+
 export type MailStoreValue = {
   mails: Mail[];
   account: string;
   accountById: (id: string) => Account | undefined;
   accounts: Account[];
   folder: FolderId;
+  folderPath: string | null;
   folderOptions: FolderOption[];
   mode: MailMode;
   phase: BackendPhase;
   backendError: string | null;
   threadsLoading: boolean;
+  pages: number;
+  hasMore: boolean;
   syncing: boolean;
   connectOpen: boolean;
   removeTarget: Account | null;
@@ -55,7 +62,8 @@ export type MailStoreValue = {
   composeDraft: ComposeDraft | null;
   composeTitle: string;
   setAccount: (value: string) => void;
-  setFolder: (value: FolderId) => void;
+  setFolder: (value: FolderId, path?: string | null) => void;
+  loadMore: () => void;
   setTasks: React.Dispatch<React.SetStateAction<Task[]>>;
   setEvents: React.Dispatch<React.SetStateAction<CalendarEvent[]>>;
   setSelectedDate: (value: string) => void;
@@ -67,6 +75,7 @@ export type MailStoreValue = {
   mailAction: (kind: "delete" | "archive" | "read", mail: Mail) => void;
   moveToInbox: (mail: Mail) => void;
   restoreMail: (mail: Mail) => void;
+  emptyTrash: () => void;
   addSuggestion: (suggestion: MailSuggestion) => void;
   dismissSuggestion: (suggestion: MailSuggestion) => void;
   openMessage: (mail: Mail) => void;
@@ -105,7 +114,10 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const [mails, setMails] = useState<Mail[]>(() => (mode === "demo" ? MAILS : []));
   const [account, setAccountState] = useState<string>(() => (mode === "demo" ? ALL_ACCOUNTS : ""));
   const [folder, setFolderState] = useState<FolderId>("inbox");
+  const [folderPath, setFolderPath] = useState<string | null>(null);
   const [threadsLoading, setThreadsLoading] = useState(false);
+  const [pages, setPages] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [revision, setRevision] = useState(0);
   const [connectOpen, setConnectOpen] = useState(false);
@@ -145,9 +157,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         setPhase("empty");
         return;
       }
-      setAccountState((current) =>
-        loaded.some((entry) => entry.id === current) ? current : loaded[0].id,
-      );
+      setAccountState((current) => {
+        if (current === ALL_ACCOUNTS) return loaded.length > 1 ? ALL_ACCOUNTS : loaded[0].id;
+        if (loaded.some((entry) => entry.id === current)) return current;
+        return loaded.length > 1 ? ALL_ACCOUNTS : loaded[0].id;
+      });
       setPhase("ready");
     } catch (error) {
       setBackendError(errorText(error));
@@ -167,7 +181,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     source.addEventListener("mail", (event) => {
       try {
         const payload = JSON.parse((event as MessageEvent<string>).data) as LiveEvent;
-        if (!account || payload.account_id === account) {
+        if (account === ALL_ACCOUNTS || !account || payload.account_id === account) {
           setRevision((value) => value + 1);
         }
       } catch {
@@ -188,33 +202,70 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     setMails(MAILS);
     setAccountState(ALL_ACCOUNTS);
     setFolderState("inbox");
+    setFolderPath(null);
+    setHasMore(false);
     setPhase("ready");
     setBackendError(null);
     setConnectOpen(false);
     setRemoveTarget(null);
   }, []);
 
-  const currentPath = useMemo(
-    () => folderPathOf(folderRecords, account, folder),
-    [folderRecords, account, folder],
+  const targets = useMemo(
+    () =>
+      mode === "api"
+        ? folderTargets(
+            folderRecords,
+            account === ALL_ACCOUNTS
+              ? accounts.map((entry) => entry.id)
+              : account
+                ? [account]
+                : [],
+            folder,
+            folderPath ?? undefined,
+          )
+        : [],
+    [mode, folderRecords, account, accounts, folder, folderPath],
   );
 
   useEffect(() => {
     if (mode !== "api" || phase !== "ready") return;
-    if (!account || !currentPath) {
+    if (targets.length === 0) {
       setMails([]);
+      setHasMore(false);
       return;
     }
     let cancelled = false;
     setThreadsLoading(true);
-    mailApi
-      .threads(account, currentPath)
-      .then((threads) => {
+    const requests = targets.flatMap((target) =>
+      Array.from({ length: pages }, (_, page) =>
+        mailApi.threads(target.accountId, target.path, PAGE_SIZE, page * PAGE_SIZE),
+      ),
+    );
+    Promise.allSettled(requests)
+      .then((results) => {
         if (cancelled) return;
-        setMails(threads.flatMap((thread) => threadToMails(thread, folderRecords, folder)));
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) notify(errorText(error));
+        const loaded = results.flatMap((result) =>
+          result.status === "fulfilled" ? [result.value] : [],
+        );
+        const failed = results.find(
+          (result): result is PromiseRejectedResult => result.status === "rejected",
+        );
+        if (loaded.length === 0 && failed) {
+          notify(errorText(failed.reason));
+          return;
+        }
+        setMails(
+          loaded.flatMap((threads) =>
+            threads.flatMap((thread) => threadToMails(thread, folderRecords, folder)),
+          ),
+        );
+        setHasMore(
+          targets.some((_, index) => {
+            const last = results[index * pages + pages - 1];
+            return last !== undefined && last.status === "fulfilled" && last.value.length === PAGE_SIZE;
+          }),
+        );
+        if (failed) notify(errorText(failed.reason));
       })
       .finally(() => {
         if (!cancelled) setThreadsLoading(false);
@@ -222,12 +273,17 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [mode, phase, account, currentPath, folder, folderRecords, revision, notify]);
+  }, [mode, phase, targets, pages, folder, folderRecords, revision, notify]);
 
   const folderOptions = useMemo<FolderOption[]>(
     () =>
       mode === "api"
-        ? optionsOf(folderRecords, account)
+        ? account === ALL_ACCOUNTS
+          ? folderOptionsForAll(
+              folderRecords,
+              accounts.map((entry) => entry.id),
+            )
+          : optionsOf(folderRecords, account)
         : [
             { id: "inbox" as const, label: folderLabel("inbox"), path: "inbox" },
             { id: "sent" as const, label: folderLabel("sent"), path: "sent" },
@@ -236,13 +292,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
             { id: "spam" as const, label: folderLabel("spam"), path: "spam" },
             { id: "trash" as const, label: folderLabel("trash"), path: "trash" },
           ],
-    [mode, folderRecords, account],
+    [mode, folderRecords, account, accounts],
   );
 
   const setAccount = useCallback(
     (value: string) => {
       setAccountState(value);
-      if (mode !== "api") return;
+      setFolderPath(null);
+      if (mode !== "api" || value === ALL_ACCOUNTS) return;
       setFolderState((current) =>
         folderPathOf(folderRecords, value, current) ? current : "inbox",
       );
@@ -250,7 +307,23 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     [folderRecords, mode],
   );
 
-  const setFolder = useCallback((value: FolderId) => setFolderState(value), []);
+  const scope = JSON.stringify([account, folder, folderPath]);
+  const [scopeKey, setScopeKey] = useState(scope);
+  if (scope !== scopeKey) {
+    setScopeKey(scope);
+    setPages(1);
+    setHasMore(false);
+  }
+
+  const setFolder = useCallback((value: FolderId, path?: string | null) => {
+    setFolderState(value);
+    setFolderPath(path ?? null);
+  }, []);
+
+  const loadMore = useCallback(() => {
+    if (!hasMore) return;
+    setPages((current) => current + 1);
+  }, [hasMore]);
 
   const flagsFor = useCallback(
     (mail: Mail, next: { unread: boolean; starred: boolean }) => {
@@ -352,10 +425,19 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (mode === "api") {
-        if (kind === "delete" && mail.folder === "trash") {
-          notify("Le service local ne supprime pas définitivement : il déplace les messages.");
+        if (kind === "delete" && mail.folder === "trash" && mail.source) {
+          const source = mail.source;
+          mailApi
+            .deleteMessage(source.accountId, { folder_path: source.folderPath, uid: source.uid })
+            .then(() => {
+              setMails((current) => current.filter((entry) => entry.id !== mail.id));
+              setOpenMail((current) => (current && current.id === mail.id ? null : current));
+              notify("Message supprimé définitivement");
+            })
+            .catch((error: unknown) => notify(errorText(error)));
           return;
         }
+
         moveTo(
           mail,
           kind === "delete" ? "trash" : "archive",
@@ -477,6 +559,49 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     },
     [mode, moveTo, notify],
   );
+
+  const emptyTrash = useCallback(() => {
+    const inTrash = (entry: Mail) =>
+      entry.folder === "trash" && (account === ALL_ACCOUNTS || entry.account === account);
+
+    if (mode === "api") {
+      const purges = folderTargets(
+        folderRecords,
+        account === ALL_ACCOUNTS ? accounts.map((entry) => entry.id) : [account],
+        "trash",
+      );
+      if (purges.length === 0) {
+        notify("Ce compte n'a pas de dossier corbeille.");
+        return;
+      }
+      Promise.all(purges.map((purge) => mailApi.purgeFolder(purge.accountId, { folder_path: purge.path })))
+        .then((results) => {
+          const removed = results.reduce((sum, result) => sum + result.removed, 0);
+          setMails((current) => current.filter((entry) => !inTrash(entry)));
+          setOpenMail((current) => (current && inTrash(current) ? null : current));
+          setRevision((value) => value + 1);
+          notify(
+            removed > 0
+              ? `Corbeille vidée · ${removed} message${removed > 1 ? "s" : ""}`
+              : "La corbeille est déjà vide.",
+          );
+        })
+        .catch((error: unknown) => notify(`Corbeille impossible · ${errorText(error)}`));
+      return;
+    }
+
+    const removed = mails.filter(inTrash);
+    setMails((current) => current.filter((entry) => !inTrash(entry)));
+    setOpenMail((current) => (current && inTrash(current) ? null : current));
+    notify("Corbeille vidée", {
+      label: "Annuler",
+      run: () =>
+        setMails((current) => [
+          ...current,
+          ...removed.filter((entry) => !current.some((item) => item.id === entry.id)),
+        ]),
+    });
+  }, [account, accounts, folderRecords, mails, mode, notify]);
 
   const minimizeCompose = useCallback(() => setComposeOpen(false), []);
 
@@ -619,20 +744,32 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       notify("Mode démo : la synchronisation est simulée.");
       return;
     }
-    if (!account || !currentPath) {
+    if (targets.length === 0) {
       notify("Choisis un dossier à synchroniser.");
       return;
     }
     setSyncing(true);
-    mailApi
-      .sync(account, currentPath)
-      .then((result) => {
-        notify(syncNotice(result.reports));
+    Promise.all(targets.map((target) => mailApi.sync(target.accountId, target.path)))
+      .then((results) => {
+        const reports = results.flatMap((result) => result.reports);
+        if (account === ALL_ACCOUNTS) {
+          const totals = reports.reduce(
+            (sum, report) => ({
+              inserted: sum.inserted + report.inserted,
+              flags_updated: sum.flags_updated + report.flags_updated,
+              removed: sum.removed + report.removed,
+            }),
+            { inserted: 0, flags_updated: 0, removed: 0 },
+          );
+          notify(syncNotice([totals]));
+        } else {
+          notify(syncNotice(reports));
+        }
         setRevision((value) => value + 1);
       })
       .catch((error: unknown) => notify(`Synchro impossible · ${errorText(error)}`))
       .finally(() => setSyncing(false));
-  }, [account, currentPath, mode, notify]);
+  }, [account, targets, mode, notify]);
 
   const openConnect = useCallback(() => setConnectOpen(true), []);
   const closeConnect = useCallback(() => setConnectOpen(false), []);
@@ -645,6 +782,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       setFolderRecords(records);
       setAccountState(summary.id);
       setFolderState("inbox");
+      setFolderPath(null);
       setConnectOpen(false);
       setPhase("ready");
       setBackendError(null);
@@ -692,11 +830,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       accountById,
       accounts,
       folder,
+      folderPath,
       folderOptions,
       mode,
       phase,
       backendError,
       threadsLoading,
+      pages,
+      hasMore,
       syncing,
       connectOpen,
       removeTarget,
@@ -712,6 +853,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       composeTitle,
       setAccount,
       setFolder,
+      loadMore,
       setTasks,
       setEvents,
       setSelectedDate,
@@ -723,6 +865,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       mailAction,
       moveToInbox,
       restoreMail,
+      emptyTrash,
       addSuggestion,
       dismissSuggestion,
       openMessage,
@@ -752,11 +895,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       accountById,
       accounts,
       folder,
+      folderPath,
       folderOptions,
       mode,
       phase,
       backendError,
       threadsLoading,
+      pages,
+      hasMore,
       syncing,
       connectOpen,
       removeTarget,
@@ -772,12 +918,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       composeTitle,
       setAccount,
       setFolder,
+      loadMore,
       notify,
       dismissNotice,
       toggleStar,
       mailAction,
       moveToInbox,
       restoreMail,
+      emptyTrash,
       addSuggestion,
       dismissSuggestion,
       openMessage,

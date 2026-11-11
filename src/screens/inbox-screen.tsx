@@ -13,6 +13,7 @@ import { BorderBeam } from "@/components/ui/border-beam";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { ThreadRow } from "@/components/thread-row";
+import { EmptyTrashButton } from "@/components/empty-trash";
 
 type Filter = "all" | "unread" | "starred" | "encrypted";
 
@@ -48,9 +49,8 @@ export function InboxScreen({
   const [filter, setFilter] = useState<Filter>("all");
   const [compact, setCompact] = useState(false);
   const [sizes, setSizes] = useState({ hero: 0, card: 0, bar: 0 });
-  const { mode, syncing, syncFolder, threadsLoading, accountById } = useMailStore();
-
-
+  const { mode, syncing, syncFolder, threadsLoading, hasMore, loadMore, folderPath, folderOptions, accountById } =
+    useMailStore();
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const heroRef = useRef<HTMLDivElement>(null);
@@ -105,6 +105,9 @@ export function InboxScreen({
   };
 
   const threads = threadsInFolder(mails, folder, account);
+  const heading =
+    folderOptions.find((entry) => entry.id === folder && entry.path === folderPath)?.label ??
+    folderLabel(folder);
   const unreadCount = threads.filter((thread) => thread.unread > 0).length;
   const starredCount = threads.filter((thread) => thread.starred).length;
   const encryptedCount = threads.filter((thread) => thread.encrypted > 0).length;
@@ -148,7 +151,7 @@ export function InboxScreen({
                       <AnimatedGradientText>réception</AnimatedGradientText>
                     </>
                   ) : (
-                    <AnimatedGradientText>{folderLabel(folder)}</AnimatedGradientText>
+                    <AnimatedGradientText>{heading}</AnimatedGradientText>
                   )}
                 </h1>
               </div>
@@ -233,7 +236,7 @@ export function InboxScreen({
                     {unreadCount} conversation{unreadCount > 1 ? "s" : ""} non lue{unreadCount > 1 ? "s" : ""}
                   </span>{" "}
                   {mode === "api"
-                    ? `dans « ${folderLabel(folder)} ».`
+                    ? `dans « ${heading} ».`
                     : "dans ta boîte de réception. Camille veut un retour sur les maquettes v3 avant vendredi."}
                 </p>
                 <div className="mt-3 flex gap-1.5">
@@ -372,6 +375,17 @@ export function InboxScreen({
               )}
             </div>
           )}
+          {mode === "api" && hasMore && !threadsLoading && (
+            <div className="flex justify-center py-4">
+              <button
+                type="button"
+                onClick={loadMore}
+                className="focus-ring rounded-full border border-line bg-surface px-3.5 py-2 text-[12px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+              >
+                Charger plus
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -389,7 +403,7 @@ export function InboxScreen({
             <Inbox className="size-[18px]" strokeWidth={2.2} />
           </IconButton>
           <div className="min-w-0 flex-1 leading-tight">
-            <p className="truncate text-[12.5px] font-bold text-ink">{folderLabel(folder)}</p>
+            <p className="truncate text-[12.5px] font-bold text-ink">{heading}</p>
             <p className="truncate text-[10px] font-semibold text-ink-muted">
               {threads.length} conversation{threads.length > 1 ? "s" : ""} · {unreadCount} non lues ·{" "}
               {mails.filter((mail) => mail.folder === "spam" && mail.unread).length} spam
@@ -425,7 +439,7 @@ export function AccountSwitchSheet({
 }) {
   const { accounts, mode, openConnect } = useMailStore();
   const rows = [
-    ...(mode === "demo"
+    ...(mode === "demo" || accounts.length > 1
       ? [
           {
             id: ALL_ACCOUNTS,
@@ -444,7 +458,6 @@ export function AccountSwitchSheet({
       glyph: account.label[0] ?? "?",
     })),
   ];
-
 
   return (
     <div className="flex h-full flex-col">
@@ -534,12 +547,12 @@ export function MailboxSheet({
   mails: Mail[];
   account: string;
   folder: FolderId;
-  onSelect: (id: FolderId) => void;
+  onSelect: (id: FolderId, path: string | null) => void;
   onClose: () => void;
 }) {
-  const { mode, folderOptions } = useMailStore();
+  const { mode, folderOptions, folderPath, emptyTrash } = useMailStore();
   const scope = account === ALL_ACCOUNTS ? mails : mails.filter((mail) => mail.account === account);
-
+  const trashCount = scope.filter((mail) => mail.folder === "trash").length;
 
   return (
     <div className="flex h-full flex-col">
@@ -556,13 +569,13 @@ export function MailboxSheet({
           const Icon = FOLDER_ICONS[entry.id];
           const items = scope.filter((mail) => mail.folder === entry.id);
           const unread = items.filter((mail) => mail.unread).length;
-          const isActive = entry.id === folder;
+          const isActive = entry.id === folder && (entry.id !== "other" || entry.path === folderPath);
           return (
             <button
-              key={entry.id}
+              key={`${entry.id}:${entry.path}`}
               type="button"
               onClick={() => {
-                onSelect(entry.id);
+                onSelect(entry.id, entry.id === "other" ? entry.path : null);
                 onClose();
               }}
               className={cn(
@@ -590,6 +603,12 @@ export function MailboxSheet({
             </button>
           );
         })}
+
+        {trashCount > 0 && (
+          <div className="pt-1">
+            <EmptyTrashButton count={trashCount} onConfirm={emptyTrash} variant="mobile" />
+          </div>
+        )}
 
         <button
           type="button"

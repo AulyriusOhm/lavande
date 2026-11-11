@@ -66,11 +66,14 @@ export function toFolderRecord(folder: ApiFolder): FolderRecord {
   };
 }
 
+const ROLE_ORDER: FolderId[] = ["inbox", "sent", "drafts", "archive", "spam", "trash", "other"];
+
 export function folderOptions(records: FolderRecord[], accountId: string): FolderOption[] {
-  const order: FolderId[] = ["inbox", "sent", "drafts", "archive", "spam", "trash", "other"];
   const own = records
     .filter((record) => record.accountId === accountId)
-    .sort((a, b) => order.indexOf(a.role) - order.indexOf(b.role) || a.name.localeCompare(b.name));
+    .sort(
+      (a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role) || a.name.localeCompare(b.name),
+    );
 
   const seen = new Set<string>();
   const options: FolderOption[] = [];
@@ -85,6 +88,39 @@ export function folderOptions(records: FolderRecord[], accountId: string): Folde
     });
   }
   return options;
+}
+
+export function folderOptionsForAll(records: FolderRecord[], accountIds: string[]): FolderOption[] {
+  const seen = new Set<string>();
+  const options: FolderOption[] = [];
+  for (const accountId of accountIds) {
+    for (const option of folderOptions(records, accountId)) {
+      const key = `${option.id}:${option.id === "other" ? option.path : ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      options.push(option.id === "other" ? option : { ...option, path: option.id });
+    }
+  }
+  return options.sort(
+    (a, b) => ROLE_ORDER.indexOf(a.id) - ROLE_ORDER.indexOf(b.id) || a.label.localeCompare(b.label),
+  );
+}
+
+export function folderTargets(
+  records: FolderRecord[],
+  accountIds: string[],
+  role: FolderId,
+  path?: string,
+): { accountId: string; path: string }[] {
+  return accountIds.flatMap((accountId) => {
+    const target = records.find(
+      (record) =>
+        record.accountId === accountId &&
+        record.role === role &&
+        (path === undefined || record.path === path),
+    );
+    return target ? [{ accountId, path: target.path }] : [];
+  });
 }
 
 export function folderPathOf(

@@ -42,6 +42,7 @@ import { BorderBeam } from "@/components/ui/border-beam";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { MailBody } from "@/components/mail-body";
+import { EmptyTrashButton } from "@/components/empty-trash";
 import {
   Badge,
   DButton,
@@ -386,17 +387,22 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
     syncing,
     syncFolder,
     folderOptions,
+    folderPath,
     openConnect,
     accountById,
     folder,
     openMail,
     openThread,
+    threadsLoading,
+    hasMore,
+    loadMore,
     setAccount,
     setFolder,
     toggleStar,
     mailAction,
     moveToInbox,
     restoreMail,
+    emptyTrash,
     openMessage,
     closeMessage,
     replyTo,
@@ -409,8 +415,10 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
 
   useEscapeLayer(Boolean(openMail), () => closeMessage());
 
-
   const threads = threadsInFolder(mails, folder, account);
+  const heading =
+    folderOptions.find((entry) => entry.id === folder && entry.path === folderPath)?.label ??
+    folderLabel(folder);
   const visible = threads.filter(FILTER_MATCH[filter]);
   const unreadCount = mails.filter(
     (mail) => mail.folder === folder && mail.unread && (account === ALL_ACCOUNTS || mail.account === account),
@@ -522,7 +530,7 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
 
               <SectionLabel className="mt-4 mb-1.5 px-2.5">Comptes</SectionLabel>
               <div className="space-y-0.5">
-                {mode === "demo" && (
+                {(mode === "demo" || accounts.length > 1) && (
                   <RailItem
                     active={account === ALL_ACCOUNTS}
                     onClick={() => setAccount(ALL_ACCOUNTS)}
@@ -559,15 +567,24 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                   const Icon = FOLDER_ICONS[entry.id];
                   return (
                     <RailItem
-                      key={entry.id}
-                      active={folder === entry.id}
-                      onClick={() => setFolder(entry.id)}
+                      key={`${entry.id}:${entry.path}`}
+                      active={folder === entry.id && (entry.id !== "other" || entry.path === folderPath)}
+                      onClick={() => setFolder(entry.id, entry.id === "other" ? entry.path : null)}
                       label={entry.label}
                       count={countFor(entry.id)}
                       icon={<Icon className="size-4" />}
                     />
                   );
                 })}
+                {folderOptions.some((entry) => entry.id === "trash") && (
+                  <div className="pt-1">
+                    <EmptyTrashButton
+                      count={countFor("trash")}
+                      onConfirm={emptyTrash}
+                      variant="desktop"
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="mt-auto pt-4">
@@ -613,7 +630,7 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                   )
                 }
               >
-                {folderLabel(folder)}
+                {heading}
               </PaneTitle>
               <DIconButton
                 label={syncing ? "Synchronisation en cours" : "Synchroniser le dossier"}
@@ -624,7 +641,6 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                 <RefreshCw className={cn("size-4", syncing && "animate-spin")} />
               </DIconButton>
             </div>
-
 
             <button
               type="button"
@@ -708,6 +724,14 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                     </DButton>
                   </div>
                 ) : null}
+              </div>
+            ) : null}
+
+            {mode === "api" && hasMore && !threadsLoading ? (
+              <div className="flex justify-center px-3 py-4">
+                <DButton size="sm" variant="ghost" onClick={loadMore}>
+                  Charger plus
+                </DButton>
               </div>
             ) : null}
           </div>
