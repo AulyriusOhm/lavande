@@ -177,6 +177,9 @@ const MailStoreContext = createContext<MailStoreValue | null>(null);
 
 export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const prefs = usePrefs();
+  // Interrupteurs de synchronisation : le maître coupe tous les domaines.
+  const mailSyncOn = prefs.sync.enabled && prefs.sync.mails;
+  const calendarSyncOn = prefs.sync.enabled && prefs.sync.calendar;
   const planning = usePlanning();
   const { tasks, suggestions: storedSuggestions, setTasks } = planning;
   const [mode, setMode] = useState<MailMode>(mailMode);
@@ -229,12 +232,13 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const dismissNotice = useCallback(() => setNotices((current) => current.slice(1)), []);
 
   useEffect(() => {
+    if (!calendarSyncOn) return;
     try {
       window.localStorage.setItem(EVENTS_KEY, JSON.stringify(events));
     } catch {
       // stockage indisponible : les événements restent en mémoire
     }
-  }, [events]);
+  }, [calendarSyncOn, events]);
 
   const accountById = useCallback(
     (id: string) => accounts.find((entry) => entry.id === id),
@@ -273,7 +277,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   // Le service pousse un événement après chaque détection IDLE : la liste se
   // rafraîchit sans clic, et sans bloquer l'interface.
   useEffect(() => {
-    if (mode !== "api" || typeof EventSource === "undefined" || isComposeWindow()) return;
+    if (mode !== "api" || !mailSyncOn || typeof EventSource === "undefined" || isComposeWindow()) return;
     let source: EventSource | null = null;
     let closed = false;
     void mailApi.eventsUrl().then((url) => {
@@ -303,7 +307,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       closed = true;
       source?.close();
     };
-  }, [account, mode]);
+  }, [account, mailSyncOn, mode]);
 
   const retryBackend = useCallback(() => {
     if (mode === "api") void bootstrap();
@@ -458,7 +462,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   // (compte + dossier) ; revision recharge ensuite fils et compteurs.
   const autoSyncedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (mode !== "api" || phase !== "ready" || isComposeWindow()) return;
+    if (mode !== "api" || !mailSyncOn || phase !== "ready" || isComposeWindow()) return;
     if (targets.length === 0) return;
     const key = targets.map((t) => `${t.accountId}:${t.path}`).sort().join("|");
     if (autoSyncedRef.current.has(key)) return;
@@ -479,7 +483,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [mode, phase, targets]);
+  }, [mailSyncOn, mode, phase, targets]);
 
   const demoCounts = useMemo(() => {
     const next: Record<string, { total: number; unread: number }> = {};
@@ -1190,6 +1194,10 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       setConnectOpen(false);
       setPhase("ready");
       setBackendError(null);
+      if (!mailSyncOn) {
+        notify("Compte connecté · synchronisation des mails coupée");
+        return;
+      }
       try {
         const result = await mailApi.sync(summary.id, "INBOX");
         const report = result.reports[0];
@@ -1203,7 +1211,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       }
       setRevision((value) => value + 1);
     },
-    [notify],
+    [mailSyncOn, notify],
   );
 
   const renameAccount = useCallback(

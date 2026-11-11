@@ -2,14 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { SyncBadge, syncBadgeLabel } from "@/components/sync-badge";
 import { PlanningProvider } from "@/lib/planning-store";
+import { PrefsProvider } from "@/lib/prefs";
 import { createMemoryStorage, emptyState, createDevice, type SyncState } from "@/lib/sync/storage";
 
 function renderBadge(state: SyncState, onOpen?: () => void) {
   const storage = createMemoryStorage(state);
   render(
-    <PlanningProvider storage={storage}>
-      <SyncBadge onOpen={onOpen} />
-    </PlanningProvider>,
+    <PrefsProvider>
+      <PlanningProvider storage={storage}>
+        <SyncBadge onOpen={onOpen} />
+      </PlanningProvider>
+    </PrefsProvider>,
   );
   return storage;
 }

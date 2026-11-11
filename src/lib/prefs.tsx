@@ -18,6 +18,17 @@ import { DEFAULT_AI_TASKS, DEFAULT_SUMMARY, type AiTasksConfig, type SummaryConf
 
 export type AccountSignature = { html: string; enabled: boolean };
 
+/** Domaines dont la synchronisation peut être coupée indépendamment. */
+export type SyncPrefs = {
+  enabled: boolean;
+  mails: boolean;
+  calendar: boolean;
+  kanban: boolean;
+};
+
+export const DEFAULT_SYNC: SyncPrefs = { enabled: true, mails: true, calendar: true, kanban: true };
+
+
 export type Prefs = {
   swipeLeft: SwipeActionId;
   swipeRight: SwipeActionId;
@@ -35,6 +46,8 @@ export type Prefs = {
   summary: SummaryConfig;
   /** Suggestions de tâches extraites des mails récents par le LLM. */
   aiTasks: AiTasksConfig;
+  /** Interrupteurs de synchronisation : maître + un par domaine. */
+  sync: SyncPrefs;
 };
 
 const DEFAULTS: Prefs = {
@@ -52,6 +65,7 @@ const DEFAULTS: Prefs = {
   aiReplyEnabled: true,
   summary: DEFAULT_SUMMARY,
   aiTasks: DEFAULT_AI_TASKS,
+  sync: DEFAULT_SYNC,
 };
 
 type PrefsContextValue = Prefs & {
@@ -68,6 +82,7 @@ type PrefsContextValue = Prefs & {
   setAiReplyEnabled: (value: boolean) => void;
   setSummary: (patch: Partial<SummaryConfig>) => void;
   setAiTasks: (patch: Partial<AiTasksConfig>) => void;
+  setSync: (patch: Partial<SyncPrefs>) => void;
 };
 
 const PrefsContext = createContext<PrefsContextValue | null>(null);
@@ -141,6 +156,17 @@ const asAiTasks = (value: unknown): AiTasksConfig => {
   };
 };
 
+export const asSync = (value: unknown): SyncPrefs => {
+  if (!value || typeof value !== "object") return { ...DEFAULT_SYNC };
+  const { enabled, mails, calendar, kanban } = value as Record<string, unknown>;
+  return {
+    enabled: asBoolean(enabled, DEFAULT_SYNC.enabled),
+    mails: asBoolean(mails, DEFAULT_SYNC.mails),
+    calendar: asBoolean(calendar, DEFAULT_SYNC.calendar),
+    kanban: asBoolean(kanban, DEFAULT_SYNC.kanban),
+  };
+};
+
 export function activeSignature(
   signatures: Record<string, AccountSignature>,
   accountId: string,
@@ -173,6 +199,7 @@ function read(): Prefs {
     aiReplyEnabled: asBoolean(stored.aiReplyEnabled, DEFAULTS.aiReplyEnabled),
     summary: asSummary(stored.summary),
     aiTasks: asAiTasks(stored.aiTasks),
+    sync: asSync(stored.sync),
   };
 }
 
@@ -238,6 +265,12 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const setSync = useCallback(
+    (patch: Partial<SyncPrefs>) =>
+      setPrefs((current) => ({ ...current, sync: { ...current.sync, ...patch } })),
+    [],
+  );
+
   const value = useMemo<PrefsContextValue>(
     () => ({
       ...prefs,
@@ -254,6 +287,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setAiReplyEnabled,
       setSummary,
       setAiTasks,
+      setSync,
     }),
     [
       prefs,
@@ -270,6 +304,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setAiReplyEnabled,
       setSummary,
       setAiTasks,
+      setSync,
     ],
   );
 

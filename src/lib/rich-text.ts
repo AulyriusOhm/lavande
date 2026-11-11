@@ -44,3 +44,39 @@ export function ensureHtml(value: string): string {
   if (!value.trim()) return "";
   return looksLikeHtml(value) ? value : textToHtml(value);
 }
+
+const BLOCKED_TAGS = new Set([
+  "script",
+  "style",
+  "iframe",
+  "object",
+  "embed",
+  "link",
+  "meta",
+  "base",
+  "form",
+  "input",
+  "button",
+  "textarea",
+  "select",
+]);
+
+/** Nettoie un HTML riche avant rendu : pas de script, d'iframe ni de gestionnaire d'événement. */
+export function sanitizeHtml(html: string): string {
+  if (!html || !html.trim()) return "";
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  doc.body.querySelectorAll("*").forEach((el) => {
+    if (BLOCKED_TAGS.has(el.tagName.toLowerCase())) {
+      el.remove();
+      return;
+    }
+    for (const attr of Array.from(el.attributes)) {
+      const name = attr.name.toLowerCase();
+      const value = attr.value.trim().toLowerCase();
+      if (name.startsWith("on") || ((name === "href" || name === "src") && value.startsWith("javascript:"))) {
+        el.removeAttribute(attr.name);
+      }
+    }
+  });
+  return doc.body.innerHTML;
+}

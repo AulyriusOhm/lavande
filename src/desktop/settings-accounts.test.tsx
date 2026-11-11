@@ -55,7 +55,7 @@ const response = (payload: unknown, status = 200): Response =>
 const noContent = (): Response => ({ ok: true, status: 204 }) as unknown as Response;
 
 function stubFetch() {
-  const state = { label: ACCOUNT.label, purged: [] as string[] };
+  const state = { label: ACCOUNT.label, purged: [] as string[], synced: null as string[] | null };
   const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
@@ -64,6 +64,10 @@ function stubFetch() {
     if (method === "PATCH" && url === "/api/accounts/a1") {
       state.label = (JSON.parse(String(init?.body)) as { label: string }).label;
       return response({ ...ACCOUNT, label: state.label });
+    }
+    if (method === "PATCH" && url === "/api/accounts/a1/sync-folders") {
+      state.synced = (JSON.parse(String(init?.body)) as { folders: string[] | null }).folders;
+      return response({ ...ACCOUNT, synced_folders: state.synced });
     }
     if (url.endsWith("/folders")) {
       return response(FOLDERS.filter((folder) => !state.purged.includes(folder.path)));
@@ -113,6 +117,39 @@ describe("Réglages · comptes", () => {
     expect(patch?.[1]?.body).toBe(JSON.stringify({ label: "Bureau" }));
     expect((await screen.findAllByText("Bureau")).length).toBeGreaterThan(0);
     expect(screen.queryByLabelText("Renommer Perso")).toBeNull();
+  });
+});
+
+describe("Réglages · dossiers synchronisés", () => {
+  it("décoche un dossier et enregistre la sélection", async () => {
+    const { state } = stubFetch();
+    mount();
+
+    fireEvent.click(await screen.findByLabelText("Dossiers synchronisés de Perso"));
+    const inbox = (await screen.findByLabelText("Synchroniser Boîte de réception")) as HTMLInputElement;
+    const archive = screen.getByLabelText("Synchroniser Archives") as HTMLInputElement;
+    expect(inbox.checked).toBe(true);
+    expect(archive.checked).toBe(true);
+
+    fireEvent.click(archive);
+
+    await waitFor(() => expect(state.synced).toEqual(["INBOX"]));
+    await waitFor(() =>
+      expect((screen.getByLabelText("Synchroniser Archives") as HTMLInputElement).checked).toBe(false),
+    );
+    expect(screen.getByText("1 dossier synchronisé")).toBeTruthy();
+  });
+
+  it("coupe la synchronisation des dossiers avec le commutateur", async () => {
+    const { state } = stubFetch();
+    mount();
+
+    fireEvent.click(await screen.findByLabelText("Dossiers synchronisés de Perso"));
+    fireEvent.click(await screen.findByRole("switch", { name: /Synchroniser les dossiers/ }));
+
+    await waitFor(() => expect(state.synced).toEqual([]));
+    expect(await screen.findByText("aucun dossier synchronisé automatiquement")).toBeTruthy();
+    expect(screen.queryByLabelText("Synchroniser Boîte de réception")).toBeNull();
   });
 });
 

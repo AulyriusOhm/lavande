@@ -3,7 +3,7 @@
 use crate::config::{AccountConfig, FolderMapping};
 use crate::error::MailError;
 use crate::imap::{self, SyncReport};
-use crate::model::FolderRole;
+use crate::model::{Folder, FolderRole};
 use crate::pgp::PgpKeyring;
 use crate::store::Store;
 use crate::tls::TlsOptions;
@@ -38,6 +38,21 @@ pub async fn sync_account_keys(
     tls_options: &TlsOptions,
     keys: &PgpKeyring,
 ) -> Result<Vec<(String, SyncReport)>, MailError> {
+    sync_account_selected(store, cfg, mapping, tls_options, keys, None).await
+}
+
+/// `sync_account_keys` with the folders the account syncs by itself: `None`
+/// keeps the default (every folder with a known role), `Some(paths)` limits the
+/// automatic pass to those folders, `Some([])` syncs none of them. Folder
+/// discovery and the on-demand per-folder sync are untouched.
+pub async fn sync_account_selected(
+    store: &Store,
+    cfg: &AccountConfig,
+    mapping: &FolderMapping,
+    tls_options: &TlsOptions,
+    keys: &PgpKeyring,
+    synced_folders: Option<&[String]>,
+) -> Result<Vec<(String, SyncReport)>, MailError> {
     cfg.validate()?;
     store.upsert_account(&cfg.id, &cfg.label, &cfg.email)?;
 
@@ -61,7 +76,7 @@ pub async fn sync_account_keys(
 
     let mut reports = Vec::new();
     for folder in &folders {
-        if folder.role == FolderRole::Other {
+        if !auto_syncs(folder, synced_folders) {
             continue;
         }
         match imap::sync_folder(&mut session, store, &cfg.id, &folder.path, mapping, keys).await {
@@ -76,4 +91,83 @@ pub async fn sync_account_keys(
         tracing::warn!(%error, "fermeture de la session imap");
     }
     Ok(reports)
+}
+
+/// `true` when the automatic pass of the account covers `folder`: the explicit
+/// selection when there is one, every folder with a known role otherwise.
+pub fn auto_syncs(folder: &Folder, synced_folders: Option<&[String]>) -> bool {
+    match synced_folders {
+        Some(paths) => paths.iter().any(|path| path == &folder.path),
+        None => folder.role != FolderRole::Other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::auto_syncs;
+    use crate::model::{Folder, FolderRole};
+
+    fn folder(path: &str, role: FolderRole) -> Folder {
+        Folder {
+            account_id: "perso".to_string(),
+            path: path.to_string(),
+            name: path.to_string(),
+            role,
+            uidvalidity: 1,
+            uidnext: 1,
+            last_sync_at: None,
+            modseq: None,
+        }
+    }
+
+    #[test]
+    fn no_selection_keeps_every_known_role() {
+        assert!(auto_syncs(&folder("INBOX", FolderRole::Inbox), None));
+        assert!(auto_syncs(&folder("Archive", FolderRole::Archive), None));
+        assert!(!auto_syncs(&folder("Projets", FolderRole::Other), None));
+    }
+
+    #[test]
+    fn an_explicit_selection_limits_the_pass_to_it() {
+        let selection = vec!["Archive".to_string()];
+        assert!(auto_syncs(
+            &folder("Archive", FolderRole::Archive),
+            Some(&selection)
+        ));
+        assert!(!auto_syncs(
+            &folder("INBOX", FolderRole::Inbox),
+            Some(&selection)
+        ));
+    }
+
+    #[test]
+    fn a_custom_folder_can_be_selected_by_name() {
+        let selection = vec!["Projets".to_string()];
+        assert!(auto_syncs(
+            &folder("Projets", FolderRole::Other),
+            Some(&selection)
+        ));
+    }
+
+    #[test]
+    fn an_empty_selection_syncs_nothing() {
+        let selection: Vec<String> = Vec::new();
+        assert!(!auto_syncs(
+            &folder("INBOX", FolderRole::Inbox),
+            Some(&selection)
+        ));
+        assert!(!auto_syncs(
+            &folder("Projets", FolderRole::Other),
+            Some(&selection)
+        ));
+    }
+
+    #[test]
+    fn a_selection_naming_a_missing_folder_matches_nothing() {
+        let selection = vec!["Absent".to_string()];
+        assert!(!auto_syncs(
+            &folder("INBOX", FolderRole::Inbox),
+            Some(&selection)
+        ));
+    }
 }

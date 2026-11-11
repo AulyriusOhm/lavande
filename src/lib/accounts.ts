@@ -6,6 +6,8 @@ export type Account = {
   color: string;
   tone: number;
   synced: string;
+  /** Dossiers synchronisés : `null` = tous ceux à rôle connu, `[]` = aucun. */
+  syncedFolders?: string[] | null;
 };
 
 export const ACCOUNTS: Account[] = [

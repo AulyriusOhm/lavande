@@ -25,6 +25,10 @@ pub struct StoredAccount {
     pub imap: Endpoint,
     pub smtp: Endpoint,
     pub auth: StoredAuth,
+    /// `None` keeps the default (every folder with a known role), `Some([])`
+    /// syncs no folder automatically, `Some(paths)` only those folders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synced_folders: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -70,6 +74,7 @@ impl StoredAccount {
             imap: config.imap.clone(),
             smtp: config.smtp.clone(),
             auth,
+            synced_folders: None,
         }
     }
 

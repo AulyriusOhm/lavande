@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { MAIL_SUGGESTIONS, TASKS, TASK_STATES, sortTasks, taskFromSuggestion } from "@/lib/tasks";
+import { usePrefs } from "@/lib/prefs";
 import type { MailSuggestion, Subtask, Task, TaskState } from "@/lib/tasks";
 import { createClock, type Clock } from "@/lib/sync/clock";
 import { createSyncEngine, type SyncEngine, type SyncStatus } from "@/lib/sync/engine";
@@ -211,6 +212,8 @@ function hasPlanningDocs(state: SyncState): boolean {
 }
 
 export function PlanningProvider({ children, storage }: { children: ReactNode; storage?: SyncStorage }) {
+  const { sync: syncPrefs } = usePrefs();
+  const kanbanSync = syncPrefs.enabled && syncPrefs.kanban;
   const syncStorage = useMemo(() => storage ?? createLocalStorageSyncStorage(), [storage]);
   const engine = useMemo(() => createSyncEngine(syncStorage), [syncStorage]);
   const clock = useMemo<Clock>(() => createClock(syncStorage.read().device.id), [syncStorage]);
@@ -264,7 +267,11 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
     [applyLocal, engine],
   );
 
-  useEffect(() => engine.start(), [engine]);
+  useEffect(() => {
+    engine.setPaused(!kanbanSync);
+    if (!kanbanSync) return;
+    return engine.start();
+  }, [engine, kanbanSync]);
 
   const seeded = useRef(false);
   useEffect(() => {

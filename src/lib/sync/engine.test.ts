@@ -445,6 +445,27 @@ describe("createSyncEngine", () => {
     expect(harness.engine.getStatus().phase).toBe("synced");
   });
 
+  it("setPaused retient le flush automatique et syncNow, puis reprend au déblocage", async () => {
+    const harness = createHarness();
+    await harness.connect();
+    harness.engine.setPaused(true);
+    expect(harness.engine.isPaused()).toBe(true);
+
+    harness.engine.emitLocal("task", "tk:1", { title: "Acheter du pain" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(harness.pushCalls()).toHaveLength(0);
+    expect(harness.engine.getState().outbox).toHaveLength(1);
+
+    await harness.engine.syncNow();
+    expect(harness.pushCalls()).toHaveLength(0);
+
+    harness.engine.setPaused(false);
+    expect(harness.engine.isPaused()).toBe(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.pushCalls()).toHaveLength(1);
+    expect(harness.engine.getState().outbox).toEqual([]);
+  });
+
   it("logoutAccount efface compte et enveloppes mais garde docs et outbox", async () => {
     const harness = createHarness();
     await harness.connect();

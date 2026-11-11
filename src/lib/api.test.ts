@@ -40,6 +40,54 @@ describe("mailApi · renommage de compte", () => {
   });
 });
 
+describe("mailApi · choix des dossiers synchronisés", () => {
+  it("envoie la sélection en PATCH sur /sync-folders", async () => {
+    const fetchMock = vi.fn(async () =>
+      response({ id: "a1", folders: 2, synced_folders: ["INBOX"] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const summary = await mailApi.setSyncFolders("a 1", ["INBOX"]);
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/accounts/a%201/sync-folders");
+    expect(init.method).toBe("PATCH");
+    expect(init.body).toBe(JSON.stringify({ folders: ["INBOX"] }));
+    expect(summary.synced_folders).toEqual(["INBOX"]);
+  });
+
+  it("envoie null pour revenir au choix par défaut", async () => {
+    const fetchMock = vi.fn(async () => response({ id: "a1", folders: 2, synced_folders: null }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const summary = await mailApi.setSyncFolders("a1", null);
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.body).toBe(JSON.stringify({ folders: null }));
+    expect(summary.synced_folders).toBeNull();
+  });
+
+  it("accepte une liste vide : aucun dossier", async () => {
+    const fetchMock = vi.fn(async () => response({ id: "a1", folders: 2, synced_folders: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const summary = await mailApi.setSyncFolders("a1", []);
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.body).toBe(JSON.stringify({ folders: [] }));
+    expect(summary.synced_folders).toEqual([]);
+  });
+
+  it("remonte un dossier inconnu refusé par le démon", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response({ error: "dossier « Zzz » inconnu", kind: "config" }, 400)),
+    );
+
+    await expect(mailApi.setSyncFolders("a1", ["Zzz"])).rejects.toThrow("dossier « Zzz » inconnu");
+  });
+});
+
 describe("mailApi · désynchronisation d'un dossier", () => {
   it("supprime le cache local avec le chemin encodé", async () => {
     const fetchMock = vi.fn(async () => noContent());

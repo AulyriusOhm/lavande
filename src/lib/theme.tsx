@@ -20,18 +20,30 @@ const CONTRAST_FALLBACK = "#000000";
 const CONTRAST_MIN = 4.5;
 const THEME_COLOR = { light: "#fbfaff", dark: "#0e0c13" };
 
+export type ThemeMode = "light" | "dark" | "auto";
+const DAY_START_HOUR = 7;
+const NIGHT_START_HOUR = 19;
+const AUTO_TICK_MS = 60_000;
+
+export function isNightTime(date = new Date()) {
+  const hour = date.getHours();
+  return hour < DAY_START_HOUR || hour >= NIGHT_START_HOUR;
+}
+
 type ThemeContextValue = {
   accent: string;
   dark: boolean;
+  mode: ThemeMode;
   brand: string;
   setAccent: (value: string) => void;
+  setMode: (mode: ThemeMode) => void;
   setDark: (value: boolean) => void;
   reset: () => void;
 };
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-type Stored = { accent?: string; dark?: boolean };
+type Stored = { accent?: string; dark?: boolean; mode?: ThemeMode };
 
 function readStored(): Stored {
   try {
@@ -66,12 +78,28 @@ export function accentContrast(accent: string) {
   return Math.max(light, dark) >= CONTRAST_MIN ? best : CONTRAST_FALLBACK;
 }
 
+function storedMode(): ThemeMode {
+  const stored = readStored();
+  if (stored.mode === "light" || stored.mode === "dark" || stored.mode === "auto") return stored.mode;
+  return stored.dark ? "dark" : "light";
+}
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [accent, setAccentState] = useState(() => readStored().accent ?? DEFAULT_ACCENT);
-  const [dark, setDarkState] = useState(() => readStored().dark ?? false);
+  const [mode, setModeState] = useState<ThemeMode>(storedMode);
+  const [night, setNight] = useState(() => isNightTime());
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ accent, dark }));
+    if (mode !== "auto") return;
+    setNight(isNightTime());
+    const timer = window.setInterval(() => setNight(isNightTime()), AUTO_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [mode]);
+
+  const dark = mode === "auto" ? night : mode === "dark";
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ accent, mode }));
     const root = document.documentElement;
     root.style.setProperty("--accent", accent);
     root.style.setProperty("--accent-contrast", accentContrast(accent));
@@ -79,18 +107,19 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     document
       .querySelector('meta[name="theme-color"]')
       ?.setAttribute("content", dark ? THEME_COLOR.dark : THEME_COLOR.light);
-  }, [accent, dark]);
+  }, [accent, dark, mode]);
 
   const setAccent = useCallback((value: string) => setAccentState(value), []);
-  const setDark = useCallback((value: boolean) => setDarkState(value), []);
+  const setMode = useCallback((value: ThemeMode) => setModeState(value), []);
+  const setDark = useCallback((value: boolean) => setModeState(value ? "dark" : "light"), []);
   const reset = useCallback(() => {
     setAccentState(DEFAULT_ACCENT);
-    setDarkState(false);
+    setModeState("light");
   }, []);
 
   const value = useMemo(
-    () => ({ accent, dark, brand: dark ? "Orchidée" : "Lavande", setAccent, setDark, reset }),
-    [accent, dark, setAccent, setDark, reset],
+    () => ({ accent, dark, mode, brand: dark ? "Orchidée" : "Lavande", setAccent, setMode, setDark, reset }),
+    [accent, dark, mode, setAccent, setMode, setDark, reset],
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, CheckCircle2, Loader2, PlugZap, Radar, Server, Sparkles } from "lucide-react";
+import { ArrowLeft, CheckCircle2, FolderTree, Loader2, PlugZap, Radar, Server, Sparkles } from "lucide-react";
 import { ApiError, errorText, mailApi } from "@/lib/api";
 import type { DiscoverySource, Encryption } from "@/lib/api";
 import { accountSlug } from "@/lib/mail-backend";
@@ -7,7 +7,7 @@ import { isTauriShell, openExternal } from "@/lib/open-external";
 import { OAuthGuide } from "@/components/oauth-guide";
 import { useMailStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
-import { IconButton } from "@/components/ui/primitives";
+import { IconButton, ToggleRow } from "@/components/ui/primitives";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
@@ -48,7 +48,7 @@ export function ConnectScreen({
   variant?: "mobile" | "desktop";
 }) {
   const desktop = variant === "desktop";
-  const { createAccount, useDemo, phase, refreshMailbox } = useMailStore();
+  const { createAccount, useDemo, phase, refreshMailbox, notify } = useMailStore();
   const [label, setLabel] = useState("");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
@@ -60,6 +60,7 @@ export function ConnectScreen({
   const [smtpPort, setSmtpPort] = useState(String(ENCRYPTIONS[0].smtp));
   const [smtpEncryption, setSmtpEncryption] = useState<Encryption>(ENCRYPTIONS[0].value);
   const [busy, setBusy] = useState(false);
+  const [syncFolders, setSyncFolders] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const builtInClientId =
@@ -176,6 +177,13 @@ export function ConnectScreen({
       if (outcome.status === "done") {
         setPendingUrl(null);
         setConnected(true);
+        if (!syncFolders) {
+          await mailApi
+            .setSyncFolders(outcome.account_id ?? accountSlug(address), [])
+            .catch((failure: unknown) =>
+              notify(`Dossiers non enregistrés · ${errorText(failure)}`),
+            );
+        }
         await new Promise((resolve) => setTimeout(resolve, 1200));
         await refreshMailbox();
         onClose?.();
@@ -196,10 +204,11 @@ export function ConnectScreen({
   const submit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (busy) return;
+    const id = accountSlug(email);
     setBusy(true);
     setError(null);
     createAccount({
-      id: accountSlug(email),
+      id,
       label: label.trim(),
       email: email.trim(),
       username: username.trim() || email.trim(),
@@ -207,6 +216,12 @@ export function ConnectScreen({
       smtp: { host: smtpHost.trim(), port: Number(smtpPort), encryption: smtpEncryption },
       auth: { kind: "password", password },
     })
+      .then(async () => {
+        if (syncFolders) return;
+        await mailApi
+          .setSyncFolders(id, [])
+          .catch((failure: unknown) => notify(`Dossiers non enregistrés · ${errorText(failure)}`));
+      })
       .catch((failure: unknown) => {
         setError(
           failure instanceof ApiError
@@ -572,6 +587,22 @@ export function ConnectScreen({
           </fieldset>
         </BlurFade>
         </div>
+
+        <BlurFade delay={0.14}>
+          <div className="mt-3 rounded-2xl border border-line bg-surface">
+            <ToggleRow
+              icon={<FolderTree className="size-4" />}
+              label="Synchroniser les dossiers"
+              hint={
+                syncFolders
+                  ? "Tous les dossiers du compte, affinables ensuite dans les réglages"
+                  : "Le compte se connecte sans rien télécharger"
+              }
+              checked={syncFolders}
+              onChange={setSyncFolders}
+            />
+          </div>
+        </BlurFade>
 
         {error && (
           <p

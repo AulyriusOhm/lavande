@@ -76,6 +76,7 @@ async fn sync(
         })?
     };
     let config = state.account(&id).await?;
+    let selection = state.sync_folders(&id)?;
     let mapping = FolderMapping::default();
     let keys = state.pgp().keyring().await?;
     let reports: Vec<FolderReport> = match request.folder_path {
@@ -93,11 +94,18 @@ async fn sync(
             logout(session).await;
             vec![FolderReport::new(folder_path, report)]
         }
-        None => mail_sync::sync_account_keys(state.store(), &config, &mapping, state.tls(), &keys)
-            .await?
-            .into_iter()
-            .map(|(folder_path, report)| FolderReport::new(folder_path, report))
-            .collect(),
+        None => mail_sync::sync_account_selected(
+            state.store(),
+            &config,
+            &mapping,
+            state.tls(),
+            &keys,
+            selection.as_deref(),
+        )
+        .await?
+        .into_iter()
+        .map(|(folder_path, report)| FolderReport::new(folder_path, report))
+        .collect(),
     };
     tracing::info!(account = %id, folders = reports.len(), "synchro terminée");
     Ok(Json(SyncResponse { reports }))

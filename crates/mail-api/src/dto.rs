@@ -133,6 +133,9 @@ pub struct AccountSummary {
     pub imap: EndpointSummary,
     pub smtp: EndpointSummary,
     pub folders: usize,
+    /// `null`: every folder with a known role; `[]`: none. Mirrors
+    /// `StoredAccount::synced_folders`.
+    pub synced_folders: Option<Vec<String>>,
 }
 
 impl AccountSummary {
@@ -145,6 +148,7 @@ impl AccountSummary {
             imap: EndpointSummary::new(&account.imap),
             smtp: EndpointSummary::new(&account.smtp),
             folders,
+            synced_folders: account.synced_folders.clone(),
         }
     }
 }
@@ -212,6 +216,13 @@ pub struct PurgeRequest {
 #[derive(Deserialize)]
 pub struct RenameRequest {
     pub label: String,
+}
+
+/// `folders` omitted or `null` restores the default selection.
+#[derive(Deserialize)]
+pub struct SyncFoldersRequest {
+    #[serde(default)]
+    pub folders: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]

@@ -5,14 +5,14 @@ use std::sync::Arc;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{delete, get};
+use axum::routing::{delete, get, patch};
 use axum::{Json, Router};
 use lavande_mail::config::AccountConfig;
 use lavande_mail::imap;
 use lavande_mail::model::Folder;
 
 use crate::config_file::StoredAccount;
-use crate::dto::{AccountSummary, ApiJson, RenameRequest};
+use crate::dto::{AccountSummary, ApiJson, RenameRequest, SyncFoldersRequest};
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -20,6 +20,7 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/accounts", get(list).post(add))
         .route("/api/accounts/{id}", delete(remove).patch(rename))
+        .route("/api/accounts/{id}/sync-folders", patch(set_sync_folders))
         .route("/api/accounts/{id}/folders", get(folders))
         .route("/api/accounts/{id}/folders/{path}/local", delete(desync))
 }
@@ -111,6 +112,52 @@ async fn rename(
     let folders = state.store().list_folders(&id)?.len();
     tracing::info!(account = %id, label, "compte renommé");
     Ok(Json(AccountSummary::new(&renamed, folders)))
+}
+
+/// Selects the folders the account syncs by itself. `folders: null` restores
+/// the default (every folder with a known role), `[]` syncs none.
+async fn set_sync_folders(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<SyncFoldersRequest>,
+) -> Result<Json<AccountSummary>, ApiError> {
+    state.ensure_account(&id)?;
+    let known: Vec<String> = state
+        .store()
+        .list_folders(&id)?
+        .into_iter()
+        .map(|folder| folder.path)
+        .collect();
+    let selected = match request.folders {
+        None => None,
+        Some(paths) => {
+            let mut kept: Vec<String> = Vec::with_capacity(paths.len());
+            for path in paths {
+                let path = path.trim().to_string();
+                if path.is_empty() {
+                    continue;
+                }
+                if !known.contains(&path) {
+                    return Err(ApiError::bad_request(
+                        "config",
+                        format!("dossier « {path} » inconnu pour ce compte"),
+                    ));
+                }
+                if !kept.contains(&path) {
+                    kept.push(path);
+                }
+            }
+            Some(kept)
+        }
+    };
+    let updated = state.update_sync_folders(&id, selected).await?;
+    let folders = known.len();
+    tracing::info!(
+        account = %id,
+        selection = updated.synced_folders.as_ref().map_or(-1, |paths| paths.len() as i64),
+        "dossiers synchronisés choisis"
+    );
+    Ok(Json(AccountSummary::new(&updated, folders)))
 }
 
 /// Forgets what is stored locally for one folder; the server is left alone.

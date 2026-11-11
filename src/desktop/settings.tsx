@@ -7,6 +7,7 @@ import {
   Check,
   ChevronDown,
   Download,
+  FolderTree,
   Globe,
   KeyRound,
   ListChecks,
@@ -21,10 +22,13 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
+  SunMoon,
   Terminal,
   Trash2,
 } from "lucide-react";
-import { errorText } from "@/lib/api";
+import { errorText, mailApi } from "@/lib/api";
+import type { ApiFolder } from "@/lib/api";
+import type { Account } from "@/lib/accounts";
 import {
   PGP_STATE,
   formatFingerprint,
@@ -42,7 +46,7 @@ import type { McpLogEntry } from "@/lib/mcp";
 import { activeSignature, mergeFlags, usePrefs } from "@/lib/prefs";
 import { llmProbe, llmReady } from "@/lib/llm";
 import type { SummaryConfig } from "@/lib/summary";
-import { ACCENT_PRESETS, useTheme } from "@/lib/theme";
+import { ACCENT_PRESETS, useTheme, type ThemeMode } from "@/lib/theme";
 import { useMailStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Avatar, Switch, ToggleRow } from "@/components/ui/primitives";
@@ -107,6 +111,113 @@ const hourPatch = (key: SummaryHourKey, value: string): Partial<SummaryConfig> =
   [key]: clampHours(value, 23),
 });
 
+// Choix des dossiers synchronisés d'un compte : null = tous ceux à rôle connu,
+// [] = aucun. Chaque changement est enregistré aussitôt et l'affichage reprend
+// la sélection que le service vient de renvoyer.
+function AccountFolderPicker({
+  account,
+  selection,
+  onSelection,
+  notify,
+}: {
+  account: Account;
+  selection: string[] | null;
+  onSelection: (next: string[] | null) => void;
+  notify: (message: string) => void;
+}) {
+  const [folders, setFolders] = useState<ApiFolder[] | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    mailApi
+      .folders(account.id)
+      .then((found) => {
+        if (!cancelled) setFolders(found);
+      })
+      .catch((failure: unknown) => {
+        if (!cancelled) setError(errorText(failure));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [account.id]);
+
+  const paths = (folders ?? []).map((folder) => folder.path);
+  const checked = selection === null ? paths : selection;
+  const enabled = checked.length > 0;
+
+  const save = (next: string[] | null) => {
+    setSaving(true);
+    setError(null);
+    mailApi
+      .setSyncFolders(account.id, next)
+      .then((summary) => {
+        onSelection(summary.synced_folders ?? null);
+        notify(`Dossiers synchronisés · ${account.label}`);
+      })
+      .catch((failure: unknown) => setError(errorText(failure)))
+      .finally(() => setSaving(false));
+  };
+
+  const togglePath = (path: string) => {
+    const next = checked.includes(path)
+      ? checked.filter((entry) => entry !== path)
+      : [...checked, path];
+    save(next.length === paths.length ? null : next);
+  };
+
+  const count =
+    enabled && checked.length > 1
+      ? `${checked.length} dossiers synchronisés`
+      : enabled
+        ? "1 dossier synchronisé"
+        : "aucun dossier synchronisé automatiquement";
+
+  return (
+    <div className="mt-2 rounded-2xl border border-line bg-surface-2/40 pb-1.5">
+      <ToggleRow
+        icon={<FolderTree className="size-4" />}
+        label="Synchroniser les dossiers"
+        hint={count}
+        checked={enabled}
+        onChange={(value) => save(value ? null : [])}
+      />
+      {enabled ? (
+        <div className="mt-1 max-h-44 overflow-y-auto px-2">
+          {folders === null ? (
+            <p className="px-1.5 py-1.5 text-[11px] font-semibold text-ink-muted">Dossiers…</p>
+          ) : (
+            folders.map((folder) => (
+              <label
+                key={folder.path}
+                className="flex cursor-pointer items-center gap-2 rounded-xl px-1.5 py-1 text-[11.5px] font-semibold text-ink-soft hover:bg-surface-2"
+              >
+                <input
+                  type="checkbox"
+                  aria-label={`Synchroniser ${folder.name}`}
+                  className="size-3.5 shrink-0 accent-[var(--accent)]"
+                  checked={checked.includes(folder.path)}
+                  disabled={saving}
+                  onChange={() => togglePath(folder.path)}
+                />
+                <span className="truncate">{folder.name}</span>
+                <span className="ml-auto truncate text-[10px] font-medium text-ink-muted">
+                  {folder.path}
+                </span>
+              </label>
+            ))
+          )}
+        </div>
+      ) : null}
+      {error ? (
+        <p className="px-3.5 pt-1 text-[10.5px] font-semibold text-rose-600">{error}</p>
+      ) : null}
+    </div>
+  );
+}
+
 function usePgpKeys() {
   const [keys, setKeys] = useState<PgpKey[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -137,7 +248,7 @@ function usePgpKeys() {
 }
 
 export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
-  const { accent, dark, brand, setAccent, setDark, reset } = useTheme();
+  const { accent, mode: themeMode, brand, setAccent, setMode: setThemeMode, reset } = useTheme();
   const {
     pgpEncrypt,
     pgpSign,
@@ -175,6 +286,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   const [exporting, setExporting] = useState<string | null>(null);
   const { keys, error: keysError, loading: keysLoading, load: loadKeys } = usePgpKeys();
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [folderPanel, setFolderPanel] = useState<string | null>(null);
+  const [folderSelection, setFolderSelection] = useState<Record<string, string[] | null>>({});
   const [renameValue, setRenameValue] = useState("");
   const [savingRename, setSavingRename] = useState(false);
   const [probing, setProbing] = useState(false);
@@ -407,12 +520,34 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                                 <PenLine className="size-3.5" />
                                 Renommer
                               </DButton>
+                              <DButton
+                                variant="ghost"
+                                size="sm"
+                                aria-label={`Dossiers synchronisés de ${item.label}`}
+                                aria-pressed={folderPanel === item.id}
+                                onClick={() =>
+                                  setFolderPanel((current) => (current === item.id ? null : item.id))
+                                }
+                              >
+                                <FolderTree className="size-3.5" />
+                                Dossiers
+                              </DButton>
                               <DButton variant="danger" size="sm" onClick={() => askRemoveAccount(item)}>
                                 <Trash2 className="size-3.5" />
                                 Retirer
                               </DButton>
                             </div>
                           ))}
+                        {mode === "api" && folderPanel === item.id ? (
+                          <AccountFolderPicker
+                            account={item}
+                            selection={folderSelection[item.id] ?? item.syncedFolders ?? null}
+                            onSelection={(next) =>
+                              setFolderSelection((current) => ({ ...current, [item.id]: next }))
+                            }
+                            notify={notify}
+                          />
+                        ) : null}
                       </Surface>
                     ))}
                     <button
@@ -463,19 +598,20 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                 <div className="grid gap-3 md:grid-cols-2">
                   <Surface className="p-4">
                     <SectionLabel>Thème</SectionLabel>
-                    <div className="mt-2 grid grid-cols-2 gap-1.5">
-                      {[
-                        { label: "Clair", icon: Sun, value: false },
-                        { label: "Sombre", icon: Moon, value: true },
-                      ].map((option) => {
+                    <div className="mt-2 grid grid-cols-3 gap-1.5">
+                      {([
+                        { label: "Clair", icon: Sun, value: "light" },
+                        { label: "Sombre", icon: Moon, value: "dark" },
+                        { label: "Auto", icon: SunMoon, value: "auto" },
+                      ] as { label: string; icon: typeof Sun; value: ThemeMode }[]).map((option) => {
                         const Icon = option.icon;
-                        const selected = dark === option.value;
+                        const selected = themeMode === option.value;
                         return (
                           <button
                             key={option.label}
                             type="button"
                             aria-pressed={selected}
-                            onClick={() => setDark(option.value)}
+                            onClick={() => setThemeMode(option.value)}
                             className={cn(
                               "focus-ring flex h-10 items-center justify-center gap-1.5 rounded-[14px] text-[12px] font-bold transition-colors duration-200",
                               selected
@@ -489,6 +625,9 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                         );
                       })}
                     </div>
+                    <p className="mt-1.5 text-[10.5px] font-medium text-ink-muted">
+                      Auto : clair le jour (7h–19h), sombre la nuit.
+                    </p>
 
                     <SectionLabel className="mt-4">Couleur d'accent</SectionLabel>
                     <div className="mt-2 grid grid-cols-3 gap-1.5">

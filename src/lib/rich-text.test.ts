@@ -6,6 +6,7 @@ import {
   looksLikeHtml,
   looksLikeMarkdown,
   markdownToHtml,
+  sanitizeHtml,
   textToHtml,
 } from "@/lib/rich-text";
 
@@ -102,5 +103,26 @@ describe("markdownToHtml", () => {
     const html = markdownToHtml("- a\n- b");
     expect(html).toContain("<ul>");
     expect(html).toContain("<li>a</li>");
+  });
+});
+
+describe("sanitizeHtml", () => {
+  it("conserve le HTML sûr", () => {
+    expect(sanitizeHtml("<p>Bonjour <b>monde</b></p>")).toBe("<p>Bonjour <b>monde</b></p>");
+  });
+
+  it("retire les scripts et iframes", () => {
+    expect(sanitizeHtml("<p>ok</p><script>alert(1)</script>")).toBe("<p>ok</p>");
+    expect(sanitizeHtml('<iframe src="x"></iframe><p>ok</p>')).toBe("<p>ok</p>");
+  });
+
+  it("retire les gestionnaires d'événements et les URL javascript:", () => {
+    expect(sanitizeHtml('<p onclick="alert(1)">x</p>')).toBe("<p>x</p>");
+    expect(sanitizeHtml('<a href="javascript:alert(1)">x</a>')).toBe("<a>x</a>");
+  });
+
+  it("renvoie vide pour une entrée vide", () => {
+    expect(sanitizeHtml("")).toBe("");
+    expect(sanitizeHtml("   ")).toBe("");
   });
 });

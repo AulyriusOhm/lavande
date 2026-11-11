@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import type { ComposeDraft } from "@/lib/draft";
@@ -10,9 +10,10 @@ vi.mock("@/lib/store", () => ({
   }),
 }));
 
+const signatureMock = vi.hoisted(() => ({ html: null as string | null }));
 vi.mock("@/lib/prefs", () => ({
   usePrefs: () => ({ signatures: [], llm: { endpoint: "", apiKey: "", model: "" } }),
-  activeSignature: () => null,
+  activeSignature: () => signatureMock.html,
 }));
 
 const { ComposeScreen } = await import("@/screens/compose-screen");
@@ -35,6 +36,10 @@ function pick(input: HTMLElement, file: File) {
   Object.defineProperty(input, "files", { value: [file], configurable: true });
   fireEvent.change(input);
 }
+
+beforeEach(() => {
+  signatureMock.html = null;
+});
 
 describe("pièces jointes de la composition", () => {
   it("ajoute le fichier choisi au brouillon et affiche une puce", async () => {
@@ -84,5 +89,22 @@ describe("pièces jointes de la composition", () => {
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("est trop lourd"));
     expect(screen.queryByText("enorme.zip")).toBeNull();
     expect(drafts.at(-1)?.attachments).toBeUndefined();
+  });
+});
+
+describe("aperçu de la signature", () => {
+  it("affiche la signature dans le corps quand elle est activée", () => {
+    signatureMock.html = "<p>Cordialement,<br>Roman</p>";
+    render(<Harness />);
+    const preview = screen.getByTestId("signature-preview");
+    expect(preview.textContent).toContain("Cordialement");
+    expect(preview.textContent).toContain("Roman");
+  });
+
+  it("masque l'aperçu quand la signature est retirée du message", () => {
+    signatureMock.html = "<p>Cordialement</p>";
+    render(<Harness />);
+    fireEvent.click(screen.getByText("Signature activée"));
+    expect(screen.queryByTestId("signature-preview")).toBeNull();
   });
 });

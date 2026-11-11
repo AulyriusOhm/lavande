@@ -2,12 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { Loader2, LogOut, RefreshCw, ShieldCheck } from "lucide-react";
 import { usePlanning } from "@/lib/planning-store";
+import { usePrefs } from "@/lib/prefs";
 import { decodeBase64Url, encodeBase64Url } from "@/lib/sync/crypto";
 import type { SyncDevice } from "@/lib/sync/client";
 import type { SyncPhase } from "@/lib/sync/engine";
 import { cn } from "@/lib/utils";
 import { Badge, DButton, DIconButton, SectionLabel, Surface, TextInput } from "@/desktop/ui";
-import { Switch } from "@/components/ui/primitives";
+import { Switch, SwitchTrack } from "@/components/ui/primitives";
 import { isNativeShell } from "@/lib/native";
 
 const DEFAULT_SERVER = "http://127.0.0.1:8787";
@@ -61,8 +62,48 @@ function shortFingerprint(publicKey: string) {
   }
 }
 
+function SyncToggle({
+  label,
+  hint,
+  checked,
+  disabled = false,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between gap-3 px-3.5 py-2.5 transition-opacity",
+        disabled && "opacity-45",
+      )}
+    >
+      <span className="min-w-0 flex-1 leading-tight">
+        <span className="block text-[12.5px] font-bold text-ink">{label}</span>
+        <span className="block text-[10.5px] font-medium text-ink-muted">{hint}</span>
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className="focus-ring grid size-11 shrink-0 place-items-center rounded-full disabled:cursor-not-allowed"
+      >
+        <SwitchTrack checked={checked} />
+      </button>
+    </div>
+  );
+}
+
 export function SyncSettings({ variant = "mobile" }: { variant?: "mobile" | "desktop" }) {
   const { sync, syncNow, engine } = usePlanning();
+  const { sync: syncPrefs, setSync } = usePrefs();
   const mobile = variant === "mobile";
   const configured = sync.phase !== "unconfigured";
   const phase = PHASE[sync.phase];
@@ -178,9 +219,52 @@ export function SyncSettings({ variant = "mobile" }: { variant?: "mobile" | "des
   const action = mobile ? "min-h-11 flex-1 rounded-full" : "";
   const small = mobile ? "text-[11px]" : "text-[10.5px]";
   const errorText = "mt-2 text-[11px] font-semibold text-rose-600 dark:text-rose-300";
+  const master = syncPrefs.enabled;
+  const planningSync = master && syncPrefs.kanban;
 
   return (
     <div className="space-y-3">
+      <Surface className="overflow-hidden pb-1">
+        <div className="px-3.5 pt-3">
+          <SectionLabel>Synchronisation</SectionLabel>
+        </div>
+        <div className="mt-1.5 divide-y divide-line/70 border-t border-line/70">
+          <SyncToggle
+            label="Tout synchroniser"
+            hint="Coupe ou rétablit toutes les synchronisations d'un coup"
+            checked={master}
+            onChange={(value) => setSync({ enabled: value })}
+          />
+          <SyncToggle
+            label="Mails"
+            hint="Relève automatiquement les nouveaux messages et rafraîchit la boîte"
+            checked={syncPrefs.mails}
+            disabled={!master}
+            onChange={(value) => setSync({ mails: value })}
+          />
+          <SyncToggle
+            label="Calendrier"
+            hint="Conserve les rendez-vous et les partage entre tes fenêtres"
+            checked={syncPrefs.calendar}
+            disabled={!master}
+            onChange={(value) => setSync({ calendar: value })}
+          />
+          <SyncToggle
+            label="Kanban / tâches"
+            hint="Tâches, suggestions et planning entre tes appareils"
+            checked={syncPrefs.kanban}
+            disabled={!master}
+            onChange={(value) => setSync({ kanban: value })}
+          />
+        </div>
+        {!master ? (
+          <p className={cn("px-3.5 pt-1 pb-2.5 font-semibold text-ink-muted", small)}>
+            Toute synchronisation est coupée : rien ne quitte cet appareil. La synchronisation manuelle
+            d'un dossier reste possible.
+          </p>
+        ) : null}
+      </Surface>
+
       <Surface className="p-3.5">
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone={phase.tone}>{phase.label}</Badge>
@@ -194,7 +278,7 @@ export function SyncSettings({ variant = "mobile" }: { variant?: "mobile" | "des
             variant="soft"
             size="sm"
             className={cn("ml-auto", mobile && "min-h-11 rounded-full")}
-            disabled={busy !== null || sync.phase === "syncing"}
+            disabled={busy !== null || sync.phase === "syncing" || !planningSync}
             onClick={() => void syncNow()}
           >
             <RefreshCw className={cn("size-3.5", sync.phase === "syncing" && "animate-spin")} />
@@ -203,10 +287,17 @@ export function SyncSettings({ variant = "mobile" }: { variant?: "mobile" | "des
         </div>
         {sync.error !== undefined ? <p className={errorText}>{sync.error}</p> : null}
         {error !== null ? <p className={errorText}>{error}</p> : null}
+        {!planningSync ? (
+          <p className={cn("mt-1.5 font-semibold text-ink-muted", small)}>
+            {master
+              ? "Synchronisation des tâches coupée : les modifications restent locales."
+              : "Synchronisation globale coupée : le planning ne quitte pas cet appareil."}
+          </p>
+        ) : null}
         <div className="mt-2.5 flex items-center justify-between gap-3 border-t border-line/70 pt-2.5">
           <span className={cn("font-semibold text-ink-muted", small)}>Synchro automatique (30 s)</span>
           <Switch
-            checked={autoSync}
+            checked={autoSync && planningSync}
             label="Synchro automatique"
             onChange={(value) => engine.setAutoSync(value)}
           />

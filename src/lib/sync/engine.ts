@@ -63,6 +63,9 @@ export type SyncEngine = {
   readOnly(kind: EntityKind, id: string): boolean;
   canEmit(): boolean;
   setAutoSync(value: boolean): void;
+  /** Met la synchronisation réseau en pause : les mutations restent dans l'outbox. */
+  setPaused(value: boolean): void;
+  isPaused(): boolean;
   createAccount(input: { serverUrl: string; email: string; password: string }): Promise<void>;
   loginAccount(input: { serverUrl: string; email: string; password: string }): Promise<void>;
   logoutAccount(): Promise<void>;
@@ -136,6 +139,7 @@ export function createSyncEngine(storage: SyncStorage, options: SyncEngineOption
   let intervalTimer: ReturnType<typeof setInterval> | null = null;
   let attempts = 0;
   let started = false;
+  let paused = false;
 
   function notify(): void {
     for (const listener of [...listeners]) listener();
@@ -185,6 +189,7 @@ export function createSyncEngine(storage: SyncStorage, options: SyncEngineOption
       intervalTimer = null;
     }
     if (!started) return;
+    if (paused) return;
     if (!storage.read().autoSync) return;
     intervalTimer = setInterval(() => {
       void syncNow();
@@ -192,6 +197,7 @@ export function createSyncEngine(storage: SyncStorage, options: SyncEngineOption
   }
 
   function scheduleFlush(): void {
+    if (paused) return;
     if (!storage.read().autoSync) return;
     if (flushTimer !== null) clearTimeout(flushTimer);
     flushTimer = setTimeout(() => {
@@ -330,6 +336,7 @@ export function createSyncEngine(storage: SyncStorage, options: SyncEngineOption
   }
 
   function syncNow(): Promise<void> {
+    if (paused) return Promise.resolve();
     if (inflight !== null) return inflight;
     const run = sync().finally(() => {
       if (inflight === run) inflight = null;
@@ -383,6 +390,31 @@ export function createSyncEngine(storage: SyncStorage, options: SyncEngineOption
     storage.write({ ...state, autoSync: value });
     armAutoSync();
     notify();
+  }
+
+  function setPaused(value: boolean): void {
+    if (paused === value) return;
+    paused = value;
+    if (value) {
+      if (flushTimer !== null) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      if (intervalTimer !== null) {
+        clearInterval(intervalTimer);
+        intervalTimer = null;
+      }
+      clearBackoffTimer();
+      notify();
+      return;
+    }
+    armAutoSync();
+    notify();
+    void syncNow();
+  }
+
+  function isPaused(): boolean {
+    return paused;
   }
 
   function start(): () => void {
@@ -589,6 +621,8 @@ export function createSyncEngine(storage: SyncStorage, options: SyncEngineOption
     readOnly,
     canEmit,
     setAutoSync,
+    setPaused,
+    isPaused,
     createAccount,
     loginAccount,
     logoutAccount,

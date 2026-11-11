@@ -194,6 +194,17 @@ impl AppState {
         Ok(renamed)
     }
 
+    /// Which folders an account syncs. `None` means the default selection
+    /// (every folder with a known role).
+    pub fn sync_folders(&self, id: &str) -> Result<Option<Vec<String>>, ApiError> {
+        let account = self
+            .stored_accounts()?
+            .into_iter()
+            .find(|account| account.id == id)
+            .ok_or_else(|| ApiError::not_found(format!("compte « {id} » inconnu")))?;
+        Ok(account.synced_folders)
+    }
+
     pub async fn add_account(
         &self,
         config: &AccountConfig,
@@ -215,6 +226,24 @@ impl AppState {
             self.store.upsert_folder(folder)?;
         }
         Ok(())
+    }
+
+    /// Records the folder selection of one account only: the label, the
+    /// endpoints and the secrets stay untouched.
+    pub async fn update_sync_folders(
+        &self,
+        id: &str,
+        folders: Option<Vec<String>>,
+    ) -> Result<StoredAccount, ApiError> {
+        let mut accounts = self.stored_accounts()?;
+        let account = accounts
+            .iter_mut()
+            .find(|account| account.id == id)
+            .ok_or_else(|| ApiError::not_found(format!("compte « {id} » inconnu")))?;
+        account.synced_folders = folders;
+        let updated = account.clone();
+        self.save_accounts(&mut accounts).await?;
+        Ok(updated)
     }
 
     /// `true` when the account was listed in `accounts.json`.

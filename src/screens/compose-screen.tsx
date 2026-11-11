@@ -23,7 +23,7 @@ import { ReplySuggestSheet, RewriteSheet } from "@/screens/assist-sheet";
 import { IconButton } from "@/components/ui/primitives";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { RichEditor } from "@/components/ui/rich-editor";
-import { ensureHtml, htmlToText, textToHtml, isHtmlEmpty } from "@/lib/rich-text";
+import { ensureHtml, htmlToText, textToHtml, isHtmlEmpty, sanitizeHtml } from "@/lib/rich-text";
 import { activeSignature, usePrefs } from "@/lib/prefs";
 
 export type { ComposeDraft };
@@ -414,6 +414,15 @@ export function ComposeScreen({
           minHeight="11rem"
           className="mt-3 flex-1"
         />
+
+        {accountSignature && draft.includeSignature !== false ? (
+          <div className="mt-2 border-t border-line/60 pt-2.5" data-testid="signature-preview">
+            <div
+              className="text-[12.5px] leading-relaxed text-ink-soft [&_a]:text-accent-ink [&_img]:max-w-full"
+              dangerouslySetInnerHTML={{ __html: sanitizeHtml(accountSignature) }}
+            />
+          </div>
+        ) : null}
 
         <div className="flex flex-wrap items-center gap-2 pb-4">
           {accountSignature ? (

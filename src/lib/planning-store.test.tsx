@@ -1,16 +1,22 @@
 import { StrictMode, type ReactNode } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { PlanningProvider, suggestionsInWindow, usePlanning } from "@/lib/planning-store";
+import { PrefsProvider, usePrefs } from "@/lib/prefs";
 import { MAIL_SUGGESTIONS, TASKS } from "@/lib/tasks";
 import type { MailSuggestion, Task } from "@/lib/tasks";
 import { createTask } from "@/screens/new-task-sheet";
 import { LOCAL_SCHEMA_VERSION, docKey, promotedTaskId, suggestionId, type Doc } from "@/lib/sync/merge";
+import { randomDek, wrapForDevice } from "@/lib/sync/crypto";
 import { createDevice, createMemoryStorage, emptyState, type SyncStorage } from "@/lib/sync/storage";
 
 function wrapperFor(storage: SyncStorage) {
   return function Wrapper({ children }: { children: ReactNode }) {
-    return <PlanningProvider storage={storage}>{children}</PlanningProvider>;
+    return (
+      <PrefsProvider>
+        <PlanningProvider storage={storage}>{children}</PlanningProvider>
+      </PrefsProvider>
+    );
   };
 }
 
@@ -49,7 +55,9 @@ describe("PlanningProvider", () => {
     const { result } = renderHook(() => usePlanning(), {
       wrapper: ({ children }: { children: ReactNode }) => (
         <StrictMode>
-          <PlanningProvider storage={storage}>{children}</PlanningProvider>
+          <PrefsProvider>
+            <PlanningProvider storage={storage}>{children}</PlanningProvider>
+          </PrefsProvider>
         </StrictMode>
       ),
     });
@@ -226,5 +234,71 @@ describe("suggestions · fenêtre temporelle", () => {
     expect(second.result.current.suggestions.find((entry) => entry.proposal === proposed.proposal)?.timestamp).toBe(
       now - H,
     );
+  });
+});
+
+describe("PlanningProvider · interrupteurs de synchronisation", () => {
+  function configuredStorage(): SyncStorage {
+    const device = createDevice("Portable", "web");
+    return createMemoryStorage({
+      ...emptyState(device),
+      account: {
+        serverUrl: "http://127.0.0.1:8787",
+        userId: "user-1",
+        email: "roman@lavande.mail",
+        accountSalt: "salt-1",
+        token: "token-1",
+      },
+      envelopes: { devices: { [device.id]: wrapForDevice(randomDek(), device.pubKey) } },
+    });
+  }
+
+  function mountWithPrefs(storage: SyncStorage, prefs: Record<string, unknown>) {
+    window.localStorage.setItem("lavande.prefs", JSON.stringify(prefs));
+    return renderHook(() => ({ planning: usePlanning(), prefs: usePrefs() }), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <PrefsProvider>
+          <PlanningProvider storage={storage}>{children}</PlanningProvider>
+        </PrefsProvider>
+      ),
+    });
+  }
+
+  it("met le moteur en pause quand le Kanban est coupé : les opérations restent en file", async () => {
+    const storage = configuredStorage();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = mountWithPrefs(storage, { sync: { kanban: false } });
+
+    expect(result.current.planning.engine.isPaused()).toBe(true);
+    expect(storage.read().outbox.length).toBeGreaterThan(0);
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
+  it("met le moteur en pause quand le maître est coupé, même Kanban actif", async () => {
+    const storage = configuredStorage();
+    vi.stubGlobal("fetch", vi.fn());
+    const { result } = mountWithPrefs(storage, { sync: { enabled: false, kanban: true } });
+
+    expect(result.current.planning.engine.isPaused()).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  it("relance la synchronisation quand le Kanban est réactivé", () => {
+    const storage = configuredStorage();
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ ops: [], nextSeq: 0, hasMore: false }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = mountWithPrefs(storage, { sync: { kanban: false } });
+
+    expect(result.current.planning.engine.isPaused()).toBe(true);
+
+    act(() => result.current.prefs.setSync({ kanban: true }));
+
+    expect(result.current.planning.engine.isPaused()).toBe(false);
+    expect(fetchMock).toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 });

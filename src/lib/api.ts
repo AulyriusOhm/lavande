@@ -122,6 +122,8 @@ export type ApiAccount = {
   imap: ApiEndpoint;
   smtp: ApiEndpoint;
   folders: number;
+  /** `null` : tous les dossiers à rôle connu ; `[]` : aucun. */
+  synced_folders?: string[] | null;
 };
 
 export type ApiHealth = {
@@ -388,6 +390,13 @@ export const mailApi = {
 
   renameAccount: (id: string, label: string) =>
     request<ApiAccount | void>(accountPath(id), { method: "PATCH", body: { label } }),
+
+  /** `null` : tous les dossiers à rôle connu ; `[]` : aucun. */
+  setSyncFolders: (id: string, folders: string[] | null) =>
+    request<ApiAccount>(`${accountPath(id)}/sync-folders`, {
+      method: "PATCH",
+      body: { folders },
+    }),
 
   deleteAccount: (id: string) => request<void>(accountPath(id), { method: "DELETE" }),
 

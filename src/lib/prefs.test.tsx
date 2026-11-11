@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { PrefsProvider, usePrefs } from "@/lib/prefs";
+import { DEFAULT_SYNC, PrefsProvider, asSync, usePrefs } from "@/lib/prefs";
 import { DEFAULT_SUMMARY } from "@/lib/summary";
 
 const mount = () =>
@@ -145,5 +145,86 @@ describe("préférences · suggestions de tâches IA", () => {
     expect(result.current.aiTasks).toEqual({ enabled: false, windowHours: 12 });
     expect(result.current.summary).toEqual(DEFAULT_SUMMARY);
     expect(stored().aiTasks).toMatchObject({ enabled: false, windowHours: 12 });
+  });
+});
+
+describe("préférences · synchronisation", () => {
+  it("active tous les domaines par défaut", () => {
+    expect(mount().result.current.sync).toEqual({
+      enabled: true,
+      mails: true,
+      calendar: true,
+      kanban: true,
+    });
+  });
+
+  it("relit des domaines coupés", () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({ sync: { enabled: false, mails: false, calendar: false, kanban: false } }),
+    );
+    expect(mount().result.current.sync).toEqual({
+      enabled: false,
+      mails: false,
+      calendar: false,
+      kanban: false,
+    });
+  });
+
+  it("ignore les valeurs non booléennes et complète les champs manquants", () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({ sync: { enabled: "non", mails: 0, calendar: null } }),
+    );
+    expect(mount().result.current.sync).toEqual({
+      enabled: true,
+      mails: true,
+      calendar: true,
+      kanban: true,
+    });
+
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ sync: { kanban: false } }));
+    expect(mount().result.current.sync).toEqual({
+      enabled: true,
+      mails: true,
+      calendar: true,
+      kanban: false,
+    });
+  });
+
+  it("tolère une valeur absente ou d'un autre type", () => {
+    expect(mount().result.current.sync.enabled).toBe(true);
+
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ sync: "tout" }));
+    expect(mount().result.current.sync).toEqual({
+      enabled: true,
+      mails: true,
+      calendar: true,
+      kanban: true,
+    });
+  });
+
+  it("met à jour partiellement et persiste, sans toucher aux autres préférences", () => {
+    const { result } = mount();
+
+    act(() => result.current.setSync({ mails: false }));
+    act(() => result.current.setSync({ enabled: false }));
+
+    expect(result.current.sync).toEqual({
+      enabled: false,
+      mails: false,
+      calendar: true,
+      kanban: true,
+    });
+    expect(stored().sync).toMatchObject({ enabled: false, mails: false });
+    expect(result.current.summary).toEqual(DEFAULT_SUMMARY);
+    expect(result.current.aiTasks).toEqual({ enabled: true, windowHours: 48 });
+    expect(result.current.calendarEnabled).toBe(true);
+    expect(result.current.pgpEncrypt).toBe(true);
+  });
+
+  it("expose un parseur tolérant pour les tests et la migration", () => {
+    expect(asSync(undefined)).toEqual(DEFAULT_SYNC);
+    expect(asSync({ kanban: false, mails: "oui" })).toEqual({ ...DEFAULT_SYNC, kanban: false });
   });
 });

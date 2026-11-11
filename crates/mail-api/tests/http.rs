@@ -383,6 +383,173 @@ async fn desyncing_a_folder_purges_it_locally() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn an_account_without_a_selection_reads_as_the_default() {
+    let (directory, state) = state().await;
+    seed(directory.path(), &[account("perso")]);
+
+    let (status, body) = call(&state, get("/api/accounts")).await;
+    assert_eq!(status, StatusCode::OK);
+    let listed = json(&body);
+    assert_eq!(listed[0]["id"], "perso");
+    assert!(
+        listed[0]["synced_folders"].is_null(),
+        "aucun choix enregistré : tous les dossiers à rôle connu"
+    );
+    assert_eq!(state.sync_folders("perso").expect("choix"), None);
+}
+
+#[tokio::test]
+async fn choosing_the_synced_folders_keeps_the_rest_of_the_account() {
+    let (directory, state) = state().await;
+    seed(directory.path(), &[account("perso")]);
+    state
+        .store()
+        .upsert_folder(&folder("INBOX", Some(4242)))
+        .expect("dossier");
+    state
+        .store()
+        .upsert_folder(&folder("Archive", None))
+        .expect("dossier");
+
+    let (status, body) = call(
+        &state,
+        patch(
+            "/api/accounts/perso/sync-folders",
+            &json!({ "folders": ["Archive", " INBOX ", "Archive", ""] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let summary = json(&body);
+    assert_eq!(summary["id"], "perso");
+    assert_eq!(summary["label"], "Perso");
+    assert_eq!(summary["synced_folders"], json!(["Archive", "INBOX"]));
+    assert_eq!(
+        state.sync_folders("perso").expect("choix"),
+        Some(vec!["Archive".to_string(), "INBOX".to_string()])
+    );
+
+    let stored = state.stored_accounts().expect("comptes");
+    assert_eq!(stored[0].label, "Perso", "le libellé survit au choix");
+    assert_eq!(stored[0].email, "roman@lavande.mail");
+    assert!(
+        state
+            .secrets()
+            .get("perso")
+            .await
+            .expect("secret")
+            .is_some(),
+        "le mot de passe du compte survit au choix"
+    );
+
+    let (status, body) = call(
+        &state,
+        patch(
+            "/api/accounts/perso/sync-folders",
+            &json!({ "folders": [] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json(&body)["synced_folders"], json!([]));
+    assert_eq!(
+        state.sync_folders("perso").expect("choix"),
+        Some(Vec::new())
+    );
+
+    let (status, body) = call(
+        &state,
+        patch(
+            "/api/accounts/perso/sync-folders",
+            &json!({ "folders": null }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(json(&body)["synced_folders"].is_null());
+    assert_eq!(state.sync_folders("perso").expect("choix"), None);
+}
+
+#[tokio::test]
+async fn an_unknown_folder_in_the_selection_is_a_400() {
+    let (directory, state) = state().await;
+    seed(directory.path(), &[account("perso")]);
+    state
+        .store()
+        .upsert_folder(&folder("INBOX", None))
+        .expect("dossier");
+
+    let (status, body) = call(
+        &state,
+        patch(
+            "/api/accounts/perso/sync-folders",
+            &json!({ "folders": ["INBOX", "Fantome"] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json(&body)["kind"], "config");
+    assert_eq!(
+        state.sync_folders("perso").expect("choix"),
+        None,
+        "un refus ne modifie rien"
+    );
+
+    let (status, body) = call(
+        &state,
+        patch(
+            "/api/accounts/absent/sync-folders",
+            &json!({ "folders": [] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json(&body)["kind"], "store");
+}
+
+#[tokio::test]
+async fn a_selection_is_written_to_accounts_json_and_survives_a_reload() {
+    let (directory, state) = state().await;
+    seed(directory.path(), &[account("perso")]);
+    state
+        .store()
+        .upsert_folder(&folder("INBOX", None))
+        .expect("dossier");
+
+    let (status, _) = call(
+        &state,
+        patch(
+            "/api/accounts/perso/sync-folders",
+            &json!({ "folders": ["INBOX"] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let text = fs::read_to_string(directory.path().join("accounts.json")).expect("fichier");
+    assert!(
+        text.contains("synced_folders"),
+        "le choix est persisté : {text}"
+    );
+    assert!(
+        !text.contains("secret-en-clair"),
+        "le secret reste hors du fichier"
+    );
+
+    let reopened = state_in(directory.path()).await;
+    assert_eq!(
+        reopened.sync_folders("perso").expect("choix"),
+        Some(vec!["INBOX".to_string()])
+    );
+
+    let legacy = serde_json::from_str::<serde_json::Value>(
+        &fs::read_to_string(directory.path().join("accounts.json")).expect("fichier"),
+    )
+    .expect("json");
+    assert!(legacy.is_array());
+}
+
 #[test]
 fn mail_error_maps_to_status() {
     let cases = [

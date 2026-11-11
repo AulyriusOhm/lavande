@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { PlanningProvider } from "@/lib/planning-store";
+import { PrefsProvider } from "@/lib/prefs";
 import { SyncSettings } from "@/components/sync-settings";
 import { randomDek, wrapForDevice } from "@/lib/sync/crypto";
 import { createDevice, createMemoryStorage, emptyState, type SyncStorage } from "@/lib/sync/storage";
@@ -34,11 +35,20 @@ function stubSyncServer(devices: unknown[]) {
   );
 }
 
+const storedSync = () =>
+  (JSON.parse(window.localStorage.getItem("lavande.prefs") ?? "{}") as { sync?: unknown }).sync;
+
+function seedSync(sync: Record<string, boolean>) {
+  window.localStorage.setItem("lavande.prefs", JSON.stringify({ sync }));
+}
+
 function renderSync(storage: SyncStorage) {
   return render(
-    <PlanningProvider storage={storage}>
-      <SyncSettings />
-    </PlanningProvider>,
+    <PrefsProvider>
+      <PlanningProvider storage={storage}>
+        <SyncSettings />
+      </PlanningProvider>
+    </PrefsProvider>,
   );
 }
 
@@ -102,5 +112,63 @@ describe("SyncSettings", () => {
       expect(screen.getByText("serveur injoignable")).toBeTruthy();
     });
     expect(screen.getByText("roman@lavande.mail")).toBeTruthy();
+  });
+});
+
+describe("SyncSettings · interrupteurs de synchronisation", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("affiche le maître et les trois domaines, tous actifs par défaut", () => {
+    renderSync(createMemoryStorage());
+
+    for (const name of ["Tout synchroniser", "Mails", "Calendrier", "Kanban / tâches"]) {
+      expect((screen.getByRole("switch", { name }) as HTMLButtonElement).getAttribute("aria-checked")).toBe("true");
+    }
+    expect(screen.getByText("Tout synchroniser")).toBeTruthy();
+    expect(screen.queryByText(/Toute synchronisation est coupée/)).toBeNull();
+  });
+
+  it("coupe un domaine au clic et le persiste", async () => {
+    renderSync(createMemoryStorage());
+
+    fireEvent.click(screen.getByRole("switch", { name: "Mails" }));
+
+    await waitFor(() => expect(storedSync()).toMatchObject({ mails: false }));
+    expect(
+      (screen.getByRole("switch", { name: "Mails" }) as HTMLButtonElement).getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(
+      (screen.getByRole("switch", { name: "Calendrier" }) as HTMLButtonElement).getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  it("grise les domaines et la synchro planning quand le maître est coupé", async () => {
+    renderSync(createMemoryStorage());
+
+    fireEvent.click(screen.getByRole("switch", { name: "Tout synchroniser" }));
+
+    await waitFor(() => expect(storedSync()).toMatchObject({ enabled: false }));
+    expect(screen.getByText(/Toute synchronisation est coupée/)).toBeTruthy();
+    for (const name of ["Mails", "Calendrier", "Kanban / tâches"]) {
+      expect((screen.getByRole("switch", { name }) as HTMLButtonElement).disabled).toBe(true);
+    }
+    expect((screen.getByRole("button", { name: "Synchroniser" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/le planning ne quitte pas cet appareil/)).toBeTruthy();
+  });
+
+  it("relit un réglage déjà coupé", () => {
+    seedSync({ enabled: true, mails: false, calendar: true, kanban: false });
+    renderSync(createMemoryStorage());
+
+    expect(
+      (screen.getByRole("switch", { name: "Mails" }) as HTMLButtonElement).getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(
+      (screen.getByRole("switch", { name: "Kanban / tâches" }) as HTMLButtonElement).getAttribute("aria-checked"),
+    ).toBe("false");
+    expect((screen.getByRole("button", { name: "Synchroniser" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/Synchronisation des tâches coupée/)).toBeTruthy();
   });
 });

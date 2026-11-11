@@ -11,11 +11,12 @@ import {
   PenLine,
   Plus,
   Sun,
+  SunMoon,
   Trash2,
   Type,
   Users,
 } from "lucide-react";
-import { ACCENT_PRESETS, useTheme } from "@/lib/theme";
+import { ACCENT_PRESETS, useTheme, type ThemeMode } from "@/lib/theme";
 import { SWIPE_ACTIONS, mergeFlags, usePrefs } from "@/lib/prefs";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
 import { useMailStore } from "@/lib/store";
@@ -49,7 +50,7 @@ export function SettingsScreen({
   onOpenPgp: () => void;
   onOpenMcp: () => void;
 }) {
-  const { accent, dark, brand, setAccent, setDark, reset } = useTheme();
+  const { accent, mode: themeMode, brand, setAccent, setMode: setThemeMode, reset } = useTheme();
   const { accounts, mode, openConnect, askRemoveAccount } = useMailStore();
   const {
     swipeLeft,
@@ -404,18 +405,19 @@ export function SettingsScreen({
       <BlurFade delay={0.2}>
         <Card className="mx-5 p-1.5">
           <div className="flex gap-1.5">
-            {[
-              { label: "Clair", icon: Sun, value: false },
-              { label: "Sombre", icon: Moon, value: true },
-            ].map((option) => {
-              const selected = dark === option.value;
+            {([
+              { label: "Clair", icon: Sun, value: "light" },
+              { label: "Sombre", icon: Moon, value: "dark" },
+              { label: "Auto", icon: SunMoon, value: "auto" },
+            ] as { label: string; icon: typeof Sun; value: ThemeMode }[]).map((option) => {
+              const selected = themeMode === option.value;
               const Icon = option.icon;
               return (
                 <button
                   key={option.label}
                   type="button"
                   aria-pressed={selected}
-                  onClick={() => setDark(option.value)}
+                  onClick={() => setThemeMode(option.value)}
                   className={cn(
                     "focus-ring flex min-h-11 flex-1 items-center justify-center gap-2 rounded-[18px] py-2.5 text-[12.5px] font-bold transition-all",
                     selected
