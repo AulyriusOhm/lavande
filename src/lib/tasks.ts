@@ -33,7 +33,7 @@ export function stateMeta(state: TaskState) {
   return TASK_STATES.find((entry) => entry.id === state) ?? TASK_STATES[0];
 }
 
-export const TASKS: Task[] = [
+export const TASKS: Task[] = import.meta.env.VITE_DISTRIBUTION === "1" ? [] : [
   {
     id: "t10",
     title: "Valider la v3 pour la démo client",
@@ -154,7 +154,7 @@ export type MailSuggestion = {
   timestamp?: number;
 };
 
-export const MAIL_SUGGESTIONS: MailSuggestion[] = [
+export const MAIL_SUGGESTIONS: MailSuggestion[] = import.meta.env.VITE_DISTRIBUTION === "1" ? [] : [
   {
     id: "s1",
     mailId: "1",

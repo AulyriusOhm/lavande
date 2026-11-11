@@ -104,7 +104,7 @@ export const TONES = [
 const DEMO_LOADED_AT = Date.now();
 const minutesAgo = (minutes: number) => DEMO_LOADED_AT - minutes * 60_000;
 
-export const MAILS: Mail[] = [
+export const MAILS: Mail[] = import.meta.env.VITE_DISTRIBUTION === "1" ? [] : [
   {
     id: "1d",
     account: "perso",
@@ -412,7 +412,7 @@ export const MAILS: Mail[] = [
   },
 ];
 
-export const RECENT_SEARCHES = ["camille", "factures", "devis signé", "figma"];
+export const RECENT_SEARCHES = import.meta.env.VITE_DISTRIBUTION === "1" ? [] : ["camille", "factures", "devis signé", "figma"];
 
 export type FrequentContact = { name: string; email: string; tone: number; count: number };
 

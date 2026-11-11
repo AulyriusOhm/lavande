@@ -38,7 +38,7 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
     [
       "usage : node scripts/release-updater.mjs [options]",
       "",
-      "  --build           lance `tauri build --bundles rpm,appimage` avant de publier",
+      "  --build           lance `tauri build --bundles rpm,appimage` (VITE_DISTRIBUTION=1) avant de publier",
       "  --notes <texte>   notes de version (défaut : dernier commit git)",
       "  --url-base <url>  dossier public des artefacts (défaut : dossier de l'endpoint)",
       "  --key <chemin>    clé privée (défaut : .tauri/lavande-updater.key)",
@@ -89,8 +89,14 @@ const notes =
   })();
 
 if (process.argv.includes("--build")) {
-  console.log("release-updater : build rpm + appimage");
-  run("npx", ["tauri", "build", "--bundles", "rpm,appimage"]);
+  console.log("release-updater : build rpm + appimage (verrou distribution)");
+  run("npx", ["tauri", "build", "--bundles", "rpm,appimage"], {
+    env: { ...process.env, VITE_DISTRIBUTION: "1" },
+  });
+} else if (process.env.VITE_DISTRIBUTION !== "1") {
+  console.warn(
+    "release-updater : binaires réutilisés — ils doivent avoir été construits avec VITE_DISTRIBUTION=1",
+  );
 }
 
 const newest = (directory, extension) => {
@@ -109,7 +115,7 @@ const rpm = newest(path.join(BUNDLE, "rpm"), ".rpm");
 if (!appimage && !rpm) {
   fail(
     `aucun artefact ${version} dans ${path.relative(ROOT, BUNDLE)} : lancez ` +
-      "`npx tauri build --bundles rpm,appimage`",
+      "`VITE_DISTRIBUTION=1 npx tauri build --bundles rpm,appimage`",
   );
 }
 

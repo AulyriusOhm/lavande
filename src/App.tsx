@@ -93,9 +93,11 @@ function Stage() {
         <PhoneApp />
       </div>
 
-      <p className="pointer-events-none hidden shrink-0 text-[11.5px] font-semibold tracking-wide text-ink-muted sm:block">
-        {brand} · maquette mobile · glisse horizontalement
-      </p>
+      {import.meta.env.VITE_DISTRIBUTION === "1" ? null : (
+        <p className="pointer-events-none hidden shrink-0 text-[11.5px] font-semibold tracking-wide text-ink-muted sm:block">
+          {brand} · maquette mobile · glisse horizontalement
+        </p>
+      )}
     </div>
   );
 }

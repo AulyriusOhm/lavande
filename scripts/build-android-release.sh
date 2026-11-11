@@ -13,6 +13,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/android-env.sh
 
+# Verrou distribution : mode api forcé et fixtures de maquette absentes du bundle.
+export VITE_DISTRIBUTION=1
+
 ALIAS="${LAVANDE_KEY_ALIAS:-lavande}"
 PASSWORD="${LAVANDE_KEYSTORE_PASSWORD:-lavande}"
 KEYSTORE="$HOME/.android/lavande-release.jks"

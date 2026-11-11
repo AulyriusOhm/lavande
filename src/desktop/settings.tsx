@@ -419,7 +419,9 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
         <div className="mx-auto max-w-[1080px] px-8 pb-32">
           <header className="flex items-center justify-between gap-4 pt-6">
             <div className="flex items-center gap-2.5">
-              <PaneTitle hint="maquette PC">Réglages</PaneTitle>
+              <PaneTitle hint={import.meta.env.VITE_DISTRIBUTION === "1" ? undefined : "maquette PC"}>
+                Réglages
+              </PaneTitle>
               <Badge tone="accent">{brand}</Badge>
             </div>
             <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">v0.1.0</span>
@@ -1430,13 +1432,15 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                       React 19 · Vite 7 · Tailwind 4 · Tauri v2
                     </p>
                   </div>
-                  <a
-                    href={window.location.pathname}
-                    className="focus-ring inline-flex h-9 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
-                  >
-                    Aperçu de la maquette mobile
-                    <ArrowRight className="size-3.5" />
-                  </a>
+                  {import.meta.env.VITE_DISTRIBUTION === "1" ? null : (
+                    <a
+                      href={window.location.pathname}
+                      className="focus-ring inline-flex h-9 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+                    >
+                      Aperçu de la maquette mobile
+                      <ArrowRight className="size-3.5" />
+                    </a>
+                  )}
                 </Surface>
               </Block>
             </div>

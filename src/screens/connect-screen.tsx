@@ -623,14 +623,16 @@ export function ConnectScreen({
             {busy ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
             {busy ? "Connexion en cours…" : "Tester et connecter"}
           </ShimmerButton>
-          <button
-            type="button"
-            onClick={useDemo}
-            className="focus-ring inline-flex min-h-11 items-center justify-center gap-2 rounded-full text-[11.5px] font-bold text-ink-soft transition-colors hover:bg-surface-2 hover:text-ink"
-          >
-            <Sparkles className="size-3.5" />
-            Voir la démo avec les données de la maquette
-          </button>
+          {import.meta.env.VITE_DISTRIBUTION === "1" ? null : (
+            <button
+              type="button"
+              onClick={useDemo}
+              className="focus-ring inline-flex min-h-11 items-center justify-center gap-2 rounded-full text-[11.5px] font-bold text-ink-soft transition-colors hover:bg-surface-2 hover:text-ink"
+            >
+              <Sparkles className="size-3.5" />
+              Voir la démo avec les données de la maquette
+            </button>
+          )}
         </div>
       </form>
     </div>

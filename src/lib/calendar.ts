@@ -43,7 +43,7 @@ export function monthLabel(month: number) {
   return capitalizeFirst(MONTH_FMT.format(new Date(2020, month, 1)));
 }
 
-export const EVENTS: CalendarEvent[] = [
+export const EVENTS: CalendarEvent[] = import.meta.env.VITE_DISTRIBUTION === "1" ? [] : [
   {
     id: "e1",
     date: TODAY_ISO,

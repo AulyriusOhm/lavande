@@ -437,7 +437,8 @@ export function SettingsScreen({
       <BlurFade delay={0.25}>
         <div className="mt-6 px-5 text-center">
           <p className="text-[11px] font-semibold text-ink-muted">
-            <AnimatedGradientText>{brand}</AnimatedGradientText> · v0.2.0 · design preview
+            <AnimatedGradientText>{brand}</AnimatedGradientText> · v0.2.0
+            {import.meta.env.VITE_DISTRIBUTION === "1" ? null : " · design preview"}
           </p>
           <button
             type="button"
@@ -446,12 +447,14 @@ export function SettingsScreen({
           >
             Réinitialiser le thème
           </button>
-          <a
-            href="?desktop"
-            className="focus-ring mt-2 flex min-h-11 items-center justify-center rounded-full text-[11.5px] font-bold text-accent-ink transition-colors hover:bg-accent-soft"
-          >
-            Voir la maquette PC →
-          </a>
+          {import.meta.env.VITE_DISTRIBUTION === "1" ? null : (
+            <a
+              href="?desktop"
+              className="focus-ring mt-2 flex min-h-11 items-center justify-center rounded-full text-[11.5px] font-bold text-accent-ink transition-colors hover:bg-accent-soft"
+            >
+              Voir la maquette PC →
+            </a>
+          )}
         </div>
       </BlurFade>
     </div>

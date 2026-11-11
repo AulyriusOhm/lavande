@@ -42,13 +42,15 @@ export function BackendBanner({ variant = "mobile" }: { variant?: "mobile" | "de
           <RefreshCw className="size-3.5" />
           Réessayer
         </button>
-        <button
-          type="button"
-          onClick={useDemo}
-          className="focus-ring inline-flex min-h-9 items-center gap-1.5 rounded-full bg-accent-soft px-3 text-[11.5px] font-bold text-accent-ink transition-colors hover:bg-accent-ring/40"
-        >
-          Voir la démo
-        </button>
+        {import.meta.env.VITE_DISTRIBUTION === "1" ? null : (
+          <button
+            type="button"
+            onClick={useDemo}
+            className="focus-ring inline-flex min-h-9 items-center gap-1.5 rounded-full bg-accent-soft px-3 text-[11.5px] font-bold text-accent-ink transition-colors hover:bg-accent-ring/40"
+          >
+            Voir la démo
+          </button>
+        )}
       </div>
     </div>
   );
