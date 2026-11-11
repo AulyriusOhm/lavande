@@ -23,6 +23,7 @@ fn open() -> Store {
             uidvalidity: 7,
             uidnext: 10,
             last_sync_at: None,
+            modseq: None,
         };
         store.upsert_folder(&folder).expect("folder");
     }
@@ -428,6 +429,53 @@ fn reads_folders_back() {
         .expect("present");
     assert_eq!(stored.last_sync_at, Some(date(10)));
     assert!(store.get_folder("perso", "Nope").expect("folder").is_none());
+}
+
+/// The high-water mark an incremental CONDSTORE pass resumes from: absent until
+/// a CONDSTORE server reported one, then carried by every sync.
+#[test]
+fn keeps_the_modseq_of_a_folder() {
+    let store = open();
+    assert_eq!(
+        store
+            .get_folder("perso", "INBOX")
+            .expect("folder")
+            .expect("present")
+            .modseq,
+        None
+    );
+
+    let folder = store
+        .get_folder("perso", "INBOX")
+        .expect("folder")
+        .expect("present");
+    store
+        .upsert_folder(&Folder {
+            modseq: Some(90060115205545359),
+            ..folder
+        })
+        .expect("upsert");
+    assert_eq!(
+        store
+            .get_folder("perso", "INBOX")
+            .expect("folder")
+            .expect("present")
+            .modseq,
+        Some(90060115205545359)
+    );
+    let listed = store.list_folders("perso").expect("folders");
+    assert_eq!(
+        listed
+            .iter()
+            .find(|folder| folder.path == "INBOX")
+            .expect("inbox")
+            .modseq,
+        Some(90060115205545359)
+    );
+    assert!(listed
+        .iter()
+        .filter(|folder| folder.path != "INBOX")
+        .all(|folder| folder.modseq.is_none()));
 }
 
 #[test]

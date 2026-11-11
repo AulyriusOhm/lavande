@@ -17,7 +17,9 @@ pub mod tls;
 pub use config::{AccountConfig, AuthConfig, Encryption, Endpoint, FolderMapping};
 pub use error::MailError;
 pub use imap::SyncReport;
-pub use mime::{parse_message, parse_message_with_keys, sanitize_html, ParsedMessage};
+pub use mime::{
+    parse_message, parse_message_with_keys, sanitize_html, sanitize_html_with_images, ParsedMessage,
+};
 pub use model::{
     thread_key, Address, AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState, Thread,
 };

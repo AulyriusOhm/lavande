@@ -42,13 +42,19 @@ pub async fn sync_account_keys(
     store.upsert_account(&cfg.id, &cfg.label, &cfg.email)?;
 
     let mut session = imap::connect_with(cfg, tls_options).await?;
+    // RFC 5161 only allows ENABLE outside a selected mailbox, and this session
+    // selects one folder per round: the opt-in has to happen here, once.
+    imap::enable_condstore(&mut session).await;
     let folders = imap::list_folders(&mut session, &cfg.id).await?;
     for folder in &folders {
         // Keep the stored UIDVALIDITY: reconcile compares it against the live
         // SELECT and must still see a server-side change to purge the folder.
+        // The stored modseq is the baseline an incremental pass resumes from;
+        // reconcile drops it itself when the UIDVALIDITY moved.
         let mut record = folder.clone();
         if let Some(stored) = store.get_folder(&cfg.id, &folder.path)? {
             record.uidvalidity = stored.uidvalidity;
+            record.modseq = stored.modseq;
         }
         store.upsert_folder(&record)?;
     }

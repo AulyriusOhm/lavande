@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ComposeDraft } from "@/lib/draft";
-import { baseDraft, emptyDraft, firstRecipient, insertAt } from "@/lib/draft";
+import { baseDraft, emptyDraft, firstRecipient, formatBytes, insertAt, persistedDraft } from "@/lib/draft";
 import { htmlToText } from "@/lib/rich-text";
+import { notifyNewMail, setUnreadBadge } from "@/lib/notify";
 import type { NoticeData } from "@/components/ui/notice";
 import { ACCOUNTS, ALL_ACCOUNTS } from "@/lib/accounts";
 import type { Account } from "@/lib/accounts";
@@ -241,6 +242,15 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       source.addEventListener("mail", (event) => {
         try {
           const payload = JSON.parse((event as MessageEvent<string>).data) as LiveEvent;
+          const inserted = payload.report?.inserted ?? 0;
+          if (inserted > 0 && payload.folder_path.toUpperCase() === "INBOX") {
+            void notifyNewMail(
+              "Nouveau message",
+              inserted === 1
+                ? "Vous avez reçu un nouveau message."
+                : `${inserted} nouveaux messages dans la boîte de réception.`,
+            );
+          }
           if (account === ALL_ACCOUNTS || !account || payload.account_id === account) {
             setRevision((value) => value + 1);
           }
@@ -391,6 +401,17 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
     };
   }, [mode, phase, accounts, revision]);
+
+  useEffect(() => {
+    if (mode !== "api") return;
+    let unread = 0;
+    for (const record of folderRecords) {
+      if (record.role === "inbox") {
+        unread += folderCounts[`${record.accountId}:${record.path}`]?.unread ?? 0;
+      }
+    }
+    setUnreadBadge(unread);
+  }, [mode, folderCounts, folderRecords]);
 
   // Première visite d'un dossier : synchro automatique en arrière-plan, pour ne
   // pas avoir à cliquer sur « Synchroniser ». Une seule fois par portée
@@ -877,7 +898,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     if (isComposeWindow()) return;
     const state: ComposeState = { draft: composeDraft, title: composeTitle, detached: composeDetached };
     composeStateRef.current = state;
-    persistCompose(composeDraft, composeTitle);
+    persistCompose(composeDraft ? persistedDraft(composeDraft) : null, composeTitle);
     const json = JSON.stringify(state);
     if (json !== lastPostedCompose.current) {
       lastPostedCompose.current = json;
@@ -1020,6 +1041,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         unread: false,
         starred: false,
         pgp: draft.pgpEncrypt ? "encrypted" : draft.pgpSign ? "signed" : "none",
+        attachments: draft.attachments?.map((file) => ({
+          name: file.filename,
+          size: formatBytes(file.size),
+          mime: file.mime,
+        })),
         tone: sender.tone,
       };
       setMails((current) => [mail, ...current]);

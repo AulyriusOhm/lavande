@@ -214,6 +214,13 @@ pub struct PurgeResponse {
     pub removed: usize,
 }
 
+/// The HTML body of one message with its remote images kept, sanitized by the
+/// service: the reader asked for them, per message.
+#[derive(Serialize)]
+pub struct HtmlImagesResponse {
+    pub html: String,
+}
+
 #[derive(Deserialize)]
 pub struct SendRequest {
     #[serde(default)]

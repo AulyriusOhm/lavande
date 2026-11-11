@@ -238,6 +238,10 @@
 .mail-html {
   overflow-wrap: anywhere;
 }
+.mail-html img {
+  max-width: 100%;
+  height: auto;
+}
 .mail-html p,
 .mail-html div {
   margin: 0 0 0.85em;

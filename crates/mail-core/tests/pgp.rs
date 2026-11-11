@@ -6,6 +6,12 @@ use lavande_mail::pgp::{self, mime, PgpKey, PgpKeyring};
 use lavande_mail::smtp::OutgoingMessage;
 use lavande_mail::{parse_message, parse_message_with_keys};
 
+fn date(iso: &str) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(iso)
+        .expect("date ISO8601")
+        .with_timezone(&chrono::Utc)
+}
+
 fn outgoing(html: Option<&str>) -> OutgoingMessage {
     OutgoingMessage {
         from: Address {
@@ -47,6 +53,7 @@ fn a_generated_key_looks_like_a_key() {
     assert!(info.has_secret);
     assert!(!info.revoked);
     assert!(!info.expired);
+    assert!(info.expires_at.is_some(), "expiration annoncée");
     assert_eq!(info.algorithm, "Ed25519");
     assert_eq!(info.key_id.len(), 16);
 
@@ -63,6 +70,47 @@ fn a_generated_key_looks_like_a_key() {
     .expect("relecture");
     assert!(secret.has_secret());
     assert_eq!(secret.fingerprint(), info.fingerprint);
+}
+
+#[test]
+fn a_generated_key_expires() {
+    let key = pgp::generate_key("Roman", "roman@lavande.mail").expect("génération");
+    key.public().verify_bindings().expect("auto-signatures");
+
+    let info = key.info();
+    assert!(!info.expired);
+    let created_at = date(&info.created_at);
+    let expires_at = date(info.expires_at.as_deref().expect("expiration"));
+    assert!(expires_at > chrono::Utc::now(), "{expires_at}");
+    assert_eq!(
+        expires_at - created_at,
+        chrono::Duration::from_std(pgp::KEY_LIFETIME).expect("durée")
+    );
+
+    let signature = &key.public().details.users[0].signatures[0];
+    let lifetime: std::time::Duration = signature
+        .key_expiration_time()
+        .expect("sous-paquet KeyExpirationTime")
+        .into();
+    assert_eq!(lifetime, pgp::KEY_LIFETIME);
+
+    let reread = PgpKey::parse(&key.public_armored().expect("export")).expect("relecture");
+    reread.public().verify_bindings().expect("auto-signatures");
+    assert_eq!(reread.info().expires_at, info.expires_at);
+}
+
+#[test]
+fn a_generated_key_expires_after_the_requested_lifetime() {
+    let lifetime = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+    let key = pgp::generate_key_with_lifetime("Roman", "roman@lavande.mail", lifetime)
+        .expect("génération");
+    let info = PgpKey::parse(&key.public_armored().expect("export"))
+        .expect("relecture")
+        .info();
+    assert!(!info.expired);
+    let created_at = date(&info.created_at);
+    let expires_at = date(info.expires_at.as_deref().expect("expiration"));
+    assert_eq!(expires_at - created_at, chrono::Duration::days(30));
 }
 
 #[test]

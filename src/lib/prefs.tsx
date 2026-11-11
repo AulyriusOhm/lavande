@@ -13,6 +13,8 @@ export const SWIPE_ACTIONS: { id: SwipeActionId; label: string }[] = [
 
 const STORAGE_KEY = "lavande.prefs";
 
+import { EMPTY_LLM, type LlmConfig } from "@/lib/llm";
+
 export type AccountSignature = { html: string; enabled: boolean };
 
 export type Prefs = {
@@ -26,6 +28,7 @@ export type Prefs = {
   planningEnabled: boolean;
   mcpEnabled: Record<string, boolean>;
   signatures: Record<string, AccountSignature>;
+  llm: LlmConfig;
 };
 
 const DEFAULTS: Prefs = {
@@ -39,6 +42,7 @@ const DEFAULTS: Prefs = {
   planningEnabled: true,
   mcpEnabled: {},
   signatures: {},
+  llm: EMPTY_LLM,
 };
 
 type PrefsContextValue = Prefs & {
@@ -51,6 +55,7 @@ type PrefsContextValue = Prefs & {
   setPlanningEnabled: (value: boolean) => void;
   setMcpEnabled: (serverId: string, value: boolean) => void;
   setSignature: (accountId: string, patch: Partial<AccountSignature>) => void;
+  setLlm: (patch: Partial<LlmConfig>) => void;
 };
 
 const PrefsContext = createContext<PrefsContextValue | null>(null);
@@ -82,6 +87,16 @@ const asSignatures = (value: unknown): Record<string, AccountSignature> => {
   return out;
 };
 
+const asLlm = (value: unknown): LlmConfig => {
+  if (!value || typeof value !== "object") return EMPTY_LLM;
+  const { endpoint, apiKey, model } = value as Record<string, unknown>;
+  return {
+    endpoint: typeof endpoint === "string" ? endpoint : "",
+    apiKey: typeof apiKey === "string" ? apiKey : "",
+    model: typeof model === "string" ? model : "",
+  };
+};
+
 export function activeSignature(
   signatures: Record<string, AccountSignature>,
   accountId: string,
@@ -110,6 +125,7 @@ function read(): Prefs {
     planningEnabled: asBoolean(stored.planningEnabled, DEFAULTS.planningEnabled),
     mcpEnabled: asFlags(stored.mcpEnabled),
     signatures: asSignatures(stored.signatures),
+    llm: asLlm(stored.llm),
   };
 }
 
@@ -155,6 +171,12 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const setLlm = useCallback(
+    (patch: Partial<LlmConfig>) =>
+      setPrefs((current) => ({ ...current, llm: { ...current.llm, ...patch } })),
+    [],
+  );
+
   const value = useMemo<PrefsContextValue>(
     () => ({
       ...prefs,
@@ -167,6 +189,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setPlanningEnabled,
       setMcpEnabled,
       setSignature,
+      setLlm,
     }),
     [
       prefs,
@@ -179,6 +202,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setPlanningEnabled,
       setMcpEnabled,
       setSignature,
+      setLlm,
     ],
   );
 

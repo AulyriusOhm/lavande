@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { folderOptionsForAll, folderTargets } from "@/lib/mail-backend";
+import { folderOptionsForAll, folderTargets, sendInputOf } from "@/lib/mail-backend";
 import type { FolderRecord } from "@/lib/mail-backend";
+import type { ComposeDraft } from "@/lib/draft";
+import { baseDraft } from "@/lib/draft";
 
 const record = (accountId: string, role: FolderRecord["role"], path: string, name: string): FolderRecord => ({
   accountId,
@@ -99,5 +101,34 @@ describe("folderTargets", () => {
   it("renvoie une liste vide sans compte ou sans dossier correspondant", () => {
     expect(folderTargets(RECORDS, [], "inbox")).toEqual([]);
     expect(folderTargets(RECORDS, ["perso", "pro"], "drafts")).toEqual([]);
+  });
+});
+
+describe("sendInputOf", () => {
+  const draft = (over: Partial<ComposeDraft> = {}): ComposeDraft => ({
+    ...baseDraft("perso", false, false),
+    to: "camille@studio-lilas.fr",
+    subject: "Factures",
+    ...over,
+  });
+
+  it("transmet les pièces jointes du brouillon au contrat du démon", () => {
+    const input = sendInputOf(
+      draft({
+        attachments: [
+          { filename: "facture.pdf", mime: "application/pdf", data_base64: "aGVsbG8=", size: 5 },
+        ],
+      }),
+    );
+
+    expect(input.attachments).toEqual([
+      { filename: "facture.pdf", mime: "application/pdf", data_base64: "aGVsbG8=" },
+    ]);
+    expect(input.to).toEqual([{ name: null, email: "camille@studio-lilas.fr" }]);
+  });
+
+  it("n'envoie aucun tableau de pièces jointes quand le brouillon n'en a pas", () => {
+    expect(sendInputOf(draft()).attachments).toBeUndefined();
+    expect(sendInputOf(draft({ attachments: [] })).attachments).toBeUndefined();
   });
 });

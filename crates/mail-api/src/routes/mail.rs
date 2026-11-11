@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use lavande_mail::config::{AccountConfig, FolderMapping};
@@ -17,8 +18,8 @@ use lavande_mail::sync as mail_sync;
 use serde::Deserialize;
 
 use crate::dto::{
-    ApiJson, DeleteRequest, FlagsRequest, FolderReport, MoveRequest, PurgeRequest, PurgeResponse,
-    SendRequest, SyncRequest, SyncResponse,
+    ApiJson, DeleteRequest, FlagsRequest, FolderReport, HtmlImagesResponse, MoveRequest,
+    PurgeRequest, PurgeResponse, SendRequest, SyncRequest, SyncResponse,
 };
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -33,6 +34,14 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/accounts/{id}/folders/{path}/messages/{uid}",
             get(message),
+        )
+        .route(
+            "/api/accounts/{id}/folders/{path}/messages/{uid}/attachments/{index}",
+            get(attachment),
+        )
+        .route(
+            "/api/accounts/{id}/folders/{path}/messages/{uid}/html-images",
+            get(html_images),
         )
         .route("/api/accounts/{id}/flags", post(set_flags))
         .route("/api/accounts/{id}/move", post(move_message))
@@ -132,6 +141,102 @@ async fn message(
         .get_message(&id, &folder_path, uid)?
         .ok_or_else(|| unknown(&id, &folder_path, uid))?;
     Ok(Json(message))
+}
+
+/// The bytes of one attachment. They are never stored: the session re-reads
+/// the message and hands back the part at `index`, in the order the model lists
+/// its `AttachmentMeta` rows.
+async fn attachment(
+    Path((id, folder_path, uid, index)): Path<(String, String, u32, usize)>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Response, ApiError> {
+    let config = state.account(&id).await?;
+    state
+        .store()
+        .get_message(&id, &folder_path, uid)?
+        .ok_or_else(|| unknown(&id, &folder_path, uid))?;
+    let keys = state.pgp().keyring().await?;
+    let mut session = imap::connect_with(&config, state.tls()).await?;
+    let fetched = imap::fetch_attachment(&mut session, &folder_path, uid, index, &keys).await;
+    logout(session).await;
+    let part = fetched?.ok_or_else(|| {
+        ApiError::not_found(format!(
+            "pièce jointe {index} introuvable dans le message {uid} de « {folder_path} »"
+        ))
+    })?;
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, header_value(&part.mime)?);
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        header_value(&disposition(&part.filename))?,
+    );
+    Ok((headers, part.data).into_response())
+}
+
+/// The HTML body of one message with its remote images kept. The stored body has
+/// them stripped (tracking pixels): this is the explicit, per-message opt-in of
+/// the reader, which re-reads the message on the server. The markup leaves
+/// sanitized again here, with the same allow-list plus `img`.
+async fn html_images(
+    Path((id, folder_path, uid)): Path<(String, String, u32)>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<HtmlImagesResponse>, ApiError> {
+    let config = state.account(&id).await?;
+    let stored = state
+        .store()
+        .get_message(&id, &folder_path, uid)?
+        .ok_or_else(|| unknown(&id, &folder_path, uid))?;
+    if stored.body_html.is_none() {
+        return Err(no_html(&folder_path, uid));
+    }
+
+    let keys = state.pgp().keyring().await?;
+    let mut session = imap::connect_with(&config, state.tls()).await?;
+    let fetched = imap::fetch_html_with_images(&mut session, &folder_path, uid, &keys).await;
+    logout(session).await;
+    let html = fetched?.ok_or_else(|| no_html(&folder_path, uid))?;
+    Ok(Json(HtmlImagesResponse { html }))
+}
+
+fn header_value(value: &str) -> Result<HeaderValue, ApiError> {
+    HeaderValue::from_str(value).map_err(|_| {
+        ApiError::internal(
+            "mime",
+            format!("en-tête de pièce jointe refusé : « {value} »"),
+        )
+    })
+}
+
+/// `Content-Disposition` of a download: an ASCII fallback for old clients and
+/// the RFC 5987 UTF-8 name so accents survive the trip.
+fn disposition(filename: &str) -> String {
+    let ascii: String = filename
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || "-_. ()".contains(character) {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!(
+        "attachment; filename=\"{ascii}\"; filename*=UTF-8''{}",
+        percent_encoded(filename)
+    )
+}
+
+fn percent_encoded(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 /// The server is written first: a refused `UID STORE` leaves the store alone.
@@ -350,4 +455,36 @@ fn unknown(account_id: &str, folder_path: &str, uid: u32) -> ApiError {
     ApiError::not_found(format!(
         "message {uid} introuvable dans « {folder_path} » du compte « {account_id} »"
     ))
+}
+
+fn no_html(folder_path: &str, uid: u32) -> ApiError {
+    ApiError::not_found(format!(
+        "le message {uid} de « {folder_path} » n'a pas de corps HTML à afficher"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_download_keeps_an_ascii_name_and_encodes_the_rest() {
+        assert_eq!(
+            disposition("facture.pdf"),
+            "attachment; filename=\"facture.pdf\"; filename*=UTF-8''facture.pdf"
+        );
+    }
+
+    #[test]
+    fn an_accented_name_survives_the_trip() {
+        assert_eq!(
+            disposition("relevé.pdf"),
+            "attachment; filename=\"relev_.pdf\"; filename*=UTF-8''relev%C3%A9.pdf"
+        );
+        assert_eq!(
+            disposition("capture d’écran.png"),
+            "attachment; filename=\"capture d__cran.png\"; \
+             filename*=UTF-8''capture%20d%E2%80%99%C3%A9cran.png"
+        );
+    }
 }

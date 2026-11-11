@@ -8,8 +8,10 @@ import {
   ChevronUp,
   CornerUpLeft,
   CornerUpRight,
+  Download,
   Forward,
   Inbox,
+  Loader2,
   Lock,
   Mail as MailIcon,
   MailOpen,
@@ -26,8 +28,9 @@ import {
   Trash2,
   type LucideIcon,
 } from "lucide-react";
-import type { FolderId } from "@/lib/mail";
+import type { FolderId, Mail, MailAttachment } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
+import { downloadAttachment } from "@/lib/attachments";
 import type { Thread } from "@/lib/threads";
 import { threadsInFolder } from "@/lib/threads";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
@@ -416,6 +419,16 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
   const [summaryOpen, setSummaryOpen] = useState(true);
   const [collapsedPrevious, setCollapsedPrevious] = useState<string[]>([]);
   const [pgpKeys, setPgpKeys] = useState<PgpKey[] | null>(null);
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
+
+  const runDownload = async (mail: Mail, file: MailAttachment) => {
+    const key = `${mail.id}:${file.name}`;
+    setDownloading(key);
+    setDownloadNotice(`Téléchargement de « ${file.name} »…`);
+    setDownloadNotice(await downloadAttachment(mail, file));
+    setDownloading(null);
+  };
 
   useEscapeLayer(Boolean(openMail), () => closeMessage());
 
@@ -850,17 +863,34 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                   ) : null}
 
                   {mail.attachments?.length ? (
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {mail.attachments.map((file) => (
-                        <div
-                          key={file.name}
-                          className="flex items-center gap-2.5 rounded-[14px] border border-line bg-surface px-3.5 py-2.5"
-                        >
-                          <Paperclip className="size-3.5 shrink-0 text-ink-muted" />
-                          <span className="text-[12.5px] font-semibold text-ink-soft">{file.name}</span>
-                          <span className="text-[11px] font-semibold text-ink-muted">{file.size}</span>
-                        </div>
-                      ))}
+                    <div className="mt-4 space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        {mail.attachments.map((file, index) => {
+                          const busy = downloading === `${mail.id}:${file.name}`;
+                          return (
+                            <button
+                              key={`${file.name}-${index}`}
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void runDownload(mail, file)}
+                              aria-label={`Télécharger ${file.name} (${file.size})`}
+                              className="flex items-center gap-2.5 rounded-[14px] border border-line bg-surface px-3.5 py-2.5 transition-colors hover:border-accent-ring disabled:opacity-60"
+                            >
+                              <Paperclip className="size-3.5 shrink-0 text-ink-muted" />
+                              <span className="text-[12.5px] font-semibold text-ink-soft">{file.name}</span>
+                              <span className="text-[11px] font-semibold text-ink-muted">{file.size}</span>
+                              {busy ? (
+                                <Loader2 className="size-3.5 animate-spin text-ink-muted" />
+                              ) : (
+                                <Download className="size-3.5 text-ink-muted" />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p role="status" aria-live="polite" className="text-[11px] font-medium text-ink-muted">
+                        {downloadNotice ?? "Les fichiers sont relus sur le serveur au moment du téléchargement."}
+                      </p>
                     </div>
                   ) : null}
 
@@ -868,6 +898,7 @@ export function DesktopInbox({ onOpenSearch }: { onOpenSearch: () => void }) {
                     className="mt-6 max-w-[80ch] text-[14.5px] leading-[1.78]"
                     html={mail.html}
                     paragraphs={mail.body}
+                    source={mail.source}
                   />
 
                   {previous.length > 0 ? (

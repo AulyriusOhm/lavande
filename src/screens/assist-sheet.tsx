@@ -3,7 +3,9 @@ import { AnimatePresence, motion } from "motion/react";
 import { WandSparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
-import { rewriteBody, rewriteOptions, userPart, type ReplySuggestion, type RewriteOption } from "@/lib/assist";
+import { aiRewrite, replaceUserPart, rewriteBody, rewriteOptions, userPart, type ReplySuggestion, type RewriteOption } from "@/lib/assist";
+import { llmReady } from "@/lib/llm";
+import { usePrefs } from "@/lib/prefs";
 
 const wordCount = (text: string) => (text.trim() ? text.trim().split(/\s+/).length : 0);
 
@@ -109,7 +111,7 @@ export function ReplySuggestSheet({
 }: {
   open: boolean;
   suggestions: ReplySuggestion[];
-  generate: (brief: string) => ReplySuggestion;
+  generate: (brief: string) => ReplySuggestion | Promise<ReplySuggestion>;
   onPick: (suggestion: ReplySuggestion) => void;
   onClose: () => void;
 }) {
@@ -144,10 +146,16 @@ export function ReplySuggestSheet({
     setCustom(null);
     setSelected(null);
     timer.current = window.setTimeout(() => {
-      setCustom(generate(brief));
-      setSelected("custom");
-      setGenerating(false);
-      timer.current = null;
+      void Promise.resolve(generate(brief))
+        .then((result) => {
+          setCustom(result);
+          setSelected("custom");
+        })
+        .catch(() => {})
+        .finally(() => {
+          setGenerating(false);
+          timer.current = null;
+        });
     }, 450);
   };
 
@@ -234,25 +242,56 @@ export function RewriteSheet({
 }: {
   open: boolean;
   body: string;
-  onApply: (id: RewriteOption["id"]) => void;
+  onApply: (text: string) => void;
   onClose: () => void;
 }) {
+  const { llm } = usePrefs();
   const [selected, setSelected] = useState<RewriteOption["id"] | null>(null);
+  const [aiText, setAiText] = useState<string | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
   const options = rewriteOptions();
-  const preview = selected ? rewriteBody(selected, body) : "";
+  const preview = aiText ?? (selected ? rewriteBody(selected, body) : "");
   const before = wordCount(userPart(body));
   const after = selected ? wordCount(userPart(preview)) : before;
 
   useEffect(() => {
-    if (open) setSelected(null);
+    if (open) {
+      setSelected(null);
+      setAiText(null);
+    }
   }, [open]);
+
+  useEffect(() => {
+    if (!selected || !llmReady(llm)) {
+      setAiText(null);
+      return;
+    }
+    const option = options.find((entry) => entry.id === selected);
+    if (!option) return;
+    let cancelled = false;
+    setAiLoading(true);
+    setAiText(null);
+    aiRewrite(llm, option.label, userPart(body))
+      .then((result) => {
+        if (!cancelled) setAiText(replaceUserPart(body, result));
+      })
+      .catch(() => {
+        if (!cancelled) setAiText(null);
+      })
+      .finally(() => {
+        if (!cancelled) setAiLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected, llm, body]);
 
 
   return (
     <Sheet
       open={open}
       title="Corriger / reformuler"
-      subtitle="La citation du message d'origine n'est pas modifiée"
+      subtitle={llmReady(llm) ? "Réécriture par IA · la citation n'est pas modifiée" : "La citation du message d'origine n'est pas modifiée"}
       onClose={onClose}
     >
       <div role="radiogroup" aria-label="Réécritures proposées" className="mt-3 space-y-2">
@@ -271,7 +310,9 @@ export function RewriteSheet({
         <div className="mt-3">
           <div className="rounded-2xl bg-surface-2 p-3">
             <p className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Aperçu</p>
-            <p className="mt-1.5 whitespace-pre-line text-[12.5px] leading-[1.6] font-medium text-ink">{preview}</p>
+            <p className="mt-1.5 whitespace-pre-line text-[12.5px] leading-[1.6] font-medium text-ink">
+              {aiLoading ? "Rédaction en cours…" : preview}
+            </p>
           </div>
           <p aria-live="polite" className="mt-2 text-[11.5px] font-semibold text-ink-muted">
             {before} mots avant · {after} mots après
@@ -282,9 +323,9 @@ export function RewriteSheet({
       <div className="mt-3 flex items-center gap-2">
         <ShimmerButton
           className="flex-1"
-          disabled={!selected}
+          disabled={!selected || aiLoading || !preview}
           onClick={() => {
-            if (selected) onApply(selected);
+            if (selected && preview) onApply(preview);
           }}
         >
           Appliquer

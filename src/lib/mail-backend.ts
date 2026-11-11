@@ -8,7 +8,8 @@ import { mailApi } from "@/lib/api";
 import type { ApiAccount, ApiFolder, ApiMessage, ApiThread, ApiFolderRole, SendInput } from "@/lib/api";
 import type { Account } from "@/lib/accounts";
 import type { ComposeDraft } from "@/lib/draft";
-import type { FolderId, Mail } from "@/lib/mail";
+import { formatBytes } from "@/lib/draft";
+import type { FolderId, Mail, MailSource } from "@/lib/mail";
 import { TONES, folderLabel } from "@/lib/mail";
 import { ensureHtml, htmlToText } from "@/lib/rich-text";
 
@@ -175,12 +176,6 @@ function toneOf(email: string): number {
   return hash % TONES.length;
 }
 
-function size(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1).replace(".", ",")} Mo`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} Ko`;
-  return `${bytes} o`;
-}
-
 export function bodyParagraphs(text: string | null): string[] {
   if (!text) return [];
   return text
@@ -222,7 +217,13 @@ export function messageToMail(
     starred: message.flags.starred,
     pgp: message.pgp,
     pgp_detail: message.pgp_detail ?? null,
-    attachments: message.attachments.map((file) => ({ name: file.filename, size: size(file.size) })),
+    attachments: message.attachments.map((file, index) => ({
+      name: file.filename,
+      size: formatBytes(file.size),
+      mime: file.mime,
+      index,
+      inline: file.inline,
+    })),
     tone: toneOf(message.from.email),
   };
 }
@@ -233,6 +234,18 @@ export function threadToMails(
   fallback: FolderId,
 ): Mail[] {
   return thread.messages.map((message) => messageToMail(message, records, fallback));
+}
+
+/**
+ * Le corps HTML d'un message relu sur le serveur avec ses images distantes.
+ *
+ * Le corps stocké n'en porte aucune (pixels de tracking retirés à l'ingestion) :
+ * c'est un choix explicite du lecteur, message par message, et le service
+ * ré-assainit le markup avant de le rendre.
+ */
+export async function htmlImagesOf(source: MailSource): Promise<string> {
+  const { html } = await mailApi.htmlImages(source.accountId, source.folderPath, source.uid);
+  return html;
 }
 
 export async function loadMailbox(): Promise<{
@@ -282,6 +295,15 @@ export function sendInputOf(draft: ComposeDraft, signatureHtml?: string | null):
     pgp_sign: draft.pgpSign,
     ...(draft.inReplyTo ? { in_reply_to: draft.inReplyTo } : {}),
     ...(draft.references?.length ? { references: draft.references } : {}),
+    ...(draft.attachments?.length
+      ? {
+          attachments: draft.attachments.map(({ filename, mime, data_base64 }) => ({
+            filename,
+            mime,
+            data_base64,
+          })),
+        }
+      : {}),
   };
 }
 

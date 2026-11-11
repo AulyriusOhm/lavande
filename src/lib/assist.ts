@@ -1,9 +1,33 @@
+import { llmChat, type LlmConfig } from "@/lib/llm";
+
 export type ReplySuggestion = { id: string; badge: string; text: string };
 export type RewriteOption = {
   id: "correction" | "concis" | "formel" | "chaleureux";
   label: string;
   hint: string;
 };
+
+const REPLY_SYSTEM =
+  "Tu rédiges des réponses d'emails en français, naturelles et concises. " +
+  "Réponds uniquement avec le corps de la réponse, sans objet ni signature, sans markdown.";
+
+const REWRITE_SYSTEM =
+  "Tu réécris le corps d'un email en français selon la consigne. " +
+  "Réponds uniquement avec le texte réécrit, sans markdown ni commentaire.";
+
+export async function aiComposeReply(
+  config: LlmConfig,
+  input: { subject: string; to: string; body: string },
+  brief: string,
+): Promise<ReplySuggestion> {
+  const user = `Objet : ${input.subject}\nDestinataire : ${input.to}\nMessage reçu :\n${input.body}\n\nConsigne pour la réponse : ${brief}`;
+  const text = await llmChat(config, REPLY_SYSTEM, user);
+  return { id: "custom", badge: "IA", text };
+}
+
+export async function aiRewrite(config: LlmConfig, label: string, body: string): Promise<string> {
+  return llmChat(config, REWRITE_SYSTEM, `Consigne : ${label}\n\nTexte à réécrire :\n${body}`);
+}
 
 const QUOTE_MARK = "\n\n---\n";
 const EXCERPT_MAX = 90;

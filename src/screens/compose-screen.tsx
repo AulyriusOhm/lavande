@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { ComposeDraft } from "@/lib/draft";
+import type { ComposeDraft, DraftAttachment } from "@/lib/draft";
+import { MAX_ATTACHMENT_BYTES, attachmentsSize, formatBytes, readAttachment } from "@/lib/draft";
 import {
   Check,
   Image,
@@ -16,7 +17,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMailStore } from "@/lib/store";
-import { composeReply, replySuggestions, rewriteBody, userPart, type ReplySuggestion } from "@/lib/assist";
+import { aiComposeReply, composeReply, replySuggestions, userPart, type ReplySuggestion } from "@/lib/assist";
+import { llmReady } from "@/lib/llm";
 import { ReplySuggestSheet, RewriteSheet } from "@/screens/assist-sheet";
 import { IconButton } from "@/components/ui/primitives";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
@@ -65,7 +67,7 @@ export function ComposeScreen({
   onHeaderDoubleClick?: () => void;
 }) {
   const { accounts } = useMailStore();
-  const { signatures } = usePrefs();
+  const { signatures, llm } = usePrefs();
   const accountSignature = activeSignature(signatures, draft.account);
   const [showCc, setShowCc] = useState(Boolean(draft.cc.trim()));
   const [showCci, setShowCci] = useState(Boolean(draft.cci.trim()));
@@ -73,6 +75,9 @@ export function ComposeScreen({
   const [confirmClose, setConfirmClose] = useState(false);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [rewriteOpen, setRewriteOpen] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const imageInput = useRef<HTMLInputElement>(null);
 
   const suggestions = useMemo(
     () => replySuggestions({ subject: draft.subject, to: draft.to, body: htmlToText(draft.body) }),
@@ -84,13 +89,48 @@ export function ComposeScreen({
     onDraftChange({ ...draft, ...patch });
   };
 
+  const addFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    const current = draft.attachments ?? [];
+    const added: DraftAttachment[] = [];
+    let failure: string | null = null;
+    for (const file of Array.from(files)) {
+      try {
+        added.push(await readAttachment(file));
+      } catch (error) {
+        failure = error instanceof Error ? error.message : `lecture de « ${file.name} » impossible`;
+      }
+    }
+    const joined = [...current, ...added];
+    if (attachmentsSize(joined) > MAX_ATTACHMENT_BYTES) {
+      setAttachmentError(
+        `Pièces jointes trop lourdes : ${formatBytes(MAX_ATTACHMENT_BYTES)} au total maximum, « ${added
+          .map((file) => file.filename)
+          .join(", ")} » n'a pas été ajouté.`,
+      );
+      return;
+    }
+    setAttachmentError(failure);
+    if (added.length) update({ attachments: joined });
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachmentError(null);
+    update({ attachments: (draft.attachments ?? []).filter((_, position) => position !== index) });
+  };
+
   const invalid = invalidRecipients(draft);
   const hasRecipient = [draft.to, draft.cc, draft.cci].some((value) =>
     recipients(value).some((token) => EMAIL.test(token)),
   );
   const validRecipients = hasRecipient && invalid.length === 0;
   const dirty = Boolean(
-    draft.to.trim() || draft.cc.trim() || draft.cci.trim() || draft.subject.trim() || draft.body.trim(),
+    draft.to.trim() ||
+      draft.cc.trim() ||
+      draft.cci.trim() ||
+      draft.subject.trim() ||
+      draft.body.trim() ||
+      draft.attachments?.length,
   );
 
   const send = () => {
@@ -146,12 +186,45 @@ export function ComposeScreen({
               <Minus className="size-4.5" />
             </IconButton>
           )}
-          <IconButton aria-label="Joindre">
+          <IconButton
+            aria-label="Joindre un fichier"
+            disabled={sent}
+            className="disabled:pointer-events-none disabled:opacity-40"
+            onClick={() => fileInput.current?.click()}
+          >
             <Paperclip className="size-4.5" />
           </IconButton>
-          <IconButton aria-label="Ajouter une image">
+          <IconButton
+            aria-label="Ajouter une image"
+            disabled={sent}
+            className="disabled:pointer-events-none disabled:opacity-40"
+            onClick={() => imageInput.current?.click()}
+          >
             <Image className="size-4.5" />
           </IconButton>
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            hidden
+            data-testid="compose-attach-input"
+            onChange={(event) => {
+              void addFiles(event.target.files);
+              event.target.value = "";
+            }}
+          />
+          <input
+            ref={imageInput}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            data-testid="compose-image-input"
+            onChange={(event) => {
+              void addFiles(event.target.files);
+              event.target.value = "";
+            }}
+          />
         </div>
       </div>
 
@@ -265,6 +338,35 @@ export function ComposeScreen({
             className="w-full bg-transparent text-[15px] font-bold tracking-tight text-ink outline-none placeholder:font-semibold placeholder:text-ink-muted/70"
           />
         </div>
+
+        {draft.attachments?.length ? (
+          <ul aria-label="Pièces jointes" className="flex flex-wrap gap-1.5 border-b border-line py-2">
+            {draft.attachments.map((file, index) => (
+              <li
+                key={`${file.filename}-${index}`}
+                className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-surface-2 px-2.5 py-1"
+              >
+                <Paperclip className="size-3 shrink-0 text-ink-muted" />
+                <span className="min-w-0 truncate text-[11.5px] font-semibold text-ink-soft">{file.filename}</span>
+                <span className="shrink-0 text-[10.5px] font-medium text-ink-muted">{formatBytes(file.size)}</span>
+                <button
+                  type="button"
+                  aria-label={`Retirer ${file.filename}`}
+                  onClick={() => removeAttachment(index)}
+                  className="shrink-0 rounded-full p-0.5 text-ink-muted transition-colors hover:text-ink"
+                >
+                  <X className="size-3" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        {attachmentError && (
+          <p role="alert" className="border-b border-line py-2 text-[11.5px] font-semibold text-red-600 dark:text-red-300">
+            {attachmentError}
+          </p>
+        )}
 
         <div className="mt-3 flex flex-wrap gap-2">
           <button
@@ -436,17 +538,18 @@ export function ComposeScreen({
       <ReplySuggestSheet
         open={suggestOpen}
         suggestions={suggestions}
-        generate={(brief) =>
-          composeReply({ subject: draft.subject, to: draft.to, body: htmlToText(draft.body), brief })
-        }
+        generate={async (brief) => {
+          const input = { subject: draft.subject, to: draft.to, body: htmlToText(draft.body) };
+          return llmReady(llm) ? aiComposeReply(llm, input, brief) : composeReply({ ...input, brief });
+        }}
         onPick={applySuggestion}
         onClose={() => setSuggestOpen(false)}
       />
       <RewriteSheet
         open={rewriteOpen}
-        body={draft.body}
-        onApply={(id) => {
-          update({ body: textToHtml(rewriteBody(id, htmlToText(draft.body))) });
+        body={htmlToText(draft.body)}
+        onApply={(text) => {
+          update({ body: textToHtml(text) });
           setRewriteOpen(false);
         }}
         onClose={() => setRewriteOpen(false)}

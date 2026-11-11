@@ -173,12 +173,15 @@ pub async fn list_folders(
             uidvalidity: uidvalidity_of(&status, account_id)?,
             uidnext: uidnext_of(&status, account_id)?,
             last_sync_at: None,
+            modseq: None,
         });
     }
     Ok(folders)
 }
 
-/// Syncs one folder against the server state.
+/// Syncs one folder against the server state. A server that advertises
+/// CONDSTORE gets the incremental pass, every other server — and every
+/// CONDSTORE failure — the full one.
 pub async fn sync_folder(
     session: &mut ImapSession,
     store: &Store,
@@ -190,10 +193,13 @@ pub async fn sync_folder(
     reconcile(session, store, account_id, folder_path, Some(mapping), keys).await
 }
 
-/// Brings one folder in step with the server: one metadata pass decides what
-/// vanished, what changed flags and what is new; bodies are then pulled for the
-/// new uids only, in batches. `mapping` only names the role of a folder the
-/// store has never seen.
+/// Brings one folder in step with the server. When the store holds the
+/// `HIGHESTMODSEQ` of the mailbox, a `CHANGEDSINCE` fetch is enough to see the
+/// new messages and the flag changes; anything the server refuses, and any
+/// mailbox whose counts do not add up (a message vanished), falls back to the
+/// full pass: one metadata pass decides what vanished, what changed flags and
+/// what is new, then bodies are pulled for the new uids only, in batches.
+/// `mapping` only names the role of a folder the store has never seen.
 async fn reconcile(
     session: &mut ImapSession,
     store: &Store,
@@ -202,7 +208,8 @@ async fn reconcile(
     mapping: Option<&FolderMapping>,
     keys: &PgpKeyring,
 ) -> Result<SyncReport, MailError> {
-    let mailbox = session.select(folder_path).await.map_err(imap_error)?;
+    let condstore = condstore_ready(session).await;
+    let (mailbox, condstore) = select_folder(session, folder_path, condstore).await?;
     let uidvalidity = uidvalidity_of(&mailbox, account_id)?;
     let uidnext = uidnext_of(&mailbox, account_id)?;
 
@@ -212,6 +219,50 @@ async fn reconcile(
         .is_some_and(|folder| folder.uidvalidity != uidvalidity);
     if uidvalidity_changed {
         store.clear_folder(account_id, folder_path)?;
+    }
+
+    let target = Target {
+        account_id,
+        folder_path,
+        uidvalidity,
+    };
+
+    if let (true, Some(baseline), Some(highest)) = (
+        condstore,
+        resumable_modseq(stored.as_ref(), uidvalidity_changed),
+        mailbox.highest_modseq,
+    ) {
+        match incremental(session, store, &target, &mailbox, baseline, keys).await {
+            Ok(Some(report)) => {
+                tracing::debug!(
+                    account = account_id,
+                    folder = folder_path,
+                    baseline,
+                    highest,
+                    "synchronisation incrémentale"
+                );
+                record_sync(
+                    store,
+                    &target,
+                    stored.as_ref(),
+                    mapping,
+                    uidnext,
+                    Some(highest),
+                )?;
+                return Ok(report);
+            }
+            Ok(None) => {
+                tracing::debug!(
+                    account = account_id,
+                    folder = folder_path,
+                    baseline,
+                    "état local irréconciliable, synchronisation complète"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(account = account_id, folder = folder_path, %error, "CHANGEDSINCE refusé, synchronisation complète");
+            }
+        }
     }
 
     let local = store.flags_in_folder(account_id, folder_path)?;
@@ -243,37 +294,226 @@ async fn reconcile(
     };
 
     for batch in new_uids.chunks(BODY_BATCH) {
-        report.inserted += import_bodies(
-            session,
-            store,
-            &Target {
-                account_id,
-                folder_path,
-                uidvalidity,
-            },
-            batch,
-            &server,
-            keys,
-        )
-        .await?;
+        report.inserted += import_bodies(session, store, &target, batch, &server, keys).await?;
     }
 
+    record_sync(
+        store,
+        &target,
+        stored.as_ref(),
+        mapping,
+        uidnext,
+        mailbox.highest_modseq,
+    )?;
+    Ok(report)
+}
+
+/// Writes the folder row a finished sync leaves behind. `modseq` is the
+/// `HIGHESTMODSEQ` read by the `SELECT` of this sync, never one read later: a
+/// change the server made in between is fetched again next time instead of
+/// being skipped.
+fn record_sync(
+    store: &Store,
+    target: &Target<'_>,
+    stored: Option<&Folder>,
+    mapping: Option<&FolderMapping>,
+    uidnext: u32,
+    modseq: Option<u64>,
+) -> Result<(), MailError> {
     let role = stored
-        .as_ref()
         .map(|folder| folder.role)
         .filter(|role| *role != FolderRole::Other)
-        .or_else(|| mapping.and_then(|mapping| mapped_role(mapping, folder_path)))
+        .or_else(|| mapping.and_then(|mapping| mapped_role(mapping, target.folder_path)))
         .unwrap_or(FolderRole::Other);
     store.upsert_folder(&Folder {
-        account_id: account_id.to_string(),
-        path: folder_path.to_string(),
-        name: config::leaf_name(folder_path).to_string(),
+        account_id: target.account_id.to_string(),
+        path: target.folder_path.to_string(),
+        name: config::leaf_name(target.folder_path).to_string(),
         role,
-        uidvalidity,
+        uidvalidity: target.uidvalidity,
         uidnext,
         last_sync_at: Some(Utc::now()),
-    })?;
-    Ok(report)
+        modseq,
+    })
+}
+
+/// Whether the server can serve a `CHANGEDSINCE` refresh. A probe that fails is
+/// a server without CONDSTORE as far as the sync is concerned: the full pass is
+/// the one path that cannot lose anything.
+async fn condstore_ready(session: &mut ImapSession) -> bool {
+    // Incremental pass not yet validated against a real CONDSTORE server: it is
+    // opt-in (LAVANDE_MAIL_CONDSTORE=1) until then; the full pass is the safe default.
+    if !condstore_opt_in() {
+        return false;
+    }
+    match supports_condstore(session).await {
+        Ok(supported) => supported,
+        Err(error) => {
+            tracing::warn!(%error, "CAPABILITY illisible, synchronisation complète");
+            false
+        }
+    }
+}
+
+fn condstore_opt_in() -> bool {
+    matches!(
+        std::env::var("LAVANDE_MAIL_CONDSTORE").as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    )
+}
+
+/// Whether the server serves the incremental pass: `CONDSTORE`, or `QRESYNC`
+/// which RFC 7162 makes a superset of it.
+pub async fn supports_condstore(session: &mut ImapSession) -> Result<bool, MailError> {
+    let capabilities = session.capabilities().await.map_err(imap_error)?;
+    Ok(capabilities.has_str("CONDSTORE") || capabilities.has_str("QRESYNC"))
+}
+
+/// RFC 5161 `ENABLE CONDSTORE`, which only means the server also sends the
+/// `MODSEQ` of its unsolicited flag updates — this sync never reads those, it
+/// takes `HIGHESTMODSEQ` from `SELECT` and asks for `CHANGEDSINCE` itself. So a
+/// server without `ENABLE`, and a server that refuses the command, lose
+/// nothing: both are logged and the sync carries on.
+///
+/// RFC 5161 only allows `ENABLE` outside a selected mailbox: this must be
+/// called once on a fresh session, before the first `SELECT`.
+pub async fn enable_condstore(session: &mut ImapSession) {
+    let capabilities = match session.capabilities().await {
+        Ok(capabilities) => capabilities,
+        Err(error) => {
+            tracing::warn!(%error, "CAPABILITY illisible, ENABLE CONDSTORE ignoré");
+            return;
+        }
+    };
+    if !capabilities.has_str("ENABLE")
+        || !(capabilities.has_str("CONDSTORE") || capabilities.has_str("QRESYNC"))
+    {
+        return;
+    }
+    if let Err(error) = session.run_command_and_check_ok("ENABLE CONDSTORE").await {
+        tracing::debug!(%error, "ENABLE CONDSTORE refusé");
+    }
+}
+
+/// Selects the mailbox, asking for `HIGHESTMODSEQ` when `condstore` is set. A
+/// server that refuses the parameter leaves no mailbox selected, so the plain
+/// `SELECT` that follows puts the session back where the full pass expects it.
+async fn select_folder(
+    session: &mut ImapSession,
+    folder_path: &str,
+    condstore: bool,
+) -> Result<(async_imap::types::Mailbox, bool), MailError> {
+    if condstore {
+        match session.select_condstore(folder_path).await {
+            Ok(mailbox) => return Ok((mailbox, true)),
+            Err(error) => {
+                tracing::warn!(folder = folder_path, %error, "SELECT (CONDSTORE) refusé, synchronisation complète");
+            }
+        }
+    }
+    let mailbox = session.select(folder_path).await.map_err(imap_error)?;
+    Ok((mailbox, false))
+}
+
+/// The modseq an incremental pass may resume from: `None` when the store never
+/// completed a full pass of the folder, and `None` when the mailbox came back
+/// with another `UIDVALIDITY` (the old uids, and so the old modseq, mean
+/// nothing).
+fn resumable_modseq(stored: Option<&Folder>, uidvalidity_changed: bool) -> Option<u64> {
+    if uidvalidity_changed {
+        return None;
+    }
+    stored.and_then(|folder| folder.modseq)
+}
+
+/// One `CHANGEDSINCE` pass: the server answers the messages it touched since
+/// `baseline` only, so the flag updates, the bodies of the new uids and the
+/// `None` the caller turns into a full pass are all decided by `diff_since`.
+async fn incremental(
+    session: &mut ImapSession,
+    store: &Store,
+    target: &Target<'_>,
+    mailbox: &async_imap::types::Mailbox,
+    baseline: u64,
+    keys: &PgpKeyring,
+) -> Result<Option<SyncReport>, MailError> {
+    let touched = changes_since(session, baseline).await?;
+    let local = store.flags_in_folder(target.account_id, target.folder_path)?;
+    let Some(plan) = diff_since(&local, &touched, mailbox.exists) else {
+        return Ok(None);
+    };
+
+    let mut report = SyncReport {
+        flags_updated: store.set_flags_batch(
+            target.account_id,
+            target.folder_path,
+            &plan.changed,
+        )?,
+        uidnext: uidnext_of(mailbox, target.account_id)?,
+        ..SyncReport::default()
+    };
+    for batch in plan.new_uids.chunks(BODY_BATCH) {
+        report.inserted += import_bodies(session, store, target, batch, &touched, keys).await?;
+    }
+    Ok(Some(report))
+}
+
+/// The writes a `CHANGEDSINCE` pass has to make: the uids the store has never
+/// seen (their bodies are pulled) and the known uids whose flags moved.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct IncrementalPlan {
+    new_uids: Vec<u32>,
+    changed: Vec<(u32, Flags)>,
+}
+
+/// What a `CHANGEDSINCE` answer means for the local folder: `None` when the
+/// counts cannot be reconciled, which happens as soon as a message vanished
+/// since the last sync — `CHANGEDSINCE` does not report an expunge, and running
+/// on would leave a ghost row behind. The caller then runs the full pass, which
+/// names the vanished uids through `UID FETCH 1:*`.
+fn diff_since(
+    local: &HashMap<u32, Flags>,
+    touched: &HashMap<u32, (Flags, u32)>,
+    exists: u32,
+) -> Option<IncrementalPlan> {
+    let mut new_uids = Vec::new();
+    let mut changed = Vec::new();
+    for (uid, (flags, _)) in touched {
+        match local.get(uid) {
+            Some(known) if known != flags => changed.push((*uid, *flags)),
+            Some(_) => {}
+            None => new_uids.push(*uid),
+        }
+    }
+    new_uids.sort_unstable();
+    changed.sort_unstable_by_key(|(uid, _)| *uid);
+
+    (local.len() + new_uids.len() == exists as usize)
+        .then_some(IncrementalPlan { new_uids, changed })
+}
+
+/// `UID FETCH 1:* (UID FLAGS RFC822.SIZE) (CHANGEDSINCE <modseq>)`: the touched
+/// messages only, in the shape `server_state` returns. The data items are the
+/// ones of the full pass, so `import_bodies` reads the same map either way.
+async fn changes_since(
+    session: &mut ImapSession,
+    baseline: u64,
+) -> Result<HashMap<u32, (Flags, u32)>, MailError> {
+    let fetches: Vec<Fetch> = session
+        .uid_fetch("1:*", changes_since_query(baseline).as_str())
+        .await
+        .map_err(imap_error)?
+        .try_collect()
+        .await
+        .map_err(imap_error)?;
+    Ok(by_uid(&fetches))
+}
+
+/// The fetch modifiers of RFC 7162, which async-imap passes through verbatim
+/// after the data items: a misplaced parenthesis is a `BAD` from the server, not
+/// a silent miss, but it is also the one wire detail this crate spells itself.
+fn changes_since_query(baseline: u64) -> String {
+    format!("(UID FLAGS RFC822.SIZE) (CHANGEDSINCE {baseline})")
 }
 
 /// `UID FETCH 1:* (UID FLAGS RFC822.SIZE)`: the whole folder in one round trip.
@@ -285,7 +525,12 @@ async fn server_state(session: &mut ImapSession) -> Result<HashMap<u32, (Flags, 
         .try_collect()
         .await
         .map_err(imap_error)?;
-    Ok(fetches
+    Ok(by_uid(&fetches))
+}
+
+/// The `(flags, size)` of every fetch the server answered, by uid.
+fn by_uid(fetches: &[Fetch]) -> HashMap<u32, (Flags, u32)> {
+    fetches
         .iter()
         .filter_map(|fetch| {
             Some((
@@ -293,7 +538,7 @@ async fn server_state(session: &mut ImapSession) -> Result<HashMap<u32, (Flags, 
                 (flags_of(fetch), fetch.size.unwrap_or_default()),
             ))
         })
-        .collect())
+        .collect()
 }
 
 /// Where the bodies being imported go.
@@ -390,19 +635,8 @@ pub async fn fetch_body(
     uid: u32,
     keys: &PgpKeyring,
 ) -> Result<(), MailError> {
-    session.select(folder_path).await.map_err(imap_error)?;
-    let fetches: Vec<Fetch> = session
-        .uid_fetch(uid.to_string(), "(BODY.PEEK[])")
-        .await
-        .map_err(imap_error)?
-        .try_collect()
-        .await
-        .map_err(imap_error)?;
-    let raw = fetches
-        .iter()
-        .find_map(|fetch| fetch.body())
-        .ok_or_else(|| MailError::Imap(format!("uid {uid} carries no body")))?;
-    let parsed = mime::parse_message_with_keys(raw, keys)?;
+    let raw = raw_message(session, folder_path, uid).await?;
+    let parsed = mime::parse_message_with_keys(&raw, keys)?;
     store.set_body(
         account_id,
         folder_path,
@@ -411,6 +645,55 @@ pub async fn fetch_body(
         parsed.body_html.as_deref(),
         parsed.pgp_detail.as_ref(),
     )
+}
+
+/// Re-reads one attachment. The bytes are never stored: they come from the
+/// server on demand. `index` is the position `mime::parse_message` lists the
+/// part at, which is what the stored `AttachmentMeta` rows carry.
+pub async fn fetch_attachment(
+    session: &mut ImapSession,
+    folder_path: &str,
+    uid: u32,
+    index: usize,
+    keys: &PgpKeyring,
+) -> Result<Option<mime::AttachmentBody>, MailError> {
+    let raw = raw_message(session, folder_path, uid).await?;
+    mime::attachment_body(&raw, index, keys)
+}
+
+/// Re-reads one message and hands back its HTML with the remote images kept,
+/// sanitized by `mime::sanitize_html_with_images`. The markup is never stored:
+/// it only exists for a reader who asked for the images of this message.
+/// `None` when the message has no HTML part, or when its encrypted body cannot
+/// be opened.
+pub async fn fetch_html_with_images(
+    session: &mut ImapSession,
+    folder_path: &str,
+    uid: u32,
+    keys: &PgpKeyring,
+) -> Result<Option<String>, MailError> {
+    let raw = raw_message(session, folder_path, uid).await?;
+    mime::html_with_images(&raw, keys)
+}
+
+/// The RFC 5322 bytes of one message, as the server holds them.
+async fn raw_message(
+    session: &mut ImapSession,
+    folder_path: &str,
+    uid: u32,
+) -> Result<Vec<u8>, MailError> {
+    session.select(folder_path).await.map_err(imap_error)?;
+    let fetches: Vec<Fetch> = session
+        .uid_fetch(uid.to_string(), "(BODY.PEEK[])")
+        .await
+        .map_err(imap_error)?
+        .try_collect()
+        .await
+        .map_err(imap_error)?;
+    fetches
+        .into_iter()
+        .find_map(|fetch| fetch.body().map(<[u8]>::to_vec))
+        .ok_or_else(|| MailError::Imap(format!("uid {uid} carries no body")))
 }
 
 /// Reads the flags one message carries on the server.
@@ -758,4 +1041,137 @@ fn attribute_label<'a>(attribute: &'a NameAttribute<'a>) -> &'a str {
 
 fn imap_error(error: async_imap::error::Error) -> MailError {
     MailError::Imap(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unread() -> Flags {
+        Flags {
+            unread: true,
+            starred: false,
+            answered: false,
+        }
+    }
+
+    fn read_starred() -> Flags {
+        Flags {
+            unread: false,
+            starred: true,
+            answered: false,
+        }
+    }
+
+    fn local(uids: &[(u32, Flags)]) -> HashMap<u32, Flags> {
+        uids.iter().copied().collect()
+    }
+
+    fn touched(uids: &[(u32, Flags)]) -> HashMap<u32, (Flags, u32)> {
+        uids.iter()
+            .map(|(uid, flags)| (*uid, (*flags, 10)))
+            .collect()
+    }
+
+    #[test]
+    fn an_unchanged_mailbox_writes_nothing() {
+        let plan = diff_since(&local(&[(1, unread()), (2, unread())]), &touched(&[]), 2);
+        assert_eq!(plan, Some(IncrementalPlan::default()));
+    }
+
+    #[test]
+    fn a_new_uid_is_a_body_to_pull() {
+        let plan = diff_since(
+            &local(&[(1, unread()), (2, unread())]),
+            &touched(&[(3, unread())]),
+            3,
+        );
+        assert_eq!(
+            plan,
+            Some(IncrementalPlan {
+                new_uids: vec![3],
+                changed: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_known_uid_with_other_flags_is_an_update() {
+        let plan = diff_since(
+            &local(&[(1, unread()), (2, unread())]),
+            &touched(&[(2, read_starred())]),
+            2,
+        );
+        assert_eq!(
+            plan,
+            Some(IncrementalPlan {
+                new_uids: Vec::new(),
+                changed: vec![(2, read_starred())],
+            })
+        );
+    }
+
+    #[test]
+    fn a_known_uid_with_the_same_flags_is_dropped() {
+        let plan = diff_since(
+            &local(&[(1, unread()), (2, read_starred())]),
+            &touched(&[(2, read_starred())]),
+            2,
+        );
+        assert_eq!(plan, Some(IncrementalPlan::default()));
+    }
+
+    /// `CHANGEDSINCE` never reports an expunge: the count is what says a message
+    /// vanished, and a vanished message forces the full pass.
+    #[test]
+    fn a_vanished_message_forces_the_full_pass() {
+        assert_eq!(
+            diff_since(&local(&[(1, unread()), (2, unread())]), &touched(&[]), 1),
+            None
+        );
+    }
+
+    /// The dangerous case: one message vanished and another arrived, so the
+    /// server still answers as many messages as the store holds.
+    #[test]
+    fn a_vanished_message_hidden_by_a_new_one_forces_the_full_pass() {
+        assert_eq!(
+            diff_since(
+                &local(&[(1, unread()), (2, unread())]),
+                &touched(&[(3, unread())]),
+                2
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_mailbox_that_grew_behind_the_baseline_forces_the_full_pass() {
+        assert_eq!(diff_since(&local(&[(1, unread())]), &touched(&[]), 2), None);
+    }
+
+    #[test]
+    fn the_incremental_fetch_carries_the_modseq_as_a_modifier() {
+        assert_eq!(
+            changes_since_query(90060115205545359),
+            "(UID FLAGS RFC822.SIZE) (CHANGEDSINCE 90060115205545359)"
+        );
+    }
+
+    #[test]
+    fn a_missing_or_stale_baseline_never_resumes() {
+        let folder = Folder {
+            account_id: "perso".to_string(),
+            path: "INBOX".to_string(),
+            name: "INBOX".to_string(),
+            role: FolderRole::Inbox,
+            uidvalidity: 7,
+            uidnext: 10,
+            last_sync_at: None,
+            modseq: Some(9),
+        };
+        assert_eq!(resumable_modseq(None, false), None);
+        assert_eq!(resumable_modseq(Some(&folder), true), None);
+        assert_eq!(resumable_modseq(Some(&folder), false), Some(9));
+    }
 }

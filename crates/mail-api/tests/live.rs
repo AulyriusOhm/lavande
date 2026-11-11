@@ -373,6 +373,100 @@ async fn sent_message_is_found_by_a_sync() {
     );
 }
 
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn an_attachment_comes_back_from_the_server() {
+    let daemon = Daemon::start().await;
+    let client = daemon.client();
+    add_account(&client, &daemon).await;
+
+    let subject = unique("[live-api-attachment] telechargement");
+    send(&client, &daemon, &subject).await;
+    sync(&client, &daemon, Some(INBOX)).await;
+    let uid = find(&threads(&client, &daemon, INBOX).await, &subject);
+    let stored = message(&client, &daemon, INBOX, uid).await;
+    assert_eq!(stored["attachments"][0]["filename"], "note.txt", "{stored}");
+
+    let uri = format!("/api/accounts/{ACCOUNT}/folders/{INBOX}/messages/{uid}/attachments/0");
+    let response = client
+        .get(daemon.url(&uri))
+        .send()
+        .await
+        .expect("GET attachment");
+    assert_eq!(response.status(), StatusCode::OK);
+    let header = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert_eq!(header("content-type"), "text/plain", "{uid}");
+    let disposition = header("content-disposition");
+    assert!(disposition.contains("note.txt"), "{disposition}");
+    let bytes = response.bytes().await.expect("octets");
+    assert_eq!(bytes.as_ref(), b"hello", "le corps ne correspond pas");
+
+    let missing = format!("/api/accounts/{ACCOUNT}/folders/{INBOX}/messages/{uid}/attachments/9");
+    let response = client
+        .get(daemon.url(&missing))
+        .send()
+        .await
+        .expect("GET attachment");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn an_encrypted_attachment_comes_back_cleartext() {
+    let daemon = Daemon::start().await;
+    let client = daemon.client();
+    add_account(&client, &daemon).await;
+    generate_key(&client, &daemon, &account().email).await;
+
+    let subject = unique("[live-api-attachment] chiffre");
+    let response = client
+        .post(daemon.url(&format!("/api/accounts/{ACCOUNT}/send")))
+        .json(&json!({
+            "to": [{ "email": account().email }],
+            "cc": [], "bcc": [],
+            "subject": subject,
+            "text": "corps chiffre",
+            "pgp_sign": true,
+            "pgp_encrypt": true,
+            "attachments": [
+                { "filename": "note.txt", "mime": "text/plain", "data_base64": "aGVsbG8=" }
+            ]
+        }))
+        .send()
+        .await
+        .expect("POST send");
+    let status = response.status();
+    let body = response.text().await.expect("corps");
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    sync(&client, &daemon, Some(INBOX)).await;
+    let uid = find(&threads(&client, &daemon, INBOX).await, &subject);
+    let stored = message(&client, &daemon, INBOX, uid).await;
+    assert_eq!(stored["pgp"], "encrypted", "{stored}");
+    assert_eq!(stored["attachments"][0]["filename"], "note.txt", "{stored}");
+
+    let uri = format!("/api/accounts/{ACCOUNT}/folders/{INBOX}/messages/{uid}/attachments/0");
+    let response = client
+        .get(daemon.url(&uri))
+        .send()
+        .await
+        .expect("GET attachment");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.bytes().await.expect("octets");
+    assert_eq!(
+        bytes.as_ref(),
+        b"hello",
+        "la pièce jointe d'un message chiffré n'est pas rendue en clair"
+    );
+}
+
 async fn generate_key(client: &Client, daemon: &Daemon, email: &str) -> Value {
     let response = client
         .post(daemon.url("/api/pgp/keys/generate"))

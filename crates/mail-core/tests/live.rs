@@ -674,6 +674,94 @@ async fn unchanged_folder_reports_nothing() {
     assert!(!report.uidvalidity_changed, "{report:?}");
 }
 
+/// GreenMail 2.1.15 advertises `IMAP4rev1 LITERAL+ UIDPLUS SORT IDLE MOVE
+/// SASL-IR AUTH=XOAUTH2 QUOTA`: no CONDSTORE, so every sync here takes the full
+/// pass. This pins the fallback: the probe says no, `ENABLE CONDSTORE` is a
+/// no-op, and the full pass keeps seeing new messages, other clients' flags and
+/// expunges. The `CHANGEDSINCE` path itself cannot be exercised against this
+/// server — it needs a CONDSTORE server (Dovecot, Gmail, ...).
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn a_server_without_condstore_keeps_the_full_pass() {
+    let cfg = account();
+    let store = store(&cfg);
+
+    let mut session = connect(&cfg).await;
+    assert!(
+        !checked(
+            "capability probe",
+            imap::supports_condstore(&mut session).await
+        ),
+        "this server advertises CONDSTORE: the fallback scenario no longer applies"
+    );
+    imap::enable_condstore(&mut session).await;
+
+    let subject = unique("[live-fallback] repli complet");
+    send(&cfg, &subject, "corps repli", None).await;
+    let first = sync(&cfg, &store, INBOX).await;
+    assert!(first.inserted >= 1, "{first:?}");
+    let folder =
+        checked("folder", store.get_folder(ACCOUNT, INBOX)).expect("the sync stored the INBOX row");
+    assert_eq!(
+        folder.modseq, None,
+        "a server without CONDSTORE left a modseq behind"
+    );
+
+    let again = sync(&cfg, &store, INBOX).await;
+    assert_eq!(again.inserted, 0, "{again:?}");
+    assert_eq!(again.flags_updated, 0, "{again:?}");
+    assert_eq!(again.removed, 0, "{again:?}");
+
+    let uid = find(&store, INBOX, &subject).uid;
+    let mut raw = connect(&cfg).await;
+    select(&mut raw, INBOX).await;
+    uid_store(&mut raw, uid, "+FLAGS (\\Seen \\Flagged)").await;
+
+    let flags = sync(&cfg, &store, INBOX).await;
+    assert!(flags.flags_updated >= 1, "{flags:?}");
+    let stored = checked("lookup", store.get_message(ACCOUNT, INBOX, uid)).expect("message");
+    assert!(
+        !stored.flags.unread && stored.flags.starred,
+        "{:?}",
+        stored.flags
+    );
+    assert_eq!(
+        checked("folder", store.get_folder(ACCOUNT, INBOX))
+            .expect("row")
+            .modseq,
+        None
+    );
+
+    let doomed = unique("[live-fallback] message supprime");
+    send(&cfg, &doomed, "corps supprime", None).await;
+    let kept = unique("[live-fallback] message garde");
+    send(&cfg, &kept, "corps garde", None).await;
+    sync(&cfg, &store, INBOX).await;
+    let doomed_uid = find(&store, INBOX, &doomed).uid;
+    let kept_uid = find(&store, INBOX, &kept).uid;
+
+    let mut raw = connect(&cfg).await;
+    select(&mut raw, INBOX).await;
+    uid_store(&mut raw, doomed_uid, "+FLAGS (\\Deleted)").await;
+    uid_expunge(&mut raw, doomed_uid).await;
+
+    let report = sync(&cfg, &store, INBOX).await;
+    assert!(report.removed >= 1, "{report:?}");
+    assert_eq!(report.inserted, 0, "{report:?}");
+    assert!(
+        checked(
+            "doomed lookup",
+            store.get_message(ACCOUNT, INBOX, doomed_uid)
+        )
+        .is_none(),
+        "uid {doomed_uid} survived the server expunge"
+    );
+    assert!(
+        checked("kept lookup", store.get_message(ACCOUNT, INBOX, kept_uid)).is_some(),
+        "uid {kept_uid} vanished from the store"
+    );
+}
+
 #[tokio::test]
 #[ignore = "requires scripts/mail-test-server.sh start"]
 async fn move_keeps_store_in_step_with_server() {

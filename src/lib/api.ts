@@ -228,6 +228,11 @@ export type PurgeResult = {
   removed: number;
 };
 
+/** Corps HTML relu à la demande, images distantes comprises (déjà assaini par le service). */
+export type HtmlImages = {
+  html: string;
+};
+
 export type SendInput = {
   to: ApiAddress[];
   cc: ApiAddress[];
@@ -327,7 +332,11 @@ function transport(error: unknown): ApiError {
   return new ApiError(error instanceof Error ? error.message : "échec réseau", "network", 0);
 }
 
-export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+async function daemonFetch(
+  path: string,
+  options: RequestOptions,
+  init: (headers: Record<string, string>) => RequestInit,
+): Promise<Response> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), options.timeout ?? SHORT_TIMEOUT);
   const relay = () => controller.abort();
@@ -336,23 +345,32 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   try {
     const token = await daemonToken();
     const headers: Record<string, string> = {};
-    if (options.body !== undefined) headers["content-type"] = "application/json";
     if (token) headers["authorization"] = `Bearer ${token}`;
-    const response = await fetch(`${BASE}${path}`, {
-      method: options.method ?? "GET",
-      headers: Object.keys(headers).length > 0 ? headers : undefined,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
-      signal: controller.signal,
-    });
+    const response = await fetch(`${BASE}${path}`, { ...init(headers), signal: controller.signal });
     if (!response.ok) throw await envelope(response);
-    if (response.status === 204) return undefined as unknown as T;
-    return (await response.json()) as T;
+    return response;
   } catch (error) {
     throw transport(error);
   } finally {
     window.clearTimeout(timer);
     options.signal?.removeEventListener("abort", relay);
   }
+}
+
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const response = await daemonFetch(path, options, (headers) => ({
+    method: options.method ?? "GET",
+    headers: options.body === undefined ? headers : { ...headers, "content-type": "application/json" },
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  }));
+  if (response.status === 204) return undefined as unknown as T;
+  return (await response.json()) as T;
+}
+
+/** Même jeton et même enveloppe d'erreur, mais le corps reste binaire. */
+async function requestBlob(path: string, options: RequestOptions = {}): Promise<Blob> {
+  const response = await daemonFetch(path, options, (headers) => ({ headers }));
+  return await response.blob();
 }
 
 const accountPath = (id: string) => `/accounts/${encodeURIComponent(id)}`;
@@ -394,6 +412,24 @@ export const mailApi = {
   message: (id: string, folderPath: string, uid: number) =>
     request<ApiMessage>(
       `${accountPath(id)}/folders/${encodeURIComponent(folderPath)}/messages/${uid}?fetch_body=true`,
+      { timeout: LONG_TIMEOUT },
+    ),
+
+  /** Les octets d'une pièce jointe : le démon les relit sur le serveur IMAP. */
+  attachment: (id: string, folderPath: string, uid: number, index: number) =>
+    requestBlob(
+      `${accountPath(id)}/folders/${encodeURIComponent(folderPath)}/messages/${uid}/attachments/${index}`,
+      { timeout: LONG_TIMEOUT },
+    ),
+
+  /**
+   * Le corps HTML relu sur le serveur, images distantes comprises : masquées par
+   * défaut, elles ne s'affichent que sur ce choix explicite. Le service renvoie
+   * un markup ré-assaini (même liste blanche, plus `img` en http(s)).
+   */
+  htmlImages: (id: string, folderPath: string, uid: number) =>
+    request<HtmlImages>(
+      `${accountPath(id)}/folders/${encodeURIComponent(folderPath)}/messages/${uid}/html-images`,
       { timeout: LONG_TIMEOUT },
     ),
 

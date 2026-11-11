@@ -12,11 +12,11 @@ contrat des commandes à écrire.
 | Fait | Ne fait pas |
 | --- | --- |
 | Connexion IMAP TLS implicite ou STARTTLS, auth mot de passe ou XOAUTH2 | Pas de pool de connexions, pas de reconnexion automatique : l'appelant ouvre et ferme la session |
-| `LIST` + `STATUS` pour les dossiers, réconciliation par dossier : une passe métadonnées `UID FETCH 1:*`, corps seulement pour les UID nouveaux | Pas de keychain : les secrets vivent dans `AccountConfig`, en mémoire (et en clair dans le JSON IPC) |
-| Envoi SMTP (lettre) avec pièces jointes, texte + HTML | Pas de PGP réel : `PgpState` ne fait que détecter `multipart/signed` et `multipart/encrypted` |
-| Parsing MIME complet (encodage de transfert, RFC 2047, pièces jointes, aperçu) | Pas de flux navigateur OAuth2 : seul l'échange *refresh token* → *access token* existe |
-| Threading déterministe par `References` / `In-Reply-To` / sujet normalisé | Pas d'IDLE ni de push : la synchro est toujours déclenchée par l'appelant |
-| Store SQLite (WAL, `user_version`), threads agrégés en Rust à la lecture | Pas de recherche côté serveur (`SEARCH`) : le filtrage reste côté front, sur les données chargées |
+| `LIST` + `STATUS` pour les dossiers, réconciliation par dossier : une passe métadonnées `UID FETCH 1:*`, corps seulement pour les UID nouveaux | Secrets dans le trousseau système / fichier chiffré (0600), plus en clair dans `accounts.json` ; base SQLite non chiffrée au repos |
+| Envoi SMTP (lettre) avec pièces jointes, texte + HTML ; PGP réel (signature/chiffrement) | Pas de décompression bzip2 des payloads OpenPGP ; voir « PGP & rédaction » |
+| Parsing MIME complet (encodage de transfert, RFC 2047, pièces jointes, aperçu) ; flux OAuth2 navigateur (PKCE) | Pas de `client_id` d'application embarqué (Google/Microsoft) : à enregistrer ou fournir au service |
+| Threading déterministe par `References` / `In-Reply-To` / sujet normalisé ; IDLE sur INBOX + push SSE | Pas de CONDSTORE/QRESYNC : chaque synchro refait une passe métadonnées complète du dossier |
+| Store SQLite (WAL, `user_version`), threads agrégés en Rust à la lecture ; recherche côté démon sur tous les dossiers | Recherche sur l'index local, pas de `SEARCH` IMAP distant |
 
 ## Arborescence
 

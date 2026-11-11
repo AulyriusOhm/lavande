@@ -39,6 +39,7 @@ import { exportKey, generateKey, listKeys } from "@/lib/pgp-api";
 import { MCP_LOG, MCP_SCOPES, MCP_SERVERS, mcpCounts } from "@/lib/mcp";
 import type { McpLogEntry } from "@/lib/mcp";
 import { activeSignature, mergeFlags, usePrefs } from "@/lib/prefs";
+import { llmReady } from "@/lib/llm";
 import { ACCENT_PRESETS, useTheme } from "@/lib/theme";
 import { useMailStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -68,6 +69,7 @@ const SECTIONS = [
   { id: "modules", label: "Modules" },
   { id: "securite", label: "Sécurité" },
   { id: "synchronisation", label: "Synchronisation" },
+  { id: "ia", label: "IA" },
   { id: "assistant", label: "Serveurs MCP" },
   { id: "apropos", label: "À propos" },
 ] as const;
@@ -128,6 +130,8 @@ export function DesktopSettings() {
     mcpEnabled,
     setMcpEnabled,
     signatures,
+    llm,
+    setLlm,
   } = usePrefs();
   const { notify, accounts, mode, openConnect, askRemoveAccount } = useMailStore();
   const [active, setActive] = useState<SectionId>("comptes");
@@ -741,6 +745,50 @@ export function DesktopSettings() {
 
               <Block id="synchronisation" label="Synchronisation" hint="chiffré de bout en bout">
                 <SyncSettings variant="desktop" />
+              </Block>
+
+              <Block id="ia" label="Intelligence artificielle" hint="suggestions & réécriture">
+                <Surface className="p-4">
+                  <p className="text-[12px] font-semibold leading-relaxed text-ink-soft">
+                    Branche un modèle compatible OpenAI pour les suggestions de réponse et la réécriture.
+                    Sans configuration, Lavande propose des réponses locales.
+                  </p>
+                  <div className="mt-3 grid gap-2.5">
+                    <label className="grid gap-1">
+                      <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Endpoint</span>
+                      <TextInput
+                        aria-label="Endpoint du modèle"
+                        placeholder="https://api.openai.com/v1"
+                        value={llm.endpoint}
+                        onChange={(event) => setLlm({ endpoint: event.target.value })}
+                      />
+                    </label>
+                    <label className="grid gap-1">
+                      <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Modèle</span>
+                      <TextInput
+                        aria-label="Nom du modèle"
+                        placeholder="gpt-4o-mini"
+                        value={llm.model}
+                        onChange={(event) => setLlm({ model: event.target.value })}
+                      />
+                    </label>
+                    <label className="grid gap-1">
+                      <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Clé API</span>
+                      <TextInput
+                        aria-label="Clé API"
+                        type="password"
+                        placeholder="sk-…"
+                        value={llm.apiKey}
+                        onChange={(event) => setLlm({ apiKey: event.target.value })}
+                      />
+                    </label>
+                  </div>
+                  <p className="mt-2.5 text-[10.5px] font-semibold text-ink-muted">
+                    {llmReady(llm)
+                      ? "IA active · les propositions utilisent le modèle configuré."
+                      : "IA inactive · propositions locales uniquement."}
+                  </p>
+                </Surface>
               </Block>
 
               <Block

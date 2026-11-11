@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS folders (
     uidvalidity INTEGER,
     uidnext INTEGER,
     last_sync_at TEXT,
+    modseq INTEGER,
     PRIMARY KEY (account_id, path)
 );
 

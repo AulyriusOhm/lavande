@@ -49,6 +49,18 @@ export type MailSource = {
   uid: number;
 };
 
+/**
+ * Une pièce jointe reçue. `index` est son rang dans le message côté serveur :
+ * c'est ce que le démon attend pour renvoyer les octets. Absent en mode démo.
+ */
+export type MailAttachment = {
+  name: string;
+  size: string;
+  mime?: string;
+  index?: number;
+  inline?: boolean;
+};
+
 export type Mail = {
   id: string;
   account: string;
@@ -72,7 +84,7 @@ export type Mail = {
   starred: boolean;
   pgp: PgpState;
   pgp_detail?: ApiPgpDetail | null;
-  attachments?: { name: string; size: string }[];
+  attachments?: MailAttachment[];
   tone: number;
 };
 

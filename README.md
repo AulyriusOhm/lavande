@@ -153,17 +153,46 @@ scripts/mail-test-server.sh stop      # ou `reset` (stop + start), `status`
   emporterait ceux qu'un autre client a marqués) ; vider un dossier reste un `EXPUNGE` dossier-wide
   assumé et `removed` en rapporte le compte côté serveur.
 - Un seul dossier synchronisé par appel (`move_message` réconcilie en plus sa destination) ;
-  `sync_account` ne fait que INBOX + Sent ; aucun retry réseau.
+  `sync_account` couvre tous les dossiers à rôle (inbox, sent, drafts, archive, spam, trash) ; aucun retry réseau.
 - HTML des mails assaini à l'ingestion (liens sûrs, **images retirées**) ; les mails purement
   graphiques sont donc plus sobres que dans leur client d'origine.
 - OAuth2 fonctionnel mais **sans identifiant d'application embarqué** : il faut enregistrer un
   `client_id` (Google/Microsoft) ou le fournir au service ; seul le parcours de test est validé.
-- Ni pool de connexions, ni PGP réel, ni recherche serveur. Les secrets ont un trousseau (voir ci-dessous).
+- Pas de pool de connexions. **PGP réel** (trousseau, signature/chiffrement) et **recherche serveur** sont implémentés — voir « PGP & rédaction » ci-dessous. Les secrets ont un trousseau.
 - Le démon écoute **127.0.0.1 uniquement** et exige un **jeton Bearer** (`daemon-token`, 0600) : sans
   lui, 401. Le proxy Vite/nginx et la coquille Tauri l'injectent ; ne l'expose pas hors loopback.
 - Les mots de passe IMAP/SMTP et jetons OAuth2 ne sont **plus en clair dans `accounts.json`** :
   trousseau système (desktop Linux) ou fichier chiffré XChaCha20-Poly1305 (Android/headless), tous deux
   0600. Détails et migration : [`docs/mail-core.md`](./docs/mail-core.md#stockage-des-secrets).
+
+### PGP & rédaction
+
+- **PGP réel** (crate `pgp`, pur Rust) : trousseau de clés (génération, import, export, suppression) via
+  `/api/pgp/keys`. Les clés **privées** vivent dans le store de secrets (trousseau système / fichier chiffré),
+  les publiques dans un keyring 0600 ; l'export ne renvoie jamais le privé. À l'envoi, `pgp_sign` / `pgp_encrypt`
+  signent puis chiffrent (RFC 3156), clés appariées par email ; à la réception, le démon déchiffre et vérifie,
+  et expose `pgp_detail` (vérifié / signataire / erreur) affiché en badge à la lecture. Routes derrière le jeton.
+- **Signatures HTML par compte** : éditeur dédié + aperçu dans les réglages, activation/désactivation, toggle par
+  message ; ajoutées automatiquement à l'envoi (multipart texte + HTML).
+- **Éditeur riche** (TipTap) à la composition : gras/italique/titres/listes/citation/code/liens, **raccourcis
+  Markdown** à la frappe et collage Markdown→HTML. Le HTML est assaini à l'envoi comme à la lecture (ammonia).
+- **Recherche serveur** (`/api/accounts/{id}/search`) sur tous les dossiers, et **synchro automatique** à la
+  première visite d'un dossier. Les clés PGP générées ont une **expiration** (2 ans par défaut).
+
+### Pièces jointes, notifications & IA
+
+- **Pièces jointes** : envoi depuis la composition (picker, chips, limite 24 Mo) ; téléchargement à la lecture via
+  un endpoint qui re-fetch la partie MIME par IMAP (`…/messages/{uid}/attachments/{idx}`). Les bytes ne sont pas
+  stockés localement (métadonnées seulement).
+- **Notifications desktop** (plugin Tauri) à l'arrivée d'un mail (IDLE), uniquement si la fenêtre n'a pas le focus ;
+  **badge non-lus** dans le titre de la fenêtre.
+- **Images des mails HTML** : masquées par défaut (anti-tracking) ; bandeau « Afficher les images » par message,
+  re-fetch + assainissement à la demande (http/https uniquement, jamais de script). Aucun pixel persisté.
+- **Assist IA** : suggestions de réponse et réécriture via un modèle compatible OpenAI, configurable dans les
+  réglages (endpoint / modèle / clé). Sans configuration, repli sur des propositions locales.
+- **Synchro CONDSTORE** : détection de capacité + repli sûr sur la passe complète ; le chemin incrémentiel est
+  opt-in (`LAVANDE_MAIL_CONDSTORE=1`) tant qu'il n'a pas été validé sur un vrai serveur. IDLE sur INBOX ; les
+  autres dossiers se synchronisent à la demande.
 
 ## Dépôt
 

@@ -84,6 +84,10 @@ pub struct Folder {
     pub uidvalidity: u32,
     pub uidnext: u32,
     pub last_sync_at: Option<DateTime<Utc>>,
+    /// `HIGHESTMODSEQ` (RFC 7162) the last complete sync left behind, or
+    /// `None` when the server never advertised CONDSTORE: the next sync then
+    /// runs the full pass.
+    pub modseq: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

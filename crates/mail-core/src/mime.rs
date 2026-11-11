@@ -1,5 +1,6 @@
 //! MIME parsing on top of `mail-parser`.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
@@ -27,6 +28,14 @@ pub struct ParsedMessage {
     pub pgp: PgpState,
     pub pgp_detail: Option<PgpDetail>,
     pub preview: String,
+}
+
+/// One attachment with its decoded bytes, ready to be written to disk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttachmentBody {
+    pub filename: String,
+    pub mime: String,
+    pub data: Vec<u8>,
 }
 
 /// Parses a message and, when it is PGP/MIME, verifies its signature and
@@ -69,17 +78,48 @@ fn clear_body(parsed: &mut ParsedMessage, entity: &[u8]) {
     parsed.preview = inner.preview;
 }
 
+/// The decoded bytes of the `index`-th attachment of a raw message, in the very
+/// order `parse_message` lists them. `None` when the message carries no such
+/// part. A PGP/MIME message is opened first: its attachments live in the
+/// cleartext entity, not in the envelope.
+pub fn attachment_body(
+    raw: &[u8],
+    index: usize,
+    keyring: &PgpKeyring,
+) -> Result<Option<AttachmentBody>, MailError> {
+    let message = parse(raw)?;
+    match pgp_state(&message) {
+        PgpState::Encrypted => match pgp::mime::open(raw, keyring).entity {
+            Some(entity) => Ok(attachment_of_message(&parse(&entity)?, index)),
+            None => Ok(None),
+        },
+        PgpState::None | PgpState::Signed => Ok(attachment_of_message(&message, index)),
+    }
+}
+
+fn attachment_of_message(
+    message: &mail_parser::Message<'_>,
+    index: usize,
+) -> Option<AttachmentBody> {
+    message.attachments().nth(index).map(|part| AttachmentBody {
+        filename: part.attachment_name().unwrap_or("attachment").to_string(),
+        mime: mime_of(part),
+        data: part.contents().to_vec(),
+    })
+}
+
+fn parse(raw: &[u8]) -> Result<mail_parser::Message<'_>, MailError> {
+    MessageParser::default()
+        .parse(raw)
+        .ok_or_else(|| MailError::Mime("could not parse message".to_string()))
+}
+
 /// Parses a raw RFC 5322 message. Decodes transfer encodings and RFC 2047
 /// encoded words.
 pub fn parse_message(raw: &[u8]) -> Result<ParsedMessage, MailError> {
-    let message = MessageParser::default()
-        .parse(raw)
-        .ok_or_else(|| MailError::Mime("could not parse message".to_string()))?;
+    let message = parse(raw)?;
 
-    let html_index = html_body_of(&message);
-    let body_html = html_index
-        .and_then(|index| message.body_html(index).map(|html| html.into_owned()))
-        .and_then(|html| sanitize_html(&html));
+    let body_html = html_source(&message).and_then(|html| sanitize_html(&html));
     let body_text = text_body_of(&message, body_html.as_deref());
     let preview = body_text.as_deref().map(preview_of).unwrap_or_default();
 
@@ -122,6 +162,11 @@ pub fn parse_message(raw: &[u8]) -> Result<ParsedMessage, MailError> {
         pgp_detail: None,
         preview,
     })
+}
+
+/// The HTML body of a parsed message, exactly as the sender wrote it.
+fn html_source(message: &mail_parser::Message<'_>) -> Option<String> {
+    html_body_of(message).and_then(|index| message.body_html(index).map(|html| html.into_owned()))
 }
 
 fn html_body_of(message: &mail_parser::Message<'_>) -> Option<usize> {
@@ -308,6 +353,27 @@ const HTML_TAGS: [&str; 28] = [
     "hr",
 ];
 
+/// The HTML body of a raw message with its remote images kept, ready to render
+/// when the reader asks for them: `sanitize_html_with_images` output. A PGP/MIME
+/// message is opened first, its HTML lives in the cleartext entity. `None` when
+/// the message carries no HTML part, or when its encrypted body cannot be
+/// opened with the keys at hand.
+pub fn html_with_images(raw: &[u8], keyring: &PgpKeyring) -> Result<Option<String>, MailError> {
+    let message = parse(raw)?;
+    let entity = match pgp_state(&message) {
+        PgpState::Encrypted => match pgp::mime::open(raw, keyring).entity {
+            Some(entity) => Some(entity),
+            None => return Ok(None),
+        },
+        PgpState::None | PgpState::Signed => None,
+    };
+    let source = match &entity {
+        Some(entity) => parse(entity)?,
+        None => message,
+    };
+    Ok(html_source(&source).and_then(|html| sanitize_html_with_images(&html)))
+}
+
 /// Strips everything a mail can use to break out of the message view: only the
 /// tags of `HTML_TAGS` survive, with `href` (http/https/mailto only), `title`,
 /// `colspan` and `rowspan`. `script`/`style` keep nothing, images (tracking
@@ -315,26 +381,70 @@ const HTML_TAGS: [&str; 28] = [
 /// but keep their text, links get `rel="noopener noreferrer"` and
 /// `target="_blank"`. Returns `None` when no visible text is left.
 pub fn sanitize_html(html: &str) -> Option<String> {
-    let cleaned = html_sanitizer().clean(html).to_string();
+    let cleaned = html_sanitizer(false).clean(html).to_string();
     if visible_text(&cleaned).is_empty() {
         return None;
     }
-    Some(cleaned.replace("<a ", "<a target=\"_blank\" "))
+    Some(open_in_new_tab(cleaned))
 }
 
-fn html_sanitizer() -> ammonia::Builder<'static> {
+/// Same allow-list as `sanitize_html`, plus `img` with an absolute http(s)
+/// `src`: the reader opted in for this message, showing its remote images is
+/// what they asked for. `script`, `style`, `on*`, `srcset`, the inline `style`
+/// attribute and `javascript:`/`data:`/`mailto:` sources are still dropped, and
+/// the markup is sanitized here, on the server, never on the client.
+pub fn sanitize_html_with_images(html: &str) -> Option<String> {
+    let cleaned = html_sanitizer(true).clean(html).to_string();
+    if visible_text(&cleaned).is_empty() && !cleaned.contains("<img") {
+        return None;
+    }
+    Some(open_in_new_tab(cleaned))
+}
+
+/// Links leave the message view: they open in a new tab, never in the app's.
+fn open_in_new_tab(cleaned: String) -> String {
+    cleaned.replace("<a ", "<a target=\"_blank\" ")
+}
+
+/// `images` adds `img` to the allow-list and restricts its `src` further.
+fn html_sanitizer(images: bool) -> ammonia::Builder<'static> {
+    let mut tags: HashSet<&str> = HTML_TAGS.into_iter().collect();
+    let mut attributes = HashMap::from([
+        ("a", HashSet::from(["href"])),
+        ("td", HashSet::from(["colspan", "rowspan"])),
+        ("th", HashSet::from(["colspan", "rowspan"])),
+    ]);
+    if images {
+        tags.insert("img");
+        attributes.insert("img", HashSet::from(["src", "alt", "width", "height"]));
+    }
+
     let mut builder = ammonia::Builder::default();
     builder
-        .tags(HTML_TAGS.into_iter().collect())
-        .tag_attributes(HashMap::from([
-            ("a", HashSet::from(["href"])),
-            ("td", HashSet::from(["colspan", "rowspan"])),
-            ("th", HashSet::from(["colspan", "rowspan"])),
-        ]))
+        .tags(tags)
+        .tag_attributes(attributes)
         .generic_attributes(HashSet::from(["title"]))
         .url_schemes(HashSet::from(["http", "https", "mailto"]))
         .link_rel(Some("noopener noreferrer"));
+    if images {
+        builder.attribute_filter(image_source);
+    }
     builder
+}
+
+/// `src` of an image: an absolute http(s) URL, nothing else. Ammonia already
+/// refuses unknown schemes, but `mailto:` is allowed for `href` and must not
+/// reach an image.
+fn image_source<'a>(element: &str, attribute: &str, value: &'a str) -> Option<Cow<'a, str>> {
+    if matches!((element, attribute), ("img", "src")) && !is_remote_url(value) {
+        return None;
+    }
+    Some(value.into())
+}
+
+fn is_remote_url(value: &str) -> bool {
+    let head = value.trim_start().to_ascii_lowercase();
+    head.starts_with("http://") || head.starts_with("https://")
 }
 
 /// Text left once the sanitized markup is reduced to its text content.
@@ -470,4 +580,163 @@ fn truncate_words(text: &str, limit: usize) -> String {
         _ => head.as_str(),
     };
     format!("{}…", head.trim_end())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RAW: &str = concat!(
+        "From: Camille <camille@studio-lilas.fr>\r\n",
+        "To: roman@lavande.mail\r\n",
+        "Subject: Factures\r\n",
+        "MIME-Version: 1.0\r\n",
+        "Content-Type: multipart/mixed; boundary=\"coupe\"\r\n",
+        "\r\n",
+        "--coupe\r\n",
+        "Content-Type: text/plain; charset=utf-8\r\n",
+        "\r\n",
+        "Bonjour\r\n",
+        "--coupe\r\n",
+        "Content-Type: application/pdf; name=\"facture.pdf\"\r\n",
+        "Content-Transfer-Encoding: base64\r\n",
+        "Content-Disposition: attachment; filename=\"facture.pdf\"\r\n",
+        "\r\n",
+        "aGVsbG8=\r\n",
+        "--coupe\r\n",
+        "Content-Type: image/png; name=\"capture.png\"\r\n",
+        "Content-Transfer-Encoding: base64\r\n",
+        "Content-Disposition: inline; filename=\"capture.png\"\r\n",
+        "\r\n",
+        "aGVsbG8=\r\n",
+        "--coupe--\r\n",
+    );
+
+    #[test]
+    fn an_attachment_is_found_by_the_index_the_model_uses() {
+        let parsed = parse_message(RAW.as_bytes()).expect("message");
+        assert_eq!(parsed.attachments.len(), 2);
+
+        let first = attachment_body(RAW.as_bytes(), 0, &PgpKeyring::default())
+            .expect("lecture")
+            .expect("première pièce jointe");
+        assert_eq!(first.filename, "facture.pdf");
+        assert_eq!(first.mime, "application/pdf");
+        assert_eq!(first.data, b"hello");
+        assert_eq!(first.data.len() as u64, parsed.attachments[0].size);
+
+        let second = attachment_body(RAW.as_bytes(), 1, &PgpKeyring::default())
+            .expect("lecture")
+            .expect("seconde pièce jointe");
+        assert_eq!(second.filename, "capture.png");
+        assert_eq!(second.mime, "image/png");
+    }
+
+    #[test]
+    fn an_index_past_the_last_attachment_is_none() {
+        let body = attachment_body(RAW.as_bytes(), 2, &PgpKeyring::default()).expect("lecture");
+        assert_eq!(body, None);
+    }
+
+    const HTML_RAW: &str = concat!(
+        "From: Camille <camille@studio-lilas.fr>\r\n",
+        "To: roman@lavande.mail\r\n",
+        "Subject: Soldes\r\n",
+        "MIME-Version: 1.0\r\n",
+        "Content-Type: text/html; charset=utf-8\r\n",
+        "\r\n",
+        "<p>Soldes <img src=\"https://pix.example/solde.png\" alt=\"visuel\"></p>\r\n",
+        "<script>alert(1)</script>\r\n",
+    );
+
+    #[test]
+    fn an_image_survives_when_the_reader_asks_for_it() {
+        let html = sanitize_html_with_images(
+            "<p>Bonjour <img src=\"https://pix.example/t.gif\" alt=\"logo\" \
+             onerror=\"alert(1)\" srcset=\"https://pix.example/2x.gif 2x\" \
+             style=\"position:fixed\"></p><script>alert(1)</script>",
+        )
+        .expect("corps");
+        assert!(
+            html.contains(r#"<img src="https://pix.example/t.gif" alt="logo""#),
+            "{html}"
+        );
+        assert!(!html.contains("onerror"), "{html}");
+        assert!(!html.contains("srcset"), "{html}");
+        assert!(!html.contains("style"), "{html}");
+        assert!(!html.contains("script"), "{html}");
+    }
+
+    #[test]
+    fn an_image_source_is_http_or_https_only() {
+        let html = sanitize_html_with_images(
+            "<p>Bonjour</p>\
+             <img src=\"javascript:alert(1)\">\
+             <img src=\"data:image/gif;base64,AAAA\">\
+             <img src=\"mailto:pix@example.org\">\
+             <img src=\"/relative/pixel.gif\">",
+        )
+        .expect("corps");
+        assert!(!html.contains("src"), "{html}");
+        assert!(!html.contains("javascript"), "{html}");
+        assert!(!html.contains("data:"), "{html}");
+        assert!(!html.contains("mailto:"), "{html}");
+    }
+
+    #[test]
+    fn a_link_keeps_its_mailto_and_opens_in_a_new_tab() {
+        let html =
+            sanitize_html_with_images(r#"<p><a href="mailto:pix@example.org">Écrire</a></p>"#)
+                .expect("corps");
+        assert!(
+            html.contains(r#"<a target="_blank" href="mailto:pix@example.org""#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn the_default_body_still_drops_every_image() {
+        let html = sanitize_html(
+            "<p>Soldes</p><img src=\"https://pix.example/solde.png\" alt=\"visuel\">",
+        )
+        .expect("corps");
+        assert!(!html.contains("<img"), "{html}");
+        assert!(!html.contains("pix.example"), "{html}");
+    }
+
+    #[test]
+    fn an_image_only_message_has_no_default_body_but_has_one_with_images() {
+        assert_eq!(
+            sanitize_html("<img src=\"https://pix.example/solde.png\">"),
+            None
+        );
+        let html = sanitize_html_with_images("<img src=\"https://pix.example/solde.png\">")
+            .expect("corps");
+        assert_eq!(html, r#"<img src="https://pix.example/solde.png">"#);
+    }
+
+    #[test]
+    fn the_stored_body_and_the_on_demand_one_differ_by_the_images_only() {
+        let stored = parse_message(HTML_RAW.as_bytes()).expect("message");
+        let stored = stored.body_html.unwrap_or_default();
+        assert!(stored.starts_with("<p>Soldes </p>"), "{stored}");
+        assert!(!stored.contains("<img"), "{stored}");
+
+        let html = html_with_images(HTML_RAW.as_bytes(), &PgpKeyring::default())
+            .expect("lecture")
+            .expect("corps html");
+        assert!(
+            html.contains(r#"<img src="https://pix.example/solde.png" alt="visuel">"#),
+            "{html}"
+        );
+        assert!(!html.contains("script"), "{html}");
+    }
+
+    #[test]
+    fn a_message_without_html_has_no_body_with_images() {
+        assert_eq!(
+            html_with_images(RAW.as_bytes(), &PgpKeyring::default()).expect("lecture"),
+            None
+        );
+    }
 }

@@ -359,6 +359,118 @@ async fn events_accept_the_token_in_the_query() {
 }
 
 #[tokio::test]
+async fn an_attachment_of_an_unknown_message_is_a_404() {
+    let (_directory, state) = state().await;
+    let config: lavande_mail::config::AccountConfig =
+        serde_json::from_value(account("perso")).expect("config");
+    state
+        .add_account(&config, &[])
+        .await
+        .expect("compte ajouté");
+
+    let uri = "/api/accounts/perso/folders/INBOX/messages/7/attachments/0";
+    let (status, _) = call_bare(&state, get(uri)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Le message n'est pas dans la base : la route répond sans ouvrir de session.
+    let (status, body) = call(&state, get(uri)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let payload = json(&body);
+    assert_eq!(payload["kind"], "store");
+    assert!(
+        payload["error"]
+            .as_str()
+            .expect("message")
+            .contains("message 7 introuvable"),
+        "{payload}"
+    );
+}
+
+#[tokio::test]
+async fn html_images_of_an_unknown_message_is_a_404() {
+    let (_directory, state) = state().await;
+    let config: lavande_mail::config::AccountConfig =
+        serde_json::from_value(account("perso")).expect("config");
+    state
+        .add_account(&config, &[])
+        .await
+        .expect("compte ajouté");
+
+    let uri = "/api/accounts/perso/folders/INBOX/messages/7/html-images";
+    let (status, _) = call_bare(&state, get(uri)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, body) = call(&state, get(uri)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let payload = json(&body);
+    assert!(
+        payload["error"]
+            .as_str()
+            .expect("message")
+            .contains("message 7 introuvable"),
+        "{payload}"
+    );
+}
+
+/// Un message stocké sans corps HTML : 404 sans ouvrir de session IMAP.
+#[tokio::test]
+async fn html_images_of_a_text_only_message_is_a_404() {
+    let (_directory, state) = state().await;
+    let config: lavande_mail::config::AccountConfig =
+        serde_json::from_value(account("perso")).expect("config");
+    state
+        .add_account(&config, &[])
+        .await
+        .expect("compte ajouté");
+    state
+        .store()
+        .upsert_message(&text_message())
+        .expect("message");
+
+    let uri = "/api/accounts/perso/folders/INBOX/messages/7/html-images";
+    let (status, body) = call(&state, get(uri)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let payload = json(&body);
+    assert!(
+        payload["error"]
+            .as_str()
+            .expect("message")
+            .contains("pas de corps HTML"),
+        "{payload}"
+    );
+}
+
+fn text_message() -> lavande_mail::model::Message {
+    let address = lavande_mail::model::Address {
+        name: None,
+        email: "camille@studio-lilas.fr".to_string(),
+    };
+    lavande_mail::model::Message {
+        account_id: "perso".to_string(),
+        folder_path: "INBOX".to_string(),
+        uid: 7,
+        uidvalidity: 1,
+        thread_id: "t-soldes".to_string(),
+        message_id: Some("soldes@studio-lilas.fr".to_string()),
+        in_reply_to: None,
+        references: Vec::new(),
+        from: address.clone(),
+        to: vec![address],
+        cc: Vec::new(),
+        subject: "Soldes".to_string(),
+        date: None,
+        flags: Default::default(),
+        size: 64,
+        pgp: Default::default(),
+        pgp_detail: None,
+        preview: "Soldes du mois".to_string(),
+        body_text: Some("Soldes du mois".to_string()),
+        body_html: None,
+        attachments: Vec::new(),
+    }
+}
+
+#[tokio::test]
 async fn the_token_file_is_private_and_stable() {
     let (directory, state) = state().await;
     let path = directory.path().join("daemon-token");

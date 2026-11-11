@@ -7,13 +7,15 @@ import {
   CornerUpLeft,
   CornerUpRight,
   Download,
+  Loader2,
   Paperclip,
   RotateCcw,
   ShieldCheck,
   Star,
   Trash2,
 } from "lucide-react";
-import type { Mail } from "@/lib/mail";
+import { downloadAttachment } from "@/lib/attachments";
+import type { Mail, MailAttachment } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
 import { messagePgpStatus } from "@/lib/pgp";
 import type { Thread } from "@/lib/threads";
@@ -49,7 +51,8 @@ export function MessageScreen({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [hint, setHint] = useState<{ mailId: string; file: string } | null>(null);
+  const [download, setDownload] = useState<{ mailId: string; file: string } | null>(null);
+  const [hint, setHint] = useState<{ mailId: string; text: string } | null>(null);
 
   const mail = thread.primary;
   const previous = thread.messages.slice(0, -1);
@@ -66,34 +69,48 @@ export function MessageScreen({
     return status ? <PgpNotice status={status} /> : null;
   };
 
+  const runDownload = async (message: Mail, file: MailAttachment) => {
+    setDownload({ mailId: message.id, file: file.name });
+    setHint({ mailId: message.id, text: `Téléchargement de « ${file.name} »…` });
+    const text = await downloadAttachment(message, file);
+    setHint({ mailId: message.id, text });
+    setDownload(null);
+  };
+
   const attachmentList = (message: Mail) => {
     if (!message.attachments?.length) return null;
-    const hintFile = hint?.mailId === message.id ? hint.file : null;
+    const hintText = hint?.mailId === message.id ? hint.text : null;
 
     return (
       <div className="mt-4 space-y-2">
-        {message.attachments.map((file) => (
-          <button
-            key={file.name}
-            type="button"
-            onClick={() => setHint({ mailId: message.id, file: file.name })}
-            aria-label={`${file.name} — téléchargement non disponible dans la maquette`}
-            className="flex w-full items-center gap-3 rounded-2xl border border-line bg-surface px-3 py-2.5 text-left transition-colors hover:border-accent-ring"
-          >
-            <span className="grid size-9 place-items-center rounded-xl bg-accent-soft text-accent-ink">
-              <Paperclip className="size-4" />
-            </span>
-            <span className="min-w-0 flex-1 leading-tight">
-              <span className="block truncate text-[12.5px] font-bold text-ink">{file.name}</span>
-              <span className="block text-[11px] text-ink-muted">{file.size}</span>
-            </span>
-            <Download className="size-4 text-ink-muted" />
-          </button>
-        ))}
+        {message.attachments.map((file, index) => {
+          const busy = download?.mailId === message.id && download.file === file.name;
+          return (
+            <button
+              key={`${file.name}-${index}`}
+              type="button"
+              disabled={busy}
+              onClick={() => void runDownload(message, file)}
+              aria-label={`Télécharger ${file.name} (${file.size})`}
+              className="flex w-full items-center gap-3 rounded-2xl border border-line bg-surface px-3 py-2.5 text-left transition-colors hover:border-accent-ring disabled:opacity-60"
+            >
+              <span className="grid size-9 place-items-center rounded-xl bg-accent-soft text-accent-ink">
+                <Paperclip className="size-4" />
+              </span>
+              <span className="min-w-0 flex-1 leading-tight">
+                <span className="block truncate text-[12.5px] font-bold text-ink">{file.name}</span>
+                <span className="block text-[11px] text-ink-muted">{file.size}</span>
+              </span>
+              {busy ? (
+                <Loader2 className="size-4 animate-spin text-ink-muted" />
+              ) : (
+                <Download className="size-4 text-ink-muted" />
+              )}
+            </button>
+          );
+        })}
         <p role="status" aria-live="polite" className="px-1 text-[10.5px] leading-snug font-medium text-ink-muted">
-          {hintFile
-            ? `Maquette : « ${hintFile} » n'est pas téléchargeable ici. Le téléchargement sera géré par le trousseau / le stockage système.`
-            : "Aucun fichier n'est réellement téléchargé depuis cette maquette."}
+          {hintText ?? "Les fichiers sont relus sur le serveur au moment du téléchargement."}
         </p>
       </div>
     );
@@ -355,7 +372,7 @@ export function MessageScreen({
         )}
 
         <BlurFade delay={0.12}>
-          <MailBody className="mt-5" html={mail.html} paragraphs={mail.body} />
+          <MailBody className="mt-5" html={mail.html} paragraphs={mail.body} source={mail.source} />
         </BlurFade>
 
         {mail.attachments?.length ? <BlurFade delay={0.18}>{attachmentList(mail)}</BlurFade> : null}

@@ -11,6 +11,7 @@ use pgp::composed::{
 };
 use pgp::crypto::ecc_curve::ECCCurve;
 use pgp::crypto::public_key::PublicKeyAlgorithm;
+use pgp::packet::{PacketTrait, Subpacket, SubpacketData};
 use pgp::types::{KeyDetails, Password};
 use serde::{Deserialize, Serialize};
 
@@ -150,10 +151,25 @@ impl PgpKey {
     }
 }
 
+/// Default validity of a generated key: two years. Renewing a key means
+/// generating a new one, so the period is long enough not to be a nuisance.
+pub const KEY_LIFETIME: std::time::Duration =
+    std::time::Duration::from_secs(2 * 365 * 24 * 60 * 60);
+
 /// Generates an Ed25519 key (certification and signature) with a Curve25519
-/// encryption subkey. No passphrase: the private half is protected by the secret
-/// store.
+/// encryption subkey, valid for [`KEY_LIFETIME`]. No passphrase: the private half
+/// is protected by the secret store.
 pub fn generate_key(name: &str, email: &str) -> Result<PgpKey, MailError> {
+    generate_key_with_lifetime(name, email, KEY_LIFETIME)
+}
+
+/// Same as [`generate_key`], with an explicit validity period announced by the
+/// self-signature of the user ID (`KeyExpirationTime`).
+pub fn generate_key_with_lifetime(
+    name: &str,
+    email: &str,
+    lifetime: std::time::Duration,
+) -> Result<PgpKey, MailError> {
     let user_id = match name.trim() {
         "" => email.trim().to_string(),
         name => format!("{} <{}>", name.trim(), email.trim()),
@@ -180,10 +196,63 @@ pub fn generate_key(name: &str, email: &str) -> Result<PgpKey, MailError> {
         .map_err(keygen_error)?
         .generate(rand::thread_rng())
         .map_err(keygen_error)?;
+    let secret = with_lifetime(secret, lifetime)?;
     let public = secret.to_public_key();
     Ok(PgpKey {
         public,
         secret: Some(secret),
+    })
+}
+
+/// The generator of the `pgp` crate has no expiration parameter: the validity
+/// period of an OpenPGP key is only announced by the self-signatures of its user
+/// IDs, so the freshly generated certificate is re-signed here with a
+/// `KeyExpirationTime` subpacket added to each certification.
+fn with_lifetime(
+    secret: SignedSecretKey,
+    lifetime: std::time::Duration,
+) -> Result<SignedSecretKey, MailError> {
+    let lifetime = pgp::types::Duration::try_from(lifetime).map_err(keygen_error)?;
+    let SignedSecretKey {
+        primary_key,
+        mut details,
+        public_subkeys,
+        secret_subkeys,
+    } = secret;
+    let passphrase = no_passphrase();
+    for user in &mut details.users {
+        let mut signatures = Vec::with_capacity(user.signatures.len());
+        for signature in &user.signatures {
+            let config = signature
+                .config()
+                .ok_or_else(|| MailError::Mime("auto-signature PGP illisible".to_string()))?;
+            let mut config = config.clone();
+            config
+                .hashed_subpackets
+                .retain(|subpacket| !matches!(subpacket.data, SubpacketData::KeyExpirationTime(_)));
+            config.hashed_subpackets.push(
+                Subpacket::regular(SubpacketData::KeyExpirationTime(lifetime))
+                    .map_err(keygen_error)?,
+            );
+            signatures.push(
+                config
+                    .sign_certification(
+                        &primary_key,
+                        primary_key.public_key(),
+                        &passphrase,
+                        user.id.tag(),
+                        &user.id,
+                    )
+                    .map_err(keygen_error)?,
+            );
+        }
+        user.signatures = signatures;
+    }
+    Ok(SignedSecretKey {
+        primary_key,
+        details,
+        public_subkeys,
+        secret_subkeys,
     })
 }
 

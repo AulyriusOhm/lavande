@@ -15,7 +15,7 @@ use crate::model::{AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState,
 use crate::pgp::PgpDetail;
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const MESSAGE_COLUMNS: &str = "account_id, folder_path, uid, uidvalidity, thread_id, message_id, \
      in_reply_to, references_json, from_json, to_json, cc_json, subject, date, unread, starred, \
      answered, size, pgp, preview, body_text, body_html, pgp_detail";
@@ -82,11 +82,12 @@ impl Store {
     pub fn upsert_folder(&self, folder: &Folder) -> Result<(), MailError> {
         let conn = self.conn()?;
         conn.execute(
-            "INSERT INTO folders (account_id, path, name, role, uidvalidity, uidnext, last_sync_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+            "INSERT INTO folders (account_id, path, name, role, uidvalidity, uidnext, last_sync_at, modseq) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
              ON CONFLICT(account_id, path) DO UPDATE SET name = excluded.name, \
              role = excluded.role, uidvalidity = excluded.uidvalidity, \
-             uidnext = excluded.uidnext, last_sync_at = excluded.last_sync_at",
+             uidnext = excluded.uidnext, last_sync_at = excluded.last_sync_at, \
+             modseq = excluded.modseq",
             params![
                 folder.account_id,
                 folder.path,
@@ -95,6 +96,7 @@ impl Store {
                 folder.uidvalidity,
                 folder.uidnext,
                 folder.last_sync_at.map(format_date),
+                folder.modseq,
             ],
         )?;
         Ok(())
@@ -109,7 +111,7 @@ impl Store {
     pub fn list_folders(&self, account_id: &str) -> Result<Vec<Folder>, MailError> {
         let conn = self.conn()?;
         let mut statement = conn.prepare(
-            "SELECT account_id, path, name, role, uidvalidity, uidnext, last_sync_at \
+            "SELECT account_id, path, name, role, uidvalidity, uidnext, last_sync_at, modseq \
              FROM folders WHERE account_id = ?1 ORDER BY path",
         )?;
         let rows = statement.query_map(params![account_id], FolderRow::read)?;
@@ -632,7 +634,7 @@ fn get_folder_on(
     path: &str,
 ) -> Result<Option<Folder>, MailError> {
     conn.query_row(
-        "SELECT account_id, path, name, role, uidvalidity, uidnext, last_sync_at \
+        "SELECT account_id, path, name, role, uidvalidity, uidnext, last_sync_at, modseq \
          FROM folders WHERE account_id = ?1 AND path = ?2",
         params![account_id, path],
         FolderRow::read,
@@ -739,6 +741,7 @@ struct FolderRow {
     uidvalidity: u32,
     uidnext: u32,
     last_sync_at: Option<String>,
+    modseq: Option<u64>,
 }
 
 impl FolderRow {
@@ -751,6 +754,7 @@ impl FolderRow {
             uidvalidity: row.get(4)?,
             uidnext: row.get(5)?,
             last_sync_at: row.get(6)?,
+            modseq: row.get(7)?,
         })
     }
 
@@ -763,6 +767,7 @@ impl FolderRow {
             uidvalidity: self.uidvalidity,
             uidnext: self.uidnext,
             last_sync_at: parse_date(self.last_sync_at.as_deref())?,
+            modseq: self.modseq,
         })
     }
 }
@@ -859,10 +864,15 @@ fn to_json_option<T: Serialize>(value: &Option<T>) -> Result<Option<String>, Mai
     value.as_ref().map(to_json).transpose()
 }
 
-/// Adds the columns a database created by an older schema misses.
+/// Adds the columns a database created by an older schema misses. The rows of
+/// a database that predates them keep `NULL` there, which a folder reads back
+/// as `modseq: None` — the next sync of that folder is the full pass.
 fn add_missing_columns(conn: &Connection) -> Result<(), MailError> {
     if !column_exists(conn, "messages", "pgp_detail")? {
         conn.execute("ALTER TABLE messages ADD COLUMN pgp_detail TEXT", [])?;
+    }
+    if !column_exists(conn, "folders", "modseq")? {
+        conn.execute("ALTER TABLE folders ADD COLUMN modseq INTEGER", [])?;
     }
     Ok(())
 }
@@ -988,5 +998,37 @@ mod tests {
     fn store_is_send_and_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<Store>();
+    }
+
+    /// A database written by the schema that predates `modseq` keeps its rows
+    /// and gains the column, empty: the next sync of those folders is the full
+    /// pass, which is the safe path.
+    #[test]
+    fn migrate_adds_modseq_to_an_older_database() {
+        let conn = Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE folders (account_id TEXT, path TEXT, name TEXT, role TEXT, \
+             uidvalidity INTEGER, uidnext INTEGER, last_sync_at TEXT, \
+             PRIMARY KEY (account_id, path)); \
+             CREATE TABLE messages (account_id TEXT, folder_path TEXT, uid INTEGER, \
+             uidvalidity INTEGER, thread_id TEXT, message_id TEXT, in_reply_to TEXT, \
+             references_json TEXT, from_json TEXT, to_json TEXT, cc_json TEXT, \
+             subject TEXT, date TEXT, unread INTEGER, starred INTEGER, answered INTEGER, \
+             size INTEGER, pgp TEXT, preview TEXT, body_text TEXT, body_html TEXT, \
+             PRIMARY KEY (account_id, folder_path, uid)); \
+             INSERT INTO folders VALUES ('perso', 'INBOX', 'Boite', 'inbox', 7, 10, NULL);",
+        )
+        .expect("old schema");
+        assert!(!column_exists(&conn, "folders", "modseq").expect("probe"));
+
+        add_missing_columns(&conn).expect("migrate");
+        assert!(column_exists(&conn, "folders", "modseq").expect("probe"));
+        let folder = get_folder_on(&conn, "perso", "INBOX")
+            .expect("folder")
+            .expect("present");
+        assert_eq!(folder.uidvalidity, 7);
+        assert_eq!(folder.modseq, None);
+
+        add_missing_columns(&conn).expect("migrate again");
     }
 }
