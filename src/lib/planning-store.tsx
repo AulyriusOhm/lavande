@@ -9,9 +9,11 @@ import {
 } from "react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { MAIL_SUGGESTIONS, TASKS, TASK_STATES, sortTasks, taskFromSuggestion } from "@/lib/tasks";
+import { EVENTS, type CalendarEvent } from "@/lib/calendar";
 import { usePrefs } from "@/lib/prefs";
 import type { MailSuggestion, Subtask, Task, TaskState } from "@/lib/tasks";
 import { createClock, type Clock } from "@/lib/sync/clock";
+import type { EntityKind } from "@/lib/sync/crypto";
 import { createSyncEngine, type SyncEngine, type SyncStatus } from "@/lib/sync/engine";
 import {
   applyOp,
@@ -44,7 +46,9 @@ const SUGGESTION_PREFIX = "sg:";
 export type PlanningValue = {
   tasks: Task[];
   suggestions: MailSuggestion[];
+  events: CalendarEvent[];
   setTasks: Dispatch<SetStateAction<Task[]>>;
+  setEvents: Dispatch<SetStateAction<CalendarEvent[]>>;
   addSuggestion: (suggestion: MailSuggestion) => void;
   proposeSuggestion: (suggestion: MailSuggestion) => void;
   dismissSuggestion: (suggestion: MailSuggestion) => void;
@@ -179,6 +183,87 @@ export function projectSuggestions(state: SyncState): MailSuggestion[] {
     .filter((entry): entry is MailSuggestion => entry !== null);
 }
 
+const EVENT_FIELDS = [
+  "date",
+  "start",
+  "end",
+  "title",
+  "location",
+  "tone",
+  "fromMail",
+  "mailId",
+  "attendees",
+  "calendar",
+] as const;
+
+function projectEvent(doc: Doc): CalendarEvent {
+  const raw = doc.raw;
+  const event: CalendarEvent = {
+    id: doc.id,
+    date: text(raw.date),
+    start: text(raw.start),
+    end: text(raw.end),
+    title: text(raw.title),
+    tone: typeof raw.tone === "number" ? raw.tone : 0,
+  };
+  if (typeof raw.location === "string") event.location = raw.location;
+  if (raw.fromMail === true) event.fromMail = true;
+  if (typeof raw.mailId === "string") event.mailId = raw.mailId;
+  if (Array.isArray(raw.attendees)) event.attendees = raw.attendees.filter((a): a is string => typeof a === "string");
+  if (typeof raw.calendar === "string") event.calendar = raw.calendar;
+  return event;
+}
+
+function eventPatch(previous: CalendarEvent | undefined, next: CalendarEvent): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  for (const field of EVENT_FIELDS) {
+    const value = next[field];
+    const before = previous?.[field];
+    if (value === undefined) {
+      if (before !== undefined) patch[field] = null;
+      continue;
+    }
+    if (previous !== undefined && sameValue(before, value)) continue;
+    patch[field] = value;
+  }
+  return patch;
+}
+
+function eventFields(event: CalendarEvent): Record<string, unknown> {
+  return eventPatch(undefined, event);
+}
+
+export function projectEvents(state: SyncState): CalendarEvent[] {
+  return visibleDocs(state.docs, "event")
+    .map(projectEvent)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start));
+}
+
+const LEGACY_EVENTS_KEY = "lavande.events.v1";
+
+/** Migration : reprend les événements déjà stockés localement, sinon la démo. */
+function initialEvents(): CalendarEvent[] {
+  try {
+    const raw = window.localStorage.getItem(LEGACY_EVENTS_KEY);
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter(
+          (entry): entry is CalendarEvent =>
+            Boolean(entry) &&
+            typeof entry === "object" &&
+            typeof (entry as CalendarEvent).id === "string" &&
+            typeof (entry as CalendarEvent).date === "string" &&
+            typeof (entry as CalendarEvent).title === "string",
+        );
+      }
+    }
+  } catch {
+    // stockage corrompu : on repart des événements de démonstration
+  }
+  return EVENTS;
+}
+
 /** Fenêtre par défaut du filtre d'affichage des suggestions issues des mails. */
 export const DEFAULT_SUGGESTION_WINDOW_HOURS = 48;
 
@@ -214,6 +299,7 @@ function hasPlanningDocs(state: SyncState): boolean {
 export function PlanningProvider({ children, storage }: { children: ReactNode; storage?: SyncStorage }) {
   const { sync: syncPrefs } = usePrefs();
   const kanbanSync = syncPrefs.enabled && syncPrefs.kanban;
+  const calendarSync = syncPrefs.enabled && syncPrefs.calendar;
   const syncStorage = useMemo(() => storage ?? createLocalStorageSyncStorage(), [storage]);
   const engine = useMemo(() => createSyncEngine(syncStorage), [syncStorage]);
   const clock = useMemo<Clock>(() => createClock(syncStorage.read().device.id), [syncStorage]);
@@ -240,7 +326,7 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
   const state = useMemo(() => engine.getState(), [engine, version]);
 
   const applyLocal = useCallback(
-    (kind: "task" | "suggestion", id: string, patch: Record<string, unknown>, op: "upsert" | "delete") => {
+    (kind: EntityKind, id: string, patch: Record<string, unknown>, op: "upsert" | "delete") => {
       const current = syncStorage.read();
       const decoded: DecodedOp = {
         kind,
@@ -257,7 +343,7 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
   );
 
   const emit = useCallback(
-    (kind: "task" | "suggestion", id: string, patch: Record<string, unknown>, op: "upsert" | "delete" = "upsert") => {
+    (kind: EntityKind, id: string, patch: Record<string, unknown>, op: "upsert" | "delete" = "upsert") => {
       if (!engine.canEmit()) {
         applyLocal(kind, id, patch, op);
         return;
@@ -268,24 +354,35 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
   );
 
   useEffect(() => {
-    engine.setPaused(!kanbanSync);
-    if (!kanbanSync) return;
+    const kinds: EntityKind[] = [];
+    if (kanbanSync) kinds.push("task", "suggestion");
+    if (calendarSync) kinds.push("event");
+    engine.setEnabledKinds(kinds);
+    const anySync = kanbanSync || calendarSync;
+    engine.setPaused(!anySync);
+    if (!anySync) return;
     return engine.start();
-  }, [engine, kanbanSync]);
+  }, [engine, kanbanSync, calendarSync]);
 
   const seeded = useRef(false);
   useEffect(() => {
     if (seeded.current) return;
     seeded.current = true;
-    if (hasPlanningDocs(syncStorage.read())) return;
-    for (const task of TASKS) emit("task", task.id, taskFields(task));
-    for (const suggestion of MAIL_SUGGESTIONS) {
-      emit("suggestion", suggestionDocId(suggestion), suggestionFields(suggestion, "pending"));
+    const initial = syncStorage.read();
+    if (!hasPlanningDocs(initial)) {
+      for (const task of TASKS) emit("task", task.id, taskFields(task));
+      for (const suggestion of MAIL_SUGGESTIONS) {
+        emit("suggestion", suggestionDocId(suggestion), suggestionFields(suggestion, "pending"));
+      }
+    }
+    if (visibleDocs(initial.docs, "event").length === 0) {
+      for (const event of initialEvents()) emit("event", event.id, eventFields(event));
     }
   }, [emit, syncStorage]);
 
   const tasks = useMemo(() => projectTasks(state), [state]);
   const suggestions = useMemo(() => projectSuggestions(state), [state]);
+  const events = useMemo(() => projectEvents(state), [state]);
   const readOnlyIds = useMemo(() => readOnlyIdsOf(state), [state]);
 
   const latest = useRef({ tasks, readOnlyIds });
@@ -312,6 +409,30 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
       latest.current = { tasks: projectTasks(fresh), readOnlyIds: readOnlyIdsOf(fresh) };
     },
     [emit, syncStorage],
+  );
+
+  const latestEvents = useRef(events);
+  latestEvents.current = events;
+
+  const setEvents = useCallback<Dispatch<SetStateAction<CalendarEvent[]>>>(
+    (action) => {
+      const previous = latestEvents.current;
+      const next = typeof action === "function" ? action(previous) : action;
+      const previousById = new Map(previous.map((event) => [event.id, event]));
+      const nextIds = new Set(next.map((event) => event.id));
+      for (const event of next) {
+        if (engine.readOnly("event", event.id)) continue;
+        const patch = eventPatch(previousById.get(event.id), event);
+        if (Object.keys(patch).length === 0) continue;
+        emit("event", event.id, patch);
+      }
+      for (const event of previous) {
+        if (nextIds.has(event.id) || engine.readOnly("event", event.id)) continue;
+        emit("event", event.id, {}, "delete");
+      }
+      latestEvents.current = projectEvents(syncStorage.read());
+    },
+    [emit, engine, syncStorage],
   );
 
   const addSuggestion = useCallback(
@@ -356,7 +477,9 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
     () => ({
       tasks,
       suggestions,
+      events,
       setTasks,
+      setEvents,
       addSuggestion,
       proposeSuggestion,
       dismissSuggestion,
@@ -366,7 +489,7 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
       unpromote,
       engine,
     }),
-    [addSuggestion, proposeSuggestion, dismissSuggestion, engine, readOnlyIds, setTasks, suggestions, syncNow, tasks, unpromote, state],
+    [addSuggestion, proposeSuggestion, dismissSuggestion, engine, events, readOnlyIds, setEvents, setTasks, suggestions, syncNow, tasks, unpromote, state],
   );
 
   return <PlanningContext.Provider value={value}>{children}</PlanningContext.Provider>;

@@ -1,6 +1,6 @@
 import { StrictMode, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { PlanningProvider, suggestionsInWindow, usePlanning } from "@/lib/planning-store";
 import { PrefsProvider, usePrefs } from "@/lib/prefs";
 import { MAIL_SUGGESTIONS, TASKS } from "@/lib/tasks";
@@ -264,11 +264,11 @@ describe("PlanningProvider · interrupteurs de synchronisation", () => {
     });
   }
 
-  it("met le moteur en pause quand le Kanban est coupé : les opérations restent en file", async () => {
+  it("met le moteur en pause quand Kanban et calendrier sont coupés : les opérations restent en file", async () => {
     const storage = configuredStorage();
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    const { result } = mountWithPrefs(storage, { sync: { kanban: false } });
+    const { result } = mountWithPrefs(storage, { sync: { kanban: false, calendar: false } });
 
     expect(result.current.planning.engine.isPaused()).toBe(true);
     expect(storage.read().outbox.length).toBeGreaterThan(0);
@@ -291,7 +291,7 @@ describe("PlanningProvider · interrupteurs de synchronisation", () => {
     const storage = configuredStorage();
     const fetchMock = vi.fn(async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ ops: [], nextSeq: 0, hasMore: false }) }));
     vi.stubGlobal("fetch", fetchMock);
-    const { result } = mountWithPrefs(storage, { sync: { kanban: false } });
+    const { result } = mountWithPrefs(storage, { sync: { kanban: false, calendar: false } });
 
     expect(result.current.planning.engine.isPaused()).toBe(true);
 
@@ -299,6 +299,43 @@ describe("PlanningProvider · interrupteurs de synchronisation", () => {
 
     expect(result.current.planning.engine.isPaused()).toBe(false);
     expect(fetchMock).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("garde le moteur actif quand seul le calendrier est synchronisé (Kanban coupé)", () => {
+    const storage = configuredStorage();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ ops: [], nextSeq: 0, hasMore: false }) })),
+    );
+    const { result } = mountWithPrefs(storage, { sync: { kanban: false, calendar: true } });
+
+    expect(result.current.planning.engine.isPaused()).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it("sème et projette les événements du calendrier", async () => {
+    const storage = configuredStorage();
+    vi.stubGlobal("fetch", vi.fn());
+    const { result } = mountWithPrefs(storage, { sync: { kanban: true, calendar: true } });
+
+    await waitFor(() => expect(result.current.planning.events.length).toBeGreaterThan(0));
+    vi.unstubAllGlobals();
+  });
+
+  it("émet un événement ajouté via setEvents", async () => {
+    const storage = configuredStorage();
+    vi.stubGlobal("fetch", vi.fn());
+    const { result } = mountWithPrefs(storage, { sync: { kanban: true, calendar: true } });
+
+    await waitFor(() => expect(result.current.planning.events.length).toBeGreaterThan(0));
+    act(() => {
+      result.current.planning.setEvents((current) => [
+        ...current,
+        { id: "ev-new", date: "2026-03-03", start: "10:00", end: "11:00", title: "Test", tone: 0 },
+      ]);
+    });
+    expect(result.current.planning.events.some((event) => event.id === "ev-new")).toBe(true);
     vi.unstubAllGlobals();
   });
 });

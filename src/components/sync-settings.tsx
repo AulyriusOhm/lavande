@@ -244,7 +244,7 @@ export function SyncSettings({ variant = "mobile" }: { variant?: "mobile" | "des
           />
           <SyncToggle
             label="Calendrier"
-            hint="Conserve les rendez-vous et les partage entre tes fenêtres"
+            hint="Synchronise tes rendez-vous entre tes appareils, chiffré de bout en bout"
             checked={syncPrefs.calendar}
             disabled={!master}
             onChange={(value) => setSync({ calendar: value })}

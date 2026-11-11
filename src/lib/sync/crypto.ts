@@ -24,7 +24,7 @@ export type OpMeta = {
 
 export type SealedOp = { nonce: string; ciphertext: string };
 
-export type EntityKind = "task" | "suggestion";
+export type EntityKind = "task" | "suggestion" | "event";
 
 const AUTH_INFO = "lavande/auth/v1";
 const KEK_INFO = "lavande/kek/v1";

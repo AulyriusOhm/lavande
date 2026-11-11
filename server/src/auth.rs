@@ -94,16 +94,16 @@ pub fn hash_auth_key(auth_key: &[u8]) -> Result<(String, Vec<u8>), ApiError> {
         .map_err(|err| ApiError::Internal(anyhow::anyhow!("sel Argon2id invalide : {err}")))?;
     let hash = Argon2::default()
         .hash_password(auth_key, &salt)
-        .map_err(|err| ApiError::Internal(anyhow::anyhow!("hachage Argon2id impossible : {err}")))?;
+        .map_err(|err| {
+            ApiError::Internal(anyhow::anyhow!("hachage Argon2id impossible : {err}"))
+        })?;
 
     Ok((hash.to_string(), salt_bytes.to_vec()))
 }
 
 pub fn verify_auth_key(auth_key: &[u8], auth_verifier: &str) -> bool {
     match PasswordHash::new(auth_verifier) {
-        Ok(parsed) => Argon2::default()
-            .verify_password(auth_key, &parsed)
-            .is_ok(),
+        Ok(parsed) => Argon2::default().verify_password(auth_key, &parsed).is_ok(),
         Err(_) => false,
     }
 }

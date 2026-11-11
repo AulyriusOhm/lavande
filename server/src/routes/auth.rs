@@ -117,7 +117,8 @@ pub async fn login(
     auth::check_login_rate_limit(&email, &ip)?;
     let auth_key = auth::decode_key(&body.auth_key, 32, "authKey")?;
 
-    let account: Option<(Uuid, String, Vec<u8>, Option<Vec<u8>>)> = sqlx::query_as(
+    type UserRow = (Uuid, String, Vec<u8>, Option<Vec<u8>>);
+    let account: Option<UserRow> = sqlx::query_as(
         "select id, auth_verifier, account_salt, key_envelope from users where email = $1",
     )
     .bind(&email)

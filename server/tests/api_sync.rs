@@ -263,7 +263,12 @@ async fn push(app: &Router, token: &str, ops: Value) -> (StatusCode, Value) {
 async fn pull(app: &Router, token: &str, query: &str) -> (StatusCode, Value) {
     call(
         app,
-        request(Method::GET, &format!("/api/v1/ops?{query}"), None, Some(token)),
+        request(
+            Method::GET,
+            &format!("/api/v1/ops?{query}"),
+            None,
+            Some(token),
+        ),
     )
     .await
 }
@@ -303,8 +308,11 @@ async fn pairing_end_to_end_gives_the_new_device_a_session() {
     assert_eq!(body["platform"], "mobile");
     assert_eq!(body["schemaVersion"], 1);
     assert_eq!(body["publicKey"], pairing.public_key);
-    let expected =
-        auth::fingerprint(&URL_SAFE_NO_PAD.decode(&pairing.public_key).expect("clé base64url"));
+    let expected = auth::fingerprint(
+        &URL_SAFE_NO_PAD
+            .decode(&pairing.public_key)
+            .expect("clé base64url"),
+    );
     assert_eq!(body["fingerprint"], expected);
 
     let envelope = random_key(96);

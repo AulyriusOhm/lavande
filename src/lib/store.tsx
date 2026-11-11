@@ -15,7 +15,7 @@ import { dueToneFor, formatDueDate } from "@/lib/tasks";
 import { currentPeriod, generateSummary, recentMails, suggestTasks } from "@/lib/summary";
 import type { SummaryMailInput, SummaryResult, SummaryTask } from "@/lib/summary";
 import { llmReady } from "@/lib/llm";
-import { EVENTS, TODAY_ISO } from "@/lib/calendar";
+import { TODAY_ISO } from "@/lib/calendar";
 import type { CalendarEvent } from "@/lib/calendar";
 import { activeSignature, usePrefs } from "@/lib/prefs";
 import { suggestionsInWindow, usePlanning } from "@/lib/planning-store";
@@ -46,7 +46,6 @@ import type { ComposeBus, ComposeState } from "@/lib/compose-bus";
 export type BackendPhase = "loading" | "ready" | "offline" | "empty";
 
 const PAGE_SIZE = 50;
-const EVENTS_KEY = "lavande.events.v1";
 const SUMMARY_TICK_MS = 5 * 60_000;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const SUMMARY_ACCOUNTS = ["perso", "pro", "gmail"] as const;
@@ -71,28 +70,6 @@ function summarySuggestion(task: SummaryTask, mail: Mail | undefined, period: st
   };
   if (typeof mail?.timestamp === "number") suggestion.timestamp = mail.timestamp;
   return suggestion;
-}
-
-function loadEvents(): CalendarEvent[] {
-  try {
-    const raw = window.localStorage.getItem(EVENTS_KEY);
-    if (raw) {
-      const parsed: unknown = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        return parsed.filter(
-          (entry): entry is CalendarEvent =>
-            Boolean(entry) &&
-            typeof entry === "object" &&
-            typeof (entry as CalendarEvent).id === "string" &&
-            typeof (entry as CalendarEvent).date === "string" &&
-            typeof (entry as CalendarEvent).title === "string",
-        );
-      }
-    }
-  } catch {
-    // stockage corrompu : on repart des événements de démonstration
-  }
-  return EVENTS;
 }
 
 export type MailStoreValue = {
@@ -179,9 +156,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const prefs = usePrefs();
   // Interrupteurs de synchronisation : le maître coupe tous les domaines.
   const mailSyncOn = prefs.sync.enabled && prefs.sync.mails;
-  const calendarSyncOn = prefs.sync.enabled && prefs.sync.calendar;
   const planning = usePlanning();
-  const { tasks, suggestions: storedSuggestions, setTasks } = planning;
+  const { tasks, suggestions: storedSuggestions, setTasks, events, setEvents } = planning;
   const [mode, setMode] = useState<MailMode>(mailMode);
   const [phase, setPhase] = useState<BackendPhase>(() => (mode === "demo" ? "ready" : "loading"));
   const [backendError, setBackendError] = useState<string | null>(null);
@@ -199,7 +175,6 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const [revision, setRevision] = useState(0);
   const [connectOpen, setConnectOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<Account | null>(null);
-  const [events, setEvents] = useState<CalendarEvent[]>(loadEvents);
   const [selectedDate, setSelectedDate] = useState(TODAY_ISO);
   const [openMail, setOpenMail] = useState<Mail | null>(null);
   const [searchResults, setSearchResults] = useState<Mail[]>([]);
@@ -230,15 +205,6 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const dismissNotice = useCallback(() => setNotices((current) => current.slice(1)), []);
-
-  useEffect(() => {
-    if (!calendarSyncOn) return;
-    try {
-      window.localStorage.setItem(EVENTS_KEY, JSON.stringify(events));
-    } catch {
-      // stockage indisponible : les événements restent en mémoire
-    }
-  }, [calendarSyncOn, events]);
 
   const accountById = useCallback(
     (id: string) => accounts.find((entry) => entry.id === id),

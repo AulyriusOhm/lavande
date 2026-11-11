@@ -1,5 +1,5 @@
-use lavande_sync::{config::Config, db, routes, state::AppState};
 use anyhow::{Context, Result};
+use lavande_sync::{config::Config, db, routes, state::AppState};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 

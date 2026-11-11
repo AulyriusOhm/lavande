@@ -115,10 +115,11 @@ pub async fn push(
         .await?;
     }
 
-    let next_seq: i64 = sqlx::query_scalar("select coalesce(max(seq), 0) from ops where user_id = $1")
-        .bind(user.user_id)
-        .fetch_one(&mut *tx)
-        .await?;
+    let next_seq: i64 =
+        sqlx::query_scalar("select coalesce(max(seq), 0) from ops where user_id = $1")
+            .bind(user.user_id)
+            .fetch_one(&mut *tx)
+            .await?;
 
     tx.commit().await?;
 
@@ -140,7 +141,7 @@ pub async fn list(
     }
 
     let limit = params.limit.unwrap_or(MAX_PULL_LIMIT);
-    if limit < 1 || limit > MAX_PULL_LIMIT {
+    if !(1..=MAX_PULL_LIMIT).contains(&limit) {
         return Err(ApiError::BadRequest(format!(
             "limit invalide : entre 1 et {MAX_PULL_LIMIT}"
         )));
@@ -191,10 +192,11 @@ pub async fn status(
     State(state): State<AppState>,
     user: AuthedUser,
 ) -> Result<Json<Value>, ApiError> {
-    let head_seq: i64 = sqlx::query_scalar("select coalesce(max(seq), 0) from ops where user_id = $1")
-        .bind(user.user_id)
-        .fetch_one(&state.pool)
-        .await?;
+    let head_seq: i64 =
+        sqlx::query_scalar("select coalesce(max(seq), 0) from ops where user_id = $1")
+            .bind(user.user_id)
+            .fetch_one(&state.pool)
+            .await?;
 
     Ok(Json(json!({
         "serverSchemaVersion": state.config.server_max_schema,
@@ -211,9 +213,9 @@ fn validate(op: OpInput) -> Result<ValidOp, ApiError> {
         )));
     }
 
-    if op.kind != "task" && op.kind != "suggestion" {
+    if op.kind != "task" && op.kind != "suggestion" && op.kind != "event" {
         return Err(ApiError::BadRequest(
-            "kind invalide : task ou suggestion attendu".to_string(),
+            "kind invalide : task, suggestion ou event attendu".to_string(),
         ));
     }
 
@@ -235,7 +237,8 @@ fn validate(op: OpInput) -> Result<ValidOp, ApiError> {
     let hlc = op.hlc.trim().to_string();
     if !valid_hlc(&hlc) {
         return Err(ApiError::BadRequest(
-            "hlc invalide : format attendu 15 chiffres-5 chiffres-1 à 8 alphanumériques".to_string(),
+            "hlc invalide : format attendu 15 chiffres-5 chiffres-1 à 8 alphanumériques"
+                .to_string(),
         ));
     }
 
@@ -269,12 +272,9 @@ fn validate(op: OpInput) -> Result<ValidOp, ApiError> {
 
 fn valid_hlc(hlc: &str) -> bool {
     let mut parts = hlc.split('-');
-    let (Some(ms), Some(counter), Some(node), None) = (
-        parts.next(),
-        parts.next(),
-        parts.next(),
-        parts.next(),
-    ) else {
+    let (Some(ms), Some(counter), Some(node), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
         return false;
     };
 
@@ -335,6 +335,10 @@ mod tests {
         };
 
         assert!(validate(base()).is_ok());
+
+        let mut event_kind = base();
+        event_kind.kind = "event".to_string();
+        assert!(validate(event_kind).is_ok());
 
         let mut wrong_kind = base();
         wrong_kind.kind = "delete".to_string();

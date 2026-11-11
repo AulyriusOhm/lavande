@@ -441,11 +441,19 @@ fn error_response(status: StatusCode, code: &'static str, message: &'static str)
 }
 
 fn pairing_unknown() -> Response {
-    error_response(StatusCode::NOT_FOUND, "pairing_unknown", "code d'appairage inconnu")
+    error_response(
+        StatusCode::NOT_FOUND,
+        "pairing_unknown",
+        "code d'appairage inconnu",
+    )
 }
 
 fn pairing_expired() -> Response {
-    error_response(StatusCode::NOT_FOUND, "pairing_expired", "code d'appairage expiré")
+    error_response(
+        StatusCode::NOT_FOUND,
+        "pairing_expired",
+        "code d'appairage expiré",
+    )
 }
 
 fn invalid_poll_secret() -> Response {
@@ -492,7 +500,6 @@ fn consumed_conflict() -> Response {
 mod tests {
     use super::*;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-
 
     #[test]
     fn generated_codes_use_the_safe_alphabet() {

@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 const DEFAULT_DATABASE_URL: &str = "postgres://lavande:lavande@127.0.0.1:55432/lavande_sync";
 
+#[allow(dead_code)]
 struct Account {
     email: String,
     auth_key: String,
@@ -495,7 +496,12 @@ async fn logout_invalidates_the_current_session() {
 
     let (status, body) = call(
         &app,
-        request(Method::POST, "/api/v1/auth/logout", None, Some(&account.token)),
+        request(
+            Method::POST,
+            "/api/v1/auth/logout",
+            None,
+            Some(&account.token),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
@@ -548,7 +554,11 @@ async fn login_is_rate_limited_after_ten_attempts_per_minute() {
 
     for attempt in 1..=10 {
         let (status, body) = login(&app, &account.email, &random_key(32)).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED, "tentative {attempt} : {body}");
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "tentative {attempt} : {body}"
+        );
         assert_eq!(body["code"], "invalid_credentials");
     }
 

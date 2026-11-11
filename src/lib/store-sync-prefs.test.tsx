@@ -145,7 +145,7 @@ describe("synchronisation des mails · interrupteurs", () => {
 });
 
 describe("synchronisation du calendrier · interrupteurs", () => {
-  it("persiste les rendez-vous par défaut", async () => {
+  it("ajoute un rendez-vous et le retrouve dans l'état synchronisé", async () => {
     mockBackend();
     const { result } = mount();
 
@@ -157,11 +157,10 @@ describe("synchronisation du calendrier · interrupteurs", () => {
       ]);
     });
 
-    const stored = JSON.parse(window.localStorage.getItem("lavande.events.v1") ?? "[]") as unknown[];
-    expect(stored.some((entry) => (entry as { id: string }).id === "new")).toBe(true);
+    expect(result.current.store.events.some((event) => event.id === "new")).toBe(true);
   });
 
-  it("ne persiste plus rien quand le calendrier est coupé, sans perdre l'état en mémoire", async () => {
+  it("garde les rendez-vous en mémoire quand le calendrier est coupé", async () => {
     storeSyncPrefs({ calendar: false });
     mockBackend();
     const { result } = mount();
@@ -174,6 +173,5 @@ describe("synchronisation du calendrier · interrupteurs", () => {
     });
 
     expect(result.current.store.events.map((event) => event.id)).toEqual(["new"]);
-    expect(window.localStorage.getItem("lavande.events.v1")).toBeNull();
   });
 });

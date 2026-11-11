@@ -66,6 +66,8 @@ export type SyncEngine = {
   /** Met la synchronisation réseau en pause : les mutations restent dans l'outbox. */
   setPaused(value: boolean): void;
   isPaused(): boolean;
+  /** Restreint les kinds synchronisés (push + pull) ; un kind réactivé est re-tiré depuis le serveur. */
+  setEnabledKinds(kinds: readonly EntityKind[]): void;
   createAccount(input: { serverUrl: string; email: string; password: string }): Promise<void>;
   loginAccount(input: { serverUrl: string; email: string; password: string }): Promise<void>;
   logoutAccount(): Promise<void>;
@@ -140,6 +142,7 @@ export function createSyncEngine(storage: SyncStorage, options: SyncEngineOption
   let attempts = 0;
   let started = false;
   let paused = false;
+  let enabledKinds = new Set<EntityKind>(["task", "suggestion", "event"]);
 
   function notify(): void {
     for (const listener of [...listeners]) listener();
@@ -249,13 +252,15 @@ export function createSyncEngine(storage: SyncStorage, options: SyncEngineOption
   async function pushOutbox(api: SyncApi): Promise<void> {
     for (;;) {
       const state = storage.read();
-      if (state.outbox.length === 0) return;
-      const batch = state.outbox.slice(0, PUSH_BATCH);
+      const pushable = state.outbox.filter((op) => enabledKinds.has(op.kind));
+      if (pushable.length === 0) return;
+      const batch = pushable.slice(0, PUSH_BATCH);
       const result = await api.pushOps(batch);
       const current = storage.read();
       const next = ackOps(current, result.acked);
       storage.write(next);
-      if (next.outbox.length === current.outbox.length) return;
+      const remaining = next.outbox.filter((op) => enabledKinds.has(op.kind)).length;
+      if (remaining === pushable.length) return;
     }
   }
 
@@ -271,6 +276,7 @@ export function createSyncEngine(storage: SyncStorage, options: SyncEngineOption
       for (const op of page.ops) {
         clock.receive(op.hlc);
         if (op.seq > cursor) cursor = op.seq;
+        if (!enabledKinds.has(op.kind)) continue;
         const decoded = decodeServerOp(dek, op);
         if (decoded === null) continue;
         const applied = applyOp(docs, refs, decoded);
@@ -415,6 +421,24 @@ export function createSyncEngine(storage: SyncStorage, options: SyncEngineOption
 
   function isPaused(): boolean {
     return paused;
+  }
+
+  function setEnabledKinds(kinds: readonly EntityKind[]): void {
+    const next = new Set<EntityKind>(kinds);
+    let reenabled = false;
+    for (const kind of next) {
+      if (!enabledKinds.has(kind)) {
+        reenabled = true;
+        break;
+      }
+    }
+    enabledKinds = next;
+    if (reenabled) {
+      const state = storage.read();
+      storage.write({ ...state, cursor: 0 });
+    }
+    notify();
+    if (started && !paused) void syncNow();
   }
 
   function start(): () => void {
@@ -623,6 +647,7 @@ export function createSyncEngine(storage: SyncStorage, options: SyncEngineOption
     setAutoSync,
     setPaused,
     isPaused,
+    setEnabledKinds,
     createAccount,
     loginAccount,
     logoutAccount,
