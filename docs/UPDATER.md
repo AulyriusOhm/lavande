@@ -32,13 +32,13 @@ chiffrée). Perdue, elle oblige à republier un installeur complet.
 "plugins": {
   "updater": {
     "pubkey": "…",
-    "endpoints": ["https://lavande.mail/updates/latest.json"],
+    "endpoints": ["https://lavande.lanro.eu/updates/latest.json"],
     "requireSignedVersion": true
   }
 }
 ```
 
-- Par défaut : `https://lavande.mail/updates/latest.json` (à héberger : un
+- Par défaut : `https://lavande.lanro.eu/updates/latest.json` (à héberger : un
   simple serveur statique HTTPS suffit, aucun code serveur).
 - Changer d'hébergement = changer l'URL ici. Variantes possibles :
   - Gitea : `https://git.lanro.eu/Roman/lavande/releases/download/updater/latest.json`
@@ -150,11 +150,11 @@ Exemple de manifeste :
   "platforms": {
     "linux-x86_64-rpm": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6…",
-      "url": "https://lavande.mail/updates/Lavande-0.2.0-1.x86_64.rpm"
+      "url": "https://lavande.lanro.eu/updates/Lavande-0.2.0-1.x86_64.rpm"
     },
     "linux-x86_64-appimage": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6…",
-      "url": "https://lavande.mail/updates/Lavande_0.2.0_amd64.AppImage.tar.gz"
+      "url": "https://lavande.lanro.eu/updates/Lavande_0.2.0_amd64.AppImage.tar.gz"
     },
     "linux-x86_64": { "signature": "…", "url": "…/Lavande-0.2.0-1.x86_64.rpm" }
   }
@@ -202,7 +202,7 @@ Exemple de manifeste :
 Le code est en place, mais **aucune mise à jour ne peut encore être distribuée**
 tant que les points ci-dessous ne sont pas faits :
 
-1. **Héberger l'endpoint.** `https://lavande.mail/updates/` n'existe pas. Choisir
+1. **Héberger l'endpoint.** `https://lavande.lanro.eu/updates/` n'existe pas. Choisir
    un hébergement (serveur statique HTTPS, ou releases Gitea/GitHub — voir
    « Endpoint »), y déposer les fichiers, et au besoin mettre à jour
    `plugins.updater.endpoints` dans `src-tauri/tauri.conf.json`.

@@ -39,8 +39,8 @@ signatures RSA (une clé ed25519 produit une signature que les postes cibles ign
 ### Créer la clé
 
 ```bash
-gpg --quick-generate-key "Lavande Release <release@lavande.mail>" rsa4096 sign 3y
-export LAVANDE_GPG_KEY_ID="$(gpg --list-secret-keys --with-colons release@lavande.mail \
+gpg --quick-generate-key "Lavande Release <release@lavande.lanro.eu>" rsa4096 sign 3y
+export LAVANDE_GPG_KEY_ID="$(gpg --list-secret-keys --with-colons release@lavande.lanro.eu \
   | awk -F: '/^fpr:/{print $10; exit}')"
 echo "$LAVANDE_GPG_KEY_ID"
 gpg --armor --export "$LAVANDE_GPG_KEY_ID" > lavande-release.asc
@@ -126,11 +126,11 @@ RPM servi aux utilisateurs doit la vérifier :
 ```ini
 [lavande]
 name=Lavande
-baseurl=https://lavande.mail/rpm/
+baseurl=https://lavande.lanro.eu/rpm/
 enabled=1
 gpgcheck=1
 repo_gpgcheck=0
-gpgkey=https://lavande.mail/rpm/lavande-release.asc
+gpgkey=https://lavande.lanro.eu/rpm/lavande-release.asc
 ```
 
 ## Signer une AppImage
@@ -219,7 +219,7 @@ sudo rpm -U Lavande-0.1.0-1.x86_64.rpm
 
 La vérification de la clé elle-même (empreinte annoncée dans le README, hors du serveur de paquets) est ce
 qui empêche un serveur compromis de publier sa propre clé : l'empreinte doit être publiée ailleurs que sur
-`lavande.mail`.
+`lavande.lanro.eu`.
 
 ## Sauvegarder et restaurer
 
