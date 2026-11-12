@@ -34,7 +34,7 @@ const BUTTON_VARIANTS = {
   ghost: "border border-line bg-surface text-ink-soft hover:bg-surface-2 hover:text-ink",
   plain: "text-ink-soft hover:bg-surface-2 hover:text-ink",
   danger:
-    "border border-rose-200 bg-white text-rose-600 hover:bg-rose-50 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300 dark:hover:bg-rose-500/15",
+    "border border-rose-300 bg-surface text-rose-700 hover:bg-rose-500/10 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300 dark:hover:bg-rose-500/15",
 } as const;
 
 const BUTTON_SIZES = {
@@ -117,7 +117,7 @@ const BADGE_TONES = {
   green: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
   amber: "bg-amber-500/14 text-amber-700 dark:text-amber-300",
   sky: "bg-sky-500/12 text-sky-700 dark:text-sky-300",
-  rose: "bg-rose-500/12 text-rose-600 dark:text-rose-300",
+  rose: "bg-rose-500/12 text-rose-700 dark:text-rose-300",
 } as const;
 
 export function Badge({

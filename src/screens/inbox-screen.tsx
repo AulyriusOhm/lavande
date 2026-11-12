@@ -7,6 +7,7 @@ import { threadsInFolder } from "@/lib/threads";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
 import { useMailStore } from "@/lib/store";
 import type { MailNavigation } from "@/lib/app-shortcuts";
+import { accentContrast } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { Avatar, Chip, IconButton } from "@/components/ui/primitives";
 import { AnimatedGradientText } from "@/components/ui/animated-text";
@@ -320,13 +321,16 @@ export function InboxScreen({
               type="button"
               onClick={onOpenAccounts}
               className={cn(
-                "mt-2.5 mb-4 inline-flex items-center gap-2 rounded-full border border-line bg-surface py-1 pr-2.5 pl-1",
+                "mt-2.5 mb-4 inline-flex min-h-11 items-center gap-2 rounded-full border border-line bg-surface py-1 pr-2.5 pl-1",
                 "text-left transition-colors hover:border-accent-ring",
               )}
             >
               <span
-                className="grid size-6 place-items-center rounded-full text-[9px] font-black text-white"
-                style={{ backgroundColor: current?.color ?? "var(--accent)" }}
+                className="grid size-6 place-items-center rounded-full text-[10px] font-black"
+                style={{
+                  backgroundColor: current?.color ?? "var(--accent)",
+                  color: current ? accentContrast(current.color) : "var(--accent-contrast)",
+                }}
               >
                 {current ? current.label[0] : "∀"}
               </span>
@@ -363,7 +367,7 @@ export function InboxScreen({
                 aria-label="Réduire le résumé"
                 style={{ opacity: cardExpand }}
                 className={cn(
-                  "absolute top-2.5 right-2.5 z-10 grid size-7 place-items-center rounded-full bg-surface/80 text-accent-ink",
+                  "absolute top-2.5 right-2.5 z-10 grid size-7 place-items-center rounded-full bg-surface/80 text-accent-ink before:absolute before:-inset-2 before:rounded-full before:content-['']",
                   compact && "pointer-events-none",
                 )}
               >
@@ -378,7 +382,7 @@ export function InboxScreen({
                   aria-label="Régénérer le résumé"
                   style={{ opacity: cardExpand }}
                   className={cn(
-                    "absolute top-2.5 right-11 z-10 grid size-7 place-items-center rounded-full bg-surface/80 text-accent-ink",
+                    "absolute top-2.5 right-11 z-10 grid size-7 place-items-center rounded-full bg-surface/80 text-accent-ink before:absolute before:-inset-2 before:rounded-full before:content-['']",
                     compact && "pointer-events-none",
                   )}
                 >
@@ -387,7 +391,7 @@ export function InboxScreen({
               ) : null}
 
               <motion.div ref={cardRef} style={{ opacity: cardBody }} className="p-4">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 pr-16">
                   <span className="grid size-6 place-items-center rounded-full bg-accent/15">
                     <Sparkles className="size-3.5 text-accent-ink" strokeWidth={2.4} />
                   </span>
@@ -458,7 +462,7 @@ export function InboxScreen({
               aria-hidden
               className={cn(
                 "rounded-full px-1.5 text-[10px] font-bold",
-                filter === "unread" ? "bg-accent-contrast/25 text-accent-contrast" : "bg-accent-soft text-accent-ink",
+                filter === "unread" ? "bg-ink/10 text-accent-contrast" : "bg-accent-soft text-accent-ink",
               )}
             >
               {unreadCount}
@@ -473,7 +477,7 @@ export function InboxScreen({
               aria-hidden
               className={cn(
                 "rounded-full px-1.5 text-[10px] font-bold",
-                filter === "starred" ? "bg-accent-contrast/25 text-accent-contrast" : "bg-accent-soft text-accent-ink",
+                filter === "starred" ? "bg-ink/10 text-accent-contrast" : "bg-accent-soft text-accent-ink",
               )}
             >
               {starredCount}
@@ -488,7 +492,7 @@ export function InboxScreen({
               aria-hidden
               className={cn(
                 "rounded-full px-1.5 text-[10px] font-bold",
-                filter === "encrypted" ? "bg-accent-contrast/25 text-accent-contrast" : "bg-accent-soft text-accent-ink",
+                filter === "encrypted" ? "bg-ink/10 text-accent-contrast" : "bg-accent-soft text-accent-ink",
               )}
             >
               {encryptedCount}
@@ -546,7 +550,7 @@ export function InboxScreen({
                 <button
                   type="button"
                   onClick={() => setFilter("all")}
-                  className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-2 text-[12px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+                  className="mt-3 inline-flex min-h-11 items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-2 text-[12px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
                 >
                   <RotateCcw className="size-3.5" />
                   Réinitialiser le filtre
@@ -557,7 +561,7 @@ export function InboxScreen({
                   type="button"
                   onClick={syncFolder}
                   disabled={syncing}
-                  className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-accent px-3.5 py-2 text-[12px] font-bold text-accent-contrast transition-colors disabled:opacity-50"
+                  className="mt-3 inline-flex min-h-11 items-center gap-1.5 rounded-full bg-accent px-3.5 py-2 text-[12px] font-bold text-accent-contrast transition-colors disabled:opacity-50"
                 >
                   <RefreshCw className={cn("size-3.5", syncing && "animate-spin")} />
                   Synchroniser
@@ -570,7 +574,7 @@ export function InboxScreen({
               <button
                 type="button"
                 onClick={loadMore}
-                className="focus-ring rounded-full border border-line bg-surface px-3.5 py-2 text-[12px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+                className="focus-ring inline-flex min-h-11 items-center rounded-full border border-line bg-surface px-3.5 py-2 text-[12px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
               >
                 Charger plus
               </button>
@@ -604,8 +608,11 @@ export function InboxScreen({
           </IconButton>
           <IconButton aria-label="Changer de compte" onClick={onOpenAccounts}>
             <span
-              className="grid size-5 place-items-center rounded-full text-[8px] font-black text-white"
-              style={{ backgroundColor: current?.color ?? "var(--accent)" }}
+              className="grid size-5 place-items-center rounded-full text-[10px] font-black"
+              style={{
+                backgroundColor: current?.color ?? "var(--accent)",
+                color: current ? accentContrast(current.color) : "var(--accent-contrast)",
+              }}
             >
               {current ? current.label[0] : "∀"}
             </span>
@@ -675,8 +682,8 @@ export function AccountSwitchSheet({
               )}
             >
               <span
-                className="grid size-9 shrink-0 place-items-center rounded-xl text-[12px] font-black text-white"
-                style={{ backgroundColor: row.color }}
+                className="grid size-9 shrink-0 place-items-center rounded-xl text-[12px] font-black"
+                style={{ backgroundColor: row.color, color: accentContrast(row.color) }}
               >
                 {row.glyph}
               </span>

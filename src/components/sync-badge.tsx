@@ -11,10 +11,10 @@ const TONE: Record<SyncPhase, { dot: string; ring: string; surface: string; ink:
     label: "Locale",
   },
   offline: {
-    dot: "bg-[#f5a623]",
-    ring: "ring-[#f5a623]/25",
-    surface: "bg-[#fff5e6]",
-    ink: "text-[#8a5a13]",
+    dot: "bg-sync-offline-dot",
+    ring: "ring-sync-offline-dot/30",
+    surface: "bg-sync-offline-soft",
+    ink: "text-sync-offline-ink",
     label: "Hors ligne",
   },
   syncing: {
@@ -25,24 +25,24 @@ const TONE: Record<SyncPhase, { dot: string; ring: string; surface: string; ink:
     label: "Synchro…",
   },
   synced: {
-    dot: "bg-[#34c48b]",
-    ring: "ring-[#34c48b]/25",
-    surface: "bg-[#eefaf3]",
-    ink: "text-[#1f7d58]",
+    dot: "bg-sync-ok-dot",
+    ring: "ring-sync-ok-dot/30",
+    surface: "bg-sync-ok-soft",
+    ink: "text-sync-ok-ink",
     label: "À jour",
   },
   error: {
-    dot: "bg-[#d1466b]",
-    ring: "ring-[#d1466b]/25",
-    surface: "bg-[#fdeef2]",
-    ink: "text-[#a52a4d]",
+    dot: "bg-sync-error-dot",
+    ring: "ring-sync-error-dot/30",
+    surface: "bg-sync-error-soft",
+    ink: "text-sync-error-ink",
     label: "Erreur",
   },
   read_only: {
-    dot: "bg-[#d1466b]",
-    ring: "ring-[#d1466b]/25",
-    surface: "bg-[#fdeef2]",
-    ink: "text-[#a52a4d]",
+    dot: "bg-sync-error-dot",
+    ring: "ring-sync-error-dot/30",
+    surface: "bg-sync-error-soft",
+    ink: "text-sync-error-ink",
     label: "Lecture seule",
   },
 };
@@ -73,7 +73,7 @@ export function SyncBadge({ onOpen, className }: { onOpen?: () => void; classNam
       }
       aria-label={`Synchronisation : ${text}`}
       className={cn(
-        "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[10.5px] font-bold ring-1 transition-transform",
+        "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold ring-1 transition-transform",
         tone.surface,
         tone.ring,
         tone.ink,

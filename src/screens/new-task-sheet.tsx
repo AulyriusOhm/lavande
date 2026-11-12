@@ -64,7 +64,7 @@ export function NewTaskSheet({
           onChange={(event) => setTitle(event.target.value)}
           placeholder="Intitulé de la tâche"
           autoFocus
-          className="mt-1.5 w-full rounded-2xl border border-line bg-surface px-3.5 py-3 text-[14px] font-bold tracking-tight text-ink outline-none placeholder:font-semibold placeholder:text-ink-muted/70 focus:border-accent-ring"
+          className="mt-1.5 w-full rounded-2xl border border-line bg-surface px-3.5 py-3 text-[14px] font-bold tracking-tight text-ink outline-none placeholder:font-semibold placeholder:text-ink-soft focus:border-accent-ring"
         />
 
         <label className="mt-3 block text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase" htmlFor="task-description">
@@ -75,7 +75,7 @@ export function NewTaskSheet({
           value={description}
           onChange={(event) => setDescription(event.target.value)}
           placeholder="Description, contexte, liens…"
-          className="mt-1.5 h-24 w-full resize-none rounded-2xl border border-line bg-surface px-3.5 py-3 text-[12.5px] leading-relaxed font-medium text-ink outline-none placeholder:text-ink-muted/70 focus:border-accent-ring"
+          className="mt-1.5 h-24 w-full resize-none rounded-2xl border border-line bg-surface px-3.5 py-3 text-[12.5px] leading-relaxed font-medium text-ink outline-none placeholder:text-ink-soft focus:border-accent-ring"
         />
 
         <p className="mt-4 mb-2 text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Échéance</p>

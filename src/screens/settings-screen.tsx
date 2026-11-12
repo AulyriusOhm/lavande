@@ -18,7 +18,7 @@ import {
   Type,
   Users,
 } from "lucide-react";
-import { ACCENT_PRESETS, useTheme, type ThemeMode } from "@/lib/theme";
+import { ACCENT_PRESETS, accentContrast, useTheme, type ThemeMode } from "@/lib/theme";
 import { SWIPE_ACTIONS, mergeFlags, usePrefs } from "@/lib/prefs";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
 import { useMailStore } from "@/lib/store";
@@ -139,14 +139,14 @@ export function SettingsScreen({
                 className="focus-row flex min-w-0 flex-1 items-center gap-3 py-3 pr-1 pl-3.5 text-left transition-colors hover:bg-surface-2/70"
               >
                 <span
-                  className="grid size-8 shrink-0 place-items-center rounded-xl text-[11px] font-black text-white"
-                  style={{ backgroundColor: item.color }}
+                  className="grid size-8 shrink-0 place-items-center rounded-xl text-[11px] font-black"
+                  style={{ backgroundColor: item.color, color: accentContrast(item.color) }}
                 >
                   {item.label[0]}
                 </span>
                 <span className="min-w-0 flex-1 leading-tight">
                   <span className="block truncate text-[12.5px] font-bold text-ink">{item.label}</span>
-                  <span className="block truncate text-[10.5px] font-medium text-ink-muted">{item.email}</span>
+                  <span className="block truncate text-[12px] font-medium text-ink-muted">{item.email}</span>
                 </span>
                 {unreadFor(item.id) > 0 && (
                   <span className="rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent-ink">
@@ -160,7 +160,7 @@ export function SettingsScreen({
                   type="button"
                   aria-label={`Retirer le compte ${item.label}`}
                   onClick={() => askRemoveAccount(item)}
-                  className="focus-ring grid size-9 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-rose-500/10 hover:text-rose-600"
+                  className="focus-ring grid size-11 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-rose-500/10 hover:text-rose-700 dark:hover:text-rose-300"
                 >
                   <Trash2 className="size-3.5" />
                 </button>
@@ -196,7 +196,7 @@ export function SettingsScreen({
               </span>
               <p className="text-[12.5px] font-bold text-ink">Couleur d'accent</p>
             </div>
-            <span className="font-mono text-[10.5px] font-semibold tracking-wide text-ink-muted uppercase">
+            <span className="font-mono text-[11px] font-semibold tracking-wide text-ink-muted uppercase">
               {accent}
             </span>
           </div>
@@ -251,7 +251,7 @@ export function SettingsScreen({
             <Avatar name="C" tone={0} size={32} />
             <div className="min-w-0 flex-1 leading-tight">
               <p className="text-[12px] font-bold text-ink">Aperçu de l'accent</p>
-              <p className="text-[10.5px] leading-relaxed font-medium text-ink-muted">
+              <p className="text-[12px] leading-relaxed font-medium text-ink-muted">
                 Boutons, badges et surlignages suivent cette teinte
               </p>
             </div>
@@ -280,7 +280,7 @@ export function SettingsScreen({
             onChange={setPlanningEnabled}
           />
         </Card>
-        <p className="mt-2 px-5 text-[10.5px] leading-relaxed font-medium text-ink-muted">
+        <p className="mt-2 px-5 text-[12px] leading-relaxed font-medium text-ink-muted">
           Un module désactivé disparaît du dock et du balayage horizontal. Tes données restent en place.
         </p>
       </BlurFade>
@@ -310,7 +310,7 @@ export function SettingsScreen({
               </span>
               <div className="min-w-0 flex-1 leading-tight">
                 <p className="text-[12.5px] font-bold text-ink">Aperçu du texte</p>
-                <p className="text-[10.5px] font-medium text-ink-muted">Dans les notifications push</p>
+                <p className="text-[12px] font-medium text-ink-muted">Dans les notifications push</p>
               </div>
             </div>
             <div
@@ -340,7 +340,7 @@ export function SettingsScreen({
                 );
               })}
             </div>
-            <p className="mt-2 text-[10px] leading-relaxed font-medium text-ink-muted">
+            <p className="mt-2 text-[12px] leading-relaxed font-medium text-ink-muted">
               Les messages chiffrés ne sont jamais inclus en clair dans la notification push.
             </p>
           </div>
@@ -388,7 +388,7 @@ export function SettingsScreen({
               </div>
             </div>
           ))}
-          <p className="text-[10px] leading-relaxed font-medium text-ink-muted">
+          <p className="text-[12px] leading-relaxed font-medium text-ink-muted">
             Ces gestes s'appliquent aux mails de la boîte. Les gestes des suggestions de la
             planification sont gérés séparément.
           </p>
@@ -409,7 +409,7 @@ export function SettingsScreen({
             </span>
             <span className="min-w-0 flex-1 text-left leading-tight">
               <span className="block text-[12.5px] font-bold text-ink">Toutes les touches</span>
-              <span className="block text-[10.5px] font-medium text-ink-muted">
+              <span className="block text-[12px] font-medium text-ink-muted">
                 {shortcuts.length} raccourcis · navigation, message et aide
               </span>
             </span>
@@ -528,7 +528,7 @@ function Row({
       <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-surface-2 text-ink-soft">{icon}</span>
       <span className="min-w-0 flex-1 text-left leading-tight">
         <span className="block text-[12.5px] font-bold text-ink">{label}</span>
-        <span className="block text-[10.5px] font-medium text-ink-muted">{hint}</span>
+        <span className="block text-[12px] font-medium text-ink-muted">{hint}</span>
       </span>
       {children}
     </button>

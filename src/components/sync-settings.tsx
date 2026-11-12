@@ -84,7 +84,7 @@ function SyncToggle({
     >
       <span className="min-w-0 flex-1 leading-tight">
         <span className="block text-[12.5px] font-bold text-ink">{label}</span>
-        <span className="block text-[10.5px] font-medium text-ink-muted">{hint}</span>
+        <span className="block text-[12px] font-medium text-ink-muted">{hint}</span>
       </span>
       <button
         type="button"
@@ -217,8 +217,8 @@ export function SyncSettings({ variant = "mobile" }: { variant?: "mobile" | "des
 
   const field = mobile ? "min-h-11" : "";
   const action = mobile ? "min-h-11 flex-1 rounded-full" : "";
-  const small = mobile ? "text-[11px]" : "text-[10.5px]";
-  const errorText = "mt-2 text-[11px] font-semibold text-rose-600 dark:text-rose-300";
+  const small = "text-[12px]";
+  const errorText = "mt-2 text-[12px] font-semibold text-rose-700 dark:text-rose-300";
   const master = syncPrefs.enabled;
   const planningSync = master && syncPrefs.kanban;
 
@@ -388,10 +388,10 @@ export function SyncSettings({ variant = "mobile" }: { variant?: "mobile" | "des
                 <p className="mt-1 font-mono text-[26px] leading-none font-extrabold tracking-[0.28em] text-ink">
                   {pairing.code}
                 </p>
-                <p className="mt-1.5 font-mono text-[10px] font-semibold text-ink-muted">
+                <p className="mt-1.5 font-mono text-[12px] font-semibold text-ink-muted">
                   valable jusqu'à {formatWhen(pairing.expiresAt)}
                 </p>
-                <p className="mt-1.5 inline-flex items-center gap-1.5 text-[10.5px] font-semibold text-accent-ink">
+                <p className="mt-1.5 inline-flex items-center gap-1.5 text-[12px] font-semibold text-accent-ink">
                   <Loader2 className="size-3 animate-spin" />
                   En attente de l'autre appareil…
                 </p>
@@ -446,7 +446,7 @@ export function SyncSettings({ variant = "mobile" }: { variant?: "mobile" | "des
                         {device.name}
                         {device.current ? <Badge tone="accent">cet appareil</Badge> : null}
                       </p>
-                      <p className="truncate font-mono text-[10px] font-semibold text-ink-muted">
+                      <p className="truncate font-mono text-[11.5px] font-semibold text-ink-muted">
                         {device.platform} ·{" "}
                         {device.current ? shortFingerprint(own.pubKey) : device.id.slice(0, 8)} · v
                         {device.schemaVersion}
@@ -495,7 +495,7 @@ export function SyncSettings({ variant = "mobile" }: { variant?: "mobile" | "des
                   Empreinte de l'appareil demandeur
                 </p>
                 <p className="mt-1 font-mono text-[13px] font-bold break-all text-ink">{claimed.fingerprint}</p>
-                <p className="mt-1 truncate font-mono text-[10px] font-medium text-ink-muted">
+                <p className="mt-1 truncate font-mono text-[11.5px] font-medium text-ink-muted">
                   {claimed.deviceId}
                 </p>
                 <DButton

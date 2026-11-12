@@ -108,3 +108,39 @@ describe("aperçu de la signature", () => {
     expect(screen.queryByTestId("signature-preview")).toBeNull();
   });
 });
+
+describe("confirmations de rédaction · cibles tactiles", () => {
+  it("donne 44 px de haut aux boutons de la confirmation d'envoi", async () => {
+    render(<Harness />);
+    fireEvent.change(screen.getByPlaceholderText("destinataire@mail.com"), {
+      target: { value: "camille@lavande.mail" },
+    });
+    fireEvent.click(screen.getByLabelText("Envoyer le message"));
+
+    const dialog = await screen.findByRole("alertdialog", { name: "Confirmer l'envoi sans objet ou sans message" });
+    const buttons = Array.from(dialog.querySelectorAll("button"));
+    expect(buttons.length).toBeGreaterThan(1);
+    for (const button of buttons) expect(button.className).toContain("min-h-11");
+  });
+
+  it("donne 44 px de haut au bouton « Supprimer » du brouillon, en rose conforme", async () => {
+    render(<Harness />);
+    fireEvent.change(screen.getByPlaceholderText("Objet du message"), { target: { value: "Brouillon" } });
+    fireEvent.click(screen.getByLabelText("Fermer"));
+
+    const dialog = await screen.findByRole("alertdialog", { name: "Enregistrer ou supprimer le brouillon" });
+    const remove = Array.from(dialog.querySelectorAll("button")).find((button) => button.textContent === "Supprimer");
+    expect(remove?.className).toContain("min-h-11");
+    expect(remove?.className).toContain("text-rose-700");
+    expect(remove?.className).toContain("dark:text-rose-300");
+  });
+
+  it("libelle les champs de rédaction avec une couleur de placeholder conforme", () => {
+    render(<Harness />);
+    for (const placeholder of ["destinataire@mail.com", "Objet du message"]) {
+      const field = screen.getByPlaceholderText(placeholder);
+      expect(field.className).toContain("placeholder:text-ink-soft");
+      expect(field.className).not.toContain("placeholder:text-ink-muted/70");
+    }
+  });
+});

@@ -182,7 +182,7 @@ export function PlanningScreen({
               <span
                 className={cn(
                   "rounded-full px-1.5 text-[10px] font-bold",
-                  filter === "all" ? "bg-accent-contrast/25 text-accent-contrast" : "bg-accent-soft text-accent-ink",
+                  filter === "all" ? "bg-ink/10 text-accent-contrast" : "bg-accent-soft text-accent-ink",
                 )}
               >
                 {tasks.length}
@@ -208,7 +208,7 @@ export function PlanningScreen({
               <span
                 className={cn(
                   "rounded-full px-1.5 text-[10px] font-bold",
-                  filter === "suggestion" ? "bg-accent-contrast/25 text-accent-contrast" : "bg-accent-soft text-accent-ink",
+                  filter === "suggestion" ? "bg-ink/10 text-accent-contrast" : "bg-accent-soft text-accent-ink",
                 )}
               >
                 {suggestions.length}
@@ -238,7 +238,7 @@ export function PlanningScreen({
                   <span
                     className={cn(
                       "rounded-full px-1.5 text-[10px] font-bold",
-                      active ? "bg-accent-contrast/25 text-accent-contrast" : "bg-surface-2 text-ink-muted",
+                      active ? "bg-ink/10 text-accent-contrast" : "bg-surface-2 text-ink-muted",
                     )}
                   >
                     {countFor(state.id)}
@@ -307,7 +307,7 @@ export function PlanningScreen({
                       </button>
                       <div className="min-w-0 flex-1 leading-tight">
                         <p className="line-clamp-2 text-[12.5px] font-bold text-ink">{suggestion.proposal}</p>
-                        <p className="mt-0.5 flex items-start gap-1 text-[10.5px] font-medium text-ink-muted">
+                        <p className="mt-0.5 flex items-start gap-1 text-[12px] leading-snug font-medium text-ink-muted">
                           <Mail className="mt-0.5 size-2.5 shrink-0" />
                           <span className="line-clamp-2">{suggestion.subject}</span>
                         </p>
@@ -316,7 +316,7 @@ export function PlanningScreen({
                             <span
                               data-testid="suggestion-ai"
                               title="Suggéré par l'IA"
-                              className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-accent-soft px-1.5 py-0.5 text-[9.5px] font-bold text-accent-ink"
+                              className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-accent-soft px-1.5 py-0.5 text-[10.5px] font-bold text-accent-ink"
                             >
                               <Sparkles className="size-2.5" strokeWidth={2.6} />
                               IA
@@ -330,7 +330,7 @@ export function PlanningScreen({
                       {suggestion.due ? (
                         <span
                           data-testid="suggestion-due"
-                          className="shrink-0 rounded-full bg-surface-2 px-1.5 py-0.5 text-[9.5px] font-extrabold whitespace-nowrap text-accent-ink"
+                          className="shrink-0 rounded-full bg-surface-2 px-1.5 py-0.5 text-[10.5px] font-extrabold whitespace-nowrap text-accent-ink"
                         >
                           {suggestion.due}
                         </span>
@@ -387,7 +387,7 @@ export function PlanningScreen({
                     >
                       {task.title}
                     </p>
-                    <p className="mt-0.5 line-clamp-2 text-[10.5px] font-medium text-ink-muted">{task.meta}</p>
+                    <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug font-medium text-ink-muted">{task.meta}</p>
                     {typeof task.progress === "number" && !done ? (
                       <div className="mt-1.5 flex items-center gap-1.5">
                         <div
@@ -400,7 +400,7 @@ export function PlanningScreen({
                         >
                           <div className="h-full rounded-full bg-accent" style={{ width: `${task.progress}%` }} />
                         </div>
-                        <span className="shrink-0 text-[9px] font-bold tabular-nums text-ink-muted">
+                        <span className="shrink-0 text-[11px] font-bold tabular-nums text-ink-muted">
                           {task.progress} %
                         </span>
                       </div>
@@ -410,7 +410,7 @@ export function PlanningScreen({
                   {task.dueTone !== "none" ? (
                     <span
                       className={cn(
-                        "shrink-0 rounded-full px-2 py-0.5 text-[9.5px] font-extrabold whitespace-nowrap",
+                        "shrink-0 rounded-full px-2 py-1 text-[10.5px] font-extrabold whitespace-nowrap",
                         DUE_STYLE[task.dueTone],
                       )}
                     >
@@ -426,7 +426,7 @@ export function PlanningScreen({
                     }}
                     aria-label={`Changer l'état de ${task.title}`}
                     className={cn(
-                      "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[9.5px] font-extrabold",
+                      "inline-flex min-h-11 shrink-0 items-center gap-1 rounded-full px-2.5 text-[11px] font-extrabold",
                       meta.chip,
                     )}
                   >

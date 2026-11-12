@@ -93,3 +93,15 @@ describe("Planification mobile · origine des suggestions", () => {
     expect(screen.getByTestId("suggestion-account").textContent).toBe("Studio");
   });
 });
+
+describe("planification · compteurs de filtres", () => {
+  it("pose le compteur actif sur bg-ink/10", () => {
+    mount(MAIL_SUGGESTIONS, []);
+    const chip = screen.getByRole("button", { name: /^Tâches/ });
+
+    expect(chip.getAttribute("aria-pressed")).toBe("true");
+    const counter = chip.querySelector("span");
+    expect(counter?.className).toContain("bg-ink/10");
+    expect(counter?.className).not.toContain("bg-accent-contrast/25");
+  });
+});

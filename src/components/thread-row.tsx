@@ -7,6 +7,7 @@ import { BlurFade } from "@/components/ui/blur-fade";
 import { PgpBadge } from "@/components/ui/pgp-badge";
 import { SwipeAction, type SwipeActionDef } from "@/components/ui/swipe-action";
 import { usePrefs, type SwipeActionId } from "@/lib/prefs";
+import { accountLabelInk, accountTint, useTheme } from "@/lib/theme";
 
 export function ThreadRow({
   thread,
@@ -56,6 +57,7 @@ export function ThreadRow({
         ? pieces
         : "";
   const { swipeLeft, swipeRight } = usePrefs();
+  const { dark } = useTheme();
 
   const build = (id: SwipeActionId): SwipeActionDef | null => {
     switch (id) {
@@ -159,10 +161,10 @@ export function ThreadRow({
           )}
           {showAccount && account ? (
             <span
-              className="inline-block max-w-[56px] truncate rounded-full px-1.5 py-[3px] text-[8.5px] leading-none font-extrabold tracking-[0.08em] uppercase"
+              className="inline-block max-w-[88px] truncate rounded-full px-1.5 py-[3px] text-[10.5px] leading-none font-extrabold tracking-[0.08em] uppercase"
               style={{
-                backgroundColor: `color-mix(in oklab, ${account.color} 16%, transparent)`,
-                color: `color-mix(in oklab, ${account.color} 62%, #241b3a)`,
+                backgroundColor: accountTint(account.color),
+                color: accountLabelInk(account.color, dark),
               }}
             >
               {account.label}
@@ -200,7 +202,7 @@ export function ThreadRow({
                 <Star
                   className={cn(
                     "size-3.5 transition-colors",
-                    thread.starred ? "fill-amber-400 text-amber-400" : "text-ink-muted/50 group-hover:text-ink-muted",
+                    thread.starred ? "fill-amber-400 text-amber-500" : "text-ink-muted group-hover:text-ink-soft",
                   )}
                 />
               </button>
@@ -217,7 +219,7 @@ export function ThreadRow({
           </p>
 
           {showPreview && (
-            <p className="mt-0.5 line-clamp-2 text-[12px] leading-[1.45] text-ink-muted">{thread.preview}</p>
+            <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-[1.45] text-ink-muted">{thread.preview}</p>
           )}
 
           {(pillLabel || mail.pgp !== "none") && (

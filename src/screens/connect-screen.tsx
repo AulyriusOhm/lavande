@@ -242,7 +242,7 @@ export function ConnectScreen({
       >
         <MeshGlow className="h-44" />
         <div className="relative flex flex-col items-center text-center">
-          <span className="grid size-14 place-items-center rounded-full bg-emerald-500/15 text-emerald-600">
+          <span className="grid size-14 place-items-center rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
             <CheckCircle2 className="size-7" strokeWidth={2.4} />
           </span>
           <h1 className="mt-4 text-[21px] leading-tight font-extrabold tracking-[-0.035em] text-ink">
@@ -357,7 +357,7 @@ export function ConnectScreen({
                   <p
                     className={cn(
                       "min-w-0 truncate text-[11px] font-semibold",
-                      discovery.tone === "ok" ? "text-emerald-600" : "text-ink-muted",
+                      discovery.tone === "ok" ? "text-emerald-700 dark:text-emerald-300" : "text-ink-muted",
                     )}
                   >
                     {discovery.text}
@@ -420,7 +420,7 @@ export function ConnectScreen({
                 ) : null}
               </div>
               {oauthError ? (
-                <p className="mt-2 text-[11px] font-semibold text-rose-600">{oauthError}</p>
+                <p className="mt-2 text-[11.5px] font-semibold text-rose-700 dark:text-rose-300">{oauthError}</p>
               ) : null}
               {pendingUrl ? (
                 <p className="mt-2 text-[11px] leading-relaxed font-semibold text-ink-muted">

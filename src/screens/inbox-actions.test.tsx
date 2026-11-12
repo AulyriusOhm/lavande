@@ -96,3 +96,16 @@ describe("boîte de réception mobile · actions au clavier", () => {
     expect(starLabel(id)).toBe(starred);
   });
 });
+
+describe("boîte de réception · compteurs de filtres", () => {
+  it("pose les compteurs actifs sur bg-ink/10, pas sur un accent translucide", async () => {
+    await openMobile();
+    const chip = screen.getAllByRole("button").find((button) => button.textContent?.startsWith("Non lus"));
+    expect(chip).toBeTruthy();
+
+    fireEvent.click(chip!);
+    const counter = chip!.querySelector("span");
+    expect(counter?.className).toContain("bg-ink/10");
+    expect(counter?.className).not.toContain("bg-accent-contrast/25");
+  });
+});

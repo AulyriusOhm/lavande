@@ -270,7 +270,7 @@ export function PgpScreen({ onClose }: { onClose: () => void }) {
 
           {open ? (
             <div className="border-t border-line/70 px-3.5 py-3">
-              <p className="text-[9.5px] font-bold tracking-[0.14em] text-ink-muted uppercase">Empreinte complète</p>
+              <p className="text-[10.5px] font-bold tracking-[0.14em] text-ink-muted uppercase">Empreinte complète</p>
               <p className="mt-1 font-mono text-[10.5px] leading-relaxed font-semibold break-all text-ink-soft">
                 {formatFingerprint(key.fingerprint)}
               </p>
@@ -333,7 +333,7 @@ export function PgpScreen({ onClose }: { onClose: () => void }) {
                       Télécharger .asc
                     </button>
                   </div>
-                  <p className="mt-1.5 font-mono text-[9.5px] leading-relaxed break-all text-ink-muted">
+                  <p className="mt-1.5 font-mono text-[11px] leading-relaxed break-all tabular-nums text-ink-muted">
                     {armor.split("\n")[0]} · {armor.length} octets
                   </p>
                 </div>

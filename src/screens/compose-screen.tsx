@@ -265,7 +265,7 @@ export function ComposeScreen({
             value={draft.to}
             onChange={(event) => update({ to: event.target.value })}
             placeholder="destinataire@mail.com"
-            className="min-w-0 flex-1 bg-transparent text-[13.5px] font-medium text-ink outline-none placeholder:text-ink-muted/70"
+            className="min-w-0 flex-1 bg-transparent text-[13.5px] font-medium text-ink outline-none placeholder:text-ink-soft"
           />
           <button
             type="button"
@@ -309,7 +309,7 @@ export function ComposeScreen({
               value={draft.cc}
               onChange={(event) => update({ cc: event.target.value })}
               placeholder="copie@mail.com"
-              className="min-w-0 flex-1 bg-transparent text-[13.5px] font-medium text-ink outline-none placeholder:text-ink-muted/70"
+              className="min-w-0 flex-1 bg-transparent text-[13.5px] font-medium text-ink outline-none placeholder:text-ink-soft"
             />
           </div>
         )}
@@ -324,7 +324,7 @@ export function ComposeScreen({
               value={draft.cci}
               onChange={(event) => update({ cci: event.target.value })}
               placeholder="copie cachée@mail.com"
-              className="min-w-0 flex-1 bg-transparent text-[13.5px] font-medium text-ink outline-none placeholder:text-ink-muted/70"
+              className="min-w-0 flex-1 bg-transparent text-[13.5px] font-medium text-ink outline-none placeholder:text-ink-soft"
             />
           </div>
         )}
@@ -344,7 +344,7 @@ export function ComposeScreen({
             value={draft.subject}
             onChange={(event) => update({ subject: event.target.value })}
             placeholder="Objet du message"
-            className="w-full bg-transparent text-[15px] font-bold tracking-tight text-ink outline-none placeholder:font-semibold placeholder:text-ink-muted/70"
+            className="w-full bg-transparent text-[15px] font-bold tracking-tight text-ink outline-none placeholder:font-semibold placeholder:text-ink-soft"
           />
         </div>
 
@@ -362,7 +362,7 @@ export function ComposeScreen({
                   type="button"
                   aria-label={`Retirer ${file.filename}`}
                   onClick={() => removeAttachment(index)}
-                  className="shrink-0 rounded-full p-0.5 text-ink-muted transition-colors hover:text-ink"
+                  className="relative grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors before:absolute before:-inset-2.5 before:rounded-full before:content-[''] hover:text-ink"
                 >
                   <X className="size-3" />
                 </button>
@@ -383,7 +383,7 @@ export function ComposeScreen({
             onClick={() => update({ pgpEncrypt: !draft.pgpEncrypt })}
             aria-pressed={draft.pgpEncrypt}
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10.5px] font-bold transition-colors",
+              "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-bold transition-colors",
               draft.pgpEncrypt
                 ? "bg-accent-soft text-accent-ink ring-1 ring-accent-ring/60"
                 : "border border-line text-ink-muted",
@@ -397,7 +397,7 @@ export function ComposeScreen({
             onClick={() => update({ pgpSign: !draft.pgpSign })}
             aria-pressed={draft.pgpSign}
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10.5px] font-bold transition-colors",
+              "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-bold transition-colors",
               draft.pgpSign
                 ? "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-500/30"
                 : "border border-line text-ink-muted",
@@ -476,14 +476,14 @@ export function ComposeScreen({
             <button
               type="button"
               onClick={() => setConfirmSend(false)}
-              className="rounded-full px-2.5 py-1 text-[11px] font-bold text-ink-soft"
+              className="inline-flex min-h-11 items-center rounded-full px-3 text-[12px] font-bold text-ink-soft"
             >
               Annuler
             </button>
             <button
               type="button"
               onClick={send}
-              className="rounded-full bg-accent px-2.5 py-1 text-[11px] font-bold text-accent-contrast"
+              className="inline-flex min-h-11 items-center rounded-full bg-accent px-3 text-[12px] font-bold text-accent-contrast"
             >
               Envoyer
             </button>
@@ -502,21 +502,21 @@ export function ComposeScreen({
             <button
               type="button"
               onClick={() => setConfirmClose(false)}
-              className="rounded-full px-2.5 py-1 text-[11px] font-bold text-ink-soft"
+              className="inline-flex min-h-11 items-center rounded-full px-3 text-[12px] font-bold text-ink-soft"
             >
               Annuler
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="rounded-full px-2.5 py-1 text-[11px] font-bold text-rose-600"
+              className="inline-flex min-h-11 items-center rounded-full px-3 text-[12px] font-bold text-rose-700 dark:text-rose-300"
             >
               Supprimer
             </button>
             <button
               type="button"
               onClick={() => void handleSaveDraft()}
-              className="rounded-full bg-accent px-2.5 py-1 text-[11px] font-bold text-accent-contrast"
+              className="inline-flex min-h-11 items-center rounded-full bg-accent px-3 text-[12px] font-bold text-accent-contrast"
             >
               Brouillons
             </button>

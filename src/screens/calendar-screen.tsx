@@ -125,7 +125,7 @@ export function CalendarScreen({
                 <button
                   type="button"
                   onClick={goToday}
-                  className="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-accent-ring bg-accent-soft px-3 text-[11.5px] font-bold text-accent-ink transition-colors hover:border-accent hover:bg-accent-soft/70 active:scale-95"
+                  className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-accent-ring bg-accent-soft px-3 text-[12px] font-bold text-accent-ink transition-colors hover:border-accent hover:bg-accent-soft/70 active:scale-95"
                 >
                   <CalendarCheck className="size-3.5" strokeWidth={2.4} />
                   Aujourd'hui

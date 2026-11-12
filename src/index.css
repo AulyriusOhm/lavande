@@ -42,7 +42,17 @@
   --accent-contrast: #1b1523;
   --accent-soft: color-mix(in oklab, var(--accent) 12%, white);
   --accent-ring: color-mix(in oklab, var(--accent) 34%, white);
-  --accent-ink: color-mix(in oklab, var(--accent) 58%, #241b3a);
+  --accent-ink: color-mix(in oklab, var(--accent) 52%, #241b3a);
+
+  --sync-offline-dot: #b45309;
+  --sync-offline-soft: #fff5e6;
+  --sync-offline-ink: #8a5a13;
+  --sync-ok-dot: #0f7a56;
+  --sync-ok-soft: #eefaf3;
+  --sync-ok-ink: #1f7d58;
+  --sync-error-dot: #be123c;
+  --sync-error-soft: #fdeef2;
+  --sync-error-ink: #a52a4d;
 }
 
 .dark {
@@ -58,6 +68,16 @@
   --accent-soft: color-mix(in oklab, var(--accent) 24%, #16131f);
   --accent-ring: color-mix(in oklab, var(--accent) 45%, #16131f);
   --accent-ink: color-mix(in oklab, var(--accent) 55%, white);
+
+  --sync-offline-dot: #fbbf24;
+  --sync-offline-soft: #2e2410;
+  --sync-offline-ink: #fbbf24;
+  --sync-ok-dot: #34d399;
+  --sync-ok-soft: #10261d;
+  --sync-ok-ink: #6ee7b7;
+  --sync-error-dot: #fb7185;
+  --sync-error-soft: #2d1219;
+  --sync-error-ink: #fda4af;
 }
 
 @theme inline {
@@ -76,6 +96,16 @@
   --color-accent-soft: var(--accent-soft);
   --color-accent-ring: var(--accent-ring);
   --color-accent-ink: var(--accent-ink);
+
+  --color-sync-offline-dot: var(--sync-offline-dot);
+  --color-sync-offline-soft: var(--sync-offline-soft);
+  --color-sync-offline-ink: var(--sync-offline-ink);
+  --color-sync-ok-dot: var(--sync-ok-dot);
+  --color-sync-ok-soft: var(--sync-ok-soft);
+  --color-sync-ok-ink: var(--sync-ok-ink);
+  --color-sync-error-dot: var(--sync-error-dot);
+  --color-sync-error-soft: var(--sync-error-soft);
+  --color-sync-error-ink: var(--sync-error-ink);
 
   --radius-4xl: 2rem;
   --radius-5xl: 2.5rem;
@@ -323,7 +353,7 @@
   float: left;
   height: 0;
   pointer-events: none;
-  color: color-mix(in oklab, var(--ink-muted) 70%, transparent);
+  color: var(--ink-soft);
 }
 .rich-editor-content ::selection {
   background: color-mix(in oklab, var(--accent) 26%, transparent);

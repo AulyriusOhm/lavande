@@ -54,7 +54,7 @@ function Sheet({
                 type="button"
                 onClick={onClose}
                 aria-label="Fermer"
-                className="grid size-8 shrink-0 place-items-center rounded-full border border-line bg-surface-2 text-ink-soft"
+                className="relative grid size-8 shrink-0 place-items-center rounded-full border border-line bg-surface-2 text-ink-soft before:absolute before:-inset-1.5 before:rounded-full before:content-['']"
               >
                 <X className="size-4" />
               </button>
@@ -181,14 +181,14 @@ export function ReplySuggestSheet({
           }}
           rows={3}
           placeholder="Dis ce que tu veux répondre : « confirmer pour mardi 10 h », « demander le devis avant vendredi »…"
-          className="mt-1.5 w-full resize-none bg-transparent text-[12.5px] leading-[1.6] font-medium text-ink outline-none placeholder:text-ink-muted/70"
+          className="mt-1.5 w-full resize-none bg-transparent text-[12.5px] leading-[1.6] font-medium text-ink outline-none placeholder:text-ink-soft"
         />
         <div className="mt-1 flex items-center gap-2">
           <button
             type="button"
             onClick={run}
             disabled={!brief.trim() || generating}
-            className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-accent px-3 text-[11.5px] font-bold text-accent-contrast transition-transform active:scale-95 disabled:pointer-events-none disabled:opacity-45"
+            className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-accent px-3 text-[12px] font-bold text-accent-contrast transition-transform active:scale-95 disabled:pointer-events-none disabled:opacity-45"
           >
             <WandSparkles className="size-3.5" />
             {generating ? "Rédaction…" : "Générer la réponse"}
@@ -227,7 +227,7 @@ export function ReplySuggestSheet({
       <button
         type="button"
         onClick={onClose}
-        className="mt-2 w-full rounded-full py-2 text-[11.5px] font-bold text-ink-soft"
+        className="mt-2 w-full rounded-full py-2 text-[12px] font-bold text-ink-soft min-h-11"
       >
         Écrire moi-même
       </button>

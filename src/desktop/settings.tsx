@@ -55,7 +55,7 @@ import { accountPgp, activeSignature, mergeFlags, usePrefs } from "@/lib/prefs";
 import { APP_VERSION, phaseLabel, useUpdater } from "@/lib/updater";
 import { llmProbe, llmReady } from "@/lib/llm";
 import type { SummaryConfig } from "@/lib/summary";
-import { ACCENT_PRESETS, useTheme, type ThemeMode } from "@/lib/theme";
+import { ACCENT_PRESETS, accentContrast, useTheme, type ThemeMode } from "@/lib/theme";
 import { useMailStore } from "@/lib/store";
 import { detectModKey } from "@/lib/shortcuts";
 import { shortcutCatalog } from "@/lib/app-shortcuts";
@@ -215,7 +215,7 @@ function AccountFolderPicker({
                   onChange={() => togglePath(folder.path)}
                 />
                 <span className="truncate">{folder.name}</span>
-                <span className="ml-auto truncate text-[10px] font-medium text-ink-muted">
+                <span className="ml-auto truncate text-[12px] font-medium text-ink-muted">
                   {folder.path}
                 </span>
               </label>
@@ -224,7 +224,7 @@ function AccountFolderPicker({
         </div>
       ) : null}
       {error ? (
-        <p className="px-3.5 pt-1 text-[10.5px] font-semibold text-rose-600">{error}</p>
+        <p className="px-3.5 pt-1 text-[11.5px] font-semibold text-rose-700 dark:text-rose-300">{error}</p>
       ) : null}
     </div>
   );
@@ -439,7 +439,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   return (
     <div className="relative h-full">
       <div className="h-full overflow-y-auto no-scrollbar" onScroll={track}>
-        <div className="mx-auto max-w-[1080px] px-8 pb-32">
+        <div className="mx-auto max-w-[1080px] px-4 pb-32 sm:px-8">
           <header className="flex items-center justify-between gap-4 pt-6">
             <div className="flex items-center gap-2.5">
               <PaneTitle hint={import.meta.env.VITE_DISTRIBUTION === "1" ? undefined : "maquette PC"}>
@@ -451,7 +451,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
           </header>
 
           <div className="mt-6 flex items-start gap-8">
-            <nav aria-label="Sections des réglages" className="sticky top-6 w-[200px] shrink-0">
+            <nav aria-label="Sections des réglages" className="sticky top-6 hidden w-[200px] shrink-0 min-[900px]:block">
               <ul className="space-y-0.5">
                 {SECTIONS.map((section) => (
                   <li key={section.id}>
@@ -481,8 +481,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                       <Surface key={item.id} className="p-3.5">
                         <div className="flex items-center gap-2.5">
                           <span
-                            className="grid size-9 shrink-0 place-items-center rounded-[12px] text-[12px] font-black text-white"
-                            style={{ backgroundColor: item.color }}
+                            className="grid size-9 shrink-0 place-items-center rounded-[12px] text-[12px] font-black"
+                            style={{ backgroundColor: item.color, color: accentContrast(item.color) }}
                           >
                             {item.label[0]}
                           </span>
@@ -495,8 +495,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                           </div>
                         </div>
                         <div className="mt-2.5 flex items-center justify-between gap-2">
-                          <span className="truncate text-[10.5px] font-semibold text-ink-soft">{item.provider}</span>
-                          <span className="inline-flex shrink-0 items-center gap-1 text-[10.5px] font-semibold text-ink-muted">
+                          <span className="truncate text-[12px] font-semibold text-ink-soft">{item.provider}</span>
+                          <span className="inline-flex shrink-0 items-center gap-1 text-[12px] font-semibold text-ink-muted">
                             <RefreshCw className="size-3" />
                             {item.synced}
                           </span>
@@ -653,7 +653,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                         );
                       })}
                     </div>
-                    <p className="mt-1.5 text-[10.5px] font-medium text-ink-muted">
+                    <p className="mt-1.5 text-[12.5px] leading-snug font-medium text-ink-muted">
                       Auto : clair le jour (7h–19h), sombre la nuit.
                     </p>
 
@@ -806,10 +806,10 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                             <span className="font-medium text-ink-soft">{` <${myKey.email}>`}</span>
                           ) : null}
                         </p>
-                        <p className="mt-1.5 font-mono text-[10.5px] leading-relaxed font-semibold break-all text-ink-soft">
+                        <p className="mt-1.5 font-mono text-[11.5px] leading-relaxed font-semibold break-all text-ink-soft">
                           {formatFingerprint(myKey.fingerprint)}
                         </p>
-                        <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-[10.5px]">
+                        <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-[12px]">
                           <div className="col-span-2">
                             <dt className="font-semibold text-ink-muted">Algorithme</dt>
                             <dd className="font-bold text-ink">{myKey.algorithm}</dd>
@@ -834,7 +834,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                           </div>
                         </dl>
                         {myState !== "valid" || expiringSoon ? (
-                          <p className="mt-2.5 flex items-start gap-1.5 rounded-xl bg-amber-500/12 px-2.5 py-2 text-[10.5px] font-semibold text-amber-700 dark:text-amber-300">
+                          <p className="mt-2.5 flex items-start gap-1.5 rounded-xl bg-amber-500/12 px-2.5 py-2 text-[12px] leading-snug font-semibold text-amber-700 dark:text-amber-300">
                             <AlertTriangle className="mt-px size-3.5 shrink-0" />
                             {PGP_STATE[myState].hint}
                           </p>
@@ -931,7 +931,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                     <div className="border-b border-line px-3.5 py-2">
                       <div className="flex items-center gap-1.5">
                         <SectionLabel>Par compte</SectionLabel>
-                        <span className="text-[10.5px] font-semibold text-ink-muted">
+                        <span className="text-[12px] font-semibold text-ink-muted">
                           {pgpAccountsOn} sur {accounts.length}
                         </span>
                       </div>
@@ -984,7 +984,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                           onChange={(value) => setAccountPgp(pgpTarget.id, { encrypt: value })}
                         />
                         {pgpEntry.enabled ? null : (
-                          <p className="px-3.5 py-2 text-[10.5px] leading-snug font-semibold text-ink-muted">
+                          <p className="px-3.5 py-2 text-[12.5px] leading-snug font-semibold text-ink-muted">
                             PGP désactivé : ce compte ne signe pas, ne chiffre pas et ne déchiffre pas.
                           </p>
                         )}
@@ -1006,7 +1006,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                 <Surface className="mt-3 overflow-hidden">
                   <div className="flex items-center gap-2 border-b border-line px-3.5 py-2">
                     <SectionLabel>Clés</SectionLabel>
-                    <span className="text-[10.5px] font-semibold text-ink-muted">
+                    <span className="text-[12px] font-semibold text-ink-muted">
                       {keys === null
                         ? "chargement…"
                         : `${keys.filter((key) => key.has_secret).length} secrète(s) · ${publicKeys} publique(s)`}
@@ -1044,7 +1044,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                             <Avatar name={keyLabel(key)} size={28} tone={index % 4} rounded="rounded-[10px]" />
                             <div className="min-w-0 flex-1 leading-tight">
                               <p className="truncate text-[12px] font-bold text-ink">{keyLabel(key)}</p>
-                              <p className="truncate font-mono text-[10px] font-medium text-ink-muted">
+                              <p className="truncate font-mono text-[11.5px] font-medium text-ink-muted">
                                 {shortFingerprint(key.fingerprint)}
                               </p>
                             </div>
@@ -1143,7 +1143,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                   {probe ? (
                     <p
                       className={cn(
-                        "mt-2 rounded-xl px-2.5 py-2 text-[10.5px] leading-relaxed font-semibold break-words",
+                        "mt-2 rounded-xl px-2.5 py-2 text-[12.5px] leading-relaxed font-semibold break-words",
                         probe.ok
                           ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
                           : "bg-rose-500/10 text-rose-600 dark:text-rose-300",
@@ -1152,7 +1152,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                       {probe.ok ? `Réponse du modèle · ${probe.text}` : `Échec · ${probe.text}`}
                     </p>
                   ) : null}
-                  <p className="mt-2.5 text-[10.5px] font-semibold text-ink-muted">
+                  <p className="mt-2.5 text-[12.5px] leading-snug font-semibold text-ink-muted">
                     {llmReady(llm)
                       ? "IA active · les propositions utilisent le modèle configuré."
                       : "IA inactive · propositions locales uniquement."}
@@ -1337,9 +1337,9 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                             />
                             <div className="min-w-0 flex-1 leading-tight">
                               <p className="truncate text-[12px] font-bold text-ink">{server.name}</p>
-                              <p className="truncate text-[10.5px] font-medium text-ink-muted">{server.description}</p>
+                              <p className="line-clamp-2 text-[12px] leading-snug font-medium text-ink-muted">{server.description}</p>
                             </div>
-                            <span className="hidden shrink-0 items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[9.5px] font-bold tracking-wide text-ink-muted uppercase sm:inline-flex">
+                            <span className="hidden shrink-0 items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[10.5px] font-bold tracking-wide text-ink-muted uppercase sm:inline-flex">
                               {server.transport === "stdio" ? (
                                 <Terminal className="size-2.5" />
                               ) : (
@@ -1351,7 +1351,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                               type="button"
                               aria-expanded={openTools}
                               onClick={() => setOpenServer(openTools ? null : server.id)}
-                              className="focus-ring flex shrink-0 items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[9.5px] font-bold text-ink-muted tabular-nums transition-colors hover:text-ink-soft"
+                              className="focus-ring flex shrink-0 items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[10.5px] font-bold text-ink-muted tabular-nums transition-colors hover:text-ink-soft"
                             >
                               {server.tools.length} outils
                               <ChevronDown
@@ -1368,8 +1368,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                             <ul className="space-y-1 border-t border-line/70 bg-surface-2/40 px-3.5 py-2 pl-9">
                               {server.tools.map((tool) => (
                                 <li key={tool.name} className="flex items-baseline gap-2">
-                                  <code className="shrink-0 text-[10.5px] font-bold text-ink-soft">{tool.name}</code>
-                                  <span className="min-w-0 flex-1 truncate text-[10.5px] font-medium text-ink-muted">
+                                  <code className="shrink-0 text-[11.5px] font-bold text-ink-soft">{tool.name}</code>
+                                  <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-ink-muted">
                                     {tool.description}
                                   </span>
                                   <Badge tone={SCOPE_TONE[tool.scope]}>{tool.scope}</Badge>

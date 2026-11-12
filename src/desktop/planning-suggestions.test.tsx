@@ -106,3 +106,14 @@ describe("Planification desktop · origine des suggestions", () => {
     expect(card.textContent).not.toContain("échéance déduite");
   });
 });
+
+describe("Kanban PC · reflow", () => {
+  it("défile horizontalement au lieu d'écraser les cinq colonnes", () => {
+    mount(seededStorage([]));
+    const kanban = screen.getByTestId("column-todo").parentElement!;
+
+    expect(kanban.className).toContain("overflow-x-auto");
+    expect(kanban.className).toContain("grid-cols-[repeat(5,minmax(220px,1fr))]");
+    expect(kanban.className).not.toContain("grid-cols-5");
+  });
+});

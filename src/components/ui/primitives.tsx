@@ -88,7 +88,7 @@ export function SwitchTrack({ checked }: { checked: boolean }) {
     >
       <span
         className={cn(
-          "absolute top-0.5 left-0.5 size-5.5 rounded-full bg-white shadow-sm transition-transform duration-300 ease-out",
+          "absolute top-0.5 left-0.5 size-5.5 rounded-full border border-ink-muted bg-surface shadow-sm transition-transform duration-300 ease-out",
           checked && "translate-x-[18px]",
         )}
       />

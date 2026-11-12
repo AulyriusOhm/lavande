@@ -31,13 +31,13 @@ export function OAuthGuide({ redirectUri }: { redirectUri: string }) {
 
       <div className="mt-2.5 space-y-2 border-t border-line pt-2.5">
         <div className="flex items-center gap-2">
-          <code className="min-w-0 flex-1 truncate rounded-lg bg-surface-2 px-2 py-1 font-mono text-[10.5px] text-ink-soft">
+          <code className="min-w-0 flex-1 rounded-lg bg-surface-2 px-2 py-1 font-mono text-[11px] leading-snug break-all text-ink-soft">
             {redirectUri}
           </code>
           <button
             type="button"
             onClick={copy}
-            className="focus-ring shrink-0 rounded-full border border-line px-2.5 py-1 text-[10.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+            className="focus-ring inline-flex min-h-11 shrink-0 items-center rounded-full border border-line px-3 text-[11.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
           >
             {copied ? "Copié" : "Copier"}
           </button>

@@ -37,7 +37,7 @@ export function BackendBanner({ variant = "mobile" }: { variant?: "mobile" | "de
         <button
           type="button"
           onClick={retryBackend}
-          className="focus-ring inline-flex min-h-9 items-center gap-1.5 rounded-full border border-rose-300 bg-surface px-3 text-[11.5px] font-bold text-rose-700 transition-colors hover:bg-rose-500/10 dark:border-rose-500/40 dark:text-rose-200"
+          className="focus-ring inline-flex min-h-11 items-center gap-1.5 rounded-full border border-rose-300 bg-surface px-3 text-[12px] font-bold text-rose-700 transition-colors hover:bg-rose-500/10 dark:border-rose-500/40 dark:text-rose-200"
         >
           <RefreshCw className="size-3.5" />
           Réessayer
@@ -46,7 +46,7 @@ export function BackendBanner({ variant = "mobile" }: { variant?: "mobile" | "de
           <button
             type="button"
             onClick={useDemo}
-            className="focus-ring inline-flex min-h-9 items-center gap-1.5 rounded-full bg-accent-soft px-3 text-[11.5px] font-bold text-accent-ink transition-colors hover:bg-accent-ring/40"
+            className="focus-ring inline-flex min-h-11 items-center gap-1.5 rounded-full bg-accent-soft px-3 text-[12px] font-bold text-accent-ink transition-colors hover:bg-accent-ring/40"
           >
             Voir la démo
           </button>
@@ -64,7 +64,7 @@ export function AccountRemoveDialog({ variant = "sheet" }: { variant?: "sheet" |
   const body = (
     <>
       <div className="flex items-start gap-2.5">
-        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-rose-500/12 text-rose-600 dark:text-rose-300">
+        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-rose-500/12 text-rose-700 dark:text-rose-300">
           <Trash2 className="size-4" />
         </span>
         <div className="min-w-0 leading-tight">
@@ -88,7 +88,7 @@ export function AccountRemoveDialog({ variant = "sheet" }: { variant?: "sheet" |
         <button
           type="button"
           onClick={confirmRemoveAccount}
-          className="focus-ring inline-flex min-h-11 items-center gap-1.5 rounded-full border border-rose-200 bg-rose-500/10 px-4 text-[12px] font-bold text-rose-600 transition-colors hover:bg-rose-500/15 dark:border-rose-500/30 dark:text-rose-300"
+          className="focus-ring inline-flex min-h-11 items-center gap-1.5 rounded-full border border-rose-300 bg-rose-500/10 px-4 text-[12px] font-bold text-rose-700 transition-colors hover:bg-rose-500/15 dark:border-rose-500/30 dark:text-rose-300"
         >
           <Trash2 className="size-3.5" />
           Retirer le compte

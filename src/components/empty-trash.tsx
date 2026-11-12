@@ -48,7 +48,7 @@ export function EmptyTrashButton({
         "focus-ring flex w-full items-center justify-center gap-2 border font-bold transition-colors",
         SHAPES[variant],
         armed
-          ? "border-rose-400/70 bg-rose-500/10 text-rose-600"
+          ? "border-rose-400/70 bg-rose-500/10 text-rose-700 dark:text-rose-300"
           : "border-line bg-surface-2 text-ink-soft hover:border-accent-ring hover:text-accent-ink",
       )}
     >

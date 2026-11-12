@@ -128,7 +128,7 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
                 <span className="flex items-center gap-1.5">
                   <span
                     data-testid="suggestion-account"
-                    className="inline-flex h-[18px] shrink-0 items-center rounded-full bg-accent-soft px-1.5 text-[9.5px] font-extrabold whitespace-nowrap text-accent-ink"
+                    className="inline-flex h-[20px] shrink-0 items-center rounded-full bg-accent-soft px-1.5 text-[10.5px] font-extrabold whitespace-nowrap text-accent-ink"
                   >
                     {sourceAccountLabel(accounts, suggestion.account)}
                   </span>
@@ -142,9 +142,9 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
                       <span className="sr-only">Suggéré par l'IA</span>
                     </span>
                   ) : null}
-                  <span className="truncate text-[11px] font-bold text-ink">{suggestion.from}</span>
+                  <span className="truncate text-[11.5px] font-bold text-ink">{suggestion.from}</span>
                 </span>
-                <span className="mt-1 block truncate text-[10.5px] font-medium text-ink-muted">
+                <span className="mt-1 line-clamp-2 block text-[12px] leading-snug font-medium text-ink-muted">
                   {suggestion.subject}
                 </span>
                 <span className="mt-1.5 block text-[12.5px] leading-tight font-bold text-ink">
@@ -179,7 +179,7 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
         </div>
       ) : null}
 
-      <div className="mt-4 grid min-h-0 flex-1 grid-cols-5 gap-4 px-6">
+      <div className="mt-4 grid min-h-0 flex-1 grid-cols-[repeat(5,minmax(220px,1fr))] gap-4 overflow-x-auto px-6 pb-2">
         {TASK_STATES.map((state) => {
           const columnTasks = tasks.filter((task) => task.state === state.id);
           return (
@@ -312,7 +312,7 @@ function TaskCard({
         </span>
         {task.mailId ? <Mail className="mt-0.5 size-3 shrink-0 text-ink-muted" /> : null}
       </span>
-      <span className="mt-1 block truncate text-[11px] font-medium text-ink-muted">{task.meta}</span>
+      <span className="mt-1 block truncate text-[11.5px] font-medium text-ink-muted">{task.meta}</span>
       {typeof task.progress === "number" ? (
         <span
           role="progressbar"
@@ -565,7 +565,7 @@ function SuggestionDetail({
           <Avatar name={suggestion.from} tone={suggestion.tone} size={30} />
           <div className="min-w-0 flex-1 leading-tight">
             <p className="truncate text-[12px] font-bold text-ink">{suggestion.from}</p>
-            <p className="truncate text-[10.5px] font-medium text-ink-muted">{suggestion.subject}</p>
+            <p className="line-clamp-2 text-[12px] font-medium text-ink-muted">{suggestion.subject}</p>
           </div>
           {suggestion.due ? <Badge tone={DUE_TONE[suggestion.dueTone]}>{suggestion.due}</Badge> : null}
         </div>

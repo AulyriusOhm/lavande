@@ -124,7 +124,7 @@ export function SearchScreen({
                 type="button"
                 aria-label="Effacer la recherche"
                 onClick={resetSearch}
-                className="grid size-6 place-items-center rounded-full bg-surface-2 text-ink-muted"
+                className="relative grid size-6 place-items-center rounded-full bg-surface-2 text-ink-muted before:absolute before:-inset-2.5 before:rounded-full before:content-['']"
               >
                 <X className="size-3.5" />
               </button>
@@ -178,7 +178,7 @@ export function SearchScreen({
                         type="button"
                         aria-label={`Retirer « ${item} » des recherches récentes`}
                         onClick={() => commitRecent(recent.filter((entry) => entry !== item))}
-                        className="mr-1 grid size-6 place-items-center rounded-full text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+                        className="relative mr-1 grid size-6 place-items-center rounded-full text-ink-muted transition-colors before:absolute before:-inset-2.5 before:rounded-full before:content-[''] hover:bg-surface-2 hover:text-ink"
                       >
                         <X className="size-3" />
                       </button>
@@ -275,7 +275,7 @@ export function SearchScreen({
               <button
                 type="button"
                 onClick={resetSearch}
-                className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-2 text-[12px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+                className="mt-3 inline-flex min-h-11 items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-2 text-[12px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
               >
                 <RotateCcw className="size-3.5" />
                 Réinitialiser

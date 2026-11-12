@@ -173,7 +173,7 @@ export function McpScreen({ onClose }: { onClose?: () => void }) {
                       title={tool.description}
                       className={cn(
                         "rounded-lg px-2 py-0.5 font-mono text-[10px] font-semibold",
-                        isOn ? SCOPE_STYLE[tool.scope] : "bg-surface-2/60 text-ink-muted/60",
+                        isOn ? SCOPE_STYLE[tool.scope] : "bg-surface-2/60 text-ink-muted",
                       )}
                     >
                       {tool.name}
@@ -239,7 +239,7 @@ export function McpScreen({ onClose }: { onClose?: () => void }) {
             <button
               type="button"
               onClick={resetMcpAllowances}
-              className="focus-ring ml-auto inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-[10px] font-bold text-ink-soft"
+              className="focus-ring ml-auto inline-flex min-h-11 items-center gap-1 rounded-full bg-surface-2 px-3 text-[11px] font-bold text-ink-soft"
             >
               <RotateCcw className="size-2.5" />
               Tout redemander

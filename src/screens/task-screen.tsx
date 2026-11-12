@@ -18,7 +18,7 @@ const DUE_STYLE: Record<Task["dueTone"], string> = {
 };
 
 const FIELD =
-  "mt-1.5 w-full rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-[13px] font-semibold text-ink outline-none placeholder:font-medium placeholder:text-ink-muted/70 focus:border-accent-ring";
+  "mt-1.5 w-full rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-[13px] font-semibold text-ink outline-none placeholder:font-medium placeholder:text-ink-soft focus:border-accent-ring";
 const LABEL = "mt-3 block text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase";
 
 export function TaskScreen({
@@ -297,18 +297,18 @@ export function TaskScreen({
                     <p className="truncate text-[12px] font-bold text-ink">{mail.name}</p>
                     <p className="truncate text-[10px] font-medium text-ink-muted">{mail.time}</p>
                   </div>
-                  <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[9.5px] font-bold text-ink-soft">
+                  <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[10.5px] font-bold text-ink-soft">
                     {accountById(mail.account)?.label ?? mail.account}
                   </span>
                 </div>
                 <p className="mt-2 px-3.5 text-[12.5px] font-bold text-ink">{mail.subject}</p>
-                <p className="mt-1 line-clamp-2 px-3.5 text-[11.5px] leading-relaxed font-medium text-ink-muted">
+                <p className="mt-1 line-clamp-2 px-3.5 text-[12.5px] leading-relaxed font-medium text-ink-muted">
                   {mail.preview}
                 </p>
                 <button
                   type="button"
                   onClick={onOpenMail}
-                  className="mt-2.5 flex w-full items-center gap-2 border-t border-line/70 bg-accent-soft/50 px-3.5 py-2.5 text-left text-[11.5px] font-extrabold text-accent-ink transition-colors hover:bg-accent-soft"
+                  className="mt-2.5 flex min-h-11 w-full items-center gap-2 border-t border-line/70 bg-accent-soft/50 px-3.5 py-2.5 text-left text-[12px] font-extrabold text-accent-ink transition-colors hover:bg-accent-soft"
                 >
                   <Mail className="size-3.5" />
                   Ouvrir le mail
@@ -321,12 +321,12 @@ export function TaskScreen({
           <>
             <SectionTitle>Mail lié</SectionTitle>
             <div className="mx-4 rounded-3xl border border-dashed border-line px-3.5 py-3.5">
-              <p className="text-[11.5px] font-semibold text-ink-muted">
+              <p className="text-[12px] font-semibold text-ink-muted">
                 Aucun mail rattaché — tâche créée à la main ou depuis un événement.
               </p>
               <button
                 type="button"
-                className="mt-2 inline-flex items-center gap-1 text-[11px] font-extrabold text-accent-ink"
+                className="relative mt-2 inline-flex min-h-11 items-center gap-1 text-[12px] font-extrabold text-accent-ink"
               >
                 Rattacher un mail
                 <ArrowUpRight className="size-3" />

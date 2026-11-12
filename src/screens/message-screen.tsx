@@ -117,7 +117,7 @@ export function MessageScreen({
             </button>
           );
         })}
-        <p role="status" aria-live="polite" className="px-1 text-[10.5px] leading-snug font-medium text-ink-muted">
+        <p role="status" aria-live="polite" className="px-1 text-[12px] leading-snug font-medium text-ink-muted">
           {hintText ?? "Les fichiers sont relus sur le serveur au moment du téléchargement."}
         </p>
       </div>
@@ -278,7 +278,7 @@ export function MessageScreen({
                               <span className="block truncate text-[12px] font-bold text-ink">
                                 {message.folder === "sent" ? "Moi" : message.name} · {message.time}
                               </span>
-                              <span className="block truncate text-[11.5px] text-ink-muted">{message.body[0]}</span>
+                              <span className="block truncate text-[12.5px] text-ink-muted">{message.body[0]}</span>
                             </span>
                             <ChevronDown
                               className={cn(
@@ -338,7 +338,7 @@ export function MessageScreen({
                   )}
                 />
               </span>
-              <span className="block truncate text-[11.5px] font-medium text-ink-muted">
+              <span className="block break-all text-left text-[12px] font-medium text-ink-muted">
                 {mail.folder === "sent" ? `à ${mail.to ?? "destinataire"}` : "à moi"} · {mail.time}
               </span>
             </button>
@@ -397,7 +397,7 @@ export function MessageScreen({
                   <button
                     type="button"
                     onClick={onOpenPgp}
-                    className="mt-2 inline-flex min-h-9 items-center gap-1.5 rounded-full bg-accent-soft px-3 text-[11.5px] font-bold text-accent-ink transition-transform duration-200 active:scale-95"
+                    className="mt-2 inline-flex min-h-11 items-center gap-1.5 rounded-full bg-accent-soft px-3 text-[12px] font-bold text-accent-ink transition-transform duration-200 active:scale-95"
                   >
                     Ouvrir les réglages
                     <ChevronRight className="size-3.5" />

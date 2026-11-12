@@ -18,6 +18,12 @@ const CONTRAST_LIGHT = "#ffffff";
 const CONTRAST_DARK = "#1b1523";
 const CONTRAST_FALLBACK = "#000000";
 const CONTRAST_MIN = 4.5;
+const THEME_INK = { light: "#1b1523", dark: "#f4f1fa" };
+const TAG_TINT = 0.16;
+const TAG_SURFACES = {
+  light: ["#fbfaff", "#ffffff", "#f6f3fd"],
+  dark: ["#0e0c13", "#16131f", "#1d1929"],
+};
 const THEME_COLOR = { light: "#fbfaff", dark: "#0e0c13" };
 
 export type ThemeMode = "light" | "dark" | "auto";
@@ -58,11 +64,22 @@ function channel(value: number) {
   return srgb <= 0.03928 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4;
 }
 
-function luminance(hex: string) {
+function toChannels(hex: string) {
   const clean = hex.replace("#", "");
   const full = clean.length === 3 ? clean.split("").map((part) => part + part).join("") : clean;
-  const [r, g, b] = [0, 2, 4].map((offset) => channel(parseInt(full.slice(offset, offset + 2), 16)));
+  return [0, 2, 4].map((offset) => parseInt(full.slice(offset, offset + 2), 16));
+}
+
+function luminance(hex: string) {
+  const [r, g, b] = toChannels(hex).map(channel);
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function tinted(colour: string, alpha: number, background: string) {
+  const foreground = toChannels(colour);
+  const under = toChannels(background);
+  const channels = foreground.map((value, index) => Math.round(value * alpha + under[index]! * (1 - alpha)));
+  return `#${channels.map((value) => value.toString(16).padStart(2, "0")).join("")}`;
 }
 
 export function contrastRatio(a: string, b: string) {
@@ -76,6 +93,18 @@ export function accentContrast(accent: string) {
   const dark = contrastRatio(accent, CONTRAST_DARK);
   const best = light >= dark ? CONTRAST_LIGHT : CONTRAST_DARK;
   return Math.max(light, dark) >= CONTRAST_MIN ? best : CONTRAST_FALLBACK;
+}
+
+export function accountTint(colour: string) {
+  return `color-mix(in oklab, ${colour} ${Math.round(TAG_TINT * 100)}%, transparent)`;
+}
+
+export function accountLabelInk(colour: string, dark: boolean) {
+  const backgrounds = TAG_SURFACES[dark ? "dark" : "light"].map((surface) => tinted(colour, TAG_TINT, surface));
+  const worst = (ink: string) => Math.min(...backgrounds.map((background) => contrastRatio(ink, background)));
+  const preferred = THEME_INK[dark ? "dark" : "light"];
+  if (worst(preferred) >= CONTRAST_MIN) return preferred;
+  return worst(CONTRAST_FALLBACK) >= worst(CONTRAST_LIGHT) ? CONTRAST_FALLBACK : CONTRAST_LIGHT;
 }
 
 function storedMode(): ThemeMode {

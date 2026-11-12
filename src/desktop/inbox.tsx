@@ -4,6 +4,7 @@ import {
   BellRing,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronUp,
   CornerUpLeft,
@@ -79,6 +80,37 @@ const FILTER_MATCH: Record<Filter, (thread: Thread) => boolean> = {
   encrypted: (thread) => thread.encrypted > 0,
   attachments: (thread) => thread.attachments > 0,
 };
+
+const NARROW_MAX = 859;
+const MEDIUM_MAX = 1099;
+const NARROW_QUERY = `(max-width: ${NARROW_MAX}px)`;
+const MEDIUM_QUERY = `(max-width: ${MEDIUM_MAX}px)`;
+
+type InboxTier = "wide" | "medium" | "narrow";
+
+function currentTier(): InboxTier {
+  if (typeof window.matchMedia !== "function") return "wide";
+  if (window.matchMedia(NARROW_QUERY).matches) return "narrow";
+  if (window.matchMedia(MEDIUM_QUERY).matches) return "medium";
+  return "wide";
+}
+
+function useInboxTier(): InboxTier {
+  const [tier, setTier] = useState<InboxTier>(currentTier);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const queries = [window.matchMedia(NARROW_QUERY), window.matchMedia(MEDIUM_QUERY)];
+    const sync = () => setTier(currentTier());
+    sync();
+    for (const query of queries) query.addEventListener?.("change", sync);
+    return () => {
+      for (const query of queries) query.removeEventListener?.("change", sync);
+    };
+  }, []);
+
+  return tier;
+}
 
 const FOLDER_ICONS: Record<FolderId, LucideIcon> = {
   inbox: Inbox,
@@ -261,7 +293,7 @@ function MorningSummary({
             >
               <action.icon className="size-4 shrink-0 text-accent-ink" strokeWidth={2.4} />
               <span className="shrink-0 text-[12px] font-bold text-ink">{action.label}</span>
-              <span className="truncate text-[10.5px] font-semibold text-ink-muted/80">{action.hint}</span>
+              <span className="truncate text-[11px] font-semibold text-ink-muted">{action.hint}</span>
               <ChevronRight className="ml-auto size-3.5 shrink-0 text-ink-muted" />
             </button>
           ))}
@@ -364,9 +396,9 @@ function ThreadRow({
               </p>
               {account ? <Badge tone={accountTone(mail.account)}>{account.label}</Badge> : null}
               {mail.pgp === "encrypted" ? (
-                <Lock className="size-3.5 shrink-0 text-emerald-600" strokeWidth={2.6} />
+                <Lock className="size-3.5 shrink-0 text-emerald-700 dark:text-emerald-300" strokeWidth={2.6} />
               ) : mail.pgp === "signed" ? (
-                <ShieldCheck className="size-3.5 shrink-0 text-sky-500" strokeWidth={2.6} />
+                <ShieldCheck className="size-3.5 shrink-0 text-sky-700 dark:text-sky-300" strokeWidth={2.6} />
               ) : null}
               <span className="ml-auto shrink-0 text-[11px] font-bold tabular-nums text-ink-muted">{thread.time}</span>
             </div>
@@ -469,6 +501,7 @@ export function DesktopInbox({
   const [downloading, setDownloading] = useState<string | null>(null);
   const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
   const [cursor, setCursor] = useState<number | null>(null);
+  const tier = useInboxTier();
   const listRef = useRef<HTMLDivElement>(null);
   const readerRef = useRef<HTMLElement>(null);
   const pendingFocus = useRef<"reader" | "list" | null>(null);
@@ -724,8 +757,17 @@ export function DesktopInbox({
 
   return (
     <>
-      <div className="grid h-full min-h-0 grid-cols-[248px_420px_minmax(0,1fr)]" data-testid="desktop-inbox">
-        <aside className="flex min-h-0 flex-col border-r border-line">
+      <div
+        className={cn(
+          "relative grid h-full min-h-0",
+          tier === "wide" && "grid-cols-[248px_420px_minmax(0,1fr)]",
+          tier === "medium" && "grid-cols-[minmax(0,360px)_minmax(0,1fr)]",
+          tier === "narrow" && "grid-cols-[minmax(0,1fr)]",
+        )}
+        data-testid="desktop-inbox"
+        data-tier={tier}
+      >
+        <aside className={cn("flex min-h-0 flex-col border-r border-line", tier !== "wide" && "hidden")}>
           <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-2.5 pt-4 pb-2">
             <div className="flex min-h-full flex-col">
               <div className="flex items-center gap-2 px-1.5">
@@ -812,25 +854,27 @@ export function DesktopInbox({
                     {PGP_STATE[pgpState].label}
                   </Badge>
                 ) : (
-                  <span className="ml-auto text-[10px] font-semibold text-ink-muted">
+                  <span className="ml-auto text-[11px] font-semibold text-ink-muted">
                     {pgpKeys === null ? "chargement…" : "aucune clé"}
                   </span>
                 )}
               </div>
               {myKey && pgpState ? (
                 <>
-                  <p className="mt-1.5 truncate text-[10.5px] font-semibold text-ink-muted">
+                  <p className="mt-1.5 truncate text-[11px] font-semibold text-ink-muted">
                     {keyLabel(myKey)} ·{" "}
                     <span className="tabular-nums">{shortFingerprint(myKey.fingerprint)}</span>
                   </p>
-                  <p className="mt-0.5 text-[10px] font-medium text-ink-muted">
+                  <p className="mt-0.5 text-[11px] font-medium text-ink-muted">
                     {myKey.expires_at ? `Expire le ${formatKeyDate(myKey.expires_at)}` : "Sans expiration"}
                   </p>
                   {pgpState !== "valid" ? (
                     <p
                       className={cn(
-                        "mt-1.5 text-[10px] font-semibold",
-                        pgpTone === "amber" ? "text-amber-700" : "text-rose-600",
+                        "mt-1.5 text-[11px] font-semibold",
+                        pgpTone === "amber"
+                          ? "text-amber-700 dark:text-amber-300"
+                          : "text-rose-700 dark:text-rose-300",
                       )}
                     >
                       {PGP_STATE[pgpState].hint}
@@ -838,7 +882,7 @@ export function DesktopInbox({
                   ) : null}
                 </>
               ) : (
-                <p className="mt-1.5 text-[10px] font-medium text-ink-muted">
+                <p className="mt-1.5 text-[11px] font-medium text-ink-muted">
                   {pgpKeys === null ? "Chargement de la clé…" : "Aucune clé PGP"}
                 </p>
               )}
@@ -884,6 +928,46 @@ export function DesktopInbox({
                 <Kbd>⌘K</Kbd>
               </span>
             </button>
+
+            {tier !== "wide" ? (
+              <div className="mt-2.5 flex flex-wrap gap-1.5" data-testid="inbox-scope">
+                <select
+                  aria-label="Dossier"
+                  value={`${folder}:${folderPath ?? ""}`}
+                  onChange={(event) => {
+                    const [id, path] = event.target.value.split(":");
+                    setFolder(id as FolderId, id === "other" ? (path ?? null) : null);
+                  }}
+                  className="focus-ring h-9 min-w-0 flex-1 rounded-full border border-line bg-surface px-3 text-[12px] font-semibold text-ink"
+                >
+                  {folderOptions.map((entry) => (
+                    <option key={`${entry.id}:${entry.path}`} value={`${entry.id}:${entry.path}`}>
+                      {entry.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="Compte"
+                  value={account}
+                  onChange={(event) => setAccount(event.target.value)}
+                  className="focus-ring h-9 min-w-0 flex-1 rounded-full border border-line bg-surface px-3 text-[12px] font-semibold text-ink"
+                >
+                  {mode === "demo" || accounts.length > 1 ? (
+                    <option value={ALL_ACCOUNTS}>Tous les comptes</option>
+                  ) : null}
+                  {accounts.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.label}
+                    </option>
+                  ))}
+                </select>
+                {myKey && pgpState ? (
+                  <Badge tone={pgpTone} className="self-center">
+                    PGP · {PGP_STATE[pgpState].label}
+                  </Badge>
+                ) : null}
+              </div>
+            ) : null}
 
             <div className="mt-2.5 flex flex-wrap gap-1.5 pb-1">
               {FILTERS.map((entry) => (
@@ -974,22 +1058,45 @@ export function DesktopInbox({
           ref={readerRef}
           tabIndex={-1}
           aria-label="Panneau de lecture"
-          className="flex min-h-0 flex-col outline-none"
+          className={cn(
+            "flex min-h-0 flex-col outline-none",
+            tier === "narrow" && "absolute inset-0 z-30 bg-canvas",
+            tier === "narrow" && !mail && "hidden",
+          )}
         >
           {mail ? (
             <>
               <div className="sticky top-0 z-20 shrink-0">
-                <header className="flex items-start gap-3 bg-surface/85 px-8 pt-4 pb-3 backdrop-blur">
+                <header
+                  className={cn(
+                    "flex items-start gap-3 bg-surface/85 pt-4 pb-3 backdrop-blur",
+                    tier === "wide" ? "px-8" : "px-5",
+                  )}
+                >
+                  {tier === "narrow" ? (
+                    <DIconButton
+                      label="Revenir à la liste"
+                      onClick={() => {
+                        setCursor(currentIndex);
+                        pendingFocus.current = "list";
+                        closeMessage();
+                      }}
+                    >
+                      <ChevronLeft className="size-4" />
+                    </DIconButton>
+                  ) : null}
                   <div className="min-w-0 flex-1">
-                    <h1 className="text-[24px] leading-[1.22] font-extrabold tracking-[-0.035em] text-ink">
+                    <h1 className="line-clamp-2 text-[24px] leading-[1.22] font-extrabold tracking-[-0.035em] text-ink">
                       {mail.subject}
                     </h1>
-                    <p className="mt-1 truncate text-[12px] font-semibold text-ink-muted">
+                    <p className="mt-1 truncate text-[12.5px] font-semibold text-ink-muted">
                       {folderLabel(mail.folder)}
                       {openThread && openThread.count > 1 ? ` · ${openThread.count} messages` : ""}
                     </p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-1">{readerActions.map(renderAction)}</div>
+                  <div className={cn("flex shrink-0 items-center gap-1", tier === "narrow" && "flex-wrap justify-end")}>
+                    {readerActions.map(renderAction)}
+                  </div>
                 </header>
 
                 <div className="flex items-center gap-2 border-b border-line bg-surface/70 px-5 py-2.5 backdrop-blur">
@@ -1009,7 +1116,12 @@ export function DesktopInbox({
                 </div>
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6 pb-[120px]">
+              <div
+                className={cn(
+                  "min-h-0 flex-1 overflow-y-auto py-6 pb-[120px]",
+                  tier === "wide" ? "px-8" : "px-5",
+                )}
+              >
                 <BlurFade yOffset={6}>
                   <div className="flex items-center gap-3">
                     <Avatar
@@ -1027,7 +1139,7 @@ export function DesktopInbox({
                           <Badge tone={accountTone(mail.account)}>{accountById(mail.account)?.label}</Badge>
                         ) : null}
                       </div>
-                      <p className="mt-0.5 truncate text-[12px] font-medium text-ink-muted">
+                      <p className="mt-0.5 truncate text-[12.5px] font-medium text-ink-muted">
                         {mail.folder === "sent" ? `à ${mail.to ?? "destinataire"}` : mail.email} ·{" "}
                         {mail.date ?? mail.time}
                       </p>
@@ -1035,7 +1147,7 @@ export function DesktopInbox({
                   </div>
 
                   {mail.pgp !== "none" ? (
-                    <div className="mt-3.5 flex items-center gap-2.5 rounded-[14px] border border-emerald-500/25 bg-emerald-500/10 px-3.5 py-2.5 text-emerald-700">
+                    <div className="mt-3.5 flex items-center gap-2.5 rounded-[14px] border border-emerald-500/25 bg-emerald-500/10 px-3.5 py-2.5 text-emerald-700 dark:text-emerald-300">
                       {mail.pgp === "encrypted" ? (
                         <Lock className="size-4 shrink-0" strokeWidth={2.6} />
                       ) : (
@@ -1126,7 +1238,7 @@ export function DesktopInbox({
                           type="button"
                           onClick={toggleAllPrevious}
                           aria-label={allExpanded ? "Tout replier les messages antérieurs" : "Tout déplier les messages antérieurs"}
-                          className="focus-ring ml-auto rounded-full px-2 py-0.5 text-[11px] font-bold text-ink-muted transition-colors duration-200 hover:bg-surface-2 hover:text-ink"
+                          className="focus-ring relative ml-auto rounded-full px-2 py-0.5 text-[11.5px] font-bold text-ink-muted transition-colors duration-200 before:absolute before:-inset-2 before:rounded-full before:content-[''] hover:bg-surface-2 hover:text-ink"
                         >
                           {allExpanded ? "Tout replier" : "Tout déplier"}
                         </button>
@@ -1160,9 +1272,9 @@ export function DesktopInbox({
                                       </Badge>
                                     ) : null}
                                     {message.pgp === "encrypted" ? (
-                                      <Lock className="size-3 shrink-0 text-emerald-600" strokeWidth={2.6} />
+                                      <Lock className="size-3 shrink-0 text-emerald-700 dark:text-emerald-300" strokeWidth={2.6} />
                                     ) : message.pgp === "signed" ? (
-                                      <ShieldCheck className="size-3 shrink-0 text-sky-500" strokeWidth={2.6} />
+                                      <ShieldCheck className="size-3 shrink-0 text-sky-700 dark:text-sky-300" strokeWidth={2.6} />
                                     ) : null}
                                     <span className="ml-auto shrink-0 text-[11.5px] font-semibold text-ink-muted">
                                       {message.date ?? message.time}

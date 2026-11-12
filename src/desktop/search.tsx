@@ -247,7 +247,7 @@ export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () =>
 
                   <section>
                     <SectionLabel>Contacts fréquents</SectionLabel>
-                    <div className="mt-2.5 grid grid-cols-3 gap-1.5">
+                    <div className="mt-2.5 grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
                       {contacts.map((contact) => (
                         <button
                           key={contact.email}
@@ -340,7 +340,7 @@ export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () =>
                               <Star
                                 className={cn(
                                   "size-3.5",
-                                  thread.starred ? "fill-amber-400 text-amber-500" : undefined,
+                                  thread.starred ? "fill-amber-400 text-amber-700 dark:text-amber-300" : undefined,
                                 )}
                               />
                             </RowAction>
