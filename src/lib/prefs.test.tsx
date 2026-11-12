@@ -1,7 +1,17 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { DEFAULT_SYNC, PrefsProvider, accountPgp, asPgpAccounts, asSync, resolvePgp, usePrefs } from "@/lib/prefs";
+import {
+  DEFAULT_SYNC,
+  PrefsProvider,
+  accountPgp,
+  asHiddenFolders,
+  asPgpAccounts,
+  asSync,
+  isFolderHidden,
+  resolvePgp,
+  usePrefs,
+} from "@/lib/prefs";
 import { DEFAULT_SUMMARY } from "@/lib/summary";
 
 const mount = () =>
@@ -355,5 +365,48 @@ describe("préférences · PGP par compte", () => {
 
     expect(result.current.pgpAccounts.perso).toEqual({ enabled: false, encrypt: true, sign: false });
     expect(resolvePgp(result.current, "perso")).toEqual({ enabled: false, encrypt: false, sign: false });
+  });
+});
+
+describe("préférences · dossiers masqués", () => {
+  it("démarre sans dossier masqué", () => {
+    const { result } = mount();
+    expect(result.current.hiddenFolders).toEqual({});
+    expect(isFolderHidden(result.current.hiddenFolders, "a1", "Projets")).toBe(false);
+  });
+
+  it("relit les chemins masqués par compte en ignorant les valeurs invalides", () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({
+        hiddenFolders: { a1: ["Projets", "", 12], a2: "Projets", a3: [], a4: ["Archives"] },
+      }),
+    );
+
+    expect(mount().result.current.hiddenFolders).toEqual({ a1: ["Projets"], a4: ["Archives"] });
+  });
+
+  it("tolère une valeur absente ou d'un autre type", () => {
+    expect(asHiddenFolders(undefined)).toEqual({});
+    expect(asHiddenFolders("tout")).toEqual({});
+    expect(asHiddenFolders({ a1: null })).toEqual({});
+  });
+
+  it("masque puis réaffiche un chemin et persiste le réglage", () => {
+    const { result } = mount();
+
+    act(() => result.current.setFolderHidden("a1", "Projets", true));
+    expect(result.current.hiddenFolders).toEqual({ a1: ["Projets"] });
+    expect(stored().hiddenFolders).toEqual({ a1: ["Projets"] });
+
+    act(() => result.current.setFolderHidden("a1", "Projets", true));
+    expect(result.current.hiddenFolders).toEqual({ a1: ["Projets"] });
+
+    act(() => result.current.setFolderHidden("a2", "Projets", true));
+    expect(result.current.hiddenFolders).toEqual({ a1: ["Projets"], a2: ["Projets"] });
+
+    act(() => result.current.setFolderHidden("a1", "Projets", false));
+    expect(result.current.hiddenFolders).toEqual({ a2: ["Projets"] });
+    expect(stored().hiddenFolders).toEqual({ a2: ["Projets"] });
   });
 });

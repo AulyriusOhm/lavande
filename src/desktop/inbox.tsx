@@ -52,7 +52,7 @@ import { NumberTicker } from "@/components/ui/number-ticker";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { MailBody } from "@/components/mail-body";
 import { EmptyTrashButton } from "@/components/empty-trash";
-import { FolderDeleteRow } from "@/components/folder-delete";
+import { FolderRow, HiddenFoldersRail } from "@/components/folder-row";
 import {
   Badge,
   DButton,
@@ -494,6 +494,9 @@ export function DesktopInbox({
     summaryLoading,
     refreshSummary,
     deleteFolder,
+    hiddenFolderOptions,
+    hideFolder,
+    unhideFolder,
   } = useMailStore();
   const { dark, setDark } = useTheme();
   const prefs = usePrefs();
@@ -835,18 +838,38 @@ export function DesktopInbox({
                   return (
                     <div key={`${entry.id}:${entry.path}`}>
                       {entry.id === "other" ? (
-                        <FolderDeleteRow
+                        <FolderRow
                           label={entry.label}
-                          onConfirm={() => void deleteFolder(entry.path, entry.label)}
+                          onDelete={() => void deleteFolder(entry.path, entry.label)}
+                          onHide={
+                            account === ALL_ACCOUNTS ? undefined : () => hideFolder(entry.path)
+                          }
                         >
                           {rail}
-                        </FolderDeleteRow>
+                        </FolderRow>
                       ) : (
                         rail
                       )}
                     </div>
                   );
                 })}
+                <HiddenFoldersRail count={hiddenFolderOptions.length}>
+                  {hiddenFolderOptions.map((entry) => (
+                    <FolderRow
+                      key={entry.path}
+                      label={entry.label}
+                      onUnhide={() => unhideFolder(entry.path)}
+                    >
+                      <RailItem
+                        active={folder === "other" && folderPath === entry.path}
+                        onClick={() => setFolder("other", entry.path)}
+                        label={entry.label}
+                        count={folderStats("other", entry.path).unread}
+                        icon={<FOLDER_ICONS.other className="size-4" />}
+                      />
+                    </FolderRow>
+                  ))}
+                </HiddenFoldersRail>
                 {folder === "trash" && (
                   <div className="pt-1">
                     <EmptyTrashButton

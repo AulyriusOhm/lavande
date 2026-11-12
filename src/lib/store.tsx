@@ -28,7 +28,7 @@ import type { SummaryMailInput, SummaryResult, SummaryTask } from "@/lib/summary
 import { llmReady } from "@/lib/llm";
 import { TODAY_ISO } from "@/lib/calendar";
 import type { CalendarEvent } from "@/lib/calendar";
-import { activeSignature, resolvePgp, usePrefs } from "@/lib/prefs";
+import { activeSignature, isFolderHidden, resolvePgp, usePrefs } from "@/lib/prefs";
 import { suggestionsInWindow, usePlanning } from "@/lib/planning-store";
 import { mailApi, errorText } from "@/lib/api";
 import type { LiveEvent } from "@/lib/api";
@@ -161,6 +161,10 @@ export type MailStoreValue = {
   cancelRemoveAccount: () => void;
   confirmRemoveAccount: () => void;
   deleteFolder: (path: string, label: string) => Promise<void>;
+  /** Dossiers masqués du compte courant, avec leur libellé pour les réafficher. */
+  hiddenFolderOptions: FolderOption[];
+  hideFolder: (path: string) => void;
+  unhideFolder: (path: string) => void;
 };
 
 const MailStoreContext = createContext<MailStoreValue | null>(null);
@@ -406,25 +410,35 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     };
   }, [mode, phase, targets, pages, folder, folderRecords, revision, notify]);
 
-  const folderOptions = useMemo<FolderOption[]>(
-    () =>
-      mode === "api"
-        ? account === ALL_ACCOUNTS
-          ? folderOptionsForAll(
-              folderRecords,
-              accounts.map((entry) => entry.id),
-            )
-          : optionsOf(folderRecords, account)
-        : [
-            { id: "inbox" as const, label: folderLabel("inbox"), path: "inbox" },
-            { id: "sent" as const, label: folderLabel("sent"), path: "sent" },
-            { id: "drafts" as const, label: folderLabel("drafts"), path: "drafts" },
-            { id: "archive" as const, label: folderLabel("archive"), path: "archive" },
-            { id: "spam" as const, label: folderLabel("spam"), path: "spam" },
-            { id: "trash" as const, label: folderLabel("trash"), path: "trash" },
-          ],
-    [mode, folderRecords, account, accounts],
-  );
+  const folderOptions = useMemo<FolderOption[]>(() => {
+    if (mode !== "api") {
+      return [
+        { id: "inbox" as const, label: folderLabel("inbox"), path: "inbox" },
+        { id: "sent" as const, label: folderLabel("sent"), path: "sent" },
+        { id: "drafts" as const, label: folderLabel("drafts"), path: "drafts" },
+        { id: "archive" as const, label: folderLabel("archive"), path: "archive" },
+        { id: "spam" as const, label: folderLabel("spam"), path: "spam" },
+        { id: "trash" as const, label: folderLabel("trash"), path: "trash" },
+      ];
+    }
+    const visible = folderRecords.filter(
+      (record) =>
+        record.role !== "other" ||
+        !isFolderHidden(prefs.hiddenFolders, record.accountId, record.path),
+    );
+    return account === ALL_ACCOUNTS
+      ? folderOptionsForAll(visible, accounts.map((entry) => entry.id))
+      : optionsOf(visible, account);
+  }, [mode, folderRecords, account, accounts, prefs.hiddenFolders]);
+
+  const hiddenFolderOptions = useMemo<FolderOption[]>(() => {
+    if (mode !== "api" || !account || account === ALL_ACCOUNTS) return [];
+    const hidden = prefs.hiddenFolders[account] ?? [];
+    if (hidden.length === 0) return [];
+    return optionsOf(folderRecords, account).filter(
+      (option) => option.id === "other" && hidden.includes(option.path),
+    );
+  }, [mode, account, folderRecords, prefs.hiddenFolders]);
 
   const setAccount = useCallback(
     (value: string) => {
@@ -1466,6 +1480,27 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     [account, accounts, folder, folderPath, folderRecords, mode, notify, setFolder],
   );
 
+  /**
+   * Masque un dossier de la liste du compte courant : rien ne quitte le serveur,
+   * seul le réglage local change. Un dossier ouvert repart sur la réception.
+   */
+  const hideFolder = useCallback(
+    (path: string) => {
+      if (mode !== "api" || !account || account === ALL_ACCOUNTS) return;
+      prefs.setFolderHidden(account, path, true);
+      if (folder === "other" && folderPath === path) setFolder("inbox", null);
+    },
+    [prefs, account, folder, folderPath, mode, setFolder],
+  );
+
+  const unhideFolder = useCallback(
+    (path: string) => {
+      if (mode !== "api" || !account || account === ALL_ACCOUNTS) return;
+      prefs.setFolderHidden(account, path, false);
+    },
+    [prefs, account, mode],
+  );
+
   const inboxMails = useMemo(() => mails.filter((mail) => mail.folder === "inbox"), [mails]);
 
   /** Suggestions affichées : celles dont le mail source est encore dans la fenêtre configurée. */
@@ -1705,6 +1740,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       cancelRemoveAccount,
       confirmRemoveAccount,
       deleteFolder,
+      hiddenFolderOptions,
+      hideFolder,
+      unhideFolder,
     }),
     [
       mails,
@@ -1779,6 +1817,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       cancelRemoveAccount,
       confirmRemoveAccount,
       deleteFolder,
+      hiddenFolderOptions,
+      hideFolder,
+      unhideFolder,
       bootstrap,
     ],
   );

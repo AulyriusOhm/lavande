@@ -16,7 +16,7 @@ import { NumberTicker } from "@/components/ui/number-ticker";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { ThreadRow } from "@/components/thread-row";
 import { EmptyTrashButton } from "@/components/empty-trash";
-import { FolderDeleteRow } from "@/components/folder-delete";
+import { FolderRow, HiddenFoldersRail } from "@/components/folder-row";
 
 type Filter = "all" | "unread" | "starred" | "encrypted";
 
@@ -736,7 +736,17 @@ export function MailboxSheet({
   onSelect: (id: FolderId, path: string | null) => void;
   onClose: () => void;
 }) {
-  const { folderOptions, folderPath, emptyTrash, folderStats, deleteFolder } = useMailStore();
+  const {
+    account,
+    folderOptions,
+    folderPath,
+    emptyTrash,
+    folderStats,
+    deleteFolder,
+    hiddenFolderOptions,
+    hideFolder,
+    unhideFolder,
+  } = useMailStore();
   const trashCount = folderStats("trash").total;
 
   return (
@@ -786,19 +796,47 @@ export function MailboxSheet({
           return (
             <div key={`${entry.id}:${entry.path}`}>
               {entry.id === "other" ? (
-                <FolderDeleteRow
+                <FolderRow
                   label={entry.label}
                   variant="mobile"
-                  onConfirm={() => void deleteFolder(entry.path, entry.label)}
+                  onDelete={() => void deleteFolder(entry.path, entry.label)}
+                  onHide={
+                    account === ALL_ACCOUNTS ? undefined : () => hideFolder(entry.path)
+                  }
                 >
                   {row}
-                </FolderDeleteRow>
+                </FolderRow>
               ) : (
                 row
               )}
             </div>
           );
         })}
+
+        <HiddenFoldersRail count={hiddenFolderOptions.length} variant="mobile">
+          {hiddenFolderOptions.map((entry) => (
+            <FolderRow
+              key={entry.path}
+              label={entry.label}
+              variant="mobile"
+              onUnhide={() => unhideFolder(entry.path)}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  onSelect("other", entry.path);
+                  onClose();
+                }}
+                className="flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-ink-soft transition-colors hover:bg-surface-2"
+              >
+                <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-surface-2 text-ink-soft">
+                  <FOLDER_ICONS.other className="size-4" />
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[13px] font-bold text-ink">{entry.label}</span>
+              </button>
+            </FolderRow>
+          ))}
+        </HiddenFoldersRail>
 
         {trashCount > 0 && (
           <div className="pt-1">

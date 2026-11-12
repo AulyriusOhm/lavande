@@ -56,6 +56,8 @@ export type Prefs = {
   aiTasks: AiTasksConfig;
   /** Interrupteurs de synchronisation : maître + un par domaine. */
   sync: SyncPrefs;
+  /** Dossiers personnalisés masqués de la liste, par compte (chemins IMAP). */
+  hiddenFolders: Record<string, string[]>;
 };
 
 const DEFAULTS: Prefs = {
@@ -76,6 +78,7 @@ const DEFAULTS: Prefs = {
   summary: DEFAULT_SUMMARY,
   aiTasks: DEFAULT_AI_TASKS,
   sync: DEFAULT_SYNC,
+  hiddenFolders: {},
 };
 
 type PrefsContextValue = Prefs & {
@@ -93,6 +96,7 @@ type PrefsContextValue = Prefs & {
   setSummary: (patch: Partial<SummaryConfig>) => void;
   setAiTasks: (patch: Partial<AiTasksConfig>) => void;
   setSync: (patch: Partial<SyncPrefs>) => void;
+  setFolderHidden: (accountId: string, path: string, hidden: boolean) => void;
 };
 
 const PrefsContext = createContext<PrefsContextValue | null>(null);
@@ -202,6 +206,26 @@ export const asSync = (value: unknown): SyncPrefs => {
   };
 };
 
+export const asHiddenFolders = (value: unknown): Record<string, string[]> => {
+  if (!value || typeof value !== "object") return {};
+  const out: Record<string, string[]> = {};
+  for (const [accountId, paths] of Object.entries(value as Record<string, unknown>)) {
+    if (!Array.isArray(paths)) continue;
+    const kept = paths.filter((path): path is string => typeof path === "string" && path !== "");
+    if (kept.length > 0) out[accountId] = kept;
+  }
+  return out;
+};
+
+/** Un dossier masqué l'est pour un compte et un chemin IMAP précis. */
+export function isFolderHidden(
+  hiddenFolders: Record<string, string[]>,
+  accountId: string,
+  path: string,
+): boolean {
+  return (hiddenFolders[accountId] ?? []).includes(path);
+}
+
 export function activeSignature(
   signatures: Record<string, AccountSignature>,
   accountId: string,
@@ -265,6 +289,7 @@ function read(): Prefs {
     summary: asSummary(stored.summary),
     aiTasks: asAiTasks(stored.aiTasks),
     sync: asSync(stored.sync),
+    hiddenFolders: asHiddenFolders(stored.hiddenFolders),
   };
 }
 
@@ -365,6 +390,23 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const setFolderHidden = useCallback(
+    (accountId: string, path: string, hidden: boolean) =>
+      setPrefs((current) => {
+        const own = current.hiddenFolders[accountId] ?? [];
+        const next = hidden
+          ? own.includes(path)
+            ? own
+            : [...own, path]
+          : own.filter((entry) => entry !== path);
+        const hiddenFolders = { ...current.hiddenFolders };
+        if (next.length === 0) delete hiddenFolders[accountId];
+        else hiddenFolders[accountId] = next;
+        return { ...current, hiddenFolders };
+      }),
+    [],
+  );
+
   const value = useMemo<PrefsContextValue>(
     () => ({
       ...prefs,
@@ -382,6 +424,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setSummary,
       setAiTasks,
       setSync,
+      setFolderHidden,
     }),
     [
       prefs,
@@ -399,6 +442,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setSummary,
       setAiTasks,
       setSync,
+      setFolderHidden,
     ],
   );
 
