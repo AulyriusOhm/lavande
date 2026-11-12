@@ -70,6 +70,11 @@ export function attachmentsSize(attachments: DraftAttachment[] | undefined): num
   return (attachments ?? []).reduce((total, attachment) => total + attachment.size, 0);
 }
 
+/** Taille des octets portés par un base64, sans les décoder. */
+export function base64Size(data: string): number {
+  return Math.floor((data.replace(/=+$/, "").length * 3) / 4);
+}
+
 /**
  * Ce qui survit à un rechargement : le brouillon est écrit dans le
  * `localStorage`, dont le quota ne supporte pas 25 Mo de base64. Au-delà d'un
@@ -83,6 +88,20 @@ export function persistedDraft(draft: ComposeDraft): ComposeDraft {
   return { ...draft, attachments: undefined };
 }
 
+/** Les octets d'un fichier en base64 : le format que le démon attend. */
+export function readBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("lecture des octets impossible"));
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      const separator = result.indexOf(",");
+      resolve(separator < 0 ? "" : result.slice(separator + 1));
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
 /** Lit un fichier choisi par l'utilisateur en refusant ceux qui sont trop lourds. */
 export function readAttachment(file: File): Promise<DraftAttachment> {
   if (file.size > MAX_ATTACHMENT_BYTES) {
@@ -90,21 +109,13 @@ export function readAttachment(file: File): Promise<DraftAttachment> {
       new Error(`« ${file.name} » est trop lourd : ${formatBytes(MAX_ATTACHMENT_BYTES)} maximum par fichier.`),
     );
   }
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`lecture de « ${file.name} » impossible`));
-    reader.onload = () => {
-      const result = typeof reader.result === "string" ? reader.result : "";
-      const separator = result.indexOf(",");
-      resolve({
-        filename: file.name,
-        mime: file.type || mimeOf(file.name),
-        data_base64: separator < 0 ? "" : result.slice(separator + 1),
-        size: file.size,
-      });
-    };
-    reader.readAsDataURL(file);
-  });
+  const mime = file.type || mimeOf(file.name);
+  return readBase64(file).then((data_base64) => ({
+    filename: file.name,
+    mime,
+    data_base64,
+    size: file.size,
+  }));
 }
 
 export function insertAt<T>(list: T[], index: number, item: T) {

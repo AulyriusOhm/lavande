@@ -149,6 +149,7 @@ function PhoneApp({ native }: { native?: boolean }) {
     dismissSuggestion,
     openMessage,
     closeMessage,
+    resumeDraft,
     openComposer,
     minimizeCompose,
     closeCompose,
@@ -502,6 +503,7 @@ function PhoneApp({ native }: { native?: boolean }) {
                 onToggleStar={() => toggleStar(openMail.id)}
                 onReply={replyTo}
                 onForward={forwardMail}
+                onResume={resumeDraft}
                 onArchive={(mail) => {
                   mailAction("archive", mail);
                   closeMessage();

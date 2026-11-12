@@ -51,7 +51,8 @@ export type MailSource = {
 
 /**
  * Une pièce jointe reçue. `index` est son rang dans le message côté serveur :
- * c'est ce que le démon attend pour renvoyer les octets. Absent en mode démo.
+ * c'est ce que le démon attend pour renvoyer les octets. Absent en mode démo,
+ * où `data` porte exceptionnellement les octets d'une maquette.
  */
 export type MailAttachment = {
   name: string;
@@ -59,6 +60,7 @@ export type MailAttachment = {
   mime?: string;
   index?: number;
   inline?: boolean;
+  data?: string;
 };
 
 export type Mail = {
@@ -408,6 +410,58 @@ export const MAILS: Mail[] = import.meta.env.VITE_DISTRIBUTION === "1" ? [] : [
     unread: false,
     starred: true,
     pgp: "encrypted",
+    tone: 0,
+  },
+  {
+    id: "d1",
+    account: "pro",
+    folder: "drafts",
+    name: "Roman",
+    email: "roman@studio-lilas.fr",
+    to: "marc.delaunay@mail.fr",
+    subject: "Planning phase 2 — proposition",
+    preview: "Voici le planning que je propose pour la phase 2 : deux semaines de mise en place, puis trois…",
+    body: [
+      "Bonjour Marc,",
+      "Voici le planning que je propose pour la phase 2 : deux semaines de mise en place, puis trois semaines de développement.",
+      "Je te confirme les créneaux dès demain matin.",
+    ],
+    time: "Hier",
+    date: "lundi 9 novembre 2026 · 16:40",
+    timestamp: minutesAgo(1_380),
+    unread: false,
+    starred: false,
+    pgp: "none",
+    tone: 1,
+  },
+  {
+    id: "d2",
+    account: "perso",
+    folder: "drafts",
+    name: "Roman",
+    email: "roman@lavande.mail",
+    to: "camille@studio-lilas.fr",
+    subject: "Retours sur les maquettes v3",
+    preview: "Deux points avant la démo : la barre du haut reste collée et les libellés de mois se tronquent.",
+    body: [
+      "Salut Camille,",
+      "Deux points avant la démo : la barre du haut reste collée et les libellés de mois se tronquent dans l'agenda.",
+      "Le reste me va, on peut figer la v3.",
+    ],
+    time: "Hier",
+    date: "lundi 9 novembre 2026 · 15:12",
+    timestamp: minutesAgo(1_470),
+    unread: false,
+    starred: false,
+    pgp: "none",
+    attachments: [
+      {
+        name: "retours-v3.txt",
+        size: "65 o",
+        mime: "text/plain",
+        data: "UmV0b3VycyB2MyA6IGJhcnJlIGR1IGhhdXQgY29sbMOpZSwgbGliZWxsw6lzIGRlIG1vaXMgdHJvbnF1w6lzLgo=",
+      },
+    ],
     tone: 0,
   },
 ];

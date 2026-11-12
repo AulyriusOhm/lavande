@@ -10,6 +10,7 @@ import {
   Download,
   Loader2,
   Paperclip,
+  PenLine,
   RotateCcw,
   ShieldCheck,
   ShieldOff,
@@ -36,6 +37,7 @@ export function MessageScreen({
   onToggleStar,
   onReply,
   onForward,
+  onResume,
   onArchive,
   onDelete,
   onNotSpam,
@@ -47,6 +49,7 @@ export function MessageScreen({
   onToggleStar: () => void;
   onReply: (mail: Mail) => void;
   onForward?: (mail: Mail) => void;
+  onResume?: (mail: Mail) => void;
   onArchive?: (mail: Mail) => void;
   onDelete?: (mail: Mail) => void;
   onNotSpam?: (mail: Mail) => void;
@@ -342,8 +345,12 @@ export function MessageScreen({
                 {mail.folder === "sent" ? `à ${mail.to ?? "destinataire"}` : "à moi"} · {mail.time}
               </span>
             </button>
-            <IconButton aria-label="Répondre" onClick={() => onReply(mail)} className="bg-accent-soft text-accent-ink">
-              <CornerUpLeft className="size-4" />
+            <IconButton
+              aria-label={mail.folder === "drafts" ? "Reprendre le brouillon" : "Répondre"}
+              onClick={() => (mail.folder === "drafts" ? onResume?.(mail) : onReply(mail))}
+              className="bg-accent-soft text-accent-ink"
+            >
+              {mail.folder === "drafts" ? <PenLine className="size-4" /> : <CornerUpLeft className="size-4" />}
             </IconButton>
           </div>
 
@@ -423,19 +430,33 @@ export function MessageScreen({
 
       <div className="relative border-t border-line/80 px-5 py-3 glass safe-bottom sm:pb-5">
         <div className="flex items-center gap-2">
-          <ShimmerButton onClick={() => onReply(mail)} className="flex-1" shimmerDuration={4}>
-            <CornerUpLeft className="size-4" />
-            Répondre
-          </ShimmerButton>
-          <button
-            type="button"
-            onClick={() => onForward?.(mail)}
-            disabled={!onForward}
-            className="grid size-11 place-items-center rounded-full border border-line bg-surface text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink disabled:pointer-events-none disabled:opacity-40"
-            aria-label="Transférer"
-          >
-            <CornerUpRight className="size-4.5" />
-          </button>
+          {mail.folder === "drafts" ? (
+            <ShimmerButton
+              onClick={() => onResume?.(mail)}
+              className="flex-1"
+              shimmerDuration={4}
+              disabled={!onResume}
+            >
+              <PenLine className="size-4" />
+              Reprendre le brouillon
+            </ShimmerButton>
+          ) : (
+            <>
+              <ShimmerButton onClick={() => onReply(mail)} className="flex-1" shimmerDuration={4}>
+                <CornerUpLeft className="size-4" />
+                Répondre
+              </ShimmerButton>
+              <button
+                type="button"
+                onClick={() => onForward?.(mail)}
+                disabled={!onForward}
+                className="grid size-11 place-items-center rounded-full border border-line bg-surface text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink disabled:pointer-events-none disabled:opacity-40"
+                aria-label="Transférer"
+              >
+                <CornerUpRight className="size-4.5" />
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

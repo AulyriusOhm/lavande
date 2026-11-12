@@ -486,6 +486,7 @@ export function DesktopInbox({
     closeMessage,
     replyTo,
     forwardMail,
+    resumeDraft,
     folderStats,
     accountUnread,
     summary,
@@ -1100,19 +1101,33 @@ export function DesktopInbox({
                 </header>
 
                 <div className="flex items-center gap-2 border-b border-line bg-surface/70 px-5 py-2.5 backdrop-blur">
-                  <ShimmerButton
-                    size="sm"
-                    onClick={() => replyTo(mail)}
-                    shimmerDuration={4}
-                    className="h-8 rounded-lg px-3 text-[12px]"
-                  >
-                    <CornerUpLeft className="size-3.5" />
-                    Répondre
-                  </ShimmerButton>
-                  <DButton variant="ghost" size="sm" onClick={() => forwardMail(mail)}>
-                    <CornerUpRight className="size-3.5" />
-                    Transférer
-                  </DButton>
+                  {mail.folder === "drafts" ? (
+                    <ShimmerButton
+                      size="sm"
+                      onClick={() => resumeDraft(mail)}
+                      shimmerDuration={4}
+                      className="h-8 rounded-lg px-3 text-[12px]"
+                    >
+                      <PenLine className="size-3.5" />
+                      Reprendre le brouillon
+                    </ShimmerButton>
+                  ) : (
+                    <>
+                      <ShimmerButton
+                        size="sm"
+                        onClick={() => replyTo(mail)}
+                        shimmerDuration={4}
+                        className="h-8 rounded-lg px-3 text-[12px]"
+                      >
+                        <CornerUpLeft className="size-3.5" />
+                        Répondre
+                      </ShimmerButton>
+                      <DButton variant="ghost" size="sm" onClick={() => forwardMail(mail)}>
+                        <CornerUpRight className="size-3.5" />
+                        Transférer
+                      </DButton>
+                    </>
+                  )}
                 </div>
               </div>
 

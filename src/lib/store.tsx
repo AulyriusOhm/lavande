@@ -1,13 +1,24 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import type { ComposeDraft } from "@/lib/draft";
-import { baseDraft, emptyDraft, firstRecipient, formatBytes, insertAt, persistedDraft } from "@/lib/draft";
-import { htmlToText } from "@/lib/rich-text";
+import type { ComposeDraft, DraftAttachment } from "@/lib/draft";
+import {
+  MAX_ATTACHMENT_BYTES,
+  base64Size,
+  baseDraft,
+  emptyDraft,
+  firstRecipient,
+  formatBytes,
+  insertAt,
+  mimeOf,
+  persistedDraft,
+  readBase64,
+} from "@/lib/draft";
+import { htmlToText, textToHtml } from "@/lib/rich-text";
 import { notifyNewMail, setUnreadBadge } from "@/lib/notify";
 import type { NoticeData } from "@/components/ui/notice";
 import { ACCOUNTS, ALL_ACCOUNTS } from "@/lib/accounts";
 import type { Account } from "@/lib/accounts";
 import { MAILS, folderLabel, mailMatches, normalize } from "@/lib/mail";
-import type { FolderId, Mail } from "@/lib/mail";
+import type { FolderId, Mail, MailSource } from "@/lib/mail";
 import { threadOf } from "@/lib/threads";
 import type { Thread } from "@/lib/threads";
 import type { MailSuggestion, Task } from "@/lib/tasks";
@@ -103,6 +114,8 @@ export type MailStoreValue = {
   composeDraft: ComposeDraft | null;
   composeTitle: string;
   composeDetached: boolean;
+  /** Brouillon serveur repris, tant qu'il n'a pas été réenregistré ou envoyé. */
+  draftSource: MailSource | null;
   setAccount: (value: string) => void;
   setFolder: (value: FolderId, path?: string | null) => void;
   loadMore: () => void;
@@ -123,6 +136,7 @@ export type MailStoreValue = {
   openMessage: (mail: Mail) => void;
   closeMessage: () => void;
   startBlankDraft: () => void;
+  resumeDraft: (mail: Mail) => void;
   openComposer: () => void;
   resumeCompose: () => void;
   minimizeCompose: () => void;
@@ -188,6 +202,10 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   );
   const [composeTitle, setComposeTitle] = useState(persistedCompose?.title ?? "Nouveau message");
   const [composeDetached, setComposeDetached] = useState(false);
+  const [draftSource, setDraftSource] = useState<MailSource | null>(
+    persistedCompose?.draftSource ?? null,
+  );
+  const resumedDraftId = useRef<string | null>(null);
   const [summary, setSummary] = useState<SummaryResult | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const summaryRun = useRef<string | null>(null);
@@ -198,6 +216,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const composeStateRef = useRef<ComposeState>({ draft: null, title: "Nouveau message", detached: false });
   const lastPostedCompose = useRef("");
   const sendDraftRef = useRef<(draft: ComposeDraft) => void>(() => {});
+  const resumeDraftRef = useRef<(mail: Mail) => void>(() => {});
   const noticeId = useRef(0);
 
   const notify = useCallback((message: string, action?: { label: string; run: () => void }) => {
@@ -749,6 +768,10 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
   const openMessage = useCallback(
     (mail: Mail) => {
+      if (mail.folder === "drafts") {
+        resumeDraftRef.current(mail);
+        return;
+      }
       setOpenMail({ ...mail, unread: false });
       setMails((current) => current.map((item) => (item.id === mail.id ? { ...item, unread: false } : item)));
       if (mode !== "api" || !mail.source) return;
@@ -884,21 +907,156 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, [account, accounts, folderRecords, mails, mode, notify]);
 
+  /** Reprise remplacée ou abandonnée : plus rien à supprimer côté serveur. */
+  const resetDraftSource = useCallback(() => {
+    resumedDraftId.current = null;
+    setDraftSource(null);
+  }, []);
+
+  /**
+   * La reprise a été enregistrée ou envoyée : l'ancien brouillon serveur est
+   * supprimé pour ne pas laisser de doublon. Rien n'est supprimé avant, pour
+   * qu'un abandon ou une fermeture laisse l'original intact.
+   */
+  const forgetDraftSource = useCallback(
+    (source: MailSource | null) => {
+      const demoId = resumedDraftId.current;
+      resumedDraftId.current = null;
+      setDraftSource(null);
+      if (demoId) setMails((current) => current.filter((entry) => entry.id !== demoId));
+      if (!source) return;
+      mailApi
+        .deleteMessage(source.accountId, { folder_path: source.folderPath, uid: source.uid })
+        .catch((error: unknown) => notify(`Ancien brouillon conservé · ${errorText(error)}`));
+    },
+    [notify],
+  );
+
   const minimizeCompose = useCallback(() => setComposeOpen(false), []);
 
   const closeCompose = useCallback(() => {
     setComposeOpen(false);
     setComposeDraft(null);
-  }, []);
+    resetDraftSource();
+  }, [resetDraftSource]);
+
+  /**
+   * Reprise d'un brouillon : le lecteur n'a rien à y faire, le corps revient
+   * dans l'éditeur avec sa signature déjà écrite (`includeSignature: false`).
+   */
+  const resumeDraft = useCallback(
+    (mail: Mail) => {
+      const open = (draft: ComposeDraft, source: MailSource | null) => {
+        resumedDraftId.current = source ? null : mail.id;
+        setDraftSource(source);
+        setComposeDraft(draft);
+        setComposeTitle("Brouillon");
+        setComposeOpen(true);
+        if (composeDetached) composeBus.current?.post({ kind: "focus" });
+        notify("Brouillon repris");
+      };
+
+      const start = () => {
+        const source = mode === "api" ? mail.source : undefined;
+        if (!source) {
+          const pgp = resolvePgp(pgpPrefs, mail.account);
+          const attachments = (mail.attachments ?? []).flatMap((file) =>
+            file.data
+              ? [
+                  {
+                    filename: file.name,
+                    mime: file.mime || mimeOf(file.name),
+                    data_base64: file.data,
+                    size: base64Size(file.data),
+                  },
+                ]
+              : [],
+          );
+          open(
+            {
+              ...baseDraft(mail.account, pgp.encrypt, pgp.sign, mail.threadId),
+              to: mail.to ?? "",
+              subject: mail.subject === "(sans objet)" ? "" : mail.subject,
+              body: mail.body.join("\n"),
+              includeSignature: false,
+              attachments: attachments.length ? attachments : undefined,
+            },
+            null,
+          );
+          return;
+        }
+
+        void (async () => {
+          try {
+            const message = await mailApi.message(source.accountId, source.folderPath, source.uid);
+            const pgp = resolvePgp(pgpPrefs, source.accountId);
+            const attachments: DraftAttachment[] = [];
+            for (const [index, file] of message.attachments.entries()) {
+              if (file.inline) continue;
+              if (file.size > MAX_ATTACHMENT_BYTES) {
+                notify(
+                  `« ${file.filename} » non reprise · ${formatBytes(MAX_ATTACHMENT_BYTES)} maximum par fichier.`,
+                );
+                continue;
+              }
+              try {
+                const blob = await mailApi.attachment(
+                  source.accountId,
+                  source.folderPath,
+                  source.uid,
+                  index,
+                );
+                attachments.push({
+                  filename: file.filename,
+                  mime: file.mime || mimeOf(file.filename),
+                  data_base64: await readBase64(blob),
+                  size: file.size,
+                });
+              } catch (error) {
+                notify(`« ${file.filename} » non reprise · ${errorText(error)}`);
+              }
+            }
+            open(
+              {
+                ...baseDraft(source.accountId, pgp.encrypt, pgp.sign, message.thread_id),
+                to: message.to.map((address) => address.email).join(", "),
+                cc: message.cc.map((address) => address.email).join(", "),
+                subject: message.subject === "(sans objet)" ? "" : message.subject,
+                body: message.body_html ?? textToHtml(message.body_text ?? ""),
+                includeSignature: false,
+                attachments: attachments.length ? attachments : undefined,
+                inReplyTo: message.in_reply_to ?? undefined,
+                references: message.references,
+              },
+              source,
+            );
+          } catch (error) {
+            notify(`Brouillon non repris · ${errorText(error)}`);
+          }
+        })();
+      };
+
+      if (composeDraft && !emptyDraft(composeDraft)) {
+        notify("Abandonner le brouillon actuel ?", { label: "Abandonner", run: start });
+        return;
+      }
+      start();
+    },
+    [composeDetached, composeDraft, mode, notify, pgpPrefs],
+  );
+  resumeDraftRef.current = resumeDraft;
 
   const saveToDrafts = useCallback(
     async (draft: ComposeDraft): Promise<boolean> => {
+      const source = draftSource;
       if (mode !== "api") {
+        forgetDraftSource(null);
         notify("Brouillon enregistré (démo)");
         return true;
       }
       try {
         await mailApi.saveDraft(draft.account, sendInputOf(draft));
+        if (source) forgetDraftSource(source);
         notify("Brouillon enregistré");
         setRevision((value) => value + 1);
         return true;
@@ -907,7 +1065,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
     },
-    [mode, notify],
+    [draftSource, forgetDraftSource, mode, notify],
   );
 
   const detachCompose = useCallback(() => {
@@ -953,15 +1111,24 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (isComposeWindow()) return;
-    const state: ComposeState = { draft: composeDraft, title: composeTitle, detached: composeDetached };
+    const state: ComposeState = {
+      draft: composeDraft,
+      title: composeTitle,
+      detached: composeDetached,
+      draftSource,
+    };
     composeStateRef.current = state;
-    persistCompose(composeDraft ? persistedDraft(composeDraft) : null, composeTitle);
+    persistCompose(
+      composeDraft ? persistedDraft(composeDraft) : null,
+      composeTitle,
+      composeDraft ? draftSource : null,
+    );
     const json = JSON.stringify(state);
     if (json !== lastPostedCompose.current) {
       lastPostedCompose.current = json;
       composeBus.current?.post({ kind: "state", state });
     }
-  }, [composeDraft, composeTitle, composeDetached]);
+  }, [composeDraft, composeTitle, composeDetached, draftSource]);
 
   const blankDraft = useCallback(() => {
     const sender = account === ALL_ACCOUNTS || !account ? accounts[0]?.id ?? "" : account;
@@ -973,7 +1140,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     setComposeDraft(blankDraft());
     setComposeTitle("Nouveau message");
     setComposeOpen(true);
-  }, [blankDraft]);
+    resetDraftSource();
+  }, [blankDraft, resetDraftSource]);
 
   const openComposer = useCallback(() => {
     if (composeDetached) {
@@ -994,6 +1162,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const replyTo = useCallback(
     (mail: Mail) => {
       const start = () => {
+        resetDraftSource();
         const pgp = resolvePgp(pgpPrefs, mail.account);
         const quoted = mail.body
           .join("\n")
@@ -1022,12 +1191,13 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       }
       start();
     },
-    [composeDetached, composeDraft, notify, pgpPrefs],
+    [composeDetached, composeDraft, notify, pgpPrefs, resetDraftSource],
   );
 
   const forwardMail = useCallback(
     (mail: Mail) => {
       const start = () => {
+        resetDraftSource();
         const pgp = resolvePgp(pgpPrefs, mail.account);
         setComposeDraft({
           ...baseDraft(mail.account, pgp.encrypt, pgp.sign),
@@ -1051,12 +1221,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
   const sendDraft = useCallback(
     (draft: ComposeDraft) => {
+      const source = draftSource;
       if (mode === "api") {
         mailApi
           .send(draft.account, sendInputOf(draft, activeSignature(prefs.signatures, draft.account)))
           .then(() => {
             setComposeOpen(false);
             setComposeDraft(null);
+            if (source) forgetDraftSource(source);
             notify("Message envoyé");
             setRevision((value) => value + 1);
             composeBus.current?.post({ kind: "sent" });
@@ -1106,10 +1278,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       setMails((current) => [mail, ...current]);
       setComposeOpen(false);
       setComposeDraft(null);
+      forgetDraftSource(null);
       notify("Message envoyé");
       composeBus.current?.post({ kind: "sent" });
     },
-    [accounts, mode, notify, prefs.signatures],
+    [accounts, draftSource, forgetDraftSource, mode, notify, prefs.signatures],
   );
   sendDraftRef.current = sendDraft;
 
@@ -1437,6 +1610,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       composeDraft,
       composeTitle,
       composeDetached,
+      draftSource,
       setAccount,
       setFolder,
       loadMore,
@@ -1457,6 +1631,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       openMessage,
       closeMessage,
       startBlankDraft,
+      resumeDraft,
       openComposer,
       resumeCompose,
       minimizeCompose,
@@ -1514,6 +1689,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       composeDraft,
       composeTitle,
       composeDetached,
+      draftSource,
       setAccount,
       setFolder,
       loadMore,
@@ -1529,6 +1705,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       openMessage,
       closeMessage,
       startBlankDraft,
+      resumeDraft,
       openComposer,
       resumeCompose,
       minimizeCompose,

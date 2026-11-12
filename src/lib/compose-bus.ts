@@ -1,9 +1,15 @@
 import type { ComposeDraft } from "@/lib/draft";
+import type { MailSource } from "@/lib/mail";
 
 export type ComposeState = {
   draft: ComposeDraft | null;
   title: string;
   detached: boolean;
+  /**
+   * Brouillon serveur repris : supprimé seulement une fois la reprise
+   * enregistrée ou envoyée, pour qu'un abandon laisse l'original en place.
+   */
+  draftSource?: MailSource | null;
 };
 
 export type ComposeMessage =
@@ -41,24 +47,52 @@ function isDraft(value: unknown): value is ComposeDraft {
   );
 }
 
-export function loadPersistedCompose(): { draft: ComposeDraft; title: string } | null {
+/** Un stockage d'avant le suivi de reprise reste valide : la source est optionnelle. */
+function isSource(value: unknown): value is MailSource {
+  if (!value || typeof value !== "object") return false;
+  const source = value as Record<string, unknown>;
+  return (
+    typeof source.accountId === "string" &&
+    typeof source.folderPath === "string" &&
+    typeof source.uid === "number"
+  );
+}
+
+export function loadPersistedCompose(): {
+  draft: ComposeDraft;
+  title: string;
+  draftSource?: MailSource;
+} | null {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return null;
-    const { draft, title } = parsed as { draft?: unknown; title?: unknown };
+    const { draft, title, draftSource } = parsed as {
+      draft?: unknown;
+      title?: unknown;
+      draftSource?: unknown;
+    };
     if (!isDraft(draft)) return null;
-    return { draft, title: typeof title === "string" ? title : "Nouveau message" };
+    const loaded = { draft, title: typeof title === "string" ? title : "Nouveau message" };
+    return isSource(draftSource) ? { ...loaded, draftSource } : loaded;
   } catch {
     return null;
   }
 }
 
-export function persistCompose(draft: ComposeDraft | null, title: string): void {
+export function persistCompose(
+  draft: ComposeDraft | null,
+  title: string,
+  draftSource?: MailSource | null,
+): void {
   try {
-    if (draft) window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ draft, title }));
-    else window.localStorage.removeItem(STORAGE_KEY);
+    if (draft) {
+      const entry = draftSource ? { draft, title, draftSource } : { draft, title };
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    } else {
+      window.localStorage.removeItem(STORAGE_KEY);
+    }
   } catch {
     // stockage indisponible (navigation privée) : le brouillon reste en mémoire
   }

@@ -181,3 +181,31 @@ describe("téléchargement des pièces jointes", () => {
     expect(saveBlob).not.toHaveBeenCalled();
   });
 });
+
+describe("reprise d'un brouillon", () => {
+  const renderDraft = (onResume: (mail: Mail) => void) => {
+    const draft: Mail = { ...MAIL, folder: "drafts", to: "marc@test.fr" };
+    render(
+      <PrefsProvider>
+        <MessageScreen
+          thread={{ ...THREAD, messages: [draft], primary: draft }}
+          onClose={() => {}}
+          onToggleStar={() => {}}
+          onReply={() => {}}
+          onResume={onResume}
+        />
+      </PrefsProvider>,
+    );
+    return draft;
+  };
+
+  it("remplace « Répondre » par la reprise du brouillon", () => {
+    const onResume = vi.fn();
+    const draft = renderDraft(onResume);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Reprendre le brouillon" })[1]);
+
+    expect(onResume).toHaveBeenCalledWith(draft);
+    expect(screen.queryAllByLabelText("Répondre")).toHaveLength(0);
+  });
+});
