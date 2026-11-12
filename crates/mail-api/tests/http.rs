@@ -1231,3 +1231,25 @@ async fn the_pgp_switch_is_per_account_and_closes_decrypted_bodies() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json(&body)["kind"], "store");
 }
+
+#[tokio::test]
+async fn a_composition_body_above_two_megabytes_reaches_the_handler() {
+    let (_directory, state) = state().await;
+    let inline = "A".repeat(3 * 1024 * 1024);
+    let (status, body) = call(
+        &state,
+        post(
+            "/api/accounts/absent/send",
+            &json!({
+                "to": [{ "email": "camille@studio-lilas.fr" }],
+                "subject": "Capture",
+                "text": "Bonjour",
+                "html": format!("<p>Bonjour</p>\n<img src=\"data:image/png;base64,{inline}\">"),
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json(&body)["kind"], "store");
+}

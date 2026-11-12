@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { EditorContent, useEditor, useEditorState, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import Image from "@tiptap/extension-image";
 import Placeholder from "@tiptap/extension-placeholder";
 import {
   Bold,
@@ -60,6 +61,64 @@ function ToolButton({
 
 const Divider = () => <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-line" />;
 
+/** Plafond d'une image collée : au-delà, l'envoi SMTP devient un calvaire. */
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+
+/** Types que le démon sait transporter en image inline (`cid:`). */
+const INLINE_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+const megabyte = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1).replace(".", ",");
+
+/** Les fichiers image d'un presse-papier ou d'un dépôt, jamais le texte. */
+function imageFiles(data: DataTransfer | null): File[] {
+  if (!data) return [];
+  const files = Array.from(data.files ?? []).filter((file) => file.type.startsWith("image/"));
+  if (files.length > 0) return files;
+  return Array.from(data.items ?? [])
+    .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null);
+}
+
+function readAsDataUrl(file: File): Promise<string | null> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Insère les images collées une à une, dans l'ordre reçu, et rapporte les refus. */
+async function insertImages(
+  editor: Editor,
+  files: File[],
+  at: number | undefined,
+  refuse: (message: string) => void,
+) {
+  for (const file of files) {
+    if (!INLINE_IMAGE_TYPES.includes(file.type)) {
+      refuse(`Format non pris en charge (${file.type}) : PNG, JPEG, GIF ou WebP.`);
+      continue;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      refuse(`Image trop lourde (${megabyte(file.size)} Mo) : 8 Mo maximum.`);
+      continue;
+    }
+    const src = await readAsDataUrl(file);
+    if (!src) {
+      refuse("Image illisible : elle n'a pas pu être lue depuis le presse-papier.");
+      continue;
+    }
+    if (at === undefined) {
+      editor.chain().focus().setImage({ src }).run();
+    } else {
+      editor.chain().focus().insertContentAt(at, { type: "image", attrs: { src } }).run();
+    }
+    at = undefined;
+  }
+}
+
 export function RichEditor({
   value,
   onChange,
@@ -78,8 +137,11 @@ export function RichEditor({
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const editorRef = useRef<Editor | null>(null);
+  const refuseRef = useRef<(message: string) => void>(() => {});
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  refuseRef.current = (message) => setNotice(message);
 
   const editor = useEditor({
     extensions: [
@@ -88,6 +150,7 @@ export function RichEditor({
         link: { openOnClick: false, autolink: true, defaultProtocol: "https" },
       }),
       Placeholder.configure({ placeholder }),
+      Image.configure({ allowBase64: true }),
     ],
     content: value,
     autofocus: autoFocus,
@@ -96,6 +159,13 @@ export function RichEditor({
       handlePaste: (_view, event) => {
         const instance = editorRef.current;
         if (!instance) return false;
+        const images = imageFiles(event.clipboardData);
+        if (images.length > 0) {
+          event.preventDefault();
+          setNotice(null);
+          void insertImages(instance, images, undefined, refuseRef.current);
+          return true;
+        }
         const html = event.clipboardData?.getData("text/html");
         const text = event.clipboardData?.getData("text/plain");
         if (!html && text && looksLikeMarkdown(text)) {
@@ -103,6 +173,17 @@ export function RichEditor({
           return true;
         }
         return false;
+      },
+      handleDrop: (view, event, _slice, moved) => {
+        const instance = editorRef.current;
+        if (!instance || moved) return false;
+        const images = imageFiles(event.dataTransfer);
+        if (images.length === 0) return false;
+        event.preventDefault();
+        setNotice(null);
+        const at = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos;
+        void insertImages(instance, images, at, refuseRef.current);
+        return true;
       },
     },
     onUpdate: ({ editor: instance }) => onChangeRef.current(instance.getHTML()),
@@ -262,6 +343,12 @@ export function RichEditor({
           </div>
         )}
       </div>
+
+      {notice && (
+        <p role="status" className="mt-1.5 text-[11.5px] font-semibold text-ink-muted">
+          {notice}
+        </p>
+      )}
 
       <EditorContent
         editor={editor}

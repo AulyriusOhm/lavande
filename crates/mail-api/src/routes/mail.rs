@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -26,6 +26,11 @@ use crate::state::AppState;
 
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 200;
+
+/// A composition carries its images and attachments in base64, well past
+/// axum's 2 MiB default: a few pasted screenshots blow it up before anything
+/// is sent.
+const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -49,6 +54,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/accounts/{id}/purge", post(purge_folder))
         .route("/api/accounts/{id}/send", post(send))
         .route("/api/accounts/{id}/drafts", post(save_draft))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 
 #[derive(Deserialize)]

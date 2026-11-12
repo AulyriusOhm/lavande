@@ -8,8 +8,7 @@ use lavande_mail::config::{Encryption, Endpoint};
 use lavande_mail::imap::SyncReport;
 use lavande_mail::model::Address;
 use lavande_mail::pgp::PgpKeyInfo;
-use lavande_mail::sanitize_html;
-use lavande_mail::smtp::{OutgoingAttachment, OutgoingMessage};
+use lavande_mail::smtp::{sanitize_outgoing_html, OutgoingAttachment, OutgoingMessage};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -362,7 +361,7 @@ impl SendRequest {
             bcc: addresses(self.bcc)?,
             subject: self.subject,
             text: self.text,
-            html: self.html.and_then(|html| sanitize_html(&html)),
+            html: self.html.and_then(|html| sanitize_outgoing_html(&html)),
             in_reply_to: self.in_reply_to,
             references: self.references,
             attachments,
@@ -405,6 +404,22 @@ mod tests {
         assert_eq!(outgoing.html.as_deref(), Some("<p>Bonjour</p>"));
         assert!(outgoing.pgp_sign);
         assert!(outgoing.pgp_encrypt);
+    }
+
+    #[test]
+    fn the_inline_image_of_a_sent_message_is_kept() {
+        let request: SendRequest = serde_json::from_value(json!({
+            "to": [{ "email": "camille@studio-lilas.fr" }],
+            "subject": "Capture",
+            "text": "Bonjour",
+            "html": "<p>Bonjour</p>\n<img src=\"data:image/png;base64,iVBORw==\">",
+        }))
+        .expect("requête");
+        let outgoing = request.into_outgoing(sender()).expect("message sortant");
+        assert_eq!(
+            outgoing.html.as_deref(),
+            Some("<p>Bonjour</p>\n<img src=\"data:image/png;base64,iVBORw==\">")
+        );
     }
 
     #[test]

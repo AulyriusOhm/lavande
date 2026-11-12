@@ -24,9 +24,20 @@ export function textToHtml(text: string): string {
     .join("");
 }
 
+const IMAGE_TAG = /<img\b[^>]*>/gi;
+const IMAGE_ALT = /\balt\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
+
+/** Une image ne rend aucun texte : elle devient son `alt`, ou `[image]`. */
+function imageLabel(tag: string): string {
+  const alt = IMAGE_ALT.exec(tag);
+  const label = (alt?.[1] ?? alt?.[2] ?? "").trim();
+  return label ? `[${label}]` : "[image]";
+}
+
 export function htmlToText(html: string): string {
   if (!html || !html.trim()) return "";
   const withBreaks = html
+    .replace(IMAGE_TAG, imageLabel)
     .replace(/<\s*(br|\/p|\/div|\/h[1-6]|\/li|\/blockquote|\/pre|\/tr)\s*\/?>/gi, "\n")
     .replace(/<\s*hr\s*\/?>/gi, "\n");
   const doc = new DOMParser().parseFromString(withBreaks, "text/html");

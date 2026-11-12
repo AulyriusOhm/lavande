@@ -47,6 +47,13 @@ describe("htmlToText", () => {
     expect(htmlToText("")).toBe("");
     expect(htmlToText("<p></p>")).toBe("");
   });
+
+  it("remplace une image par son libellé", () => {
+    expect(htmlToText('<p>Voici <img src="data:image/png;base64,iVBORw=="></p>')).toBe(
+      "Voici [image]",
+    );
+    expect(htmlToText('<p><img src="x.png" alt="capture"></p>')).toBe("[capture]");
+  });
 });
 
 describe("isHtmlEmpty", () => {
@@ -60,6 +67,10 @@ describe("isHtmlEmpty", () => {
   it("détecte un contenu non vide", () => {
     expect(isHtmlEmpty("<p>Salut</p>")).toBe(false);
     expect(isHtmlEmpty("Salut")).toBe(false);
+  });
+
+  it("ne considère pas un corps fait d'images comme vide", () => {
+    expect(isHtmlEmpty('<p><img src="data:image/png;base64,iVBORw=="></p>')).toBe(false);
   });
 });
 
@@ -171,5 +182,10 @@ describe("sanitizeHtml", () => {
   it("renvoie vide pour une entrée vide", () => {
     expect(sanitizeHtml("")).toBe("");
     expect(sanitizeHtml("   ")).toBe("");
+  });
+
+  it("conserve une image en data URL", () => {
+    const html = '<p>Capture :</p><img src="data:image/png;base64,iVBORw==" alt="capture">';
+    expect(sanitizeHtml(html)).toBe(html);
   });
 });

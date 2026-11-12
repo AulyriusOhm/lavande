@@ -1,5 +1,7 @@
 //! SMTP submission through `lettre`, with the same TLS roots as IMAP.
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use lettre::address::Envelope;
 use lettre::message::header::ContentType;
 use lettre::message::{Attachment, Mailbox, MultiPart, SinglePart};
@@ -17,6 +19,32 @@ pub struct OutgoingAttachment {
     pub filename: String,
     pub mime: String,
     pub data: Vec<u8>,
+}
+
+/// Largest inline image accepted from the body, decoded. Past it the image is
+/// dropped instead of turning one mail into a multi-megabyte upload.
+const MAX_INLINE_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+
+/// The only image types turned into `cid:` parts: those every mail client
+/// renders without asking.
+const INLINE_IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// Prefix of a `data:` URL the daemon inlines.
+const DATA_PREFIX: &str = "data:image/";
+
+/// One `data:` image of the body, lifted into a MIME part of its own.
+struct InlineImage {
+    content_id: String,
+    mime: String,
+    data: Vec<u8>,
+}
+
+/// One `<img src="data:…">` of the body: the tag to drop or keep, the value to
+/// rewrite, and the `alt` to carry over.
+struct BodyImage {
+    tag: std::ops::Range<usize>,
+    src: std::ops::Range<usize>,
+    alt: Option<String>,
 }
 
 pub struct OutgoingMessage {
@@ -184,34 +212,251 @@ enum Body {
 }
 
 fn body_of(message: &OutgoingMessage) -> Result<Body, MailError> {
-    Ok(
-        match (message.html.as_deref(), message.attachments.is_empty()) {
-            (None, true) => Body::Plain(SinglePart::plain(message.text.clone())),
-            (Some(html), true) => Body::Multi(MultiPart::alternative_plain_html(
-                message.text.clone(),
-                html.to_string(),
-            )),
-            (html, false) => {
-                let body = match html {
-                    Some(html) => {
-                        MultiPart::alternative_plain_html(message.text.clone(), html.to_string())
-                    }
-                    None => MultiPart::mixed().singlepart(SinglePart::plain(message.text.clone())),
-                };
-                let mut parts = MultiPart::mixed().multipart(body);
-                for attachment in &message.attachments {
-                    parts = parts.singlepart(attachment_part(attachment)?);
-                }
-                Body::Multi(parts)
+    let (markup, images) = match message.html.as_deref() {
+        Some(html) => lift_inline_images(html),
+        None => (String::new(), Vec::new()),
+    };
+    let html = message
+        .html
+        .as_ref()
+        .map(|_| alternative(&message.text, &markup, &images))
+        .transpose()?;
+    Ok(match (html, message.attachments.is_empty()) {
+        (Some(html), true) => Body::Multi(html),
+        (None, true) => Body::Plain(SinglePart::plain(message.text.clone())),
+        (html, false) => {
+            let body = html.unwrap_or_else(|| {
+                MultiPart::mixed().singlepart(SinglePart::plain(message.text.clone()))
+            });
+            let mut parts = MultiPart::mixed().multipart(body);
+            for attachment in &message.attachments {
+                parts = parts.singlepart(attachment_part(attachment)?);
             }
-        },
+            Body::Multi(parts)
+        }
+    })
+}
+
+/// `text/plain` and the HTML body. Inline images make the HTML branch a
+/// `multipart/related`: the markup is the root part, each image a `cid:` part
+/// the reader renders in place.
+fn alternative(text: &str, html: &str, images: &[InlineImage]) -> Result<MultiPart, MailError> {
+    let plain = SinglePart::plain(text.to_string());
+    if images.is_empty() {
+        return Ok(MultiPart::alternative()
+            .singlepart(plain)
+            .singlepart(SinglePart::html(html.to_string())));
+    }
+    let mut related = MultiPart::related().singlepart(SinglePart::html(html.to_string()));
+    for image in images {
+        related = related.singlepart(inline_part(image)?);
+    }
+    Ok(MultiPart::alternative()
+        .singlepart(plain)
+        .multipart(related))
+}
+
+fn inline_part(image: &InlineImage) -> Result<SinglePart, MailError> {
+    let content_type = ContentType::parse(&image.mime)
+        .map_err(|error| MailError::Smtp(format!("invalid inline image content type: {error}")))?;
+    Ok(Attachment::new_inline(image.content_id.clone()).body(image.data.clone(), content_type))
+}
+
+/// Sanitizes the outgoing body with the reception allow-list, keeping the
+/// `data:` images the composer pasted: that allow-list drops every `img`, so
+/// each inline image is set aside behind a text placeholder, then restored as
+/// canonical markup once the rest is clean. `None` when nothing readable is
+/// left.
+pub fn sanitize_outgoing_html(html: &str) -> Option<String> {
+    let mut markup = String::with_capacity(html.len());
+    let mut images: Vec<String> = Vec::new();
+    let mut cursor = 0;
+    for image in body_images(html) {
+        markup.push_str(&html[cursor..image.tag.start]);
+        markup.push_str(&image_placeholder(images.len()));
+        images.push(format!(
+            "<img src=\"{}\"{}>",
+            &html[image.src.clone()],
+            image
+                .alt
+                .map(|alt| format!(" alt=\"{}\"", escape_attribute(&alt)))
+                .unwrap_or_default()
+        ));
+        cursor = image.tag.end;
+    }
+    markup.push_str(&html[cursor..]);
+    let cleaned = crate::mime::sanitize_html(&markup)?;
+    Some(
+        images
+            .iter()
+            .enumerate()
+            .fold(cleaned, |html, (index, markup)| {
+                html.replace(&image_placeholder(index), markup)
+            }),
     )
+}
+
+/// Turns the `data:` images of the body into MIME parts: every `src` becomes
+/// `cid:<Content-ID>`. A type outside `INLINE_IMAGE_TYPES` or an undecodable
+/// payload stays as it is; an image over `MAX_INLINE_IMAGE_BYTES` is dropped
+/// from the body, tag and all.
+fn lift_inline_images(html: &str) -> (String, Vec<InlineImage>) {
+    let mut out = String::with_capacity(html.len());
+    let mut images = Vec::new();
+    let mut cursor = 0;
+    for image in body_images(html) {
+        match decode_data_url(&html[image.src.clone()]) {
+            Decoded::Image(mime, data) => {
+                let content_id = content_id();
+                out.push_str(&html[cursor..image.src.start]);
+                out.push_str(&format!("cid:{content_id}"));
+                cursor = image.src.end;
+                images.push(InlineImage {
+                    content_id,
+                    mime,
+                    data,
+                });
+            }
+            Decoded::TooLarge => {
+                tracing::warn!(
+                    limit = MAX_INLINE_IMAGE_BYTES,
+                    "image en ligne retirée du corps : plafond dépassé"
+                );
+                out.push_str(&html[cursor..image.tag.start]);
+                cursor = image.tag.end;
+            }
+            Decoded::Ignored => {}
+        }
+    }
+    out.push_str(&html[cursor..]);
+    (out, images)
 }
 
 fn attachment_part(attachment: &OutgoingAttachment) -> Result<SinglePart, MailError> {
     let content_type = ContentType::parse(&attachment.mime)
         .map_err(|error| MailError::Smtp(format!("invalid attachment content type: {error}")))?;
     Ok(Attachment::new(attachment.filename.clone()).body(attachment.data.clone(), content_type))
+}
+
+/// The `<img src="data:…">` tags of a body, in document order. Only the `src`
+/// values `data_url_parts` accepts are returned: a remote image is not an
+/// inline one and belongs to neither pass.
+fn body_images(html: &str) -> Vec<BodyImage> {
+    let lower = html.to_ascii_lowercase();
+    let mut images = Vec::new();
+    let mut cursor = 0;
+    while let Some(offset) = lower[cursor..].find("<img") {
+        let start = cursor + offset;
+        let Some(close) = lower[start..].find('>') else {
+            break;
+        };
+        let end = start + close + 1;
+        cursor = end;
+        let Some(src) = attribute_span(&lower, start, end, "src") else {
+            continue;
+        };
+        if data_url_parts(&html[src.clone()]).is_none() {
+            continue;
+        }
+        images.push(BodyImage {
+            tag: start..end,
+            src,
+            alt: attribute_span(&lower, start, end, "alt").map(|alt| html[alt].to_string()),
+        });
+    }
+    images
+}
+
+/// The value span of one quoted attribute of the tag `from..to`.
+fn attribute_span(
+    lower: &str,
+    from: usize,
+    to: usize,
+    name: &str,
+) -> Option<std::ops::Range<usize>> {
+    let needle = format!("{name}=");
+    let mut cursor = from;
+    while cursor < to {
+        let offset = lower[cursor..to].find(&needle)?;
+        let at = cursor + offset;
+        cursor = at + needle.len();
+        if !lower[from..at].ends_with(char::is_whitespace) {
+            continue;
+        }
+        let quote = lower[cursor..to].chars().next()?;
+        if quote != '"' && quote != '\'' {
+            continue;
+        }
+        let value = cursor + 1;
+        let close = lower[value..to].find(quote)?;
+        return Some(value..value + close);
+    }
+    None
+}
+
+/// Splits a `data:` image URL into its MIME type and its base64 payload. Only
+/// the types of `INLINE_IMAGE_TYPES` and a payload that cannot leave the
+/// attribute are accepted.
+fn data_url_parts(src: &str) -> Option<(String, &str)> {
+    let (meta, payload) = src.strip_prefix(DATA_PREFIX)?.split_once(',')?;
+    let mut fields = meta.split(';');
+    let mime = format!("image/{}", fields.next()?.trim().to_ascii_lowercase());
+    if !INLINE_IMAGE_TYPES.contains(&mime.as_str()) {
+        return None;
+    }
+    if !fields.any(|field| field.trim().eq_ignore_ascii_case("base64")) {
+        return None;
+    }
+    let plain = payload.chars().all(|c| {
+        c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=') || c.is_ascii_whitespace()
+    });
+    plain.then_some((mime, payload))
+}
+
+enum Decoded {
+    Image(String, Vec<u8>),
+    TooLarge,
+    Ignored,
+}
+
+fn decode_data_url(src: &str) -> Decoded {
+    let Some((mime, payload)) = data_url_parts(src) else {
+        return Decoded::Ignored;
+    };
+    let encoded: String = payload
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
+    if encoded.len() > (MAX_INLINE_IMAGE_BYTES * 4).div_ceil(3) {
+        return Decoded::TooLarge;
+    }
+    let Ok(data) = STANDARD.decode(encoded) else {
+        return Decoded::Ignored;
+    };
+    if data.len() > MAX_INLINE_IMAGE_BYTES {
+        return Decoded::TooLarge;
+    }
+    Decoded::Image(mime, data)
+}
+
+/// A fresh `Content-ID` per inline image: unique across messages and across the
+/// images of one message, so no reader can mix two of them up.
+fn content_id() -> String {
+    let bytes: [u8; 16] = rand::random();
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("{hex}@lavande")
+}
+
+fn image_placeholder(index: usize) -> String {
+    format!("lavande-inline-image-{index}-lavande")
+}
+
+fn escape_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn mailbox(address: &Address) -> Result<Mailbox, MailError> {
