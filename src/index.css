@@ -162,6 +162,30 @@
   backdrop-filter: blur(20px) saturate(180%);
 }
 
+@utility dock-glass {
+  border: 1px solid color-mix(in oklab, var(--accent) 45%, var(--line));
+  background: color-mix(in oklab, var(--surface) 90%, transparent);
+  backdrop-filter: blur(26px) saturate(180%);
+}
+
+@utility dock-halo {
+  position: absolute;
+  inset: -1.1rem -1.6rem;
+  border-radius: 999px;
+  background: radial-gradient(closest-side, color-mix(in oklab, var(--surface) 22%, transparent), transparent);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-mask-image: radial-gradient(closest-side, #000 40%, transparent);
+  mask-image: radial-gradient(closest-side, #000 40%, transparent);
+}
+
+@utility dock-aura {
+  position: absolute;
+  inset: -1.5rem -2.5rem;
+  border-radius: 999px;
+  background: radial-gradient(closest-side, color-mix(in oklab, var(--accent) 15%, transparent), transparent);
+  filter: blur(30px);
+}
+
 @utility safe-bottom {
   padding-bottom: max(env(safe-area-inset-bottom), 0px);
 }
