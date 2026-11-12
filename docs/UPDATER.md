@@ -13,6 +13,7 @@ bureau.
 | Clé privée (signe les releases) | `.tauri/lavande-updater.key` | **non** (`.gitignore` : `.tauri/*.key`) |
 | Clé publique correspondante | `.tauri/lavande-updater.key.pub` | oui (référence) |
 | Clé publique utilisée par l'app | `src-tauri/tauri.conf.json` → `plugins.updater.pubkey` | oui |
+| Clé GPG (signe le RPM et l'AppImage) | trousseau `$LAVANDE_GPG_HOME`, empreinte dans `LAVANDE_GPG_KEY_ID` | **non** — voir [`SIGNING.md`](./SIGNING.md) |
 
 Générer une nouvelle paire (casse la chaîne de mise à jour : toutes les
 installations existantes refuseront les paquets signés avec l'ancienne clé) :
@@ -91,12 +92,30 @@ ls -la /out/*.rpm
 '
 ```
 
+   Le RPM sort **non signé** ; il se signe sur l'hôte, après le conteneur — les clés
+   privées n'entrent pas dans un conteneur, et `rpmsign` ne demande que le paquet
+   `rpm` :
+
+   ```bash
+   sudo apt install rpm                     # rpmsign, rpm -K
+   export LAVANDE_GPG_KEY_ID=<empreinte>
+   bash scripts/sign-artifacts.sh artifacts/rpm/*.rpm
+   cp artifacts/rpm/*.rpm src-tauri/target/release/bundle/rpm/   # là où release-updater le cherche
+   ```
+
+   Sans `LAVANDE_GPG_KEY_ID`, le script refuse de continuer (pas de signature
+   silencieuse). Création de la clé, publication de la clé publique, vérification :
+   [`SIGNING.md`](./SIGNING.md).
+
 3. Générer le manifeste et signer :
 
 ```bash
+export LAVANDE_GPG_KEY_ID=<empreinte>       # clé GPG de release (RPM + AppImage)
 npm run release:updater -- --notes "Correctifs de synchronisation"
 # ou, en une fois, build + signature :
 node scripts/release-updater.mjs --build --notes "…"
+# release stricte : échoue si la clé GPG est absente
+npm run release:updater -- --require-gpg --notes "…"
 ```
 
 Le script (`scripts/release-updater.mjs`) :
@@ -109,12 +128,17 @@ Le script (`scripts/release-updater.mjs`) :
   `.AppImage.tar.gz` (format attendu par l'updater Linux) ;
 - signe chaque paquet avec `tauri signer sign --app-version <version>`
   (la version signée est vérifiée à l'installation) ;
+- si `LAVANDE_GPG_KEY_ID` est défini, signe d'abord le `.rpm` (`rpmsign --addsign`, via
+  `scripts/sign-artifacts.sh`) et le `.AppImage.tar.gz` (`gpg --detach-sign` → `.asc`) :
+  l'ordre est imposé, `rpmsign` réécrit le paquet et une signature minisign posée
+  avant porterait sur d'autres octets. Sans la clé, avertissement explicite ;
+  `--require-gpg` le transforme en échec (voir [`SIGNING.md`](./SIGNING.md)) ;
 - écrit `artifacts/updater/latest.json` et copie les `.sig`.
 
 4. Déposer dans le dossier public **tous** les fichiers listés par le script :
-   `latest.json`, les paquets et leurs `.sig`. Rien d'autre n'est nécessaire ;
-   l'app compare sa version à `version` et télécharge l'entrée
-   `linux-x86_64-rpm` / `linux-x86_64-appimage` / `linux-x86_64`.
+   `latest.json`, les paquets, leurs `.sig` et les `.asc` GPG. Ajouter
+   `lavande-release.asc` (clé publique GPG) ; l'app compare sa version à `version` et
+   télécharge l'entrée `linux-x86_64-rpm` / `linux-x86_64-appimage` / `linux-x86_64`.
 
 Exemple de manifeste :
 
@@ -158,8 +182,9 @@ Exemple de manifeste :
   `pkexec` (fenêtre polkit), puis `zenity`/`kdialog` + `sudo`, puis `sudo` en
   terminal. Sans polkit ni `sudo` disponible, l'installation échoue (l'app
   affiche l'erreur, le paquet reste téléchargé en cache temporaire). Le RPM doit
-  être publié avec une version supérieure et une signature RPM valide si la
-  politique du poste l'exige.
+  être publié avec une version supérieure et une signature RPM valide : elle est
+  posée par `scripts/sign-artifacts.sh` (`docs/SIGNING.md`), et le poste cible doit
+  avoir importé `lavande-release.asc` s'il applique `gpgcheck`.
 - **AppImage** : mise à jour en place du fichier `.AppImage` ; c'est le format
   le plus fiable pour l'auto-update Linux.
 - **Android** : pas d'auto-update Tauri ; l'APK reste manuel
@@ -181,9 +206,11 @@ tant que les points ci-dessous ne sont pas faits :
    un hébergement (serveur statique HTTPS, ou releases Gitea/GitHub — voir
    « Endpoint »), y déposer les fichiers, et au besoin mettre à jour
    `plugins.updater.endpoints` dans `src-tauri/tauri.conf.json`.
-2. **Sauvegarder la clé privée.** `.tauri/lavande-updater.key` n'est que sur ce
-   poste. La copier dans un gestionnaire de secrets / une sauvegarde chiffrée.
-   Perdue = chaîne de mise à jour cassée (il faudra republier un installeur complet).
+2. **Sauvegarder les clés privées.** `.tauri/lavande-updater.key`, la clé GPG de release
+   (`LAVANDE_GPG_KEY_ID`) et le keystore APK ne sont que sur ce poste. Les copier
+   dans un gestionnaire de secrets / une sauvegarde chiffrée hors ligne — inventaire
+   et procédure : [`SIGNING.md`](./SIGNING.md). Perdue, la clé de l'updater casse la
+   chaîne de mise à jour (réinstallateur complet à republier).
 3. **Publier une première release.** Incrémenter la version (`tauri.conf.json` +
    `package.json`, ex. 0.1.0 → 0.2.0), construire les paquets, lancer
    `npm run release:updater -- --notes "…"`, puis déposer `latest.json` + paquets +

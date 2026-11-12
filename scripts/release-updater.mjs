@@ -10,6 +10,11 @@
  * récupère le RPM et l'AppImage déjà construits dans `src-tauri/target/release/bundle/`,
  * les signe avec la clé privée (`.tauri/lavande-updater.key`) et écrit `latest.json`.
  *
+ * Si `LAVANDE_GPG_KEY_ID` est défini, les paquets publiés reçoivent en plus la
+ * signature GPG des postes cibles (`scripts/sign-artifacts.sh`, avant minisign :
+ * rpmsign réécrit le .rpm). Sans clé, le script le signale bruyamment ;
+ * `--require-gpg` transforme cet avertissement en échec.
+ *
  * L'updater Tauri télécharge le paquet correspondant à l'installation qui tourne :
  * `linux-x86_64-rpm` pour un paquet RPM, `linux-x86_64-appimage` pour un AppImage,
  * et `linux-x86_64` en dernier recours.
@@ -43,6 +48,7 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
       "  --url-base <url>  dossier public des artefacts (défaut : dossier de l'endpoint)",
       "  --key <chemin>    clé privée (défaut : .tauri/lavande-updater.key)",
       "  --out <dossier>   sortie (défaut : artifacts/updater)",
+      "  --require-gpg     échoue si LAVANDE_GPG_KEY_ID est absent (RPM/AppImage non signés)",
       "  -h, --help        cette aide",
     ].join("\n"),
   );
@@ -139,29 +145,56 @@ const sign = (file) => {
   return signature;
 };
 
-const platforms = {};
+const bundles = {};
 
 if (rpm) {
-  const source = path.join(BUNDLE, "rpm", rpm);
-  const target = path.join(outDir, rpm);
-  fs.copyFileSync(source, target);
-  platforms["linux-x86_64-rpm"] = {
-    signature: sign(target),
-    url: `${urlBase}/${encodeURIComponent(rpm)}`,
-  };
-  console.log(`signé : ${rpm}`);
+  fs.copyFileSync(path.join(BUNDLE, "rpm", rpm), path.join(outDir, rpm));
+  bundles["linux-x86_64-rpm"] = rpm;
 }
 
 if (appimage) {
   const source = path.join(BUNDLE, "appimage", appimage);
   const archive = `${appimage}.tar.gz`;
-  const target = path.join(outDir, archive);
-  run("tar", ["-czf", target, "-C", path.dirname(source), appimage]);
-  platforms["linux-x86_64-appimage"] = {
-    signature: sign(target),
-    url: `${urlBase}/${encodeURIComponent(archive)}`,
+  run("tar", ["-czf", path.join(outDir, archive), "-C", path.dirname(source), appimage]);
+  bundles["linux-x86_64-appimage"] = archive;
+}
+
+// GPG avant minisign : rpmsign réécrit le paquet, une signature minisign posée
+// avant porterait sur d'autres octets et serait rejetée à l'installation.
+const gpgKey = (process.env.LAVANDE_GPG_KEY_ID ?? "").trim();
+if (gpgKey) {
+  console.log(`release-updater : signature GPG (${gpgKey})`);
+  try {
+    run("bash", [
+      "scripts/sign-artifacts.sh",
+      ...Object.values(bundles).map((name) => path.join(outDir, name)),
+    ]);
+  } catch {
+    fail("signature GPG échouée (scripts/sign-artifacts.sh) : release interrompue.");
+  }
+} else if (process.argv.includes("--require-gpg")) {
+  fail(
+    "LAVANDE_GPG_KEY_ID absent alors que --require-gpg est demandé : RPM et " +
+      "AppImage resteraient non signés pour les postes cibles (docs/SIGNING.md).",
+  );
+} else {
+  console.warn(
+    [
+      "release-updater : LAVANDE_GPG_KEY_ID absent — RPM et AppImage NON signés GPG.",
+      "  Seule la signature minisign de l'updater les couvre : un utilisateur qui",
+      "  télécharge le paquet à la main ne peut pas la vérifier.",
+      "  export LAVANDE_GPG_KEY_ID=<clé de release>   (docs/SIGNING.md)",
+    ].join("\n"),
+  );
+}
+
+const platforms = {};
+for (const [platform, name] of Object.entries(bundles)) {
+  platforms[platform] = {
+    signature: sign(path.join(outDir, name)),
+    url: `${urlBase}/${encodeURIComponent(name)}`,
   };
-  console.log(`signé : ${archive}`);
+  console.log(`signé (minisign) : ${name}`);
 }
 
 platforms["linux-x86_64"] = platforms["linux-x86_64-rpm"] ?? platforms["linux-x86_64-appimage"];

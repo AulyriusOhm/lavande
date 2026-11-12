@@ -15,3 +15,9 @@ deploy/nginx/lavande-token.inc
 # Clé privée de signature des mises à jour de bureau : jamais commitée.
 # La clé publique correspondante vit dans src-tauri/tauri.conf.json.
 .tauri/*.key
+
+# Trousseau GPG de signature des paquets (RPM/AppImage) : jamais commité.
+# La clé publique se publie (lavande-release.asc), jamais la secrète.
+.gnupg/
+.tauri/gnupg/
+.tauri/*.pass

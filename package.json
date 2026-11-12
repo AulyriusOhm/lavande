@@ -19,7 +19,8 @@
     "mail:clippy": "cargo clippy --workspace --all-targets -- -D warnings",
     "mail:test": "cargo test --workspace",
     "mail:test:live": "MAIL_TEST_TLS_DIR=$HOME/.cache/lavande/mail-test cargo test --workspace --test live -- --ignored --test-threads=1",
-    "release:updater": "node scripts/release-updater.mjs"
+    "release:updater": "node scripts/release-updater.mjs",
+    "sign:artifacts": "bash scripts/sign-artifacts.sh"
   },
   "dependencies": {
     "@noble/ciphers": "^2.4.0",
