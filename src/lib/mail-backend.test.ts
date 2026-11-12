@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildQuotedHtml } from "@/lib/rich-text";
 import {
   accountDecrypts,
   folderOptionsForAll,
@@ -137,6 +138,29 @@ describe("sendInputOf", () => {
   it("n'envoie aucun tableau de pièces jointes quand le brouillon n'en a pas", () => {
     expect(sendInputOf(draft()).attachments).toBeUndefined();
     expect(sendInputOf(draft({ attachments: [] })).attachments).toBeUndefined();
+  });
+
+  const QUOTED = buildQuotedHtml("Le 9 novembre, Support a écrit :", "<p>Bonjour</p>");
+
+  it("place la signature avant l'historique cité, en html comme en texte", () => {
+    const input = sendInputOf(draft({ body: "<p>Merci</p>", quoted: QUOTED }), "<p>Cordialement</p>");
+
+    expect(input.html).toBe(`<p>Merci</p><br><p>Cordialement</p><br><br>${QUOTED}`);
+    expect(input.text).toBe("Merci\n\nCordialement\n\nLe 9 novembre, Support a écrit :\nBonjour");
+  });
+
+  it("sans signature, l'historique suit directement le nouveau message", () => {
+    const input = sendInputOf(draft({ body: "<p>Merci</p>", quoted: QUOTED }), null);
+
+    expect(input.html).toBe(`<p>Merci</p><br><br>${QUOTED}`);
+    expect(input.text).toBe("Merci\n\nLe 9 novembre, Support a écrit :\nBonjour");
+  });
+
+  it("sans citation, la signature clôt le message", () => {
+    const input = sendInputOf(draft({ body: "<p>Merci</p>" }), "<p>Cordialement</p>");
+
+    expect(input.html).toBe("<p>Merci</p><br><p>Cordialement</p>");
+    expect(input.text).toBe("Merci\n\nCordialement");
   });
 });
 

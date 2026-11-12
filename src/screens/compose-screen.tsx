@@ -4,6 +4,7 @@ import type { ComposeDraft, DraftAttachment } from "@/lib/draft";
 import { MAX_ATTACHMENT_BYTES, attachmentsSize, formatBytes, readAttachment } from "@/lib/draft";
 import {
   Check,
+  ChevronDown,
   Image,
   PenLine,
   Lock,
@@ -76,6 +77,7 @@ export function ComposeScreen({
   const [confirmClose, setConfirmClose] = useState(false);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [rewriteOpen, setRewriteOpen] = useState(false);
+  const [quoteOpen, setQuoteOpen] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
@@ -84,7 +86,7 @@ export function ComposeScreen({
     () => replySuggestions({ subject: draft.subject, to: draft.to, body: htmlToText(draft.body) }),
     [draft.subject, draft.to, draft.body],
   );
-  const isReply = /^re\s*:/i.test(draft.subject) || /a écrit\s*:/.test(draft.body);
+  const isReply = /^re\s*:/i.test(draft.subject) || Boolean(draft.quoted?.trim());
 
   const update = (patch: Partial<ComposeDraft>) => {
     onDraftChange({ ...draft, ...patch });
@@ -425,6 +427,31 @@ export function ComposeScreen({
               className="text-[12.5px] leading-relaxed text-ink-soft [&_a]:text-accent-ink [&_img]:max-w-full"
               dangerouslySetInnerHTML={{ __html: sanitizeHtml(accountSignature) }}
             />
+          </div>
+        ) : null}
+
+        {draft.quoted?.trim() ? (
+          <div className="mt-2" data-testid="compose-quoted-block">
+            <button
+              type="button"
+              onClick={() => setQuoteOpen((value) => !value)}
+              aria-expanded={quoteOpen}
+              aria-label={quoteOpen ? "Masquer la conversation précédente" : "Voir la conversation précédente"}
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-accent-soft px-3 text-[11.5px] font-bold text-accent-ink transition-colors"
+            >
+              <ChevronDown
+                className={cn("size-3.5 transition-transform", quoteOpen && "rotate-180")}
+                strokeWidth={2.6}
+              />
+              {quoteOpen ? "Masquer la conversation précédente" : "Voir la conversation précédente"}
+            </button>
+            {quoteOpen && (
+              <div
+                data-testid="compose-quoted"
+                className="pointer-events-none mt-2 rounded-2xl border border-line bg-surface-2 px-3 py-2.5 text-[12.5px] leading-relaxed text-ink-soft [&_a]:text-accent-ink [&_blockquote]:border-l-2 [&_blockquote]:border-line [&_blockquote]:pl-2.5 [&_img]:max-w-full"
+                dangerouslySetInnerHTML={{ __html: sanitizeHtml(draft.quoted) }}
+              />
+            )}
           </div>
         ) : null}
 

@@ -71,7 +71,7 @@ type Backend = {
   messageFails: boolean;
 };
 
-function mockBackend(): Backend {
+function mockBackend(message: ApiMessage = MESSAGE): Backend {
   const calls: Backend = { attachments: [], deleted: [], drafts: [], sent: [], messageFails: false };
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = decodeURIComponent(new URL(String(input), "http://localhost").pathname);
@@ -85,7 +85,7 @@ function mockBackend(): Backend {
       return blobReply(new Blob(["hello"], { type: "application/pdf" }));
     }
     if (/\/messages\/42$/.test(path)) {
-      return calls.messageFails ? failure("boîte IMAP injoignable") : reply(MESSAGE);
+      return calls.messageFails ? failure("boîte IMAP injoignable") : reply(message);
     }
     if (/\/drafts$/.test(path) && method === "POST") {
       calls.drafts.push(JSON.parse(String(init?.body)));
@@ -168,6 +168,21 @@ describe("reprise d'un brouillon (api)", () => {
     expect(result.current.openMail).toBeNull();
     expect(result.current.notices.map((notice) => notice.message)).toContain("Brouillon repris");
     expect(backend.messageFails).toBe(false);
+  });
+
+  it("sépare l'historique cité du corps éditable", async () => {
+    const quoted =
+      '<blockquote class="lavande-quote"><p class="lavande-quote-head">Le 9 novembre, Support a écrit :</p><p>Bonjour</p></blockquote>';
+    mockBackend({ ...MESSAGE, body_html: `<p>Ma réponse</p><br>${quoted}` });
+    const { result } = mount();
+
+    act(() => result.current.resumeDraft(draftMail(SOURCE)));
+
+    await waitFor(() => expect(result.current.composeDraft).not.toBeNull());
+    const draft = result.current.composeDraft!;
+    expect(draft.body).toBe("<p>Ma réponse</p>");
+    expect(draft.quoted).toBe(quoted);
+    expect(draft.includeSignature).toBe(false);
   });
 
   it("récupère les pièces jointes non inline et ignore les images du corps", async () => {

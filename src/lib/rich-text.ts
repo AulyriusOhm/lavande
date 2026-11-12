@@ -48,6 +48,23 @@ export function isHtmlEmpty(html: string): boolean {
   return htmlToText(html).length === 0;
 }
 
+/** L'historique cité voyage dans un bloc à part, marqué pour être reconnu au retour. */
+export function buildQuotedHtml(attribution: string, innerHtml: string): string {
+  return `<blockquote class="lavande-quote"><p class="lavande-quote-head">${escapeHtml(attribution)}</p>${innerHtml}</blockquote>`;
+}
+
+/** Sépare le nouveau message de l'historique cité qu'un brouillon rechargé contient encore. */
+export function splitQuotedBody(html: string): { body: string; quoted: string } {
+  if (!html || !html.trim()) return { body: html ?? "", quoted: "" };
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const block = doc.body.querySelector("blockquote.lavande-quote");
+  if (!block) return { body: html, quoted: "" };
+  const quoted = block.outerHTML;
+  block.remove();
+  const body = doc.body.innerHTML.replace(/(?:<br\s*\/?>\s*)+$/i, "").trimEnd();
+  return { body, quoted };
+}
+
 const HTML_TAG =
   /<\/?(?:article|blockquote|body|center|code|div|font|head|html|img|pre|section|span|strong|table|tbody|td|th|thead|tr|ul|hr|br|h[1-6]|a|b|em|i|u|li|ol|p)\b[^>]*>/i;
 

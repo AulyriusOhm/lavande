@@ -14,6 +14,7 @@ export type ComposeDraft = {
   cci: string;
   subject: string;
   body: string;
+  quoted?: string;
   account: string;
   pgpEncrypt: boolean;
   pgpSign: boolean;

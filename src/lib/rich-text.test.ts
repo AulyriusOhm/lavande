@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildQuotedHtml,
   ensureHtml,
   htmlToText,
   isHtmlEmpty,
@@ -7,6 +8,7 @@ import {
   looksLikeMarkdown,
   markdownToHtml,
   sanitizeHtml,
+  splitQuotedBody,
   textToHtml,
 } from "@/lib/rich-text";
 
@@ -187,5 +189,45 @@ describe("sanitizeHtml", () => {
   it("conserve une image en data URL", () => {
     const html = '<p>Capture :</p><img src="data:image/png;base64,iVBORw==" alt="capture">';
     expect(sanitizeHtml(html)).toBe(html);
+  });
+});
+
+describe("buildQuotedHtml", () => {
+  it("enveloppe l'attribution et l'historique dans un blockquote marqué", () => {
+    expect(buildQuotedHtml("Le 9 novembre, Support a écrit :", "<p>Bonjour</p>")).toBe(
+      '<blockquote class="lavande-quote"><p class="lavande-quote-head">Le 9 novembre, Support a écrit :</p><p>Bonjour</p></blockquote>',
+    );
+  });
+
+  it("échappe l'attribution pour qu'elle ne devienne pas du HTML", () => {
+    expect(buildQuotedHtml("De : <a@b.fr>", "")).toContain("De : &lt;a@b.fr&gt;");
+  });
+});
+
+describe("splitQuotedBody", () => {
+  const quoted = buildQuotedHtml("Le 9 novembre, Support a écrit :", "<p>Bonjour<br>Suite</p>");
+
+  it("retrouve le corps et la citation produits par buildQuotedHtml", () => {
+    const split = splitQuotedBody(`<p>Ma réponse</p><br>${quoted}`);
+
+    expect(split.body).toBe("<p>Ma réponse</p>");
+    expect(split.quoted).toBe(quoted);
+  });
+
+  it("survit à un passage par sanitizeHtml", () => {
+    const split = splitQuotedBody(sanitizeHtml(`<p>Ma réponse</p><br>${quoted}`));
+
+    expect(split.body).toBe("<p>Ma réponse</p>");
+    expect(split.quoted).toBe(quoted);
+  });
+
+  it("laisse un corps sans citation intact", () => {
+    expect(splitQuotedBody("<p>Bonjour</p>")).toEqual({ body: "<p>Bonjour</p>", quoted: "" });
+    expect(splitQuotedBody("Bonjour")).toEqual({ body: "Bonjour", quoted: "" });
+  });
+
+  it("renvoie un corps vide pour une entrée vide", () => {
+    expect(splitQuotedBody("")).toEqual({ body: "", quoted: "" });
+    expect(splitQuotedBody("   ")).toEqual({ body: "   ", quoted: "" });
   });
 });

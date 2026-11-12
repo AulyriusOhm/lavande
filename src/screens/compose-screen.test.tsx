@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import type { ComposeDraft } from "@/lib/draft";
 import { baseDraft } from "@/lib/draft";
+import { buildQuotedHtml, textToHtml } from "@/lib/rich-text";
 
 vi.mock("@/lib/store", () => ({
   useMailStore: () => ({
@@ -18,8 +19,8 @@ vi.mock("@/lib/prefs", () => ({
 
 const { ComposeScreen } = await import("@/screens/compose-screen");
 
-function Harness({ onChange }: { onChange?: (draft: ComposeDraft) => void }) {
-  const [draft, setDraft] = useState<ComposeDraft>(baseDraft("perso", false, false));
+function Harness({ onChange, quoted }: { onChange?: (draft: ComposeDraft) => void; quoted?: string }) {
+  const [draft, setDraft] = useState<ComposeDraft>({ ...baseDraft("perso", false, false), quoted });
   return (
     <ComposeScreen
       draft={draft}
@@ -106,6 +107,60 @@ describe("aperçu de la signature", () => {
     render(<Harness />);
     fireEvent.click(screen.getByText("Signature activée"));
     expect(screen.queryByTestId("signature-preview")).toBeNull();
+  });
+});
+
+describe("historique cité replié", () => {
+  const QUOTED = buildQuotedHtml("Le 9 novembre, Support a écrit :", textToHtml("Bonjour\nSuite du fil"));
+
+  it("reste replié par défaut puis se déroule et se replie au clic", () => {
+    render(<Harness quoted={QUOTED} />);
+
+    const toggle = screen.getByRole("button", { name: "Voir la conversation précédente" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.className).toContain("min-h-11");
+    expect(screen.queryByTestId("compose-quoted")).toBeNull();
+
+    fireEvent.click(toggle);
+
+    const opened = screen.getByRole("button", { name: "Masquer la conversation précédente" });
+    expect(opened.getAttribute("aria-expanded")).toBe("true");
+    const quoted = screen.getByTestId("compose-quoted");
+    expect(quoted.textContent).toContain("Support a écrit");
+    expect(quoted.textContent).toContain("Suite du fil");
+
+    fireEvent.click(opened);
+    expect(screen.queryByTestId("compose-quoted")).toBeNull();
+  });
+
+  it("rend l'historique en lecture seule, sans éditeur ni interaction", () => {
+    render(<Harness quoted={QUOTED} />);
+    fireEvent.click(screen.getByRole("button", { name: "Voir la conversation précédente" }));
+
+    const quoted = screen.getByTestId("compose-quoted");
+    expect(quoted.getAttribute("contenteditable")).toBeNull();
+    expect(quoted.querySelector("[contenteditable]")).toBeNull();
+    expect(quoted.querySelector("input, textarea, button")).toBeNull();
+    expect(quoted.innerHTML).not.toContain("contenteditable=");
+    expect(quoted.className).toContain("pointer-events-none");
+    expect(quoted.className).toContain("text-ink-soft");
+    expect(quoted.className).toContain("bg-surface-2");
+    expect(quoted.className).toContain("rounded-2xl");
+  });
+
+  it("place l'aperçu de la signature avant le bloc citation", () => {
+    signatureMock.html = "<p>Cordialement</p>";
+    render(<Harness quoted={QUOTED} />);
+
+    const preview = screen.getByTestId("signature-preview");
+    const block = screen.getByTestId("compose-quoted-block");
+    expect(preview.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("n'affiche aucun bloc citation sans historique", () => {
+    render(<Harness />);
+    expect(screen.queryByTestId("compose-quoted-block")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Voir la conversation précédente" })).toBeNull();
   });
 });
 

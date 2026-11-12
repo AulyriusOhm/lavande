@@ -12,7 +12,7 @@ import {
   persistedDraft,
   readBase64,
 } from "@/lib/draft";
-import { htmlToText, textToHtml } from "@/lib/rich-text";
+import { buildQuotedHtml, htmlToText, splitQuotedBody, textToHtml } from "@/lib/rich-text";
 import { notifyNewMail, setUnreadBadge } from "@/lib/notify";
 import type { NoticeData } from "@/components/ui/notice";
 import { ACCOUNTS, ALL_ACCOUNTS } from "@/lib/accounts";
@@ -990,6 +990,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           try {
             const message = await mailApi.message(source.accountId, source.folderPath, source.uid);
             const pgp = resolvePgp(pgpPrefs, source.accountId);
+            const full = message.body_html ?? textToHtml(message.body_text ?? "");
+            const { body, quoted } = splitQuotedBody(full);
             const attachments: DraftAttachment[] = [];
             for (const [index, file] of message.attachments.entries()) {
               if (file.inline) continue;
@@ -1022,7 +1024,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
                 to: message.to.map((address) => address.email).join(", "),
                 cc: message.cc.map((address) => address.email).join(", "),
                 subject: message.subject === "(sans objet)" ? "" : message.subject,
-                body: message.body_html ?? textToHtml(message.body_text ?? ""),
+                body,
+                ...(quoted ? { quoted } : {}),
                 includeSignature: false,
                 attachments: attachments.length ? attachments : undefined,
                 inReplyTo: message.in_reply_to ?? undefined,
@@ -1164,11 +1167,6 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       const start = () => {
         resetDraftSource();
         const pgp = resolvePgp(pgpPrefs, mail.account);
-        const quoted = mail.body
-          .join("\n")
-          .split("\n")
-          .map((line) => (line ? `> ${line}` : ">"))
-          .join("\n");
         const references = [
           ...(mail.references ?? []),
           ...(mail.messageId ? [mail.messageId] : []),
@@ -1177,7 +1175,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           ...baseDraft(mail.account, pgp.encrypt, pgp.sign, mail.threadId ?? mail.id),
           to: mail.email,
           subject: /^re\s*:/i.test(mail.subject.trim()) ? mail.subject : `Re: ${mail.subject}`,
-          body: `\n\n---\nLe ${mail.date ?? mail.time}, ${mail.name} a écrit :\n${quoted}`,
+          body: "",
+          quoted: buildQuotedHtml(
+            `Le ${mail.date ?? mail.time}, ${mail.name} a écrit :`,
+            textToHtml(mail.body.join("\n")),
+          ),
           inReplyTo: mail.messageId,
           references,
         });
@@ -1202,9 +1204,15 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         setComposeDraft({
           ...baseDraft(mail.account, pgp.encrypt, pgp.sign),
           subject: /^tr\s*:/i.test(mail.subject.trim()) ? mail.subject : `Tr: ${mail.subject}`,
-          body: `\n\n--- Message transféré ---\nDe : ${mail.name} <${mail.email}>\nDate : ${
-            mail.date ?? mail.time
-          }\nObjet : ${mail.subject}\n\n${mail.body.join("\n")}`,
+          body: "",
+          quoted: buildQuotedHtml(
+            "Message transféré",
+            textToHtml(
+              `De : ${mail.name} <${mail.email}>\nDate : ${mail.date ?? mail.time}\nObjet : ${
+                mail.subject
+              }\n\n${mail.body.join("\n")}`,
+            ),
+          ),
         });
         setComposeTitle("Transférer");
         setComposeOpen(true);

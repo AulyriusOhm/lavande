@@ -302,8 +302,11 @@ export function sendInputOf(draft: ComposeDraft, signatureHtml?: string | null):
   const withSignature = draft.includeSignature !== false && Boolean(signatureHtml?.trim());
   const bodyHtml = ensureHtml(draft.body);
   const bodyText = htmlToText(draft.body);
-  const html = withSignature ? `${bodyHtml}<br>${signatureHtml}` : bodyHtml;
-  const text = withSignature ? `${bodyText}\n\n${htmlToText(signatureHtml ?? "")}` : bodyText;
+  const quotedHtml = draft.quoted?.trim() ? ensureHtml(draft.quoted) : "";
+  const headHtml = withSignature ? `${bodyHtml}<br>${signatureHtml}` : bodyHtml;
+  const headText = withSignature ? `${bodyText}\n\n${htmlToText(signatureHtml ?? "")}` : bodyText;
+  const html = quotedHtml ? `${headHtml}<br><br>${quotedHtml}` : headHtml;
+  const text = quotedHtml ? `${headText}\n\n${htmlToText(quotedHtml)}` : headText;
   return {
     to: recipients(draft.to),
     cc: recipients(draft.cc),

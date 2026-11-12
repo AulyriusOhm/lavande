@@ -6,7 +6,6 @@ import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { PrefsProvider } from "@/lib/prefs";
 import { MAILS } from "@/lib/mail";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
-import { ensureHtml, looksLikeHtml } from "@/lib/rich-text";
 import { createMemoryStorage } from "@/lib/sync/storage";
 import { emptyDraft } from "@/lib/draft";
 
@@ -126,7 +125,7 @@ describe("garde du brouillon en cours", () => {
   });
 });
 
-describe("citation d'un mail texte contenant une URL entre chevrons", () => {
+describe("citation séparée d'un mail texte contenant une URL entre chevrons", () => {
   const QUOTED_BODY = [
     "Bonjour,",
     "Merci de votre retour, voici le suivi :",
@@ -139,36 +138,60 @@ describe("citation d'un mail texte contenant une URL entre chevrons", () => {
     body: QUOTED_BODY,
   });
 
-  it("répondre produit une ligne citée par ligne, pas un pavé", () => {
+  it("répondre laisse le corps éditable vide et range l'historique dans le bloc cité", () => {
     const { result } = mount();
+    const target = targetMail(result);
     act(() => {
-      result.current.replyTo(targetMail(result));
+      result.current.replyTo(target);
     });
 
-    const body = result.current.composeDraft!.body;
-    const html = ensureHtml(body);
-
-    expect(looksLikeHtml(body)).toBe(false);
-    expect(html).toContain(
-      "&gt; Bonjour,<br>&gt; Merci de votre retour, voici le suivi :<br>&gt; &lt;https://bbfhigcd.r.af.d.sendibt2.com/tr/cl/abc123&gt;<br>&gt; Je vais relancer.",
-    );
-    expect(html.match(/&gt; /g)?.length).toBe(QUOTED_BODY.length);
-    expect(html.split("<br>").length).toBe(body.replace(/^\n+/, "").split("\n").length);
+    const draft = result.current.composeDraft!;
+    expect(draft.body).toBe("");
+    expect(draft.subject).toBe(`Re: ${target.subject}`);
+    expect(draft.quoted).toBeDefined();
+    expect(draft.quoted).toContain('<blockquote class="lavande-quote">');
+    expect(draft.quoted).toContain(`Le ${target.date ?? target.time}, ${target.name} a écrit :`);
+    expect(draft.quoted).toContain("&lt;https://bbfhigcd.r.af.d.sendibt2.com/tr/cl/abc123&gt;");
+    expect(draft.quoted?.split("<br>").length).toBe(QUOTED_BODY.length);
+    expect(draft.quoted).not.toContain("---");
+    expect(draft.quoted).not.toContain("&gt; ");
   });
 
-  it("transférer garde une ligne par ligne du corps transféré", () => {
+  it("transférer range l'en-tête et le corps transférés dans le bloc cité", () => {
     const { result } = mount();
+    const target = targetMail(result);
     act(() => {
-      result.current.forwardMail(targetMail(result));
+      result.current.forwardMail(target);
     });
 
-    const body = result.current.composeDraft!.body;
-    const html = ensureHtml(body);
+    const draft = result.current.composeDraft!;
+    expect(draft.body).toBe("");
+    expect(draft.subject).toBe(`Tr: ${target.subject}`);
+    expect(draft.quoted).toContain('<blockquote class="lavande-quote">');
+    expect(draft.quoted).toContain("Message transféré");
+    expect(draft.quoted).toContain(`De : ${target.name} &lt;${target.email}&gt;`);
+    expect(draft.quoted).toContain("Objet : ");
+    expect(draft.quoted).toContain("&lt;https://bbfhigcd.r.af.d.sendibt2.com/tr/cl/abc123&gt;");
+    expect(draft.quoted).not.toContain("--- Message transféré ---");
+  });
 
-    expect(looksLikeHtml(body)).toBe(false);
-    expect(html).toContain(
-      "Bonjour,<br>Merci de votre retour, voici le suivi :<br>&lt;https://bbfhigcd.r.af.d.sendibt2.com/tr/cl/abc123&gt;<br>Je vais relancer.",
-    );
+  it("garde le sujet déjà préfixé sans le doubler", () => {
+    const base = mount();
+    const inbox = base.result.current.mails.find((mail) => mail.folder === "inbox")!;
+    act(() => {
+      base.result.current.replyTo({ ...inbox, subject: "Re: Déjà répondu" });
+    });
+    expect(base.result.current.composeDraft?.subject).toBe("Re: Déjà répondu");
+    base.unmount();
+    window.localStorage.clear();
+
+
+    const forwarded = mount();
+    const forwardedInbox = forwarded.result.current.mails.find((mail) => mail.folder === "inbox")!;
+    act(() => {
+      forwarded.result.current.forwardMail({ ...forwardedInbox, subject: "Tr: Déjà transféré" });
+    });
+    expect(forwarded.result.current.composeDraft?.subject).toBe("Tr: Déjà transféré");
   });
 });
 
