@@ -68,6 +68,24 @@ describe("Planification mobile · origine des suggestions", () => {
     expect(screen.getByText(suggestion.subject)).toBeTruthy();
   });
 
+  it("affiche la date seule, sans légende, quand l'échéance est réelle", () => {
+    const suggestion: MailSuggestion = { ...MAIL_SUGGESTIONS[0], due: "vendredi", dueTone: "soon" };
+    mount([suggestion]);
+
+    expect(screen.getByTestId("suggestion-due").textContent).toBe("vendredi");
+    expect(screen.queryByText("échéance déduite")).toBeNull();
+  });
+
+  it("n'affiche ni puce date ni libellé quand la suggestion n'a pas d'échéance", () => {
+    const suggestion: MailSuggestion = { ...MAIL_SUGGESTIONS[0], due: "", dueTone: "none" };
+    mount([suggestion]);
+
+    expect(screen.queryByTestId("suggestion-due")).toBeNull();
+    expect(screen.queryByText("sans échéance")).toBeNull();
+    expect(screen.queryByText("échéance déduite")).toBeNull();
+  });
+
+
   it("garde le libellé du compte démo sans puce IA sur une suggestion manuelle", () => {
     mount([MAIL_SUGGESTIONS[2]]);
 

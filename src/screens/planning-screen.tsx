@@ -327,9 +327,14 @@ export function PlanningScreen({
                           </span>
                         </p>
                       </div>
-                      <span className="shrink-0 rounded-full bg-surface-2 px-1.5 py-0.5 text-[9.5px] font-extrabold whitespace-nowrap text-accent-ink">
-                        {suggestion.due}
-                      </span>
+                      {suggestion.due ? (
+                        <span
+                          data-testid="suggestion-due"
+                          className="shrink-0 rounded-full bg-surface-2 px-1.5 py-0.5 text-[9.5px] font-extrabold whitespace-nowrap text-accent-ink"
+                        >
+                          {suggestion.due}
+                        </span>
+                      ) : null}
                     </div>
                   </SwipeAction>
                 </motion.div>

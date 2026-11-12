@@ -150,10 +150,11 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
                 <span className="mt-1.5 block text-[12.5px] leading-tight font-bold text-ink">
                   {suggestion.proposal}
                 </span>
-                <span className="mt-1.5 flex items-center gap-1.5">
-                  <Badge tone={DUE_TONE[suggestion.dueTone]}>{suggestion.due}</Badge>
-                  <span className="text-[10px] font-semibold text-ink-muted">échéance déduite</span>
-                </span>
+                {suggestion.due ? (
+                  <span data-testid="suggestion-due" className="mt-1.5 flex items-center gap-1.5">
+                    <Badge tone={DUE_TONE[suggestion.dueTone]}>{suggestion.due}</Badge>
+                  </span>
+                ) : null}
               </button>
               <div className="mt-2 flex items-center gap-1.5">
                 <DButton
@@ -566,7 +567,7 @@ function SuggestionDetail({
             <p className="truncate text-[12px] font-bold text-ink">{suggestion.from}</p>
             <p className="truncate text-[10.5px] font-medium text-ink-muted">{suggestion.subject}</p>
           </div>
-          <Badge tone={DUE_TONE[suggestion.dueTone]}>{task.due}</Badge>
+          {suggestion.due ? <Badge tone={DUE_TONE[suggestion.dueTone]}>{suggestion.due}</Badge> : null}
         </div>
         <p className="mt-3 text-[13.5px] leading-tight font-extrabold tracking-[-0.02em] text-ink">
           {task.title}

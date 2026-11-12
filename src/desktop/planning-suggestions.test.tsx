@@ -11,7 +11,7 @@ import { createDevice, createMemoryStorage, emptyState, type SyncStorage } from 
 
 vi.stubEnv("VITE_MAIL_BACKEND", "demo");
 
-function suggestionDoc(id: string, account: string, ai: boolean): Doc {
+function suggestionDoc(id: string, account: string, ai: boolean, due = ""): Doc {
   return {
     id,
     kind: "suggestion",
@@ -23,8 +23,8 @@ function suggestionDoc(id: string, account: string, ai: boolean): Doc {
       from: "Camille",
       subject: "Maquettes v3",
       proposal: `Action ${id}`,
-      due: "sans échéance",
-      dueTone: "soft",
+      due,
+      dueTone: due ? "soon" : "none",
       tone: 0,
       description: "",
       ...(ai ? { ai: true } : {}),
@@ -87,5 +87,22 @@ describe("Planification desktop · origine des suggestions", () => {
     const card = cardOf("Action s-main");
     expect(card.querySelector('[data-testid="suggestion-ai"]')).toBeNull();
     expect(card.querySelector('[data-testid="suggestion-account"]')?.textContent).toBe("boite-x");
+  });
+
+  it("ne rend ni badge ni légende quand la suggestion n'a pas d'échéance", async () => {
+    mount(seededStorage([suggestionDoc("s-vide", "perso", false)]));
+
+    const card = cardOf("Action s-vide");
+    expect(card.querySelector('[data-testid="suggestion-due"]')).toBeNull();
+    expect(card.textContent).not.toContain("sans échéance");
+    expect(card.textContent).not.toContain("échéance déduite");
+  });
+
+  it("affiche la date seule, sans légende, quand l'échéance est réelle", async () => {
+    mount(seededStorage([suggestionDoc("s-date", "perso", false, "vendredi")]));
+
+    const card = cardOf("Action s-date");
+    expect(card.querySelector('[data-testid="suggestion-due"]')?.textContent).toBe("vendredi");
+    expect(card.textContent).not.toContain("échéance déduite");
   });
 });

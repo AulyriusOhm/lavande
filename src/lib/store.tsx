@@ -61,10 +61,10 @@ function summarySuggestion(task: SummaryTask, mail: Mail | undefined, period: st
     from: task.from || mail?.name || "Résumé",
     subject: mail?.subject ?? "",
     proposal: task.title,
-    due: day ? formatDueDate(day) : "sans échéance",
-    dueTone: day ? dueToneFor(day) : "soft",
+    due: day ? formatDueDate(day) : "",
+    dueTone: day ? dueToneFor(day) : "none",
     tone: mail?.tone ?? 0,
-    description: `${period} · ${task.due && task.due !== "aucune" ? `échéance ${task.due}` : "sans échéance"}`,
+    description: day ? `${period} · échéance ${formatDueDate(day)}` : period,
   };
   if (typeof mail?.timestamp === "number") suggestion.timestamp = mail.timestamp;
   return suggestion;

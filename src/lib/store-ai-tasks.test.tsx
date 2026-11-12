@@ -83,7 +83,7 @@ const TASKS_JSON = {
 const reply = (body: unknown) =>
   ({ ok: true, status: 200, statusText: "", json: async () => body }) as unknown as Response;
 
-function mockBackend(threads: ApiThread[]) {
+function mockBackend(threads: ApiThread[], tasksJson: unknown = TASKS_JSON) {
   const llmCalls: { system: string; user: string }[] = [];
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -97,7 +97,7 @@ function mockBackend(threads: ApiThread[]) {
         system: body.messages?.[0]?.content ?? "",
         user: body.messages?.[1]?.content ?? "",
       });
-      return reply({ choices: [{ message: { content: JSON.stringify(TASKS_JSON) } }] });
+      return reply({ choices: [{ message: { content: JSON.stringify(tasksJson) } }] });
     }
     if (path.endsWith("/api/accounts")) return reply([apiAccount()]);
     if (path.endsWith(`/api/accounts/${ALPHA}/folders`)) return reply([apiFolder()]);
@@ -132,8 +132,8 @@ const suggestionDoc = (id: string, proposal: string, timestamp?: number): Doc =>
     from: "Camille",
     subject: "Maquettes",
     proposal,
-    due: "sans échéance",
-    dueTone: "soft",
+    due: "",
+    dueTone: "none",
     tone: 0,
     description: "",
     ...(timestamp === undefined ? {} : { timestamp }),
@@ -169,6 +169,8 @@ describe("suggestions de tâches IA · fenêtre des 48 h", () => {
     const proposal = result.current.suggestions.find((entry) => entry.proposal === "Envoyer le compte rendu");
     expect(proposal?.mailId).toBe(MAIL_ID);
     expect(proposal?.due).toBe("ven 20 nov");
+    expect(proposal?.dueTone).toBe("soft");
+    expect(proposal?.description).toBe("Suggestion IA · échéance ven 20 nov");
     expect(proposal?.timestamp).toBe(Date.parse(RECEIVED));
     expect(proposal?.ai).toBe(true);
     expect(proposal?.account).toBe(ALPHA);
@@ -176,6 +178,26 @@ describe("suggestions de tâches IA · fenêtre des 48 h", () => {
     expect(llmCalls).toHaveLength(1);
     expect(llmCalls[0].system).toContain("NON FIABLE");
     expect(llmCalls[0].user).toContain("<<<MAILS>>>");
+  });
+
+  it("n'invente ni date ni mention quand le modèle ne donne pas d'échéance", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: true, windowHours: 48 });
+    mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)], {
+      taches: [{ titre: "Envoyer le compte rendu", de: "Camille", mailId: MAIL_ID }],
+    });
+    const { result } = mount();
+
+    await waitFor(
+      () => expect(result.current.suggestions.some((entry) => entry.proposal === "Envoyer le compte rendu")).toBe(true),
+      { timeout: 3000 },
+    );
+
+    const proposal = result.current.suggestions.find((entry) => entry.proposal === "Envoyer le compte rendu");
+    expect(proposal?.due).toBe("");
+    expect(proposal?.dueTone).toBe("none");
+    expect(proposal?.description).toBe("Suggestion IA");
+    expect(proposal?.description).not.toContain("sans échéance");
   });
 
   it("n'envoie rien au modèle quand aucun mail n'est dans la fenêtre", async () => {

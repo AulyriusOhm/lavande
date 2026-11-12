@@ -200,10 +200,12 @@ export function TaskScreen({
             </h1>
 
             <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-              <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-[10.5px] font-bold whitespace-nowrap text-ink-soft">
-                <Clock className="size-3" />
-                {task.due}
-              </span>
+              {task.due ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-[10.5px] font-bold whitespace-nowrap text-ink-soft">
+                  <Clock className="size-3" />
+                  {task.due}
+                </span>
+              ) : null}
               <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[10.5px] font-semibold text-ink-soft">
                 {task.meta}
               </span>
