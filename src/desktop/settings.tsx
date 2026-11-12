@@ -86,24 +86,65 @@ const LOG_TONE = { succès: "green", échec: "rose", refusé: "amber" } as const
 const MCP_SECTIONS =
   import.meta.env.VITE_PLATFORM === "android" ? [] : ([{ id: "assistant", label: "Serveurs MCP" }] as const);
 
-const SECTIONS = [
-  { id: "comptes", label: "Comptes" },
-  { id: "signatures", label: "Signatures" },
-  { id: "apparence", label: "Apparence" },
-  { id: "clavier", label: "Raccourcis clavier" },
-  { id: "modules", label: "Modules" },
-  { id: "securite", label: "Sécurité" },
-  { id: "synchronisation", label: "Synchronisation" },
-  { id: "calendriers", label: "Calendriers" },
-  { id: "ia", label: "IA" },
-  { id: "resumes", label: "Résumés" },
-  { id: "taches-ia", label: "Suggestions de tâches" },
-  ...MCP_SECTIONS,
-  { id: "mise-a-jour", label: "Mise à jour" },
-  { id: "apropos", label: "À propos" },
+const SECTION_GROUPS = [
+  {
+    id: "comptes",
+    label: "Comptes",
+    sections: [
+      { id: "comptes", label: "Comptes" },
+      { id: "signatures", label: "Signatures" },
+    ],
+  },
+  {
+    id: "apparence",
+    label: "Apparence",
+    sections: [
+      { id: "apparence", label: "Apparence" },
+      { id: "clavier", label: "Raccourcis clavier" },
+      { id: "modules", label: "Modules" },
+    ],
+  },
+  {
+    id: "synchronisation",
+    label: "Synchronisation",
+    sections: [
+      { id: "synchronisation", label: "Synchronisation" },
+      { id: "calendriers", label: "Calendriers" },
+    ],
+  },
+  {
+    id: "securite",
+    label: "Sécurité",
+    sections: [{ id: "securite", label: "Sécurité & PGP" }],
+  },
+  {
+    id: "ia",
+    label: "IA",
+    sections: [
+      { id: "ia", label: "Intelligence artificielle" },
+      { id: "resumes", label: "Résumés" },
+      { id: "taches-ia", label: "Suggestions de tâches" },
+    ],
+  },
+  { id: "mcp", label: "MCP", sections: MCP_SECTIONS },
+  {
+    id: "application",
+    label: "Application",
+    sections: [
+      { id: "mise-a-jour", label: "Mise à jour" },
+      { id: "apropos", label: "À propos" },
+    ],
+  },
 ] as const;
 
-type SectionId = (typeof SECTIONS)[number]["id"];
+type SectionId = (typeof SECTION_GROUPS)[number]["sections"][number]["id"];
+
+type SectionEntry = { id: SectionId; label: string };
+
+const NAV_GROUPS: readonly { id: string; label: string; sections: readonly SectionEntry[] }[] =
+  SECTION_GROUPS.filter((group) => group.sections.length > 0);
+
+const SECTIONS: readonly SectionEntry[] = NAV_GROUPS.flatMap((group) => group.sections);
 
 const anchor = (id: SectionId) => `reglages-${id}`;
 
@@ -654,25 +695,34 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
 
           <div className="mt-6 flex items-start gap-8">
             <nav aria-label="Sections des réglages" className="sticky top-6 hidden w-[200px] shrink-0 min-[900px]:block">
-              <ul className="space-y-0.5">
-                {SECTIONS.map((section) => (
-                  <li key={section.id}>
-                    <button
-                      type="button"
-                      onClick={() => goTo(section.id)}
-                      aria-current={active === section.id}
-                      className={cn(
-                        "focus-ring flex h-8 w-full items-center rounded-[10px] px-2.5 text-left text-[12px] font-semibold transition-colors duration-200",
-                        active === section.id
-                          ? "bg-accent-soft text-accent-ink"
-                          : "text-ink-soft hover:bg-surface-2 hover:text-ink",
-                      )}
-                    >
-                      {section.label}
-                    </button>
-                  </li>
+              <div className="space-y-3">
+                {NAV_GROUPS.map((group) => (
+                  <div key={group.id} role="group" aria-label={group.label}>
+                    <p className="px-2.5 pb-1 text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                      {group.label}
+                    </p>
+                    <ul className="space-y-0.5">
+                      {group.sections.map((section) => (
+                        <li key={section.id}>
+                          <button
+                            type="button"
+                            onClick={() => goTo(section.id)}
+                            aria-current={active === section.id}
+                            className={cn(
+                              "focus-ring flex h-8 w-full items-center rounded-[10px] px-2.5 text-left text-[12px] font-semibold transition-colors duration-200",
+                              active === section.id
+                                ? "bg-accent-soft text-accent-ink"
+                                : "text-ink-soft hover:bg-surface-2 hover:text-ink",
+                            )}
+                          >
+                            {section.label}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 ))}
-              </ul>
+              </div>
             </nav>
 
             <div className="min-w-0 flex-1 space-y-7">
@@ -969,6 +1019,14 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                     onChange={setPlanningEnabled}
                   />
                 </Surface>
+              </Block>
+
+              <Block id="synchronisation" label="Synchronisation" hint="chiffré de bout en bout">
+                <SyncSettings variant="desktop" />
+              </Block>
+
+              <Block id="calendriers" label="Calendriers">
+                <CalendarsSection />
               </Block>
 
               <Block
@@ -1280,14 +1338,6 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                     )}
                   </div>
                 </Surface>
-              </Block>
-
-              <Block id="synchronisation" label="Synchronisation" hint="chiffré de bout en bout">
-                <SyncSettings variant="desktop" />
-              </Block>
-
-              <Block id="calendriers" label="Calendriers">
-                <CalendarsSection />
               </Block>
 
               <Block id="ia" label="Intelligence artificielle" hint="suggestions & réécriture">
