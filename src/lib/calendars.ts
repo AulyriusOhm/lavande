@@ -86,6 +86,14 @@ export function calendarsInUse(events: CalendarEvent[], calendars: CalendarDef[]
   return out;
 }
 
+export function calendarId(name: string, existing: CalendarDef[]): string {
+  const base = slug(name) || "calendrier";
+  if (!existing.some((entry) => entry.id === base)) return base;
+  let index = 2;
+  while (existing.some((entry) => entry.id === `${base}-${index}`)) index += 1;
+  return `${base}-${index}`;
+}
+
 function slug(name: string) {
   return name
     .toLowerCase()

@@ -51,6 +51,7 @@ import {
   mcpTypeAllowed,
   useMcpLog,
 } from "@/lib/mcp";
+import { calendarId, TONE_DOT, useCalendars } from "@/lib/calendars";
 import { accountPgp, activeSignature, mergeFlags, usePrefs } from "@/lib/prefs";
 import { APP_VERSION, phaseLabel, useUpdater } from "@/lib/updater";
 import { llmProbe, llmReady } from "@/lib/llm";
@@ -93,6 +94,7 @@ const SECTIONS = [
   { id: "modules", label: "Modules" },
   { id: "securite", label: "Sécurité" },
   { id: "synchronisation", label: "Synchronisation" },
+  { id: "calendriers", label: "Calendriers" },
   { id: "ia", label: "IA" },
   { id: "resumes", label: "Résumés" },
   { id: "taches-ia", label: "Suggestions de tâches" },
@@ -257,6 +259,205 @@ function usePgpKeys() {
   }, [load]);
 
   return { keys, error, loading, load };
+}
+
+function TonePicker({
+  label,
+  value,
+  onPick,
+}: {
+  label: string;
+  value: number;
+  onPick: (tone: number) => void;
+}) {
+  return (
+    <div role="group" aria-label={label} className="flex items-center gap-1.5">
+      {TONE_DOT.map((dot, index) => (
+        <button
+          key={dot}
+          type="button"
+          aria-label={`${label} · ton ${index + 1}`}
+          aria-pressed={value === index}
+          onClick={() => onPick(index)}
+          className={cn(
+            "focus-ring grid size-7 place-items-center rounded-full transition-opacity duration-200",
+            value === index ? "ring-2 ring-accent-ring" : "opacity-55 hover:opacity-100",
+          )}
+        >
+          <span className={cn("size-4 rounded-full", dot)} />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CalendarsSection() {
+  const { notify } = useMailStore();
+  const [calendars, setCalendars] = useCalendars();
+  const [draftName, setDraftName] = useState("");
+  const [draftTone, setDraftTone] = useState(0);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [removing, setRemoving] = useState<string | null>(null);
+
+  const addCalendar = () => {
+    const name = draftName.trim();
+    if (!name) {
+      notify("Nom du calendrier requis");
+      return;
+    }
+    if (calendars.some((entry) => entry.name.toLowerCase() === name.toLowerCase())) {
+      notify(`Calendrier déjà présent · ${name}`);
+      return;
+    }
+    setCalendars([...calendars, { id: calendarId(name, calendars), name, tone: draftTone }]);
+    setDraftName("");
+    notify(`Calendrier ajouté · ${name}`);
+  };
+
+  const startRename = (id: string, name: string) => {
+    setRemoving(null);
+    setRenaming(id);
+    setRenameValue(name);
+  };
+
+  const commitRename = (id: string) => {
+    const name = renameValue.trim();
+    if (!name) {
+      notify("Nom du calendrier requis");
+      return;
+    }
+    if (calendars.some((entry) => entry.id !== id && entry.name.toLowerCase() === name.toLowerCase())) {
+      notify(`Calendrier déjà présent · ${name}`);
+      return;
+    }
+    setCalendars(calendars.map((entry) => (entry.id === id ? { ...entry, name } : entry)));
+    setRenaming(null);
+    notify(`Calendrier renommé · ${name}`);
+  };
+
+  const setTone = (id: string, tone: number) => {
+    setCalendars(calendars.map((entry) => (entry.id === id ? { ...entry, tone } : entry)));
+  };
+
+  const removeCalendar = (id: string) => {
+    const target = calendars.find((entry) => entry.id === id);
+    setCalendars(calendars.filter((entry) => entry.id !== id));
+    setRemoving(null);
+    if (target) notify(`Calendrier supprimé · ${target.name}`);
+  };
+
+  return (
+    <Surface className="overflow-hidden">
+      <div className="flex flex-wrap items-end gap-3 border-b border-line px-3.5 py-3">
+        <label className="grid min-w-[150px] flex-1 gap-1">
+          <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Nom</span>
+          <TextInput
+            aria-label="Nom du nouveau calendrier"
+            placeholder="Associatif"
+            value={draftName}
+            onChange={(event) => setDraftName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") addCalendar();
+            }}
+            className="h-9 text-[12px] font-semibold"
+          />
+        </label>
+        <div className="grid gap-1">
+          <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Ton</span>
+          <div className="flex h-9 items-center">
+            <TonePicker label="Ton du nouveau calendrier" value={draftTone} onPick={setDraftTone} />
+          </div>
+        </div>
+        <DButton variant="primary" size="sm" onClick={addCalendar}>
+          <Plus className="size-3.5" strokeWidth={3} />
+          Ajouter
+        </DButton>
+      </div>
+
+      {calendars.length === 0 ? (
+        <p className="px-3.5 py-4 text-[11px] font-medium text-ink-muted">
+          Aucun calendrier : les événements gardent leur propre ton.
+        </p>
+      ) : (
+        <div className="divide-y divide-line/70">
+          {calendars.map((entry) => (
+            <div key={entry.id} className="flex flex-wrap items-center gap-2 px-3.5 py-2">
+              <span className={cn("size-2 shrink-0 rounded-full", TONE_DOT[entry.tone % TONE_DOT.length])} />
+              {renaming === entry.id ? (
+                <>
+                  <TextInput
+                    aria-label={`Nouveau nom pour ${entry.name}`}
+                    value={renameValue}
+                    autoFocus
+                    onChange={(event) => setRenameValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") commitRename(entry.id);
+                      if (event.key === "Escape") setRenaming(null);
+                    }}
+                    className="h-8 max-w-[220px] text-[11.5px] font-semibold"
+                  />
+                  <DButton variant="primary" size="sm" onClick={() => commitRename(entry.id)}>
+                    <Check className="size-3.5" />
+                    Valider
+                  </DButton>
+                  <DButton variant="plain" size="sm" onClick={() => setRenaming(null)}>
+                    Annuler
+                  </DButton>
+                </>
+              ) : (
+                <>
+                  <span className="min-w-0 flex-1 truncate text-[12px] font-bold text-ink">{entry.name}</span>
+                  <TonePicker
+                    label={`Ton de ${entry.name}`}
+                    value={entry.tone % TONE_DOT.length}
+                    onPick={(tone) => setTone(entry.id, tone)}
+                  />
+                  {removing === entry.id ? (
+                    <>
+                      <span className="text-[10.5px] font-semibold text-ink-muted">Supprimer ?</span>
+                      <DButton variant="danger" size="sm" onClick={() => removeCalendar(entry.id)}>
+                        <Trash2 className="size-3.5" />
+                        Confirmer
+                      </DButton>
+                      <DButton variant="plain" size="sm" onClick={() => setRemoving(null)}>
+                        Annuler
+                      </DButton>
+                    </>
+                  ) : (
+                    <>
+                      <DButton
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Renommer le calendrier ${entry.name}`}
+                        onClick={() => startRename(entry.id, entry.name)}
+                      >
+                        <PenLine className="size-3.5" />
+                        Renommer
+                      </DButton>
+                      <DButton
+                        variant="danger"
+                        size="sm"
+                        aria-label={`Supprimer le calendrier ${entry.name}`}
+                        onClick={() => setRemoving(entry.id)}
+                      >
+                        <Trash2 className="size-3.5" />
+                        Supprimer
+                      </DButton>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="border-t border-line/70 px-3.5 py-2 text-[10.5px] leading-relaxed font-semibold text-ink-muted">
+        Enregistrés sur cet appareil : l'agenda les affiche aussitôt.
+      </p>
+    </Surface>
+  );
 }
 
 export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
@@ -1082,6 +1283,10 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
 
               <Block id="synchronisation" label="Synchronisation" hint="chiffré de bout en bout">
                 <SyncSettings variant="desktop" />
+              </Block>
+
+              <Block id="calendriers" label="Calendriers">
+                <CalendarsSection />
               </Block>
 
               <Block id="ia" label="Intelligence artificielle" hint="suggestions & réécriture">
