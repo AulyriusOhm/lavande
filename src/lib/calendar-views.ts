@@ -1,5 +1,5 @@
 import type { CalendarEvent } from "@/lib/calendar";
-import { monthGrid } from "@/lib/calendar";
+import { capitalizeFirst, monthGrid } from "@/lib/calendar";
 
 export type ViewMode = "month" | "week" | "day" | "list";
 
@@ -66,10 +66,6 @@ function addMonthsISO(iso: string, count: number) {
 
 function monthName(month: number, locale: string) {
   return new Intl.DateTimeFormat(locale, { month: "long" }).format(new Date(2020, month, 1, 12));
-}
-
-function capitalizeFirst(text: string) {
-  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 export function periodLabel(mode: ViewMode, anchorISO: string, _todayISO?: string, locale = "fr-FR") {

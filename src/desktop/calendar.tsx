@@ -98,6 +98,19 @@ const VIEW_VARIANTS: Variants = {
 
 const TONE_LABELS = ["Ton 1", "Ton 2", "Ton 3", "Ton 4", "Ton 5"];
 
+function periodContainsToday(mode: ViewMode, anchor: string, selectedDate: string): boolean {
+  switch (mode) {
+    case "month":
+      return anchor.slice(0, 7) === TODAY_ISO.slice(0, 7);
+    case "week":
+      return weekStartISO(anchor) === weekStartISO(TODAY_ISO);
+    case "day":
+      return anchor === TODAY_ISO;
+    case "list":
+      return selectedDate === TODAY_ISO;
+  }
+}
+
 function useNarrowViewport() {
   const [narrow, setNarrow] = useState(() =>
     typeof window.matchMedia === "function" ? window.matchMedia(NARROW_QUERY).matches : false,
@@ -1084,14 +1097,7 @@ export function DesktopCalendar({
   const hasFilters =
     Boolean(query.trim()) || fromMail || conflictsOnly || attendeesOnly || hiddenCalendars.size > 0;
 
-  const isOnToday =
-    mode === "month"
-      ? anchor.slice(0, 7) === TODAY_ISO.slice(0, 7)
-      : mode === "week"
-        ? weekStartISO(anchor) === weekStartISO(TODAY_ISO)
-        : mode === "day"
-          ? anchor === TODAY_ISO
-          : selectedDate === TODAY_ISO;
+  const isOnToday = periodContainsToday(mode, anchor, selectedDate);
 
   const periodKey =
     mode === "month"
