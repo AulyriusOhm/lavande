@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { DesktopCalendar } from "@/desktop/calendar";
+import { DesktopCalendar, NewEventDialog } from "@/desktop/calendar";
 import { MailStoreProvider } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
@@ -36,6 +36,7 @@ const caldavEvent = (over: Partial<CalendarEvent> = {}): CalendarEvent => ({
   location: "Bureau",
   calendar: "Travail",
   external: true,
+  caldav: { sourceId: "travail", uid: "abc-123", etag: '"v1"' },
   ...over,
 });
 
@@ -65,6 +66,22 @@ const caldavPayload = [
     source: "Travail",
   },
 ];
+
+/** L'événement que le démon renvoie après une écriture, avec le nouvel etag. */
+const writtenPayload = {
+  uid: "abc-123",
+  title: "Revue serveur",
+  date: TODAY_ISO,
+  start: "14:00",
+  end: "15:00",
+  all_day: false,
+  timezone: "UTC",
+  location: null,
+  description: null,
+  recurring: false,
+  source: "Travail",
+  etag: '"v2"',
+};
 
 function installViewport(width: number) {
   Object.defineProperty(window, "matchMedia", {
@@ -127,6 +144,27 @@ function stubFetch(payload: unknown = caldavPayload) {
   return fetchMock;
 }
 
+/** Le démon répond route par route : écriture puis relecture de la source. */
+function stubRoutes(routes: (url: string, init?: RequestInit) => Response | Promise<Response>) {
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => routes(url, init));
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+const jsonResponse = (payload: unknown, status = 200): Response =>
+  ({
+    ok: status < 400,
+    status,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  }) as unknown as Response;
+
+const noContent = (): Response => ({ ok: true, status: 204, json: async () => ({}), text: async () => "" }) as unknown as Response;
+
+const storedEvents = (): Record<string, CalendarEvent[]> =>
+  (JSON.parse(window.localStorage.getItem(ICS_KEY) ?? "null") as { events: Record<string, CalendarEvent[]> } | null)
+    ?.events ?? {};
+
 function mount() {
   installViewport(1440);
   const onNewEvent = vi.fn();
@@ -165,16 +203,42 @@ describe("Agenda · événements d'une source CalDAV", () => {
     expect(within(dayPanel()).getByText("14:00 → 15:00")).toBeTruthy();
   });
 
-  it("marque le détail comme lecture seule, sans édition ni suppression", () => {
+  it("propose Modifier et Supprimer pour un événement CalDAV", () => {
     seed();
     mount();
 
     fireEvent.click(within(dayPanel()).getByText("Réunion CalDAV"));
 
     const detail = screen.getByTestId("event-detail");
-    expect(within(detail).getByText("CalDAV · lecture seule")).toBeTruthy();
+    expect(within(detail).getByText("CalDAV")).toBeTruthy();
     expect(within(detail).getByText("Travail")).toBeTruthy();
-    expect(within(detail).getByText(/Calendrier CalDAV : lecture seule, modifiable à la source/)).toBeTruthy();
+    expect(within(detail).queryByText("CalDAV · lecture seule")).toBeNull();
+    expect(within(detail).queryByText(/lecture seule, modifiable à la source/)).toBeNull();
+    expect(within(detail).getByRole("button", { name: "Modifier" })).toBeTruthy();
+    expect(within(detail).getByRole("button", { name: "Supprimer" })).toBeTruthy();
+  });
+
+  it("garde en lecture seule un événement CalDAV sans uid serveur", () => {
+    seed({ caldav: [caldavEvent({ caldav: undefined })] });
+    mount();
+
+    fireEvent.click(within(dayPanel()).getByText("Réunion CalDAV"));
+
+    const detail = screen.getByTestId("event-detail");
+    expect(within(detail).getByText("CalDAV · lecture seule")).toBeTruthy();
+    expect(within(detail).queryByRole("button", { name: "Modifier" })).toBeNull();
+    expect(within(detail).queryByRole("button", { name: "Supprimer" })).toBeNull();
+  });
+
+  it("laisse un événement ICS en lecture seule", () => {
+    seed();
+    mount();
+
+    fireEvent.click(within(dayPanel()).getByText("Réunion ICS"));
+
+    const detail = screen.getByTestId("event-detail");
+    expect(within(detail).getByText("ICS · lecture seule")).toBeTruthy();
+    expect(within(detail).getByText(/Calendrier ICS : lecture seule, modifiable à la source/)).toBeTruthy();
     expect(within(detail).queryByRole("button", { name: "Modifier" })).toBeNull();
     expect(within(detail).queryByRole("button", { name: "Supprimer" })).toBeNull();
   });
@@ -224,6 +288,7 @@ describe("Agenda · rafraîchissement des sources CalDAV", () => {
         location: "Bureau",
         calendar: "Travail",
         external: true,
+        caldav: { sourceId: "travail", uid: "abc-123" },
       },
     ]);
     expect(stored.synced.travail).toBeGreaterThan(0);
@@ -308,5 +373,209 @@ describe("Agenda · compatibilité des sources existantes", () => {
 
     expect(within(dayPanel()).queryByText("Réunion CalDAV")).toBeNull();
     expect(within(header()).getByText(new RegExp(`sur ${EVENTS.length + 1} événements?`))).toBeTruthy();
+  });
+});
+
+function mountDialog(event: CalendarEvent | null) {
+  const onClose = vi.fn();
+  const onCreated = vi.fn();
+  render(
+    <NewEventDialog
+      open
+      event={event}
+      initialDate={`${TODAY_ISO}T14:00`}
+      onCreated={onCreated}
+      onClose={onClose}
+    />,
+    { wrapper: Providers },
+  );
+  return { onClose, onCreated };
+}
+
+const seedCalendars = () =>
+  window.localStorage.setItem(CALENDARS_KEY, JSON.stringify([PRO, TRAVAIL, GOOGLE]));
+
+const seedCaldavCache = () =>
+  window.localStorage.setItem(
+    ICS_KEY,
+    JSON.stringify({ events: { travail: [caldavEvent()] }, synced: { travail: Date.now() } }),
+  );
+
+const requestOf = (fetchMock: ReturnType<typeof stubRoutes>, index = 0) => {
+  const [url, init] = fetchMock.mock.calls[index] as unknown as [string, RequestInit];
+  return { url, init, body: init.body === undefined ? undefined : JSON.parse(String(init.body)) };
+};
+
+describe("Agenda · écriture d'une source CalDAV", () => {
+  it("crée l'événement par le démon quand la cible est CalDAV", async () => {
+    seedCalendars();
+    const fetchMock = stubRoutes(() => jsonResponse(writtenPayload, 201));
+    const { onClose, onCreated } = mountDialog(null);
+
+    fireEvent.change(screen.getByTestId("event-title-input"), { target: { value: "Revue serveur" } });
+    fireEvent.change(screen.getByTestId("event-calendar-input"), { target: { value: "Travail" } });
+    expect(screen.getByTestId("event-caldav-hint")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Créer le rendez-vous" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    const { url, init, body } = requestOf(fetchMock);
+    expect(url).toBe("/api/calendars/caldav/sources/travail/events/create");
+    expect(init.method).toBe("POST");
+    expect(body).toEqual({ title: "Revue serveur", date: TODAY_ISO, start: "14:00", end: "15:00" });
+    expect(onCreated).toHaveBeenCalledTimes(1);
+    expect(storedEvents().travail).toEqual([
+      {
+        id: "caldav:travail:abc-123",
+        date: TODAY_ISO,
+        start: "14:00",
+        end: "15:00",
+        title: "Revue serveur",
+        calendar: "Travail",
+        external: true,
+        caldav: { sourceId: "travail", uid: "abc-123", etag: '"v2"' },
+      },
+    ]);
+  });
+
+  it("met à jour l'événement avec l'etag détenu", async () => {
+    seedCalendars();
+    seedCaldavCache();
+    const fetchMock = stubRoutes(() => jsonResponse(writtenPayload));
+    const { onClose } = mountDialog(caldavEvent());
+
+    expect((screen.getByTestId("event-calendar-input") as HTMLSelectElement).disabled).toBe(true);
+
+    fireEvent.change(screen.getByTestId("event-title-input"), { target: { value: "Revue serveur" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    const { url, init, body } = requestOf(fetchMock);
+    expect(url).toBe("/api/calendars/caldav/sources/travail/events/abc-123");
+    expect(init.method).toBe("PUT");
+    expect(body).toEqual({
+      title: "Revue serveur",
+      date: TODAY_ISO,
+      start: "14:00",
+      end: "15:00",
+      location: "Bureau",
+      etag: '"v1"',
+    });
+    expect(storedEvents().travail?.[0]?.title).toBe("Revue serveur");
+    expect(storedEvents().travail?.[0]?.caldav?.etag).toBe('"v2"');
+  });
+
+  it("explique un conflit de version et relit la source", async () => {
+    seedCalendars();
+    seedCaldavCache();
+    const fetchMock = stubRoutes((url) =>
+      url.endsWith("/events")
+        ? jsonResponse([{ ...writtenPayload, title: "Version serveur" }])
+        : jsonResponse({ error: "ETag périmé", kind: "caldav" }, 412),
+    );
+    const { onClose } = mountDialog(caldavEvent());
+
+    fireEvent.change(screen.getByTestId("event-title-input"), { target: { value: "Revue serveur" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    await waitFor(() => expect(screen.getByTestId("event-error")).toBeTruthy());
+    expect(screen.getByTestId("event-error").textContent).toContain("modifié sur le serveur entre-temps");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1]![0])).toBe("/api/calendars/caldav/sources/travail/events");
+    expect(storedEvents().travail?.[0]?.title).toBe("Version serveur");
+  });
+
+  it("signale une écriture refusée sans relire la source", async () => {
+    seedCalendars();
+    const fetchMock = stubRoutes(() => jsonResponse({ error: "source inconnue", kind: "caldav" }, 404));
+    const { onClose } = mountDialog(null);
+
+    fireEvent.change(screen.getByTestId("event-title-input"), { target: { value: "Revue serveur" } });
+    fireEvent.change(screen.getByTestId("event-calendar-input"), { target: { value: "Travail" } });
+    fireEvent.click(screen.getByRole("button", { name: "Créer le rendez-vous" }));
+
+    await waitFor(() => expect(screen.getByTestId("event-error")).toBeTruthy());
+    expect(screen.getByTestId("event-error").textContent).toContain("source inconnue");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("supprime l'événement du serveur après confirmation", async () => {
+    const fetchMock = stubRoutes(() => noContent());
+    seed();
+    mount();
+
+    fireEvent.click(within(dayPanel()).getByText("Réunion CalDAV"));
+    fireEvent.click(within(screen.getByTestId("event-detail")).getByRole("button", { name: "Supprimer" }));
+
+    const confirm = screen.getByTestId("event-delete-confirm");
+    expect(within(confirm).getByText("Supprimer ?")).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.click(within(confirm).getByRole("button", { name: "Confirmer" }));
+
+    await waitFor(() => expect(screen.queryByTestId("event-detail")).toBeNull());
+    const { url, init } = requestOf(fetchMock);
+    expect(url).toBe("/api/calendars/caldav/sources/travail/events/abc-123?etag=%22v1%22");
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBeUndefined();
+    expect(storedEvents().travail).toEqual([]);
+    expect(within(dayPanel()).queryByText("Réunion CalDAV")).toBeNull();
+  });
+
+  it("annule la suppression sans toucher au serveur", () => {
+    const fetchMock = stubRoutes(() => noContent());
+    seed();
+    mount();
+
+    fireEvent.click(within(dayPanel()).getByText("Réunion CalDAV"));
+    fireEvent.click(within(screen.getByTestId("event-detail")).getByRole("button", { name: "Supprimer" }));
+    fireEvent.click(within(screen.getByTestId("event-delete-confirm")).getByRole("button", { name: "Annuler" }));
+
+    expect(screen.queryByTestId("event-delete-confirm")).toBeNull();
+    expect(within(screen.getByTestId("event-detail")).getByText("Réunion CalDAV")).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(storedEvents().travail).toHaveLength(1);
+  });
+
+  it("garde l'événement quand le démon refuse la suppression", async () => {
+    const fetchMock = stubRoutes(() => jsonResponse({ error: "serveur en panne", kind: "caldav" }, 502));
+    seed();
+    mount();
+
+    fireEvent.click(within(dayPanel()).getByText("Réunion CalDAV"));
+    fireEvent.click(within(screen.getByTestId("event-detail")).getByRole("button", { name: "Supprimer" }));
+    fireEvent.click(within(screen.getByTestId("event-delete-confirm")).getByRole("button", { name: "Confirmer" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByTestId("event-delete-confirm")).toBeNull());
+    expect(within(screen.getByTestId("event-detail")).getByText("Réunion CalDAV")).toBeTruthy();
+    expect(storedEvents().travail).toHaveLength(1);
+  });
+
+  it("délivre le cache à l'agenda sans relecture après une écriture", async () => {
+    const fetchMock = stubFetch([writtenPayload]);
+    seed({ synced: { google: Date.now(), travail: Date.now() } });
+    mount();
+
+    fireEvent.click(screen.getByRole("button", { name: "Actualiser les sources CalDAV" }));
+
+    await waitFor(() => expect(within(dayPanel()).getByText("Revue serveur")).toBeTruthy());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(storedEvents().travail?.[0]?.caldav).toEqual({ sourceId: "travail", uid: "abc-123", etag: '"v2"' });
+  });
+
+  it("garde la création locale hors du démon", async () => {
+    seedCalendars();
+    const fetchMock = stubRoutes(() => jsonResponse([]));
+    const { onClose } = mountDialog(null);
+
+    fireEvent.change(screen.getByTestId("event-title-input"), { target: { value: "Déjeuner" } });
+    fireEvent.click(screen.getByRole("button", { name: "Créer le rendez-vous" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(storedEvents().travail).toBeUndefined();
   });
 });

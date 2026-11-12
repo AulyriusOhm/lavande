@@ -254,6 +254,21 @@ export type ExternalEvent = {
   source: string | null;
 };
 
+/** Un événement que le démon vient d'écrire : ses champs et l'etag de la ressource. */
+export type WrittenExternalEvent = ExternalEvent & { etag?: string | null };
+
+/** Champs éditables d'un événement CalDAV ; `start` absent : journée entière. */
+export type CaldavEventInput = {
+  title: string;
+  date: string;
+  start?: string;
+  end?: string;
+  location?: string;
+  description?: string;
+  /** ETag détenu par l'appelant : un etag périmé est refusé par le serveur (412). */
+  etag?: string;
+};
+
 /** `content` (fichier) ou `url` (abonnement) : jamais les deux. */
 export type IcsImport = {
   content?: string;
@@ -359,7 +374,7 @@ const KINDS: readonly ApiErrorKind[] = [
 ];
 
 type RequestOptions = {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   timeout?: number;
   signal?: AbortSignal;
@@ -570,6 +585,28 @@ export const mailApi = {
       method: "POST",
       timeout: LONG_TIMEOUT,
     }),
+
+  /** Écriture : le démon signe la requête avec les identifiants de son coffre. */
+  caldavCreateEvent: (sourceId: string, input: CaldavEventInput) =>
+    request<WrittenExternalEvent>(
+      `/calendars/caldav/sources/${encodeURIComponent(sourceId)}/events/create`,
+      { method: "POST", body: input, timeout: LONG_TIMEOUT },
+    ),
+
+  caldavUpdateEvent: (sourceId: string, uid: string, input: CaldavEventInput) =>
+    request<WrittenExternalEvent>(
+      `/calendars/caldav/sources/${encodeURIComponent(sourceId)}/events/${encodeURIComponent(uid)}`,
+      { method: "PUT", body: input, timeout: LONG_TIMEOUT },
+    ),
+
+  /** `etag` connu rend la suppression conditionnelle : un serveur qui a bougé répond 412. */
+  caldavDeleteEvent: (sourceId: string, uid: string, etag?: string) =>
+    request<void>(
+      `/calendars/caldav/sources/${encodeURIComponent(sourceId)}/events/${encodeURIComponent(uid)}${
+        etag ? `?etag=${encodeURIComponent(etag)}` : ""
+      }`,
+      { method: "DELETE", timeout: LONG_TIMEOUT },
+    ),
 
   /** Le compte doit être connecté en OAuth2 Google : aucun identifiant ne passe ici. */
   googleCalendars: (accountId: string) =>

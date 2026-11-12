@@ -1,12 +1,21 @@
 /**
- * Sources externes en lecture seule (iCalendar et CalDAV) : les événements
- * analysés par le démon sont rangés à part des calendriers locaux, qui vivent
- * dans le planning synchronisé. Supprimer une source jette ses événements ;
- * aucun événement externe ne remonte dans le store de planification.
+ * Sources externes lues à leur serveur : les événements analysés par le démon
+ * sont rangés à part des calendriers locaux, qui vivent dans le planning
+ * synchronisé. Une source CalDAV s'écrit en plus par le démon, avec les
+ * identifiants de son coffre ; ICS et Google restent en lecture seule.
+ * Supprimer une source jette ses événements ; aucun événement externe ne
+ * remonte dans le store de planification.
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { mailApi, type ExternalEvent } from "@/lib/api";
+import {
+  ApiError,
+  errorText,
+  mailApi,
+  type CaldavEventInput,
+  type ExternalEvent,
+  type WrittenExternalEvent,
+} from "@/lib/api";
 import type { CalendarEvent } from "@/lib/calendar";
 import {
   caldavSourceIdOf,
@@ -20,6 +29,9 @@ import {
 import { GOOGLE_REFRESH_MS, googleWindow } from "@/lib/gcal";
 
 export const ICS_STORAGE_KEY = "lavande.ics.v1";
+
+/** Le cache a changé dans cet onglet : `storage` ne prévient que les autres. */
+export const ICS_CHANGE_EVENT = "lavande:ics-changed";
 
 /** Un abonnement se relit au plus toutes les six heures : jamais de boucle de fetch. */
 export const ICS_REFRESH_MS = 6 * 60 * 60 * 1000;
@@ -61,10 +73,11 @@ export function externalEventKind(event: { id: string }): ExternalKind {
 }
 
 export function toCalendarEvents(
-  external: ExternalEvent[],
-  calendar: { id: string; name: string },
+  external: WrittenExternalEvent[],
+  calendar: CalendarDef,
   kind: ExternalKind = "ics",
 ): CalendarEvent[] {
+  const sourceId = kind === "caldav" ? caldavSourceIdOf(calendar) : undefined;
   return external.map((entry, index) => {
     const event: CalendarEvent = {
       id: externalEventId(kind, calendar.id, entry, index),
@@ -78,6 +91,9 @@ export function toCalendarEvents(
     if (entry.location) event.location = entry.location;
     if (entry.description) event.description = entry.description;
     if (entry.recurring) event.recurring = true;
+    if (sourceId && entry.uid) {
+      event.caldav = { sourceId, uid: entry.uid, ...(entry.etag ? { etag: entry.etag } : {}) };
+    }
     return event;
   });
 }
@@ -117,6 +133,22 @@ export function dropIcsCalendar(state: IcsState, id: string): IcsState {
   return { events, synced };
 }
 
+/** Le démon a écrit l'événement : le cache de la source prend sa version serveur. */
+export function upsertIcsCalendarEvent(state: IcsState, id: string, event: CalendarEvent): IcsState {
+  const list = state.events[id] ?? [];
+  const known = list.some((entry) => entry.id === event.id);
+  const events = known
+    ? list.map((entry) => (entry.id === event.id ? event : entry))
+    : [...list, event];
+  return { ...state, events: { ...state.events, [id]: events.slice(0, ICS_MAX_EVENTS) } };
+}
+
+export function removeIcsCalendarEvent(state: IcsState, id: string, eventId: string): IcsState {
+  const list = state.events[id];
+  if (!list) return state;
+  return { ...state, events: { ...state.events, [id]: list.filter((entry) => entry.id !== eventId) } };
+}
+
 /** Les sources relues à leur serveur dont le cache a expiré (ou qui n'ont jamais été lues). */
 export function dueExternalSubscriptions(
   calendars: CalendarDef[],
@@ -152,6 +184,73 @@ export async function fetchCaldavCalendar(def: CalendarDef): Promise<CalendarEve
 export async function fetchExternalCalendar(def: CalendarDef): Promise<CalendarEvent[]> {
   if (isGoogleCalendar(def)) return fetchGoogleCalendar(def);
   return isCaldavCalendar(def) ? fetchCaldavCalendar(def) : fetchIcsCalendar(def);
+}
+
+/** Relit la source et remplace son cache : la vérité du serveur après un conflit. */
+export async function reloadCaldavSource(def: CalendarDef): Promise<IcsState> {
+  return setIcsCalendarEvents(loadIcsState(), def.id, await fetchCaldavCalendar(def));
+}
+
+/** 409 ou 412 : la ressource a bougé chez le serveur depuis la dernière lecture. */
+export function isCaldavConflict(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 409 || error.status === 412);
+}
+
+export const CALDAV_CONFLICT_MESSAGE =
+  "Événement modifié sur le serveur entre-temps : la source a été relue, réessayez.";
+
+/** Message d'une écriture refusée ; un conflit relit la source pour repartir de son état. */
+export async function caldavWriteFailure(def: CalendarDef, error: unknown): Promise<string> {
+  if (!isCaldavConflict(error)) return `Calendrier CalDAV · ${errorText(error)}`;
+  try {
+    commitIcsState(await reloadCaldavSource(def));
+  } catch (reloadError) {
+    return `${CALDAV_CONFLICT_MESSAGE} Relecture impossible · ${errorText(reloadError)}`;
+  }
+  return CALDAV_CONFLICT_MESSAGE;
+}
+
+/** Le démon renvoie l'événement écrit (uid et etag) : le cache garde de quoi le réécrire. */
+function writtenCaldavEvent(def: CalendarDef, written: WrittenExternalEvent): CalendarEvent {
+  const [event] = toCalendarEvents([written], def, "caldav");
+  if (!event) throw new Error("événement CalDAV illisible en réponse");
+  return event;
+}
+
+/** Crée l'événement dans la source ; l'etag renvoyé servira à la mise à jour suivante. */
+export async function createCaldavEvent(
+  def: CalendarDef,
+  input: CaldavEventInput,
+): Promise<IcsState> {
+  const sourceId = caldavSourceIdOf(def);
+  if (!sourceId) throw new Error("source CalDAV sans identifiant");
+  const written = await mailApi.caldavCreateEvent(sourceId, input);
+  return upsertIcsCalendarEvent(loadIcsState(), def.id, writtenCaldavEvent(def, written));
+}
+
+/** Met à jour la ressource avec l'etag détenu : un serveur qui a bougé répond 409 ou 412. */
+export async function updateCaldavEvent(
+  def: CalendarDef,
+  event: CalendarEvent,
+  input: CaldavEventInput,
+): Promise<IcsState> {
+  const binding = event.caldav;
+  if (!binding) throw new Error("événement CalDAV sans identifiant serveur");
+  const written = await mailApi.caldavUpdateEvent(binding.sourceId, binding.uid, {
+    ...input,
+    ...(binding.etag ? { etag: binding.etag } : {}),
+  });
+  return upsertIcsCalendarEvent(loadIcsState(), def.id, writtenCaldavEvent(def, written));
+}
+
+export async function deleteCaldavEvent(
+  def: CalendarDef,
+  event: CalendarEvent,
+): Promise<IcsState> {
+  const binding = event.caldav;
+  if (!binding) throw new Error("événement CalDAV sans identifiant serveur");
+  await mailApi.caldavDeleteEvent(binding.sourceId, binding.uid, binding.etag);
+  return removeIcsCalendarEvent(loadIcsState(), def.id, event.id);
 }
 
 /** Le démon relit l'agenda du compte avec son refresh token, sur une fenêtre bornée. */
@@ -239,13 +338,23 @@ export function saveIcsState(state: IcsState) {
   }
 }
 
+/** Enregistre le cache puis prévient les vues du même onglet, que `storage` ne touche pas. */
+export function commitIcsState(state: IcsState) {
+  saveIcsState(state);
+  window.dispatchEvent(new Event(ICS_CHANGE_EVENT));
+}
+
 export function useIcsState(): [IcsState, (next: IcsState) => void] {
   const [state, setState] = useState<IcsState>(loadIcsState);
 
   useEffect(() => {
     const sync = () => setState(loadIcsState());
     window.addEventListener("storage", sync);
-    return () => window.removeEventListener("storage", sync);
+    window.addEventListener(ICS_CHANGE_EVENT, sync);
+    return () => {
+      window.removeEventListener("storage", sync);
+      window.removeEventListener(ICS_CHANGE_EVENT, sync);
+    };
   }, []);
 
   const setIcsState = useCallback((next: IcsState) => {

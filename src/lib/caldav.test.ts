@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mailApi, type CaldavSource, type ExternalEvent } from "@/lib/api";
+import { ApiError, mailApi, type CaldavSource, type ExternalEvent } from "@/lib/api";
 import {
+  CALDAV_CONFLICT_MESSAGE,
   CALDAV_REFRESH_MS,
   EMPTY_ICS_STATE,
   ICS_REFRESH_MS,
+  caldavWriteFailure,
+  createCaldavEvent,
+  deleteCaldavEvent,
   dropIcsCalendar,
   dueExternalSubscriptions,
   externalCalendarEvents,
@@ -11,8 +15,12 @@ import {
   externalEventKind,
   fetchCaldavCalendar,
   fetchExternalCalendar,
+  isCaldavConflict,
+  loadIcsState,
+  saveIcsState,
   setIcsCalendarEvents,
   toCalendarEvents,
+  updateCaldavEvent,
 } from "@/lib/ics";
 import {
   DEFAULT_CALENDARS,
@@ -122,8 +130,27 @@ describe("caldav · mapping ExternalEvent → CalendarEvent", () => {
       description: "Point hebdo",
       calendar: "Travail",
       external: true,
+      caldav: { sourceId: "travail", uid: "abc-123" },
     });
   });
+
+  it("garde uid, etag et source pour réécrire l'événement chez le démon", () => {
+    const [written] = toCalendarEvents([{ ...external(), etag: '"v1"' }], travail, "caldav");
+
+    expect(written?.caldav).toEqual({ sourceId: "travail", uid: "abc-123", etag: '"v1"' });
+  });
+
+  it("laisse ICS et Google sans identifiant d'écriture", () => {
+    expect(toCalendarEvents([external()], google)[0]?.caldav).toBeUndefined();
+    expect(toCalendarEvents([external()], google, "google")[0]?.caldav).toBeUndefined();
+  });
+
+  it("reste en lecture seule quand le démon ne donne pas d'uid", () => {
+    const [event] = toCalendarEvents([external({ uid: null })], travail, "caldav");
+
+    expect(event?.caldav).toBeUndefined();
+  });
+
 
   it("distingue les deux familles par l'identifiant", () => {
     expect(externalEventKind({ id: "caldav:travail:abc" })).toBe("caldav");
@@ -264,5 +291,115 @@ describe("caldav · routes du démon", () => {
     await mailApi.caldavSourceEvents("tra/vail");
 
     expect(String(mock.mock.calls[0][0])).toBe("/api/calendars/caldav/sources/tra%2Fvail/events");
+  });
+});
+
+describe("caldav · écriture des événements", () => {
+  const written = { ...external({ title: "Réunion écrite" }), etag: '"v2"' };
+
+  it("crée l'événement par la route dédiée et garde l'etag renvoyé", async () => {
+    const mock = fetchMock(written, 201);
+
+    const state = await createCaldavEvent(travail, {
+      title: "Réunion écrite",
+      date: "2026-03-15",
+      start: "09:00",
+      end: "10:00",
+    });
+
+    const [url, init] = mock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/calendars/caldav/sources/travail/events/create");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(
+      JSON.stringify({ title: "Réunion écrite", date: "2026-03-15", start: "09:00", end: "10:00" }),
+    );
+    expect(state.events.travail).toEqual([
+      {
+        id: "caldav:travail:abc-123",
+        date: "2026-03-15",
+        start: "09:00",
+        end: "10:00",
+        title: "Réunion écrite",
+        location: "Bureau",
+        description: "Point hebdo",
+        calendar: "Travail",
+        external: true,
+        caldav: { sourceId: "travail", uid: "abc-123", etag: '"v2"' },
+      },
+    ]);
+  });
+
+  it("met à jour par uid avec l'etag détenu", async () => {
+    const mock = fetchMock(written);
+    const cached = toCalendarEvents([{ ...external(), etag: '"v1"' }], travail, "caldav")[0]!;
+
+    const state = await updateCaldavEvent(travail, cached, { title: "Réunion écrite", date: "2026-03-15" });
+
+    const [url, init] = mock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/calendars/caldav/sources/travail/events/abc-123");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(String(init.body))).toEqual({
+      title: "Réunion écrite",
+      date: "2026-03-15",
+      etag: '"v1"',
+    });
+    expect(state.events.travail?.[0]?.caldav?.etag).toBe('"v2"');
+  });
+
+  it("supprime l'événement avec son etag, puis le retire du cache", async () => {
+    const mock = vi.fn(
+      async () => ({ ok: true, status: 204, json: async () => ({}), text: async () => "" }) as unknown as Response,
+    );
+    vi.stubGlobal("fetch", mock);
+    const cached = toCalendarEvents([{ ...external(), etag: '"v1"' }], travail, "caldav")[0]!;
+    saveIcsState(setIcsCalendarEvents(EMPTY_ICS_STATE, "travail", [cached]));
+
+    const state = await deleteCaldavEvent(travail, cached);
+
+    const [url, init] = mock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/calendars/caldav/sources/travail/events/abc-123?etag=%22v1%22");
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBeUndefined();
+    expect(state.events.travail).toEqual([]);
+    expect(loadIcsState().events.travail).toEqual([cached]);
+  });
+
+  it("reconnaît un conflit de version et relit la source", async () => {
+    const conflict = response({ error: "ETag périmé", kind: "caldav" }, 412);
+    const mock = vi.fn(async () => conflict);
+    vi.stubGlobal("fetch", mock);
+
+    expect(isCaldavConflict(new ApiError("ETag périmé", "caldav", 412))).toBe(true);
+    expect(isCaldavConflict(new ApiError("ETag périmé", "caldav", 409))).toBe(true);
+    expect(isCaldavConflict(new ApiError("erreur", "caldav", 500))).toBe(false);
+
+    let failure: unknown = null;
+    try {
+      await updateCaldavEvent(travail, toCalendarEvents([external()], travail, "caldav")[0]!, { title: "x", date: "2026-03-15" });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(isCaldavConflict(failure)).toBe(true);
+  });
+
+  it("explique un conflit et remplace le cache par la relecture", async () => {
+    const sources = vi.fn(async () => response([external({ title: "Version serveur" })]));
+    vi.stubGlobal("fetch", sources);
+
+    const message = await caldavWriteFailure(travail, new ApiError("ETag périmé", "caldav", 412));
+
+    expect(message).toBe(CALDAV_CONFLICT_MESSAGE);
+    expect(String(sources.mock.calls[0][0])).toBe("/api/calendars/caldav/sources/travail/events");
+    expect(loadIcsState().events.travail?.[0]?.title).toBe("Version serveur");
+  });
+
+  it("remonte l'erreur du démon sans relire la source", async () => {
+    const sources = fetchMock([external()]);
+
+    const message = await caldavWriteFailure(travail, new ApiError("identifiants refusés", "caldav", 502));
+
+    expect(message).toBe("Calendrier CalDAV · caldav · identifiants refusés");
+    expect(sources).not.toHaveBeenCalled();
   });
 });

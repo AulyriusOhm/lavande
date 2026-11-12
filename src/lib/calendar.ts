@@ -11,10 +11,21 @@ export type CalendarEvent = {
   mailId?: string;
   attendees?: string[];
   calendar?: string;
-  /** Événement venu d'un calendrier ICS : affiché, jamais édité ni supprimé ici. */
+  /** Événement venu d'un calendrier relu à sa source : affiché, jamais édité ici. */
   external?: boolean;
   /** Règle de récurrence présente dans le fichier : l'occurrence n'est pas développée. */
   recurring?: boolean;
+  /**
+   * De quoi réécrire un événement CalDAV : `uid` de la ressource et `etag` connu,
+   * pour la source du démon qui détient les identifiants. Absent : lecture seule.
+   */
+  caldav?: CaldavBinding;
+};
+
+export type CaldavBinding = {
+  sourceId: string;
+  uid: string;
+  etag?: string;
 };
 
 const TODAY = new Date();

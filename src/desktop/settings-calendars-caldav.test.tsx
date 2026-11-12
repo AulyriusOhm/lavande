@@ -170,6 +170,7 @@ describe("Réglages · sources CalDAV", () => {
         location: "Bureau",
         calendar: "Travail",
         external: true,
+        caldav: { sourceId: "travail", uid: "abc-123" },
       },
       {
         id: "caldav:travail:jour-6",
@@ -180,6 +181,7 @@ describe("Réglages · sources CalDAV", () => {
         calendar: "Travail",
         external: true,
         recurring: true,
+        caldav: { sourceId: "travail", uid: "jour-6" },
       },
     ]);
     expect(calls(fetchMock, "/calendars/caldav/sources/travail/events", "POST")).toHaveLength(1);

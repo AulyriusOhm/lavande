@@ -32,14 +32,19 @@ import {
   monthGrid,
   overlappingEvents,
 } from "@/lib/calendar";
-import { TONE_DOT, TONE_PILL, calendarsInUse, icsUrlOf, isCaldavCalendar, isGoogleCalendar, toneOfEvent, useCalendars, type CalendarDef } from "@/lib/calendars";
+import { TONE_DOT, TONE_PILL, caldavSourceIdOf, calendarsInUse, icsUrlOf, isCaldavCalendar, isGoogleCalendar, toneOfEvent, useCalendars, type CalendarDef } from "@/lib/calendars";
 import {
+  commitIcsState,
+  caldavWriteFailure,
+  createCaldavEvent,
+  deleteCaldavEvent,
   dueExternalSubscriptions,
   externalCalendarEvents,
   externalEventKind,
   fetchExternalCalendar,
   markIcsSynced,
   setIcsCalendarEvents,
+  updateCaldavEvent,
   useIcsState,
 } from "@/lib/ics";
 import { errorText } from "@/lib/api";
@@ -167,7 +172,7 @@ const timeRange = (event: CalendarEvent) => {
   return event.end ? `${event.start} → ${event.end}` : event.start;
 };
 
-/** Étiquette d'une source relue à son serveur : ICS, CalDAV ou Google, toujours en lecture seule. */
+/** Étiquette d'une source relue à son serveur : ICS, CalDAV ou Google. */
 function externalBadge(event: CalendarEvent): { tone: "sky" | "green" | "amber"; label: string } {
   const kind = externalEventKind(event);
   if (kind === "google") return { tone: "amber", label: "Google" };
@@ -952,10 +957,14 @@ function DayPanel({
   calendars,
   overlaps,
   hasFilters,
+  confirmingDelete,
+  deleting,
   onSelect,
   onBack,
   onEdit,
   onDelete,
+  onConfirmDelete,
+  onCancelDelete,
   onOpenMail,
 }: {
   selectedDate: string;
@@ -965,14 +974,20 @@ function DayPanel({
   calendars: CalendarDef[];
   overlaps: CalendarEvent[];
   hasFilters: boolean;
+  confirmingDelete: boolean;
+  deleting: boolean;
   onSelect: (event: CalendarEvent) => void;
   onBack: () => void;
   onEdit: (event: CalendarEvent) => void;
   onDelete: (event: CalendarEvent) => void;
+  onConfirmDelete: () => void;
+  onCancelDelete: () => void;
   onOpenMail?: () => void;
 }) {
   const tone = detail ? toneOfEvent(detail, calendars) : 0;
   const external = detail?.external ? externalBadge(detail) : null;
+  const editable = Boolean(detail?.caldav);
+  const readOnly = external !== null && !editable;
 
   return (
     <div className="flex min-h-0 flex-col gap-2">
@@ -1014,7 +1029,11 @@ function DayPanel({
                   mail
                 </Badge>
               ) : null}
-              {external ? <Badge tone={external.tone}>{external.label} · lecture seule</Badge> : null}
+              {external ? (
+                <Badge tone={external.tone}>
+                  {editable ? external.label : `${external.label} · lecture seule`}
+                </Badge>
+              ) : null}
               {detail.recurring ? <Badge tone="neutral">récurrent</Badge> : null}
               {conflicts.has(detail.id) ? <Badge tone="amber">Conflit</Badge> : null}
             </div>
@@ -1069,11 +1088,27 @@ function DayPanel({
             ) : null}
           </div>
 
-          {external ? (
+          {readOnly && external ? (
             <p className="flex items-center gap-2 rounded-[16px] border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-[11px] font-bold text-sky-700 dark:text-sky-300">
               <Link2 className="size-3.5 shrink-0" strokeWidth={2.4} />
               Calendrier {external.label} : lecture seule, modifiable à la source uniquement.
             </p>
+          ) : confirmingDelete ? (
+            <div
+              role="group"
+              aria-label="Confirmer la suppression"
+              data-testid="event-delete-confirm"
+              className="flex items-center gap-2 rounded-[16px] border border-rose-500/40 bg-rose-500/12 px-3 py-2"
+            >
+              <span className="text-[11px] font-bold text-rose-700 dark:text-rose-300">Supprimer ?</span>
+              <DButton variant="danger" size="sm" className="ml-auto" disabled={deleting} onClick={onConfirmDelete}>
+                <Trash2 className="size-3.5" strokeWidth={2.2} />
+                Confirmer
+              </DButton>
+              <DButton variant="ghost" size="sm" onClick={onCancelDelete}>
+                Annuler
+              </DButton>
+            </div>
           ) : (
             <div className="flex items-center gap-2">
               <DButton variant="soft" size="md" className="flex-1" onClick={() => onEdit(detail)}>
@@ -1225,6 +1260,8 @@ export function DesktopCalendar({
   const [attendeesOnly, setAttendeesOnly] = useState(false);
   const [query, setQuery] = useState("");
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const narrow = useNarrowViewport();
 
   const externalEvents = useMemo(() => externalCalendarEvents(ics, calendars), [ics, calendars]);
@@ -1418,13 +1455,35 @@ export function DesktopCalendar({
   };
 
   const removeEvent = (target: CalendarEvent) => {
-    if (target.external) {
-      notify(`Événement d'un calendrier ${externalBadge(target).label} · lecture seule`);
+    if (!target.caldav) {
+      setEvents((current) => current.filter((event) => event.id !== target.id));
+      notify("Rendez-vous supprimé");
+      setDetailId(null);
       return;
     }
-    setEvents((current) => current.filter((event) => event.id !== target.id));
-    notify("Rendez-vous supprimé");
-    setDetailId(null);
+    setPendingDelete(target.id);
+  };
+
+  const confirmRemove = async () => {
+    const target = detail;
+    if (!target?.caldav) return;
+    const def = calendars.find((entry) => caldavSourceIdOf(entry) === target.caldav?.sourceId);
+    if (!def) {
+      notify("Calendrier CalDAV introuvable · relisez les réglages des calendriers");
+      setPendingDelete(null);
+      return;
+    }
+    setDeleting(true);
+    try {
+      commitIcsState(await deleteCaldavEvent(def, target));
+      notify("Rendez-vous supprimé");
+      setDetailId(null);
+    } catch (error) {
+      notify(await caldavWriteFailure(def, error));
+    } finally {
+      setDeleting(false);
+      setPendingDelete(null);
+    }
   };
 
   const overlaps = detail
@@ -1677,10 +1736,14 @@ export function DesktopCalendar({
             calendars={calendars}
             overlaps={overlaps}
             hasFilters={hasFilters}
+            confirmingDelete={detail !== null && pendingDelete === detail.id}
+            deleting={deleting}
             onSelect={openEvent}
             onBack={() => setDetailId(null)}
             onEdit={onEditEvent}
             onDelete={removeEvent}
+            onConfirmDelete={() => void confirmRemove()}
+            onCancelDelete={() => setPendingDelete(null)}
             onOpenMail={mail ? () => openMessage(mail) : undefined}
           />
         </div>
@@ -1754,6 +1817,9 @@ function NewEventForm({
   const [location, setLocation] = useState(event?.location ?? draft?.location ?? "");
   const [people, setPeople] = useState((event?.attendees ?? []).join(", "));
   const [description, setDescription] = useState(descriptionOf(event) ?? "");
+  const [saving, setSaving] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEscapeLayer(true, onClose);
 
@@ -1761,9 +1827,59 @@ function NewEventForm({
   const clashes =
     invalid || !date ? [] : overlappingEvents(events.filter((entry) => entry.id !== event?.id), date, start, end);
   const resolvedTone = tone === "" ? toneOfEvent({ calendar }, calendars) : Number(tone);
+  /** Un événement CalDAV s'écrit chez le démon ; un calendrier local garde le store. */
+  const caldavDef = event?.caldav
+    ? calendars.find((def) => caldavSourceIdOf(def) === event.caldav?.sourceId)
+    : calendars.find((def) => def.name === calendar && isCaldavCalendar(def));
+
+  const caldavInput = () => ({
+    title: title.trim(),
+    date,
+    start,
+    end,
+    location: location.trim() || undefined,
+    description: description.trim() || undefined,
+  });
+
+  const saveCaldav = async (def: CalendarDef) => {
+    setSaving(true);
+    setFailure(null);
+    try {
+      const target = event;
+      commitIcsState(
+        target ? await updateCaldavEvent(def, target, caldavInput()) : await createCaldavEvent(def, caldavInput()),
+      );
+      notify(target ? "Rendez-vous mis à jour" : "Rendez-vous créé");
+      setSelectedDate(date);
+      if (!target) onCreated?.();
+      onClose();
+    } catch (error) {
+      setFailure(await caldavWriteFailure(def, error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeCaldav = async (def: CalendarDef, target: CalendarEvent) => {
+    setSaving(true);
+    setFailure(null);
+    try {
+      commitIcsState(await deleteCaldavEvent(def, target));
+      notify("Rendez-vous supprimé");
+      onClose();
+    } catch (error) {
+      setFailure(await caldavWriteFailure(def, error));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const submit = () => {
-    if (invalid) return;
+    if (invalid || saving) return;
+    if (caldavDef) {
+      void saveCaldav(caldavDef);
+      return;
+    }
     const attendees = people
       .split(",")
       .map((person) => person.trim())
@@ -1795,7 +1911,15 @@ function NewEventForm({
   };
 
   const remove = () => {
-    if (!event) return;
+    if (!event || saving) return;
+    if (caldavDef) {
+      if (!confirmDelete) {
+        setConfirmDelete(true);
+        return;
+      }
+      void removeCaldav(caldavDef, event);
+      return;
+    }
     setEvents((current) => current.filter((entry) => entry.id !== event.id));
     notify("Rendez-vous supprimé");
     onClose();
@@ -1889,8 +2013,9 @@ function NewEventForm({
                   aria-label="Calendrier"
                   data-testid="event-calendar-input"
                   value={calendar}
+                  disabled={Boolean(event?.caldav)}
                   onChange={(inputEvent) => setCalendar(inputEvent.target.value)}
-                  className="focus-ring h-10 w-full appearance-none rounded-xl border border-line bg-surface pr-7 pl-7 text-[12.5px] font-bold text-ink"
+                  className="focus-ring h-10 w-full appearance-none rounded-xl border border-line bg-surface pr-7 pl-7 text-[12.5px] font-bold text-ink disabled:opacity-70"
                 >
                   {calendars.map((def) => (
                     <option key={def.id} value={def.name}>
@@ -1957,6 +2082,27 @@ function NewEventForm({
             />
           </Field>
 
+          {caldavDef ? (
+            <p
+              data-testid="event-caldav-hint"
+              className="flex items-center gap-1.5 text-[10.5px] font-semibold text-ink-muted"
+            >
+              <Link2 className="size-3.5 shrink-0" strokeWidth={2.4} />
+              Calendrier CalDAV : l'événement est écrit sur le serveur.
+            </p>
+          ) : null}
+
+          {failure ? (
+            <div
+              role="alert"
+              data-testid="event-error"
+              className="flex items-start gap-2 rounded-[16px] border border-rose-500/40 bg-rose-500/12 px-3 py-2 text-[11.5px] font-bold text-rose-700 dark:text-rose-300"
+            >
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" strokeWidth={2.2} />
+              <p>{failure}</p>
+            </div>
+          ) : null}
+
           {clashes.length > 0 ? (
             <div
               role="alert"
@@ -1974,16 +2120,16 @@ function NewEventForm({
           </p>
           <div className="ml-auto flex items-center gap-2">
             {editing ? (
-              <DButton variant="danger" size="sm" onClick={remove}>
+              <DButton variant="danger" size="sm" disabled={saving} onClick={remove}>
                 <Trash2 className="size-3.5" strokeWidth={2.2} />
-                Supprimer
+                {confirmDelete ? "Confirmer la suppression" : "Supprimer"}
               </DButton>
             ) : null}
             <DButton variant="ghost" size="sm" onClick={onClose}>
               Annuler
             </DButton>
-            <DButton variant="primary" size="md" disabled={invalid} onClick={submit}>
-              {editing ? "Enregistrer" : "Créer le rendez-vous"}
+            <DButton variant="primary" size="md" disabled={invalid || saving} onClick={submit}>
+              {saving ? "Enregistrement…" : editing ? "Enregistrer" : "Créer le rendez-vous"}
             </DButton>
           </div>
         </div>
