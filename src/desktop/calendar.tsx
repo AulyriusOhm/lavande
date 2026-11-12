@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  EyeOff,
   Inbox,
   Mail,
   MapPin,
@@ -21,9 +22,11 @@ import {
   TODAY_ISO,
   WEEKDAYS,
   capitalizeFirst,
+  clampIsoDay,
   conflictingIds,
   daysInMonth,
   isoDay,
+  isoTime,
   monthGrid,
   overlappingEvents,
 } from "@/lib/calendar";
@@ -47,6 +50,9 @@ import {
   type ViewMode,
 } from "@/lib/calendar-views";
 import { useMailStore } from "@/lib/store";
+import type { Mail as MailType } from "@/lib/mail";
+import { formatDueDate, type MailSuggestion } from "@/lib/tasks";
+import { sourceAccountLabel } from "@/lib/accounts";
 import { useEscapeLayer } from "@/desktop/escape";
 import {
   Badge,
@@ -808,6 +814,77 @@ function FilterGroup({
   );
 }
 
+function EventSuggestionCard({
+  suggestion,
+  account,
+  mail,
+  onAccept,
+  onOpenMail,
+  onDismiss,
+}: {
+  suggestion: MailSuggestion;
+  account: string;
+  mail: MailType | undefined;
+  onAccept: () => void;
+  onOpenMail: (mail: MailType) => void;
+  onDismiss: () => void;
+}) {
+  const day = clampIsoDay(suggestion.date);
+  const hours = [isoTime(suggestion.start), isoTime(suggestion.end)].filter(Boolean).join(" → ");
+  const when = [day ? formatDueDate(day) : suggestion.due, hours].filter(Boolean).join(" · ");
+
+  return (
+    <div
+      data-testid="event-suggestion-card"
+      className="rounded-[18px] border border-dashed border-accent-ring/70 bg-accent-soft/40 p-2.5"
+    >
+      <div className="flex items-center gap-1.5">
+        <span
+          data-testid="event-suggestion-account"
+          className="inline-flex h-[20px] shrink-0 items-center rounded-full bg-surface px-1.5 text-[10.5px] font-extrabold whitespace-nowrap text-accent-ink"
+        >
+          {account}
+        </span>
+        <span className="truncate text-[11px] font-bold text-ink">{suggestion.from}</span>
+      </div>
+
+      <p className="mt-1.5 text-[12.5px] leading-tight font-bold text-ink">{suggestion.proposal}</p>
+
+      {when ? (
+        <p
+          data-testid="event-suggestion-when"
+          className="mt-1 flex items-center gap-1.5 text-[11px] font-bold text-ink-muted tabular-nums"
+        >
+          <Clock className="size-3 shrink-0" strokeWidth={2.4} />
+          <span className="truncate">{when}</span>
+        </p>
+      ) : null}
+
+      {suggestion.location ? (
+        <p className="mt-1 flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted">
+          <MapPin className="size-3 shrink-0" strokeWidth={2.4} />
+          <span className="truncate">{suggestion.location}</span>
+        </p>
+      ) : null}
+
+      <div className="mt-2 flex items-center gap-1">
+        <DButton size="sm" variant="soft" aria-label={`Accepter : ${suggestion.proposal}`} onClick={onAccept}>
+          <Plus className="size-3.5" strokeWidth={3} />
+          Accepter
+        </DButton>
+        {mail ? (
+          <DIconButton label="Ouvrir le mail" className="size-8" onClick={() => onOpenMail(mail)}>
+            <Mail className="size-3.5" strokeWidth={2.2} />
+          </DIconButton>
+        ) : null}
+        <DIconButton label="Ignorer la suggestion" className="ml-auto size-8" onClick={onDismiss}>
+          <EyeOff className="size-3.5" strokeWidth={2.2} />
+        </DIconButton>
+      </div>
+    </div>
+  );
+}
+
 function DayPanel({
   selectedDate,
   dayEvents,
@@ -1021,14 +1098,46 @@ function DayPanel({
   );
 }
 
+export type NewEventInit = {
+  title?: string;
+  date?: string;
+  start?: string;
+  end?: string;
+  location?: string;
+};
+
+function draftFromSuggestion(suggestion: MailSuggestion): NewEventInit {
+  const date = clampIsoDay(suggestion.date);
+  const start = isoTime(suggestion.start);
+  const end = isoTime(suggestion.end);
+  return {
+    title: suggestion.proposal,
+    ...(date ? { date } : {}),
+    ...(start ? { start } : {}),
+    ...(start && end && end > start ? { end } : {}),
+    ...(suggestion.location ? { location: suggestion.location } : {}),
+  };
+}
+
 export function DesktopCalendar({
   onNewEvent,
   onEditEvent,
 }: {
-  onNewEvent: (date?: string) => void;
+  onNewEvent: (init?: string | NewEventInit, suggestion?: MailSuggestion) => void;
   onEditEvent: (event: CalendarEvent) => void;
 }) {
-  const { events, mails, selectedDate, setSelectedDate, setEvents, openMessage, notify } = useMailStore();
+  const {
+    events,
+    mails,
+    accounts,
+    suggestions,
+    selectedDate,
+    setSelectedDate,
+    setEvents,
+    dismissSuggestion,
+    openMessage,
+    notify,
+  } = useMailStore();
   const [calendars] = useCalendars();
   const [mode, setMode] = useState<ViewMode>("month");
   const [anchor, setAnchor] = useState(selectedDate);
@@ -1043,6 +1152,13 @@ export function DesktopCalendar({
 
   const calendarList = useMemo(() => calendarsInUse(events, calendars), [events, calendars]);
   const conflicts = useMemo(() => conflictingIds(events), [events]);
+  const eventSuggestions = useMemo(
+    () => suggestions.filter((suggestion) => suggestion.kind === "event"),
+    [suggestions],
+  );
+
+  const acceptSuggestion = (suggestion: MailSuggestion) =>
+    onNewEvent(draftFromSuggestion(suggestion), suggestion);
 
   const activeCalendars = useMemo(() => {
     const names = new Set(
@@ -1375,6 +1491,22 @@ export function DesktopCalendar({
             />
           </FilterGroup>
 
+          {eventSuggestions.length > 0 ? (
+            <FilterGroup label="Suggestions de RDV" count={eventSuggestions.length} testId="event-suggestions">
+              {eventSuggestions.map((suggestion) => (
+                <EventSuggestionCard
+                  key={suggestion.id}
+                  suggestion={suggestion}
+                  account={sourceAccountLabel(accounts, suggestion.account)}
+                  mail={mails.find((mail) => mail.id === suggestion.mailId)}
+                  onAccept={() => acceptSuggestion(suggestion)}
+                  onOpenMail={openMessage}
+                  onDismiss={() => dismissSuggestion(suggestion)}
+                />
+              ))}
+            </FilterGroup>
+          ) : null}
+
           <div className="h-px shrink-0 bg-line" />
 
           <DayPanel
@@ -1412,24 +1544,40 @@ export function NewEventDialog({
   open,
   event,
   initialDate,
+  draft,
+  onCreated,
   onClose,
 }: {
   open: boolean;
   event: CalendarEvent | null;
   initialDate?: string;
+  draft?: NewEventInit;
+  onCreated?: () => void;
   onClose: () => void;
 }) {
   if (!open) return null;
-  return <NewEventForm event={event} initialDate={initialDate} onClose={onClose} />;
+  return (
+    <NewEventForm
+      event={event}
+      initialDate={initialDate}
+      draft={draft}
+      onCreated={onCreated}
+      onClose={onClose}
+    />
+  );
 }
 
 function NewEventForm({
   event,
   initialDate,
+  draft,
+  onCreated,
   onClose,
 }: {
   event: CalendarEvent | null;
   initialDate?: string;
+  draft?: NewEventInit;
+  onCreated?: () => void;
   onClose: () => void;
 }) {
   const { events, selectedDate, setEvents, setSelectedDate, notify } = useMailStore();
@@ -1437,13 +1585,13 @@ function NewEventForm({
   const editing = event !== null;
 
   const [initDate, initStart] = (initialDate ?? "").split("T");
-  const [title, setTitle] = useState(event?.title ?? "");
-  const [date, setDate] = useState(event?.date ?? (initDate || undefined) ?? selectedDate);
-  const [start, setStart] = useState(event?.start ?? (initStart || undefined) ?? "14:00");
-  const [end, setEnd] = useState(event?.end ?? (initStart ? addMinutes(initStart, 60) : "15:00"));
+  const [title, setTitle] = useState(event?.title ?? draft?.title ?? "");
+  const [date, setDate] = useState(event?.date ?? draft?.date ?? (initDate || undefined) ?? selectedDate);
+  const [start, setStart] = useState(event?.start ?? draft?.start ?? (initStart || undefined) ?? "14:00");
+  const [end, setEnd] = useState(event?.end ?? draft?.end ?? (initStart ? addMinutes(initStart, 60) : "15:00"));
   const [calendar, setCalendar] = useState(event?.calendar ?? calendars[0]?.name ?? "Pro");
   const [tone, setTone] = useState(event?.tone === undefined ? "" : String(event.tone));
-  const [location, setLocation] = useState(event?.location ?? "");
+  const [location, setLocation] = useState(event?.location ?? draft?.location ?? "");
   const [people, setPeople] = useState((event?.attendees ?? []).join(", "));
   const [description, setDescription] = useState(descriptionOf(event) ?? "");
 
@@ -1480,6 +1628,7 @@ function NewEventForm({
     } else {
       setEvents((current) => [...current, next]);
       notify("Rendez-vous créé");
+      onCreated?.();
     }
     setSelectedDate(date);
     onClose();

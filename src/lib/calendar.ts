@@ -140,6 +140,25 @@ export function daysInMonth(year = CURRENT_YEAR, month = CURRENT_MONTH) {
   return new Date(year, month + 1, 0).getDate();
 }
 
+const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+/** Jour réel : « 2026-02-31 » retombe au dernier jour du mois, une valeur libre est ignorée. */
+export function clampIsoDay(value: string | undefined) {
+  const match = ISO_DAY.exec(value ?? "");
+  if (!match) return undefined;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) return undefined;
+  const last = daysInMonth(year, month - 1);
+  return isoDay(year, month - 1, Math.min(Math.max(Number(match[3]), 1), last));
+}
+
+export function isoTime(value: string | undefined) {
+  if (!value || !ISO_TIME.test(value)) return undefined;
+  return value;
+}
+
 export function overlappingEvents(list: CalendarEvent[], date: string, start: string, end: string) {
   return list.filter((event) => event.date === date && event.start < end && start < event.end);
 }

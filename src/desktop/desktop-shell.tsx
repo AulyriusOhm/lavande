@@ -9,8 +9,9 @@ import { DESKTOP_TABS, DesktopDock, type DesktopView } from "@/desktop/dock";
 import { DesktopInbox } from "@/desktop/inbox";
 import { DesktopSearch } from "@/desktop/search";
 import { DesktopCompose } from "@/desktop/compose";
-import { DesktopCalendar, NewEventDialog } from "@/desktop/calendar";
+import { DesktopCalendar, NewEventDialog, type NewEventInit } from "@/desktop/calendar";
 import type { CalendarEvent } from "@/lib/calendar";
+import type { MailSuggestion } from "@/lib/tasks";
 import { DesktopPlanning, NewTaskDialog } from "@/desktop/planning";
 import { DesktopSettings } from "@/desktop/settings";
 import { PgpScreen } from "@/screens/pgp-screen";
@@ -39,6 +40,7 @@ function DesktopMain() {
     closeConnect,
     composeOpen,
     removeTarget,
+    dismissSuggestion,
   } = useMailStore();
   const { calendarEnabled, planningEnabled } = usePrefs();
   const [view, setView] = useState<DesktopView>(() => {
@@ -50,6 +52,8 @@ function DesktopMain() {
   const [newEventOpen, setNewEventOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const [pendingInit, setPendingInit] = useState<string | undefined>(undefined);
+  const [pendingDraft, setPendingDraft] = useState<NewEventInit | undefined>(undefined);
+  const [pendingSuggestion, setPendingSuggestion] = useState<MailSuggestion | null>(null);
   const [pgpOpen, setPgpOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const mailNav = useRef<MailNavigation | null>(null);
@@ -80,11 +84,16 @@ function DesktopMain() {
 
   const toggleHelp = useCallback(() => setHelpOpen((current) => !current), []);
 
-  const openNewEvent = useCallback((init?: string) => {
-    setEditingEvent(null);
-    setPendingInit(init);
-    setNewEventOpen(true);
-  }, []);
+  const openNewEvent = useCallback(
+    (init?: string | NewEventInit, suggestion?: MailSuggestion) => {
+      setEditingEvent(null);
+      setPendingInit(typeof init === "string" ? init : undefined);
+      setPendingDraft(typeof init === "string" ? undefined : init);
+      setPendingSuggestion(suggestion ?? null);
+      setNewEventOpen(true);
+    },
+    [],
+  );
 
   const overlayOpen =
     searchOpen ||
@@ -210,10 +219,16 @@ function DesktopMain() {
         open={newEventOpen}
         event={editingEvent}
         initialDate={pendingInit}
+        draft={pendingDraft}
+        onCreated={() => {
+          if (pendingSuggestion) dismissSuggestion(pendingSuggestion);
+        }}
         onClose={() => {
           setNewEventOpen(false);
           setEditingEvent(null);
           setPendingInit(undefined);
+          setPendingDraft(undefined);
+          setPendingSuggestion(null);
         }}
       />
       <Notice notice={notices[0] ?? null} onClose={dismissNotice} />

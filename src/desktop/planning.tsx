@@ -46,6 +46,7 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
   const [over, setOver] = useState<TaskState | null>(null);
 
   const openTasks = tasks.filter((task) => task.state !== "done").length;
+  const taskSuggestions = suggestions.filter((suggestion) => suggestion.kind !== "event");
   const selectedTask = selection?.kind === "task" ? tasks.find((task) => task.id === selection.id) : undefined;
   const selectedSuggestion = selection?.kind === "suggestion" ? selection.suggestion : undefined;
   const linkedMail = selectedTask?.mailId
@@ -99,9 +100,9 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
         <PaneTitle hint={`${openTasks} ouvertes`}>Planification</PaneTitle>
         <div className="flex items-center gap-2">
           <SyncBadge onOpen={onOpenSync} />
-          {suggestions.length > 0 ? (
+          {taskSuggestions.length > 0 ? (
             <span className="inline-flex h-8 items-center rounded-full bg-accent-soft px-2.5 text-[11px] font-bold text-accent-ink tabular-nums">
-              {suggestions.length} suggestions
+              {taskSuggestions.length} suggestions
             </span>
           ) : null}
           <DButton variant="primary" size="sm" onClick={onNewTask}>
@@ -111,9 +112,9 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
         </div>
       </header>
 
-      {suggestions.length > 0 ? (
+      {taskSuggestions.length > 0 ? (
         <div className="mt-4 flex shrink-0 gap-3 overflow-x-auto px-6 pb-1">
-          {suggestions.map((suggestion, index) => (
+          {taskSuggestions.map((suggestion, index) => (
             <motion.article
               key={suggestion.id}
               data-testid="suggestion-card"
