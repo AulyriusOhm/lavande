@@ -760,7 +760,6 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       }
       if (mail.bodyFetched) return;
       if (mail.pgp === "encrypted" && !resolvePgp(pgpPrefs, mail.account).enabled) {
-        notify("PGP désactivé pour ce compte · message chiffré laissé fermé");
         return;
       }
       const source = mail.source;
