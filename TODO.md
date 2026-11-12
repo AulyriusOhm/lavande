@@ -30,7 +30,7 @@ Décisions actées avec Roman le 12/11/2026 :
 - #15 correction LLM sans perte d'images (jetons ⟦img-n⟧ + repli) · #16 historique cité repliable lecture seule (champ `quoted` séparé) · #17 signature avant l'historique (`sendInputOf` : message → signature → citation).
 
 **Restent à faire** :
-- #3 anti-spam (phase de recherche d'abord) · #6 graphisme PC planif (agenda livré) · #7 rangement des réglages (plan à valider) · #11 calendriers externes (OAuth Google à fournir) · #14 parapluie sécurité (audit autonome ; Keystore Android + trousseau système + signature paquets avec Roman) · #18 barre flottante PC (plus visible + flou gaussien autour).
+- #3 anti-spam (phase de recherche d'abord) · #6 graphisme PC planif (agenda livré) · #7 rangement des réglages (plan à valider) · #11 calendriers externes (OAuth Google à fournir) · #14 parapluie sécurité (audit autonome ; Keystore Android + trousseau système + signature paquets avec Roman) · #18 barre flottante PC (plus visible + flou gaussien autour) · #19 connexion Google (401 invalid_client).
 - Hors todo : auto-updater (hébergement endpoint, sauvegarde clé, 1ʳᵉ release, AppImage, test E2E) · Android insets sur appareil physique + CI.
 - Suivis mineurs : `htmlToText` avale les URL `<https://…>` dans les aperçus texte ; relecture locale des images inline CID dans Envoyés ; scénario live IMAP du gate PGP ; 2 chaînes démo cosmétiques sous verrou ; agenda : événements sans calendrier non masquables par une case + compteurs de filtres qui se recoupent (préexistant).
 
@@ -53,6 +53,13 @@ adaptation au thème sombre.
 ### #4 — Corriger l'agenda PC au redimensionnement
 L'agenda sur PC supporte mal le redimensionnement de la fenêtre ; le bouton « Nouveau rendez-vous »
 apparaît en doublon selon la largeur. Diagnostiquer les deux rendus (header/toolbar) et corriger le layout responsive.
+
+### #19 — Corriger la connexion Google (Erreur 401 : invalid_client)
+La connexion Google échoue avec « Erreur 401 : invalid_client » — détails de la requête :
+`flowName=GeneralOAuthFlow`. Piste : identifiants du client OAuth (client ID / secret) invalides ou mal
+configurés dans la Google Cloud Console. Flux concerné : `crates/mail-core/src/oauth.rs` +
+`crates/mail-api/src/oauth_flow.rs`, écran de connexion (`src/screens/connect-screen.tsx`). Lié à #11
+(Google Calendar OAuth).
 
 ## Production / distribution
 
