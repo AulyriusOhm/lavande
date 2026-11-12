@@ -22,9 +22,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::State;
+use axum::http::{header, HeaderValue, Method};
 use axum::routing::get;
 use axum::{Json, Router};
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 
 use crate::dto::Health;
 use crate::state::AppState;
@@ -41,13 +42,35 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Health> {
     })
 }
 
+/// Origines qui parlent réellement au démon : la coquille Tauri (Linux et macOS
+/// en `tauri://localhost`, Windows en `tauri.localhost` https par défaut ou http
+/// si le schéma est forcé, Android avec les deux) et le dev server Vite
+/// (`strictPort`, donc toujours 1420). L'app servie par le portail nginx n'est
+/// pas concernée : elle joint `/lavande/api/` en même origine.
+const ALLOWED_ORIGINS: [&str; 5] = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+];
+
 /// The webview of the desktop/mobile shell runs on another origin, so the
 /// routeur accepts it explicitly; the daemon only ever listens on loopback.
+/// Une origine absente de la liste ne reçoit aucun en-tête CORS : le navigateur
+/// refuse de lire la réponse, la requête elle-même n'est pas coupée.
 fn cors() -> CorsLayer {
     CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any)
+        .allow_origin(ALLOWED_ORIGINS.map(HeaderValue::from_static))
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
 }
 
 pub fn app(state: Arc<AppState>) -> Router {

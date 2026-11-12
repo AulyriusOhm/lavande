@@ -765,7 +765,7 @@ Où chaque client prend le jeton :
 | --- | --- |
 | Coquille Tauri (desktop/mobile) | commande `mail_daemon_token` (lit/crée le même fichier), le front porte le jeton ; SSE en `?token=` |
 | Web dev (`npm run dev`) | proxy Vite : lit `daemon-token` au démarrage et l'injecte, le navigateur ne le voit jamais |
-| Portail nginx (`/lavande/api/`) | `dev-proxy.sh` génère `deploy/nginx/lavande-token.inc` (gitignoré) que `portal.conf` inclut |
+| Portail nginx (`/lavande/api/`) | `dev-proxy.sh` génère `deploy/nginx/lavande-token.inc` (gitignoré, **0600**) que `portal.conf` inclut ; l'emplacement n'accepte que les requêtes émises par le SPA du portail (voir `deploy/README.md`) |
 
 Si le démon démarre après Vite ou nginx, relancez le proxy pour qu'il lise le jeton. Un processus
 du même utilisateur peut lire le fichier : le jeton protège contre les autres utilisateurs et toute
@@ -987,7 +987,11 @@ Les identifiants de message (`message_id`, `in_reply_to`, `references`) sont sto
   vraie boîte. Si le démon est absent, un bandeau propose de le démarrer ou de passer en démo.
 - Coquille Tauri (`src-tauri/src/lib.rs`) : `lavande_mail_api::serve()` démarre le routeur sur
   `127.0.0.1:8790` avec `app_data_dir()` au lancement, dans le processus de l'app (pas de sidecar).
-  Le routeur autorise l'origine du webview (CORS), et l'APK autorise le trafic local en clair.
+  Le routeur n'accepte en CORS que les origines de la coquille (`tauri://localhost`,
+  `http://tauri.localhost`, `https://tauri.localhost`), le dev server (`http://localhost:1420`,
+  `http://127.0.0.1:1420`) ; méthodes `GET/POST/PUT/PATCH/DELETE/OPTIONS`, en-têtes
+  `authorization` et `content-type`. Toute autre origine ne reçoit aucun en-tête CORS. L'APK
+  autorise le trafic local en clair.
 
 ## Modes de fonctionnement
 
@@ -1001,8 +1005,9 @@ est absent, `BackendBanner` l'explique et propose « Réessayer » ou « Voir la
 blanc.
 
 Coquille Tauri : le processus démarre le routeur sur `127.0.0.1:8790` (`app_data_dir()`), le webview
-appelle cette base (origine différente, d'où le CORS loopback). L'APK autorise le trafic local en
-clair (`usesCleartextTraffic`), le démon n'écoutant que sur la boucle locale.
+appelle cette base (origine différente, d'où le CORS limité aux origines de la coquille et du dev
+server, `tests/cors.rs`). L'APK autorise le trafic local en clair (`usesCleartextTraffic`), le démon
+n'écoutant que sur la boucle locale.
 
 ## Tests
 

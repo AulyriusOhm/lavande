@@ -33,8 +33,55 @@ Vérifié :
 | --- | --- |
 | `curl https://plasma.int.lanro.eu:8443/` | `200` (portail) |
 | `curl .../lavande/`, `.../lavande/src/main.tsx`, `.../lavande/@vite/client` | `200` |
+| `curl .../lavande/api/accounts` sans en-tête de navigation | `403` (voir plus bas) |
 | `openssl s_client -servername plasma.int.lanro.eu` | chaîne complète, `Verify return code: 0 (ok)` |
 | rendu de l'app dans un Chrome headless via le DNS interne + TLS réel | rendu complet, 0 erreur console |
+
+## `/lavande/api/` : jeton injecté, accès restreint au SPA
+
+Le démon mail n'authentifie pas la requête : c'est nginx qui ajoute le `Bearer`
+(`deploy/nginx/lavande-token.inc`, généré par `dev-proxy.sh`, **0600**). L'URL du portail
+n'est donc pas censée être une API mail ouverte. Deux protections habituelles ne
+fonctionnent pas dans cette topologie :
+
+- **allow-list d'IP** : tout client distant arrive par le tunnel SSH inversé (donc vu depuis
+  `127.0.0.1`) et les postes du LAN sortent en `MASQUERADE` — aucune source n'est
+  distinguable ;
+- **`auth_basic`** : elle demanderait un dialogue que `EventSource` (SSE des événements mail)
+  et le HMR Vite ne peuvent pas mener, et le front n'est pas modifiable pour porter un secret.
+
+D'où un contrôle sur ce que seul le navigateur pose, en tête de `portal.conf` (contexte
+`http`, donc hors du bloc `server`) :
+
+```nginx
+map $http_sec_fetch_site $lavande_api_from_portal { default 0; "same-origin" 1; "same-site" 1; }
+map $http_referer        $lavande_api_from_referer { default 0; "~^https?://(plasma\.int\.lanro\.eu|dev\.int\.lanro\.eu|10\.1\.50\.10|localhost)(:[0-9]+)?/lavande(/|$)" 1; }
+map "$lavande_api_from_portal$lavande_api_from_referer" $lavande_api_allowed { default 0; "~1" 1; }
+```
+
+et dans `location /lavande/api/` : `if ($lavande_api_allowed = 0) { return 403; }`.
+
+`Sec-Fetch-Site` est posé par le navigateur (inforgeable depuis une page) et vaut
+`same-origin` pour le SPA servi par ce portail ; `Referer` sert de repli pour les navigateurs
+qui n'envoient pas encore les métadonnées Fetch (Safari < 16.4). Résultat mesuré (nginx:alpine,
+certificat auto-signé, amont factice) :
+
+| Requête vers `/lavande/api/accounts` | Code |
+| --- | --- |
+| `curl` nu (URL saisie, scan) | `403` |
+| `Sec-Fetch-Site: same-origin` | `200`, `Authorization: Bearer …` injecté |
+| `Sec-Fetch-Site: same-site` | `200` |
+| `Sec-Fetch-Site: none` (navigation directe) | `403` |
+| `Sec-Fetch-Site: cross-site` (page tierce) | `403` |
+| `Referer: https://plasma.int.lanro.eu:8443/lavande/mail` | `200` |
+| `Referer: https://dev.int.lanro.eu/lavande/` | `200` |
+| `Referer: https://evil.test/lavande/x` | `403` |
+| `Referer: https://evil.int.lanro.eu:8443/lavande/` | `403` |
+
+Limite assumée : un client non-navigateur qui forge `Sec-Fetch-Site`/`Referer` passe toujours.
+Fermer ce dernier trou demande un secret par client porté par le front (ou la suppression de
+l'injection nginx au profit de la seule coquille Tauri) — hors périmètre ici.
+
 
 ## Ajouter un projet
 
