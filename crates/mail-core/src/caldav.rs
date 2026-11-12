@@ -1,4 +1,4 @@
-//! CalDAV client (RFC 4791), read-only.
+//! CalDAV client (RFC 4791): discovery, events and writes.
 //!
 //! Discovery walks `current-user-principal`, then `calendar-home-set`, then
 //! lists the collections whose `resourcetype` carries `calendar`; a server
@@ -7,8 +7,13 @@
 //! fetched and parsed by [`crate::ics::parse_events`]; a server refusing the
 //! REPORT falls back to a `PROPFIND` listing of the collection.
 //!
+//! A write is one resource per event (`<collection>/<uid>.ics`): a `PUT`
+//! carrying the iCalendar of [`crate::ics::event_ics`], guarded by
+//! `If-None-Match: *` on creation and `If-Match` on update or deletion, so a
+//! stale ETag is refused by the server instead of silently overwritten.
+//!
 //! Credentials travel in a Basic header only: they never enter a URL, a log
-//! line or an error message. Writing (`PUT`, `DELETE`) is out of scope.
+//! line or an error message.
 //!
 //! The server URL is caller supplied and fetched as is: like the ICS import,
 //! the LAN stays reachable (self-hosted servers are the use case). Only `http`
@@ -24,10 +29,19 @@ use reqwest::{Method, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 
 use crate::error::MailError;
-use crate::ics::{parse_events, ExternalEvent, MAX_ICS_BYTES, MAX_ICS_EVENTS};
+use crate::ics::{event_ics, parse_events, ExternalEvent, MAX_ICS_BYTES, MAX_ICS_EVENTS};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Media type of a calendar resource written by a `PUT`.
+const ICS_TYPE: &str = "text/calendar; charset=utf-8";
+
+/// Media type of a WebDAV request body.
+const XML_TYPE: &str = "application/xml; charset=utf-8";
+
+/// Longest `UID` accepted as a resource name.
+const MAX_UID_LENGTH: usize = 255;
 
 /// Largest WebDAV answer (PROPFIND, REPORT) read from the server.
 const MAX_XML_BYTES: usize = 2 * 1024 * 1024;
@@ -75,6 +89,11 @@ const MEMBERS_QUERY: &str = concat!(
     r#"<?xml version="1.0" encoding="utf-8"?>"#,
     r#"<d:propfind xmlns:d="DAV:">"#,
     r#"<d:prop><d:resourcetype/><d:getcontenttype/></d:prop></d:propfind>"#
+);
+
+const ETAG_QUERY: &str = concat!(
+    r#"<?xml version="1.0" encoding="utf-8"?>"#,
+    r#"<d:propfind xmlns:d="DAV:"><d:prop><d:getetag/></d:prop></d:propfind>"#
 );
 
 /// One calendar collection as the settings need it.
@@ -192,6 +211,119 @@ impl CaldavClient {
         Ok(events)
     }
 
+    /// Writes `event` into `collection_href` as `<collection>/<uid>.ics`.
+    ///
+    /// Without `etag` the resource must not exist yet (`If-None-Match: *`);
+    /// with one the write is conditional (`If-Match`). Returns the ETag the
+    /// server announced in its answer, when it sends one.
+    pub async fn put_event(
+        &self,
+        collection_href: &str,
+        event: &ExternalEvent,
+        etag: Option<&str>,
+    ) -> Result<Option<String>, MailError> {
+        let uid = event
+            .uid
+            .as_deref()
+            .ok_or_else(|| MailError::Calendar("événement sans UID".to_string()))?;
+        let url = self.event_url(collection_href, uid)?;
+        let ics = event_ics(event)?;
+        let put = Call::new(method("PUT"), url.clone()).payload(ICS_TYPE, ics);
+        let put = match condition(etag) {
+            Some(etag) => put.header("If-Match", etag),
+            None => put.header("If-None-Match", "*"),
+        };
+        let answer = self.send(put).await?;
+        ensure_authorized(&answer, &url)?;
+        match answer.status {
+            status if status.is_success() => Ok(answer.etag),
+            StatusCode::PRECONDITION_FAILED => Err(changed(&url)),
+            StatusCode::CONFLICT => Err(MailError::Caldav(format!(
+                "{} refuse l'écriture : le calendrier n'existe pas (409)",
+                address(&url)
+            ))),
+            StatusCode::NOT_FOUND => Err(missing(&url)),
+            status => Err(refused(&url, status)),
+        }
+    }
+
+    /// Deletes `<collection>/<uid>.ics`, conditional on `etag` when given.
+    pub async fn delete_event(
+        &self,
+        collection_href: &str,
+        uid: &str,
+        etag: Option<&str>,
+    ) -> Result<(), MailError> {
+        let url = self.event_url(collection_href, uid)?;
+        let delete = Call::new(method("DELETE"), url.clone());
+        let delete = match condition(etag) {
+            Some(etag) => delete.header("If-Match", etag),
+            None => delete,
+        };
+        let answer = self.send(delete).await?;
+        ensure_authorized(&answer, &url)?;
+        match answer.status {
+            status if status.is_success() => Ok(()),
+            StatusCode::PRECONDITION_FAILED => Err(changed(&url)),
+            StatusCode::NOT_FOUND => Err(missing(&url)),
+            status => Err(refused(&url, status)),
+        }
+    }
+
+    /// Current ETag of `<collection>/<uid>.ics`, `None` when the server sends
+    /// none: `PROPFIND getetag` first, the `ETag` header of a `GET` otherwise.
+    pub async fn get_etag(
+        &self,
+        collection_href: &str,
+        uid: &str,
+    ) -> Result<Option<String>, MailError> {
+        let url = self.event_url(collection_href, uid)?;
+        let answer = self.propfind(&url, "0", ETAG_QUERY).await?;
+        ensure_authorized(&answer, &url)?;
+        match answer.status {
+            status if status.is_success() => {
+                let responses = parse_multistatus(&answer.body)?;
+                if let Some(etag) = responses
+                    .iter()
+                    .find_map(|response| response.property("getetag"))
+                {
+                    return Ok(Some(etag.to_string()));
+                }
+            }
+            StatusCode::NOT_FOUND => return Err(missing(&url)),
+            status => tracing::debug!(
+                status = status.as_u16(),
+                resource = %address(&url),
+                "PROPFIND getetag sans réponse, repli sur GET"
+            ),
+        }
+        let answer = self
+            .send(Call::new(method("GET"), url.clone()).limit(MAX_ICS_BYTES))
+            .await?;
+        ensure_authorized(&answer, &url)?;
+        match answer.status {
+            status if status.is_success() => Ok(answer.etag),
+            StatusCode::NOT_FOUND => Err(missing(&url)),
+            status => Err(refused(&url, status)),
+        }
+    }
+
+    /// URL of the resource holding `uid` inside `collection_href`.
+    fn event_url(&self, collection_href: &str, uid: &str) -> Result<Url, MailError> {
+        if collection_href.trim().is_empty() {
+            return Err(MailError::Config(
+                "CalDAV : aucun calendrier à écrire".to_string(),
+            ));
+        }
+        let name = event_name(uid)?;
+        let mut collection = resolve(&self.base, collection_href.trim())?;
+        if !collection.path().ends_with('/') {
+            let path = format!("{}/", collection.path());
+            collection.set_path(&path);
+        }
+        resolve(&collection, &format!("{name}.ics"))
+    }
+
     async fn calendar_home(&self) -> Result<Option<Url>, MailError> {
         let Some(principal) = self.principal().await? else {
             return Ok(None);
@@ -250,11 +382,9 @@ impl CaldavClient {
     async fn resources(&self, collection: &Url) -> Result<Vec<Url>, MailError> {
         let answer = self
             .send(
-                method("REPORT"),
-                collection,
-                Some("1"),
-                Some(MEMBERS_REPORT),
-                MAX_XML_BYTES,
+                Call::new(method("REPORT"), collection.clone())
+                    .depth("1")
+                    .xml(MEMBERS_REPORT),
             )
             .await?;
         ensure_authorized(&answer, collection)?;
@@ -277,7 +407,7 @@ impl CaldavClient {
 
     async fn resource(&self, url: &Url) -> Result<String, MailError> {
         let answer = self
-            .send(method("GET"), url, None, None, MAX_ICS_BYTES)
+            .send(Call::new(method("GET"), url.clone()).limit(MAX_ICS_BYTES))
             .await?;
         ensure_authorized(&answer, url)?;
         if !answer.status.is_success() {
@@ -292,23 +422,22 @@ impl CaldavClient {
 
     async fn propfind(&self, url: &Url, depth: &str, body: &str) -> Result<Answer, MailError> {
         self.send(
-            method("PROPFIND"),
-            url,
-            Some(depth),
-            Some(body),
-            MAX_XML_BYTES,
+            Call::new(method("PROPFIND"), url.clone())
+                .depth(depth)
+                .xml(body),
         )
         .await
     }
 
-    async fn send(
-        &self,
-        method: Method,
-        url: &Url,
-        depth: Option<&str>,
-        body: Option<&str>,
-        limit: usize,
-    ) -> Result<Answer, MailError> {
+    async fn send(&self, call: Call<'_>) -> Result<Answer, MailError> {
+        let Call {
+            method,
+            url,
+            depth,
+            payload,
+            headers,
+            limit,
+        } = call;
         let mut target = url.clone();
         for _ in 0..=MAX_REDIRECTS {
             let mut request = self
@@ -318,10 +447,13 @@ impl CaldavClient {
             if let Some(depth) = depth {
                 request = request.header("Depth", depth);
             }
-            if let Some(body) = body {
+            if let Some((content_type, body)) = payload.as_ref() {
                 request = request
-                    .header("Content-Type", "application/xml; charset=utf-8")
-                    .body(body.to_string());
+                    .header("Content-Type", *content_type)
+                    .body(body.clone());
+            }
+            for (name, value) in &headers {
+                request = request.header(*name, value);
             }
             let response = request.send().await.map_err(|error| {
                 MailError::Caldav(format!("{} injoignable : {error}", address(&target)))
@@ -349,18 +481,73 @@ impl CaldavClient {
                 target = resolve(&target, &location)?;
                 continue;
             }
+            let etag = response
+                .headers()
+                .get(reqwest::header::ETAG)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
             let body = answer_body(response, limit).await?;
-            return Ok(Answer { status, body });
+            return Ok(Answer { status, etag, body });
         }
         Err(MailError::Caldav(format!(
             "trop de redirections pour {}",
-            address(url)
+            address(&url)
         )))
+    }
+}
+
+/// One WebDAV request. Nothing is sent unless a `Depth` or a payload is
+/// asked for.
+struct Call<'a> {
+    method: Method,
+    url: Url,
+    depth: Option<&'a str>,
+    payload: Option<(&'a str, String)>,
+    headers: Vec<(&'static str, String)>,
+    limit: usize,
+}
+
+impl<'a> Call<'a> {
+    fn new(method: Method, url: Url) -> Self {
+        Self {
+            method,
+            url,
+            depth: None,
+            payload: None,
+            headers: Vec::new(),
+            limit: MAX_XML_BYTES,
+        }
+    }
+
+    fn depth(mut self, depth: &'a str) -> Self {
+        self.depth = Some(depth);
+        self
+    }
+
+    fn xml(self, body: &'a str) -> Self {
+        self.payload(XML_TYPE, body.to_string())
+    }
+
+    fn payload(mut self, content_type: &'a str, body: String) -> Self {
+        self.payload = Some((content_type, body));
+        self
+    }
+
+    fn header(mut self, name: &'static str, value: impl Into<String>) -> Self {
+        self.headers.push((name, value.into()));
+        self
+    }
+
+    fn limit(mut self, limit: usize) -> Self {
+        self.limit = limit;
+        self
     }
 }
 
 struct Answer {
     status: StatusCode,
+    /// `ETag` announced by the answer, when there is one.
+    etag: Option<String>,
     body: String,
 }
 
@@ -403,6 +590,45 @@ fn ensure_authorized(answer: &Answer, url: &Url) -> Result<(), MailError> {
         ))),
         _ => Ok(()),
     }
+}
+
+/// A precondition carried by the caller: an empty ETag is no ETag.
+fn condition(etag: Option<&str>) -> Option<&str> {
+    etag.map(str::trim).filter(|etag| !etag.is_empty())
+}
+
+/// `UID` used as a resource name: a path separator, a relative reference or a
+/// character the URL would have to encode is refused.
+fn event_name(uid: &str) -> Result<&str, MailError> {
+    let uid = uid.trim();
+    let usable = !uid.is_empty()
+        && uid.len() <= MAX_UID_LENGTH
+        && uid
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '@' | '+'))
+        && uid.chars().any(|c| c != '.');
+    if !usable {
+        return Err(MailError::Config(format!(
+            "UID d'événement inutilisable comme nom de ressource : « {} »",
+            uid.chars().take(80).collect::<String>()
+        )));
+    }
+    Ok(uid)
+}
+
+fn changed(url: &Url) -> MailError {
+    MailError::Conflict(format!(
+        "{} a changé sur le serveur (412) : relisez l'événement avant de le réécrire",
+        address(url)
+    ))
+}
+
+fn missing(url: &Url) -> MailError {
+    MailError::InvalidData(format!("{} introuvable (404)", address(url)))
+}
+
+fn refused(url: &Url, status: StatusCode) -> MailError {
+    MailError::Caldav(format!("{} répond {}", address(url), status.as_u16()))
 }
 
 /// `PROPFIND`/`REPORT` are extensions of the standard methods.
@@ -894,6 +1120,7 @@ mod tests {
             COLLECTIONS_QUERY,
             MEMBERS_REPORT,
             MEMBERS_QUERY,
+            ETAG_QUERY,
         ] {
             let mut reader = Reader::from_str(body);
             loop {
@@ -961,5 +1188,76 @@ mod tests {
             label(&Url::parse("https://caldav.exemple.tld/").expect("URL")),
             "caldav.exemple.tld"
         );
+    }
+
+    fn client() -> CaldavClient {
+        CaldavClient::new("https://caldav.exemple.tld/dav/", "roman", "secret").expect("client")
+    }
+
+    #[test]
+    fn a_resource_url_is_the_collection_and_the_uid() {
+        let client = client();
+        assert_eq!(
+            client
+                .event_url("https://caldav.exemple.tld/dav/roman/travail/", "abc-123")
+                .expect("URL")
+                .as_str(),
+            "https://caldav.exemple.tld/dav/roman/travail/abc-123.ics"
+        );
+        assert_eq!(
+            client
+                .event_url("/dav/roman/travail", "reunion@lavande")
+                .expect("URL")
+                .as_str(),
+            "https://caldav.exemple.tld/dav/roman/travail/reunion@lavande.ics"
+        );
+    }
+
+    #[test]
+    fn an_uid_unusable_as_a_resource_name_is_refused() {
+        let client = client();
+        for uid in [
+            "", "   ", ".", "..", "a/b", "a b", "a%20b", "a?b", "a#b", "é",
+        ] {
+            assert!(
+                matches!(
+                    client.event_url("/dav/roman/", uid),
+                    Err(MailError::Config(_))
+                ),
+                "uid accepté : « {uid} »"
+            );
+        }
+        let too_long = "a".repeat(MAX_UID_LENGTH + 1);
+        assert!(matches!(
+            client.event_url("/dav/roman/", &too_long),
+            Err(MailError::Config(_))
+        ));
+        assert!(client.event_url("   ", "abc").is_err());
+        assert!(client.event_url("/dav/roman/", "a.b_c-d+e").is_ok());
+    }
+
+    #[test]
+    fn an_empty_etag_is_no_condition() {
+        assert_eq!(condition(None), None);
+        assert_eq!(condition(Some("  ")), None);
+        assert_eq!(condition(Some(" \"3\" ")), Some("\"3\""));
+    }
+
+    #[test]
+    fn a_write_failure_is_reported_without_leaking_credentials() {
+        let url = Url::parse("https://caldav.exemple.tld/dav/roman/travail/a.ics").expect("URL");
+        assert!(matches!(changed(&url), MailError::Conflict(_)));
+        assert!(matches!(missing(&url), MailError::InvalidData(_)));
+        assert!(matches!(
+            refused(&url, StatusCode::INTERNAL_SERVER_ERROR),
+            MailError::Caldav(_)
+        ));
+        for error in [
+            changed(&url).to_string(),
+            missing(&url).to_string(),
+            refused(&url, StatusCode::CONFLICT).to_string(),
+        ] {
+            assert!(!error.contains("secret"), "{error}");
+        }
     }
 }

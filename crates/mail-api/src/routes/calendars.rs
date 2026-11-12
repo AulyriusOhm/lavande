@@ -1,22 +1,24 @@
 //! `/api/calendars`: import en lecture seule d'un calendrier iCalendar, collé
 //! dans le corps de la requête ou téléchargé par le démon depuis une URL, accès
-//! CalDAV en lecture seule et lecture des calendriers Google d'un compte OAuth2.
+//! CalDAV en lecture et en écriture et lecture des calendriers Google d'un
+//! compte OAuth2.
 //!
 //! Une source CalDAV persistée garde son URL et son nom dans `calendars.json`
 //! et ses identifiants dans le coffre de secrets : ils ne repassent jamais par
-//! une réponse ni par une ligne de journal.
+//! une réponse ni par une ligne de journal. Une écriture vise la collection
+//! nommée par la source, ou son unique calendrier découvert.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use lavande_mail::caldav::{CaldavClient, CalendarCollection};
 use lavande_mail::gcal::{GcalClient, GoogleCalendar};
-use lavande_mail::ics::{parse_events, ExternalEvent, MAX_ICS_BYTES};
-use serde::Deserialize;
+use lavande_mail::ics::{event_uid, parse_events, ExternalEvent, MAX_ICS_BYTES};
+use serde::{Deserialize, Serialize};
 
 use crate::calendar_sources::CalendarSource;
 use crate::dto::ApiJson;
@@ -41,6 +43,14 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/calendars/caldav/sources/{id}/events",
             post(source_events),
+        )
+        .route(
+            "/api/calendars/caldav/sources/{id}/events/create",
+            post(source_event_create),
+        )
+        .route(
+            "/api/calendars/caldav/sources/{id}/events/{uid}",
+            put(source_event_update).delete(source_event_delete),
         )
         .route(
             "/api/calendars/google/{account_id}/calendars",
@@ -226,6 +236,157 @@ async fn source_events(
     let events = client.events(source.calendar_href.as_deref()).await?;
     tracing::debug!(source = %id, events = events.len(), "événements CalDAV récupérés");
     Ok(Json(events))
+}
+
+/// One event written to a stored source: every field of [`ExternalEvent`]
+/// (its `uid` included) plus the `etag` the server answered.
+#[derive(Serialize)]
+struct WrittenEvent {
+    #[serde(flatten)]
+    event: ExternalEvent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    etag: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct EventRequest {
+    #[serde(default)]
+    title: String,
+    /// `YYYY-MM-DD` of the event.
+    #[serde(default)]
+    date: String,
+    /// `HH:MM`; absent, the event lasts the whole day.
+    #[serde(default)]
+    start: Option<String>,
+    #[serde(default)]
+    end: Option<String>,
+    #[serde(default)]
+    location: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    /// ETag the caller holds: a stale one is refused by the server (412).
+    #[serde(default)]
+    etag: Option<String>,
+}
+
+impl EventRequest {
+    /// The event as it is written, `uid` being the one of the resource.
+    fn event(&self, uid: String) -> Result<ExternalEvent, ApiError> {
+        let title = self.title.trim();
+        if title.is_empty() {
+            return Err(ApiError::bad_request("calendar", "il manque « title »"));
+        }
+        let date = self.date.trim();
+        if date.is_empty() {
+            return Err(ApiError::bad_request("calendar", "il manque « date »"));
+        }
+        let start = trimmed(self.start.clone());
+        Ok(ExternalEvent {
+            uid: Some(uid),
+            title: title.to_string(),
+            date: date.to_string(),
+            all_day: start.is_none(),
+            start,
+            end: trimmed(self.end.clone()),
+            timezone: None,
+            location: trimmed(self.location.clone()),
+            description: trimmed(self.description.clone()),
+            recurring: false,
+            source: None,
+        })
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct DeleteQuery {
+    #[serde(default)]
+    etag: Option<String>,
+}
+
+async fn source_event_create(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<EventRequest>,
+) -> Result<(StatusCode, Json<WrittenEvent>), ApiError> {
+    let (source, client, collection) = source_collection(&state, &id).await?;
+    let mut event = request.event(event_uid(None))?;
+    event.source = Some(source.name.clone());
+    let etag = client.put_event(&collection, &event, None).await?;
+    tracing::debug!(source = %id, uid = event.uid.as_deref().unwrap_or_default(), "événement CalDAV créé");
+    Ok((StatusCode::CREATED, Json(WrittenEvent { event, etag })))
+}
+
+/// The ETag of the caller wins; without one the current ETag is read first so
+/// the write stays conditional.
+async fn source_event_update(
+    Path((id, uid)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<EventRequest>,
+) -> Result<Json<WrittenEvent>, ApiError> {
+    let (source, client, collection) = source_collection(&state, &id).await?;
+    let etag = match trimmed(request.etag.clone()) {
+        Some(etag) => etag,
+        None => client.get_etag(&collection, &uid).await?.ok_or_else(|| {
+            ApiError::gateway(
+                "caldav",
+                format!("le serveur ne donne pas d'ETag pour « {uid} » : mise à jour conditionnelle impossible"),
+            )
+        })?,
+    };
+    let mut event = request.event(uid)?;
+    event.source = Some(source.name.clone());
+    let etag = client.put_event(&collection, &event, Some(&etag)).await?;
+    tracing::debug!(source = %id, uid = event.uid.as_deref().unwrap_or_default(), "événement CalDAV mis à jour");
+    Ok(Json(WrittenEvent { event, etag }))
+}
+
+async fn source_event_delete(
+    Path((id, uid)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<DeleteQuery>,
+) -> Result<StatusCode, ApiError> {
+    let (_, client, collection) = source_collection(&state, &id).await?;
+    client
+        .delete_event(&collection, &uid, trimmed(query.etag).as_deref())
+        .await?;
+    tracing::debug!(source = %id, uid = %uid, "événement CalDAV supprimé");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Source, client and collection a write goes to.
+async fn source_collection(
+    state: &AppState,
+    id: &str,
+) -> Result<(CalendarSource, CaldavClient, String), ApiError> {
+    let source = state.calendar_source(id)?;
+    let (username, password) = state.calendar_credentials(id).await?;
+    let client = CaldavClient::new(&source.url, &username, &password)?;
+    let collection = match source
+        .calendar_href
+        .as_deref()
+        .map(str::trim)
+        .filter(|href| !href.is_empty())
+    {
+        Some(href) => href.to_string(),
+        None => match client.discover().await?.as_slice() {
+            [only] => only.href.clone(),
+            [] => {
+                return Err(ApiError::bad_request(
+                    "caldav",
+                    format!("la source « {id} » n'a aucun calendrier à écrire"),
+                ))
+            }
+            _ => {
+                return Err(ApiError::bad_request(
+                    "caldav",
+                    format!(
+                        "la source « {id} » a plusieurs calendriers : précisez « calendar_href »"
+                    ),
+                ))
+            }
+        },
+    };
+    Ok((source, client, collection))
 }
 
 #[derive(Deserialize)]

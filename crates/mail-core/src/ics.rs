@@ -1,4 +1,4 @@
-//! iCalendar import (RFC 5545), read-only.
+//! iCalendar import and export (RFC 5545).
 //!
 //! The parsed calendar is projected onto [`ExternalEvent`]: only what the
 //! agenda displays leaves the daemon. `VEVENT` are read; `VTODO`, `VJOURNAL`
@@ -8,13 +8,16 @@
 //!
 //! Times are the wall clock written in the file: no timezone conversion is
 //! applied here, the `TZID` (or `"UTC"` for a `Z` value) travels with the
-//! event so the caller can decide.
+//! event so the caller can decide. [`event_ics`] writes the opposite way: one
+//! `VEVENT` per resource, whole-day or floating local clock.
 
 use std::borrow::Cow;
 use std::str::FromStr;
 
-use chrono::{NaiveDate, NaiveTime};
-use icalendar::{Calendar, CalendarDateTime, Component, DatePerhapsTime, EventLike};
+use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use icalendar::{
+    Calendar, CalendarDateTime, Component, DatePerhapsTime, Event, EventLike, Property,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::error::MailError;
@@ -75,6 +78,86 @@ pub fn parse_events(content: &str, source: Option<&str>) -> Result<Vec<ExternalE
         }
     }
     Ok(events)
+}
+
+/// `UID` of an event about to be written: the one it already carries, or a
+/// fresh one. Keeping the `UID` of an event is what turns a write into an
+/// update of the same resource.
+pub fn event_uid(existing: Option<&str>) -> String {
+    match existing.map(str::trim).filter(|uid| !uid.is_empty()) {
+        Some(uid) => uid.to_string(),
+        None => format!(
+            "{:016x}{:016x}@lavande",
+            rand::random::<u64>(),
+            rand::random::<u64>()
+        ),
+    }
+}
+
+/// iCalendar resource of one event: a `VCALENDAR` holding a single `VEVENT`.
+///
+/// `event.uid` must be set, the caller writes the same `UID` into the resource
+/// URL. An event without `start` is written whole-day (`VALUE=DATE`, `DTEND`
+/// on the next day); a timed event is written as a floating local clock, the
+/// daemon having no timezone of its own. A timed event without `end` lasts one
+/// hour.
+pub fn event_ics(event: &ExternalEvent) -> Result<String, MailError> {
+    let uid = event
+        .uid
+        .as_deref()
+        .map(str::trim)
+        .filter(|uid| !uid.is_empty())
+        .ok_or_else(|| MailError::Calendar("événement sans UID".to_string()))?;
+    let title = event.title.trim();
+    if title.is_empty() {
+        return Err(MailError::Calendar("événement sans titre".to_string()));
+    }
+    let date = iso_date(&event.date)?;
+    let mut entry = Event::new();
+    entry.uid(uid).summary(title).timestamp(Utc::now());
+    match date_time(&event.start)? {
+        Some(start) => {
+            let start = NaiveDateTime::new(date, start);
+            let end = match date_time(&event.end)? {
+                Some(end) => NaiveDateTime::new(date, end),
+                None => start + Duration::hours(1),
+            };
+            if end <= start {
+                return Err(MailError::Calendar(format!(
+                    "fin ({}) avant le début ({}) le {}",
+                    clock(end.time()),
+                    clock(start.time()),
+                    event.date.trim()
+                )));
+            }
+            entry.starts(start).ends(end);
+        }
+        None => {
+            let next = date.succ_opt().ok_or_else(|| {
+                MailError::Calendar(format!("date hors limites : {}", event.date.trim()))
+            })?;
+            entry.starts(date).ends(next);
+        }
+    }
+    if let Some(location) = text(event.location.as_deref()) {
+        entry.location(&location);
+    }
+    if let Some(description) = text(event.description.as_deref()) {
+        entry.description(&description);
+    }
+    let mut calendar = Calendar::empty();
+    calendar
+        .append_property(Property::new("VERSION", "2.0"))
+        .append_property(Property::new("PRODID", "-//Lavande//Agenda//FR"));
+    calendar.push(entry);
+    let ics = calendar.to_string();
+    if ics.len() > MAX_ICS_BYTES {
+        return Err(MailError::Calendar(format!(
+            "événement trop volumineux : {} octets (maximum {MAX_ICS_BYTES})",
+            ics.len()
+        )));
+    }
+    Ok(ics)
 }
 
 /// A `VEVENT` without a usable `DTSTART` cannot be placed on a calendar and is
@@ -193,6 +276,25 @@ fn stamp(value: &DatePerhapsTime) -> Option<Stamp> {
 
 fn iso_day(date: NaiveDate) -> String {
     date.format("%Y-%m-%d").to_string()
+}
+
+fn iso_date(value: &str) -> Result<NaiveDate, MailError> {
+    let value = value.trim();
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map_err(|_| MailError::Calendar(format!("date « {value} » invalide (AAAA-MM-JJ)")))
+}
+
+fn date_time(value: &Option<String>) -> Result<Option<NaiveTime>, MailError> {
+    match value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => NaiveTime::parse_from_str(value, "%H:%M")
+            .map(Some)
+            .map_err(|_| MailError::Calendar(format!("heure « {value} » invalide (HH:MM)"))),
+        None => Ok(None),
+    }
 }
 
 fn clock(time: NaiveTime) -> String {
@@ -541,5 +643,135 @@ mod tests {
             ["Un", "Deux"]
         );
         assert_eq!(events[1].date, "2024-03-16");
+    }
+
+    fn written(event: ExternalEvent) -> (String, ExternalEvent) {
+        let ics = event_ics(&event).expect("iCalendar écrit");
+        assert!(ics.starts_with("BEGIN:VCALENDAR\r\n"));
+        assert!(ics.ends_with("END:VCALENDAR\r\n"));
+        let reread = parse_events(&ics, None).expect("iCalendar relu");
+        assert_eq!(reread.len(), 1, "un seul événement écrit : {ics}");
+        (ics, reread.into_iter().next().expect("événement"))
+    }
+
+    fn draft(title: &str, date: &str) -> ExternalEvent {
+        ExternalEvent {
+            uid: Some(event_uid(None)),
+            title: title.to_string(),
+            date: date.to_string(),
+            ..ExternalEvent::default()
+        }
+    }
+
+    #[test]
+    fn a_whole_day_event_is_written_with_a_date() {
+        let (ics, event) = written(draft("Journée off", "2024-03-20"));
+        assert!(ics.contains("DTSTART;VALUE=DATE:20240320\r\n"), "{ics}");
+        assert!(ics.contains("DTEND;VALUE=DATE:20240321\r\n"), "{ics}");
+        assert!(ics.contains("\r\nDTSTAMP:"), "{ics}");
+        assert!(ics.contains("PRODID:-//Lavande//Agenda//FR"), "{ics}");
+        assert!(ics.contains("SUMMARY:Journée off\r\n"), "{ics}");
+        assert_eq!(event.title, "Journée off");
+        assert_eq!(event.date, "2024-03-20");
+        assert!(event.all_day);
+        assert_eq!(event.start, None);
+    }
+
+    #[test]
+    fn a_timed_event_is_written_with_its_hours() {
+        let mut event = draft("Réunion", "2024-03-15");
+        event.start = Some("14:00".to_string());
+        event.end = Some("15:30".to_string());
+        event.location = Some("Bureau".to_string());
+        event.description = Some("Point hebdomadaire".to_string());
+        let (ics, reread) = written(event);
+        assert!(ics.contains("DTSTART:20240315T140000\r\n"), "{ics}");
+        assert!(ics.contains("DTEND:20240315T153000\r\n"), "{ics}");
+        assert!(ics.contains("LOCATION:Bureau\r\n"), "{ics}");
+        assert_eq!(reread.start.as_deref(), Some("14:00"));
+        assert_eq!(reread.end.as_deref(), Some("15:30"));
+        assert_eq!(reread.location.as_deref(), Some("Bureau"));
+        assert_eq!(reread.description.as_deref(), Some("Point hebdomadaire"));
+        assert!(!reread.all_day);
+        assert_eq!(reread.timezone, None);
+    }
+
+    #[test]
+    fn a_timed_event_without_end_lasts_one_hour() {
+        let mut event = draft("Sans fin", "2024-03-15");
+        event.start = Some("23:15".to_string());
+        let (ics, reread) = written(event);
+        assert!(ics.contains("DTEND:20240316T001500\r\n"), "{ics}");
+        assert_eq!(reread.end.as_deref(), Some("00:15"));
+    }
+
+    #[test]
+    fn text_escapes_are_written() {
+        let mut event = draft("Point, puis revue; suite", "2024-03-15");
+        event.location = Some("Salle 1\\2".to_string());
+        event.description = Some("Un\nDeux".to_string());
+        let (ics, reread) = written(event);
+        assert!(
+            ics.contains("SUMMARY:Point\\, puis revue\\; suite\r\n"),
+            "{ics}"
+        );
+        assert!(ics.contains("DESCRIPTION:Un\\nDeux\r\n"), "{ics}");
+        assert_eq!(reread.title, "Point, puis revue; suite");
+        assert_eq!(reread.location.as_deref(), Some("Salle 1\\2"));
+        assert_eq!(reread.description.as_deref(), Some("Un\nDeux"));
+    }
+
+    #[test]
+    fn a_long_value_is_folded() {
+        let long = "Un titre vraiment très long ".repeat(10);
+        let (ics, reread) = written(draft(long.trim(), "2024-03-15"));
+        assert!(ics.lines().all(|line| line.len() <= 76), "{ics}");
+        assert_eq!(reread.title, long.trim());
+    }
+
+    #[test]
+    fn the_uid_of_an_event_is_kept_or_generated() {
+        assert_eq!(event_uid(Some("abc-123")), "abc-123");
+        assert_eq!(event_uid(Some("  abc-123  ")), "abc-123");
+        let generated = event_uid(None);
+        assert!(generated.ends_with("@lavande"), "{generated}");
+        assert_eq!(generated.len(), 32 + "@lavande".len());
+        assert!(generated[..32].chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(generated, event_uid(None));
+    }
+
+    #[test]
+    fn a_written_uid_is_the_one_of_the_resource() {
+        let mut event = draft("Titre", "2024-03-15");
+        event.uid = Some("reunion-caldav".to_string());
+        let (ics, reread) = written(event);
+        assert!(ics.contains("UID:reunion-caldav\r\n"), "{ics}");
+        assert_eq!(reread.uid.as_deref(), Some("reunion-caldav"));
+    }
+
+    #[test]
+    fn an_incomplete_event_is_refused() {
+        let mut without_uid = draft("Titre", "2024-03-15");
+        without_uid.uid = None;
+        assert!(matches!(
+            event_ics(&without_uid),
+            Err(MailError::Calendar(_))
+        ));
+        let mut blank_uid = draft("Titre", "2024-03-15");
+        blank_uid.uid = Some("   ".to_string());
+        assert!(matches!(event_ics(&blank_uid), Err(MailError::Calendar(_))));
+        let mut untitled = draft("Titre", "2024-03-15");
+        untitled.title = "  ".to_string();
+        assert!(matches!(event_ics(&untitled), Err(MailError::Calendar(_))));
+        let mut bad_date = draft("Titre", "2024-03-15");
+        bad_date.date = "15/03/2024".to_string();
+        assert!(matches!(event_ics(&bad_date), Err(MailError::Calendar(_))));
+        let mut bad_time = draft("Titre", "2024-03-15");
+        bad_time.start = Some("9h".to_string());
+        assert!(matches!(event_ics(&bad_time), Err(MailError::Calendar(_))));
+        let mut backwards = draft("Titre", "2024-03-15");
+        backwards.start = Some("15:00".to_string());
+        backwards.end = Some("14:00".to_string());
+        assert!(matches!(event_ics(&backwards), Err(MailError::Calendar(_))));
     }
 }
