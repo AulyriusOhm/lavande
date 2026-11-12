@@ -24,7 +24,7 @@ import { ReplySuggestSheet, RewriteSheet } from "@/screens/assist-sheet";
 import { IconButton } from "@/components/ui/primitives";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { RichEditor } from "@/components/ui/rich-editor";
-import { ensureHtml, htmlToText, textToHtml, isHtmlEmpty, sanitizeHtml } from "@/lib/rich-text";
+import { ensureHtml, extractImageTokens, htmlToText, restoreImageTokens, textToHtml, isHtmlEmpty, sanitizeHtml } from "@/lib/rich-text";
 import { activeSignature, resolvePgp, usePrefs } from "@/lib/prefs";
 
 export type { ComposeDraft };
@@ -87,6 +87,7 @@ export function ComposeScreen({
     [draft.subject, draft.to, draft.body],
   );
   const isReply = /^re\s*:/i.test(draft.subject) || Boolean(draft.quoted?.trim());
+  const { text: rewriteText, images: rewriteImages } = useMemo(() => extractImageTokens(draft.body), [draft.body]);
 
   const update = (patch: Partial<ComposeDraft>) => {
     onDraftChange({ ...draft, ...patch });
@@ -601,9 +602,9 @@ export function ComposeScreen({
       />
       <RewriteSheet
         open={rewriteOpen}
-        body={htmlToText(draft.body)}
+        body={rewriteText}
         onApply={(text) => {
-          update({ body: textToHtml(text) });
+          update({ body: restoreImageTokens(text, rewriteImages) });
           setRewriteOpen(false);
         }}
         onClose={() => setRewriteOpen(false)}

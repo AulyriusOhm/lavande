@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   buildQuotedHtml,
   ensureHtml,
+  extractImageTokens,
   htmlToText,
   isHtmlEmpty,
   looksLikeHtml,
   looksLikeMarkdown,
   markdownToHtml,
+  restoreImageTokens,
   sanitizeHtml,
   splitQuotedBody,
   textToHtml,
@@ -55,6 +57,55 @@ describe("htmlToText", () => {
       "Voici [image]",
     );
     expect(htmlToText('<p><img src="x.png" alt="capture"></p>')).toBe("[capture]");
+  });
+});
+
+describe("extractImageTokens / restoreImageTokens", () => {
+  const IMAGE = '<img src="a.png" alt="capture">';
+  const OTHER = '<img src="b.png">';
+
+  it("extrait les images dans l'ordre et met un jeton dans le texte", () => {
+    const { text, images } = extractImageTokens(`<p>Voici</p>${IMAGE}<p>Merci</p>${OTHER}`);
+
+    expect(images).toEqual([IMAGE, OTHER]);
+    expect(text).toBe("Voici\n⟦img-0⟧Merci\n⟦img-1⟧");
+  });
+
+  it("réinsère l'image à la place du jeton", () => {
+    const { text, images } = extractImageTokens(`<p>Voici</p>${IMAGE}<p>Merci</p>`);
+
+    expect(restoreImageTokens(text, images)).toBe(`<p>Voici</p>${IMAGE}<p>Merci</p>`);
+  });
+
+  it("ajoute en fin l'image dont le jeton a été supprimé", () => {
+    expect(restoreImageTokens("Bonjour\n\nMerci.", [IMAGE])).toBe(`<p>Bonjour</p><p>Merci.</p>${IMAGE}`);
+  });
+
+  it("gère plusieurs images, y compris après suppression d'un jeton", () => {
+    expect(restoreImageTokens("⟦img-1⟧\nEntre", [IMAGE, OTHER])).toBe(`${OTHER}<p>Entre</p>${IMAGE}`);
+    expect(restoreImageTokens("Entre", [IMAGE, OTHER])).toBe(`<p>Entre</p>${IMAGE}${OTHER}`);
+  });
+
+  it("retombe sur textToHtml quand il n'y a aucune image", () => {
+    expect(restoreImageTokens("Bonjour\n\nÀ toi", [])).toBe(textToHtml("Bonjour\n\nÀ toi"));
+  });
+
+  it("conserve les images sur un aller-retour", () => {
+    const html = `<p>Regarde</p>${IMAGE}<p>et</p>${OTHER}<p>fin</p>`;
+    const { text, images } = extractImageTokens(html);
+
+    const restored = restoreImageTokens(text, images);
+
+    expect(restored).toContain(IMAGE);
+    expect(restored).toContain(OTHER);
+    expect(restored.indexOf(IMAGE)).toBeLessThan(restored.indexOf(OTHER));
+    expect(restored).not.toContain("⟦img-");
+  });
+
+  it("gère un texte vide", () => {
+    expect(extractImageTokens("")).toEqual({ text: "", images: [] });
+    expect(restoreImageTokens("", [IMAGE])).toBe(IMAGE);
+    expect(restoreImageTokens("", [])).toBe("");
   });
 });
 

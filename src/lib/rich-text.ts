@@ -48,6 +48,38 @@ export function isHtmlEmpty(html: string): boolean {
   return htmlToText(html).length === 0;
 }
 
+const IMAGE_TOKEN = /⟦img-(\d+)⟧/g;
+
+/** Remplace chaque image par un jeton ⟦img-N⟧ pour la faire traverser une réécriture de texte. */
+export function extractImageTokens(html: string): { text: string; images: string[] } {
+  const images: string[] = [];
+  const withTokens = html.replace(IMAGE_TAG, (tag) => {
+    images.push(tag);
+    return `⟦img-${images.length - 1}⟧`;
+  });
+  return { text: htmlToText(withTokens), images };
+}
+
+/** Réinsère les images à la place de leur jeton ; celles dont le jeton a disparu sont ajoutées en fin. */
+export function restoreImageTokens(text: string, images: string[]): string {
+  if (images.length === 0) return textToHtml(text);
+  const used = new Set<number>();
+  let html = "";
+  let cursor = 0;
+  for (const match of text.matchAll(IMAGE_TOKEN)) {
+    html += textToHtml(text.slice(cursor, match.index));
+    const index = Number(match[1]);
+    if (images[index] && !used.has(index)) {
+      used.add(index);
+      html += images[index];
+    }
+    cursor = match.index + match[0].length;
+  }
+  html += textToHtml(text.slice(cursor));
+  const missing = images.filter((_tag, index) => !used.has(index));
+  return html + missing.join("");
+}
+
 /** L'historique cité voyage dans un bloc à part, marqué pour être reconnu au retour. */
 export function buildQuotedHtml(attribution: string, innerHtml: string): string {
   return `<blockquote class="lavande-quote"><p class="lavande-quote-head">${escapeHtml(attribution)}</p>${innerHtml}</blockquote>`;

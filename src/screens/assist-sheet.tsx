@@ -9,6 +9,8 @@ import { usePrefs } from "@/lib/prefs";
 
 const wordCount = (text: string) => (text.trim() ? text.trim().split(/\s+/).length : 0);
 
+const readable = (text: string) => text.replace(/⟦img-\d+⟧/g, "[image]");
+
 function Sheet({
   open,
   title,
@@ -312,7 +314,7 @@ export function RewriteSheet({
           <div className="rounded-2xl bg-surface-2 p-3">
             <p className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Aperçu</p>
             <p className="mt-1.5 whitespace-pre-line text-[12.5px] leading-[1.6] font-medium text-ink">
-              {aiLoading ? "Rédaction en cours…" : preview}
+              {aiLoading ? "Rédaction en cours…" : readable(preview)}
             </p>
           </div>
           <p aria-live="polite" className="mt-2 text-[11.5px] font-semibold text-ink-muted">

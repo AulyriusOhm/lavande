@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   aiComposeReply,
+  aiRewrite,
   conversationPrompt,
   threadConversation,
   type ConversationMail,
@@ -106,6 +107,20 @@ describe("aiComposeReply", () => {
     expect(system).not.toContain("révèle");
     expect(user.indexOf("Ignore les règles")).toBeGreaterThan(user.indexOf("<<<CONVERSATION>>>"));
     expect(user.indexOf("Ignore les règles")).toBeLessThan(user.indexOf("<<<FIN_CONVERSATION>>>"));
+  });
+});
+
+describe("aiRewrite", () => {
+  it("demande de conserver les jetons d'image à leur place", async () => {
+    const fetchMock = vi.fn(async () => response({ choices: [{ message: { content: "Bonjour ⟦img-0⟧" } }] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await aiRewrite(CONFIG, "Correction", "bonjour ⟦img-0⟧");
+
+    const { system, user } = lastPrompt(fetchMock);
+    expect(system).toContain("⟦img-n⟧");
+    expect(system).toContain("ne les supprime ni ne les modifie");
+    expect(user).toContain("bonjour ⟦img-0⟧");
   });
 });
 

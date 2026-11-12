@@ -17,6 +17,7 @@ const REPLY_SYSTEM = [
 
 const REWRITE_SYSTEM =
   "Tu réécris le corps d'un email en français selon la consigne. " +
+  "Conserve exactement les jetons ⟦img-n⟧ (images) à leur place, ne les supprime ni ne les modifie. " +
   "Réponds uniquement avec le texte réécrit, sans markdown ni commentaire.";
 
 export type ComposeInput = {

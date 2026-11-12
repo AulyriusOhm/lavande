@@ -19,8 +19,16 @@ vi.mock("@/lib/prefs", () => ({
 
 const { ComposeScreen } = await import("@/screens/compose-screen");
 
-function Harness({ onChange, quoted }: { onChange?: (draft: ComposeDraft) => void; quoted?: string }) {
-  const [draft, setDraft] = useState<ComposeDraft>({ ...baseDraft("perso", false, false), quoted });
+function Harness({
+  onChange,
+  quoted,
+  body,
+}: {
+  onChange?: (draft: ComposeDraft) => void;
+  quoted?: string;
+  body?: string;
+}) {
+  const [draft, setDraft] = useState<ComposeDraft>({ ...baseDraft("perso", false, false), quoted, body: body ?? "" });
   return (
     <ComposeScreen
       draft={draft}
@@ -161,6 +169,28 @@ describe("historique cité replié", () => {
     render(<Harness />);
     expect(screen.queryByTestId("compose-quoted-block")).toBeNull();
     expect(screen.queryByRole("button", { name: "Voir la conversation précédente" })).toBeNull();
+  });
+});
+
+describe("réécriture sans perte d'image inline", () => {
+  const IMAGE = '<img src="data:image/png;base64,iVBORw==">';
+
+  it("garde l'image du corps après une correction locale", async () => {
+    const drafts: ComposeDraft[] = [];
+    render(
+      <Harness body={`<p>bonjour  ,le monde</p>${IMAGE}<p>merci</p>`} onChange={(draft) => drafts.push(draft)} />,
+    );
+
+    fireEvent.click(screen.getByLabelText("Corriger ou reformuler le message"));
+    fireEvent.click(await screen.findByRole("radio", { name: /Correction/ }));
+    fireEvent.click(screen.getByText("Appliquer"));
+
+    await waitFor(() => expect(drafts.at(-1)?.body).toContain(IMAGE));
+    const result = drafts.at(-1)?.body ?? "";
+    expect(result).toContain("Bonjour, le monde");
+    expect(result).toContain("<p>merci.</p>");
+    expect(result).not.toContain("⟦img-");
+    expect(result).not.toContain("[image]");
   });
 });
 
