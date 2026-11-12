@@ -1851,6 +1851,7 @@ dependencies = [
  "lettre",
  "mail-parser",
  "pgp",
+ "quick-xml",
  "rand 0.8.8",
  "reqwest",
  "rusqlite",

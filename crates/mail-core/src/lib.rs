@@ -1,6 +1,7 @@
-//! Mail core for Lavande: data model, MIME parsing, calendar import, threading,
-//! local store and the IMAP/SMTP transport layer.
+//! Mail core for Lavande: data model, MIME parsing, calendar import (iCalendar
+//! and CalDAV), threading, local store and the IMAP/SMTP transport layer.
 
+pub mod caldav;
 pub mod config;
 pub mod error;
 pub mod ics;
@@ -16,6 +17,7 @@ pub mod sync;
 pub mod threading;
 pub mod tls;
 
+pub use caldav::{CaldavClient, CalendarCollection};
 pub use config::{AccountConfig, AuthConfig, Encryption, Endpoint, FolderMapping};
 pub use error::MailError;
 pub use ics::{parse_events, ExternalEvent};

@@ -1,11 +1,13 @@
 //! `/api/calendars`: import en lecture seule d'un calendrier iCalendar, collé
-//! dans le corps de la requête ou téléchargé par le démon depuis une URL.
+//! dans le corps de la requête ou téléchargé par le démon depuis une URL, et
+//! accès CalDAV en lecture seule. Aucun identifiant CalDAV n'est stocké.
 
 use std::time::Duration;
 
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
+use lavande_mail::caldav::{CaldavClient, CalendarCollection};
 use lavande_mail::ics::{parse_events, ExternalEvent, MAX_ICS_BYTES};
 use serde::Deserialize;
 
@@ -18,7 +20,58 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn router() -> Router<std::sync::Arc<AppState>> {
-    Router::new().route("/api/calendars/ics", post(import))
+    Router::new()
+        .route("/api/calendars/ics", post(import))
+        .route("/api/calendars/caldav/discover", post(caldav_discover))
+        .route("/api/calendars/caldav/events", post(caldav_events))
+}
+
+/// Credentials travel with each call and are never stored by the daemon.
+#[derive(Deserialize)]
+struct CaldavRequest {
+    url: String,
+    username: String,
+    password: String,
+    /// Collection to read; every discovered calendar when absent.
+    #[serde(default)]
+    calendar_href: Option<String>,
+}
+
+impl CaldavRequest {
+    fn client(&self) -> Result<CaldavClient, ApiError> {
+        let url = self.url.trim();
+        if url.is_empty() {
+            return Err(ApiError::bad_request("caldav", "il manque « url »"));
+        }
+        let username = self.username.trim();
+        if username.is_empty() {
+            return Err(ApiError::bad_request("caldav", "il manque « username »"));
+        }
+        if self.password.is_empty() {
+            return Err(ApiError::bad_request("caldav", "il manque « password »"));
+        }
+        Ok(CaldavClient::new(url, username, &self.password)?)
+    }
+}
+
+async fn caldav_discover(
+    ApiJson(request): ApiJson<CaldavRequest>,
+) -> Result<Json<Vec<CalendarCollection>>, ApiError> {
+    let collections = request.client()?.discover().await?;
+    tracing::debug!(
+        calendars = collections.len(),
+        "calendriers CalDAV découverts"
+    );
+    Ok(Json(collections))
+}
+
+async fn caldav_events(
+    ApiJson(request): ApiJson<CaldavRequest>,
+) -> Result<Json<Vec<ExternalEvent>>, ApiError> {
+    let client = request.client()?;
+    let events = client.events(request.calendar_href.as_deref()).await?;
+    tracing::debug!(events = events.len(), "événements CalDAV récupérés");
+    Ok(Json(events))
 }
 
 #[derive(Deserialize)]

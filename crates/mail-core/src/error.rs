@@ -20,6 +20,8 @@ pub enum MailError {
     Config(String),
     #[error("calendar error: {0}")]
     Calendar(String),
+    #[error("caldav error: {0}")]
+    Caldav(String),
     #[error("auth error: {0}")]
     Auth(String),
     #[error("imap error: {0}")]
