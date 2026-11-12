@@ -27,7 +27,8 @@ export type ApiErrorKind =
   | "oauth"
   | "store"
   | "mime"
-  | "calendar";
+  | "calendar"
+  | "caldav";
 
 export type ApiEndpoint = {
   host: string;
@@ -260,6 +261,23 @@ export type IcsImport = {
   source?: string;
 };
 
+/** Une source CalDAV rangée par le démon : les identifiants restent dans son coffre, jamais ici. */
+export type CaldavSource = {
+  id: string;
+  name: string;
+  url: string;
+  calendar_href?: string;
+};
+
+/** Les identifiants ne voyagent qu'une fois, à la création de la source. */
+export type CaldavSourceInput = {
+  url: string;
+  username: string;
+  password: string;
+  name?: string;
+  calendar_href?: string;
+};
+
 export type SendInput = {
   to: ApiAddress[];
   cc: ApiAddress[];
@@ -323,6 +341,7 @@ const KINDS: readonly ApiErrorKind[] = [
   "store",
   "mime",
   "calendar",
+  "caldav",
 ];
 
 type RequestOptions = {
@@ -515,6 +534,26 @@ export const mailApi = {
     request<ExternalEvent[]>("/calendars/ics", {
       method: "POST",
       body: input,
+      timeout: LONG_TIMEOUT,
+    }),
+
+  caldavSources: () => request<CaldavSource[]>("/calendars/caldav/sources"),
+
+  /** Le démon teste la connexion avant de ranger la source ; le mot de passe ne revient jamais. */
+  addCaldavSource: (input: CaldavSourceInput) =>
+    request<CaldavSource>("/calendars/caldav/sources", {
+      method: "POST",
+      body: input,
+      timeout: LONG_TIMEOUT,
+    }),
+
+  removeCaldavSource: (id: string) =>
+    request<void>(`/calendars/caldav/sources/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  /** Lecture seule : le démon relit la source avec ses propres identifiants. */
+  caldavSourceEvents: (id: string) =>
+    request<ExternalEvent[]>(`/calendars/caldav/sources/${encodeURIComponent(id)}/events`, {
+      method: "POST",
       timeout: LONG_TIMEOUT,
     }),
 

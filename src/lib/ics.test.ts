@@ -6,14 +6,14 @@ import {
   ICS_MAX_EVENTS,
   ICS_REFRESH_MS,
   ICS_STORAGE_KEY,
+  calendarUrlError,
   dropIcsCalendar,
-  dueIcsSubscriptions,
+  dueExternalSubscriptions,
+  externalCalendarEvents,
   fetchIcsCalendar,
-  icsCalendarEvents,
   icsEventId,
   icsNameFromFile,
   icsNameFromUrl,
-  icsUrlError,
   importIcsContent,
   loadIcsState,
   markIcsSynced,
@@ -218,44 +218,44 @@ describe("ics · fusion dans l'agenda", () => {
     const state = setIcsCalendarEvents(EMPTY_ICS_STATE, "google", toCalendarEvents([external()], google));
     const calendars: CalendarDef[] = [...DEFAULT_CALENDARS, google];
 
-    expect(icsCalendarEvents(state, calendars).map((event) => event.calendar)).toEqual(["Google"]);
-    expect(icsCalendarEvents(state, DEFAULT_CALENDARS)).toEqual([]);
+    expect(externalCalendarEvents(state, calendars).map((event) => event.calendar)).toEqual(["Google"]);
+    expect(externalCalendarEvents(state, DEFAULT_CALENDARS)).toEqual([]);
   });
 
   it("suit le renommage du calendrier", () => {
     const state = setIcsCalendarEvents(EMPTY_ICS_STATE, "google", toCalendarEvents([external()], google));
     const renamed: CalendarDef = { ...google, name: "Travail" };
 
-    expect(icsCalendarEvents(state, [renamed])[0].calendar).toBe("Travail");
+    expect(externalCalendarEvents(state, [renamed])[0].calendar).toBe("Travail");
   });
 
   it("retire les événements d'une source supprimée", () => {
     const state = setIcsCalendarEvents(EMPTY_ICS_STATE, "google", toCalendarEvents([external()], google));
 
-    expect(icsCalendarEvents(state, [google])).toHaveLength(1);
-    expect(icsCalendarEvents(dropIcsCalendar(state, "google"), [google])).toEqual([]);
+    expect(externalCalendarEvents(state, [google])).toHaveLength(1);
+    expect(externalCalendarEvents(dropIcsCalendar(state, "google"), [google])).toEqual([]);
   });
 });
 
 describe("ics · abonnements à rafraîchir", () => {
   it("relit un abonnement jamais synchronisé", () => {
-    expect(dueIcsSubscriptions([google, file], {})).toEqual([google]);
+    expect(dueExternalSubscriptions([google, file], {})).toEqual([google]);
   });
 
   it("laisse tranquille un cache encore frais", () => {
     const now = 1_700_000_000_000;
 
-    expect(dueIcsSubscriptions([google], { google: now - 1000 }, now)).toEqual([]);
+    expect(dueExternalSubscriptions([google], { google: now - 1000 }, now)).toEqual([]);
   });
 
   it("relit un cache expiré", () => {
     const now = 1_700_000_000_000;
 
-    expect(dueIcsSubscriptions([google], { google: now - ICS_REFRESH_MS }, now)).toEqual([google]);
+    expect(dueExternalSubscriptions([google], { google: now - ICS_REFRESH_MS }, now)).toEqual([google]);
   });
 
   it("ignore les calendriers locaux et les fichiers importés", () => {
-    expect(dueIcsSubscriptions([...DEFAULT_CALENDARS, file], {})).toEqual([]);
+    expect(dueExternalSubscriptions([...DEFAULT_CALENDARS, file], {})).toEqual([]);
   });
 });
 
@@ -291,7 +291,7 @@ describe("ics · sources de calendrier", () => {
   it("ignore une source inconnue sans perdre le calendrier", () => {
     window.localStorage.setItem(
       "lavande.calendars.v1",
-      JSON.stringify([{ id: "pro", name: "Pro", tone: 0, source: { kind: "caldav" } }]),
+      JSON.stringify([{ id: "pro", name: "Pro", tone: 0, source: { kind: "exchange" } }]),
     );
 
     expect(loadCalendars()).toEqual([{ id: "pro", name: "Pro", tone: 0 }]);
@@ -300,14 +300,14 @@ describe("ics · sources de calendrier", () => {
 
 describe("ics · validation des entrées", () => {
   it("accepte http et https", () => {
-    expect(icsUrlError("https://exemple.tld/c.ics")).toBeNull();
-    expect(icsUrlError("http://exemple.tld/c.ics")).toBeNull();
+    expect(calendarUrlError("https://exemple.tld/c.ics")).toBeNull();
+    expect(calendarUrlError("http://exemple.tld/c.ics")).toBeNull();
   });
 
   it("refuse une URL vide, relative ou hors http", () => {
-    expect(icsUrlError("  ")).toBe("URL du calendrier requise");
-    expect(icsUrlError("pas une url")).toBe("URL invalide");
-    expect(icsUrlError("file:///etc/passwd")).toBe("L'URL doit commencer par http:// ou https://");
+    expect(calendarUrlError("  ")).toBe("URL du calendrier requise");
+    expect(calendarUrlError("pas une url")).toBe("URL invalide");
+    expect(calendarUrlError("file:///etc/passwd")).toBe("L'URL doit commencer par http:// ou https://");
   });
 
   it("déduit un nom de l'URL ou du fichier", () => {

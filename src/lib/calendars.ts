@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CalendarEvent } from "@/lib/calendar";
 
-export type CalendarSource = { kind: "local" } | { kind: "ics"; url?: string };
+export type CalendarSource =
+  | { kind: "local" }
+  | { kind: "ics"; url?: string }
+  /** `sourceId` désigne la source rangée par le démon : ses identifiants n'existent pas ici. */
+  | { kind: "caldav"; sourceId: string };
 
 /** `source` absent : calendrier local, comme avant l'arrivée des sources ICS. */
 export type CalendarDef = { id: string; name: string; tone: number; source?: CalendarSource };
@@ -10,9 +14,22 @@ export function isIcsCalendar(def: CalendarDef): boolean {
   return def.source?.kind === "ics";
 }
 
+export function isCaldavCalendar(def: CalendarDef): boolean {
+  return def.source?.kind === "caldav";
+}
+
 /** L'URL de l'abonnement ; un import fichier n'en a pas. */
 export function icsUrlOf(def: CalendarDef): string | undefined {
   return def.source?.kind === "ics" ? def.source.url : undefined;
+}
+
+export function caldavSourceIdOf(def: CalendarDef): string | undefined {
+  return def.source?.kind === "caldav" ? def.source.sourceId : undefined;
+}
+
+/** Un calendrier relu à sa source : jamais éditable dans l'agenda. */
+export function isExternalCalendar(def: CalendarDef): boolean {
+  return isIcsCalendar(def) || isCaldavCalendar(def);
 }
 
 export const TONE_PILL = [
@@ -35,8 +52,13 @@ const STORAGE_KEY = "lavande.calendars.v1";
 
 function parseSource(raw: unknown): CalendarSource | undefined {
   if (!raw || typeof raw !== "object") return undefined;
-  const { kind, url } = raw as { kind?: unknown; url?: unknown };
+  const { kind, url, sourceId } = raw as { kind?: unknown; url?: unknown; sourceId?: unknown };
   if (kind === "local") return { kind: "local" };
+  if (kind === "caldav") {
+    return typeof sourceId === "string" && sourceId.trim()
+      ? { kind: "caldav", sourceId: sourceId.trim() }
+      : undefined;
+  }
   if (kind !== "ics") return undefined;
   return typeof url === "string" && url.trim() ? { kind: "ics", url: url.trim() } : { kind: "ics" };
 }

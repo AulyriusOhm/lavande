@@ -32,8 +32,16 @@ import {
   monthGrid,
   overlappingEvents,
 } from "@/lib/calendar";
-import { TONE_DOT, TONE_PILL, calendarsInUse, icsUrlOf, toneOfEvent, useCalendars, type CalendarDef } from "@/lib/calendars";
-import { dueIcsSubscriptions, fetchIcsCalendar, icsCalendarEvents, markIcsSynced, setIcsCalendarEvents, useIcsState } from "@/lib/ics";
+import { TONE_DOT, TONE_PILL, calendarsInUse, icsUrlOf, isCaldavCalendar, toneOfEvent, useCalendars, type CalendarDef } from "@/lib/calendars";
+import {
+  dueExternalSubscriptions,
+  externalCalendarEvents,
+  externalEventKind,
+  fetchExternalCalendar,
+  markIcsSynced,
+  setIcsCalendarEvents,
+  useIcsState,
+} from "@/lib/ics";
 import { errorText } from "@/lib/api";
 import {
   DAY_END_MIN,
@@ -158,6 +166,46 @@ const timeRange = (event: CalendarEvent) => {
   if (!event.start) return "Journée entière";
   return event.end ? `${event.start} → ${event.end}` : event.start;
 };
+
+/** Étiquette d'une source relue à son serveur : ICS ou CalDAV, toujours en lecture seule. */
+function externalBadge(event: CalendarEvent): { tone: "sky" | "green"; label: string } {
+  const caldav = externalEventKind(event) === "caldav";
+  return caldav ? { tone: "green", label: "CalDAV" } : { tone: "sky", label: "ICS" };
+}
+
+/** Une famille de sources externes : compte des événements et relecture à la demande. */
+function ExternalRefreshRow({
+  label,
+  refreshLabel,
+  count,
+  syncing,
+  onRefresh,
+}: {
+  label: string;
+  refreshLabel: string;
+  count: number;
+  syncing: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 px-1">
+      <span className="text-[10.5px] font-semibold text-ink-muted">
+        {label} · {count} événement{count > 1 ? "s" : ""}
+      </span>
+      <DButton
+        variant="ghost"
+        size="sm"
+        className="ml-auto"
+        aria-label={refreshLabel}
+        disabled={syncing}
+        onClick={onRefresh}
+      >
+        <RefreshCw className={cn("size-3.5", syncing && "animate-spin")} strokeWidth={2.4} />
+        Actualiser
+      </DButton>
+    </div>
+  );
+}
 
 function EventPill({
   event,
@@ -923,6 +971,7 @@ function DayPanel({
   onOpenMail?: () => void;
 }) {
   const tone = detail ? toneOfEvent(detail, calendars) : 0;
+  const external = detail?.external ? externalBadge(detail) : null;
 
   return (
     <div className="flex min-h-0 flex-col gap-2">
@@ -964,7 +1013,7 @@ function DayPanel({
                   mail
                 </Badge>
               ) : null}
-              {detail.external ? <Badge tone="sky">ICS · lecture seule</Badge> : null}
+              {external ? <Badge tone={external.tone}>{external.label} · lecture seule</Badge> : null}
               {detail.recurring ? <Badge tone="neutral">récurrent</Badge> : null}
               {conflicts.has(detail.id) ? <Badge tone="amber">Conflit</Badge> : null}
             </div>
@@ -1019,10 +1068,10 @@ function DayPanel({
             ) : null}
           </div>
 
-          {detail.external ? (
+          {external ? (
             <p className="flex items-center gap-2 rounded-[16px] border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-[11px] font-bold text-sky-700 dark:text-sky-300">
               <Link2 className="size-3.5 shrink-0" strokeWidth={2.4} />
-              Calendrier ICS : lecture seule, modifiable à la source uniquement.
+              Calendrier {external.label} : lecture seule, modifiable à la source uniquement.
             </p>
           ) : (
             <div className="flex items-center gap-2">
@@ -1052,6 +1101,7 @@ function DayPanel({
         <div className="flex flex-col gap-2">
           {dayEvents.map((event, index) => {
             const eventTone = toneOfEvent(event, calendars);
+            const eventBadge = externalBadge(event);
             return (
               <BlurFade key={event.id} delay={0.05 * index}>
                 <button
@@ -1071,7 +1121,7 @@ function DayPanel({
                         mail
                       </Badge>
                     ) : null}
-                    {event.external ? <Badge tone="sky">ICS</Badge> : null}
+                    {event.external ? <Badge tone={eventBadge.tone}>{eventBadge.label}</Badge> : null}
                     {event.recurring ? <Badge tone="neutral">récurrent</Badge> : null}
                     {conflicts.has(event.id) ? <Badge tone="amber">Conflit</Badge> : null}
                   </span>
@@ -1161,10 +1211,10 @@ export function DesktopCalendar({
   } = useMailStore();
   const [calendars] = useCalendars();
   const [ics, setIcs] = useIcsState();
-  const [icsSyncing, setIcsSyncing] = useState(false);
-  const icsRef = useRef(ics);
-  icsRef.current = ics;
-  const icsInFlight = useRef(new Set<string>());
+  const [externalSyncing, setExternalSyncing] = useState(false);
+  const externalRef = useRef(ics);
+  externalRef.current = ics;
+  const externalInFlight = useRef(new Set<string>());
   const [mode, setMode] = useState<ViewMode>("month");
   const [anchor, setAnchor] = useState(selectedDate);
   const [direction, setDirection] = useState(0);
@@ -1176,40 +1226,49 @@ export function DesktopCalendar({
   const [detailId, setDetailId] = useState<string | null>(null);
   const narrow = useNarrowViewport();
 
-  const icsEvents = useMemo(() => icsCalendarEvents(ics, calendars), [ics, calendars]);
-  const allEvents = useMemo(() => [...events, ...icsEvents], [events, icsEvents]);
+  const externalEvents = useMemo(() => externalCalendarEvents(ics, calendars), [ics, calendars]);
+  const icsEvents = useMemo(
+    () => externalEvents.filter((event) => externalEventKind(event) === "ics"),
+    [externalEvents],
+  );
+  const caldavEvents = useMemo(
+    () => externalEvents.filter((event) => externalEventKind(event) === "caldav"),
+    [externalEvents],
+  );
+  const allEvents = useMemo(() => [...events, ...externalEvents], [events, externalEvents]);
   const icsSubscriptions = useMemo(() => calendars.filter((def) => icsUrlOf(def)), [calendars]);
+  const caldavSubscriptions = useMemo(() => calendars.filter(isCaldavCalendar), [calendars]);
 
-  const refreshIcs = useCallback(
+  const refreshExternal = useCallback(
     async (targets: CalendarDef[]) => {
-      const queue = targets.filter((def) => !icsInFlight.current.has(def.id));
+      const queue = targets.filter((def) => !externalInFlight.current.has(def.id));
       if (queue.length === 0) return;
-      for (const def of queue) icsInFlight.current.add(def.id);
-      setIcsSyncing(true);
-      let next = icsRef.current;
+      for (const def of queue) externalInFlight.current.add(def.id);
+      setExternalSyncing(true);
+      let next = externalRef.current;
       const failures: string[] = [];
       for (const def of queue) {
         try {
-          next = setIcsCalendarEvents(next, def.id, await fetchIcsCalendar(def));
+          next = setIcsCalendarEvents(next, def.id, await fetchExternalCalendar(def));
         } catch (error) {
           next = markIcsSynced(next, def.id);
           failures.push(`${def.name} · ${errorText(error)}`);
         } finally {
-          icsInFlight.current.delete(def.id);
+          externalInFlight.current.delete(def.id);
         }
       }
-      icsRef.current = next;
+      externalRef.current = next;
       setIcs(next);
-      setIcsSyncing(false);
-      if (failures.length > 0) notify(`Abonnement ICS · ${failures.join(" ; ")}`);
+      setExternalSyncing(false);
+      if (failures.length > 0) notify(`Calendrier externe · ${failures.join(" ; ")}`);
     },
     [notify, setIcs],
   );
 
   useEffect(() => {
-    const due = dueIcsSubscriptions(calendars, icsRef.current.synced);
-    if (due.length > 0) void refreshIcs(due);
-  }, [calendars, refreshIcs]);
+    const due = dueExternalSubscriptions(calendars, externalRef.current.synced);
+    if (due.length > 0) void refreshExternal(due);
+  }, [calendars, refreshExternal]);
 
   const calendarList = useMemo(() => calendarsInUse(allEvents, calendars), [allEvents, calendars]);
   const conflicts = useMemo(() => conflictingIds(allEvents), [allEvents]);
@@ -1354,7 +1413,7 @@ export function DesktopCalendar({
 
   const removeEvent = (target: CalendarEvent) => {
     if (target.external) {
-      notify("Événement d'un calendrier ICS · lecture seule");
+      notify(`Événement d'un calendrier ${externalBadge(target).label} · lecture seule`);
       return;
     }
     setEvents((current) => current.filter((event) => event.id !== target.id));
@@ -1536,22 +1595,23 @@ export function DesktopCalendar({
           </FilterGroup>
 
           {icsSubscriptions.length > 0 ? (
-            <div className="flex items-center gap-2 px-1">
-              <span className="text-[10.5px] font-semibold text-ink-muted">
-                Abonnements ICS · {icsEvents.length} événement{icsEvents.length > 1 ? "s" : ""}
-              </span>
-              <DButton
-                variant="ghost"
-                size="sm"
-                className="ml-auto"
-                aria-label="Actualiser les abonnements ICS"
-                disabled={icsSyncing}
-                onClick={() => void refreshIcs(icsSubscriptions)}
-              >
-                <RefreshCw className={cn("size-3.5", icsSyncing && "animate-spin")} strokeWidth={2.4} />
-                Actualiser
-              </DButton>
-            </div>
+            <ExternalRefreshRow
+              label="Abonnements ICS"
+              refreshLabel="Actualiser les abonnements ICS"
+              count={icsEvents.length}
+              syncing={externalSyncing}
+              onRefresh={() => void refreshExternal(icsSubscriptions)}
+            />
+          ) : null}
+
+          {caldavSubscriptions.length > 0 ? (
+            <ExternalRefreshRow
+              label="Sources CalDAV"
+              refreshLabel="Actualiser les sources CalDAV"
+              count={caldavEvents.length}
+              syncing={externalSyncing}
+              onRefresh={() => void refreshExternal(caldavSubscriptions)}
+            />
           ) : null}
 
           <FilterGroup label="Filtres" count={filterPeriodEvents.length}>

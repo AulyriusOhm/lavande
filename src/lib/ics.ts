@@ -1,22 +1,33 @@
 /**
- * Sources ICS en lecture seule : les événements analysés par le démon sont
- * rangés à part des calendriers locaux (qui vivent dans le planning
- * synchronisé). Supprimer une source jette ses événements ; aucun événement
- * externe ne remonte dans le store de planification.
+ * Sources externes en lecture seule (iCalendar et CalDAV) : les événements
+ * analysés par le démon sont rangés à part des calendriers locaux, qui vivent
+ * dans le planning synchronisé. Supprimer une source jette ses événements ;
+ * aucun événement externe ne remonte dans le store de planification.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { mailApi, type ExternalEvent } from "@/lib/api";
 import type { CalendarEvent } from "@/lib/calendar";
-import { icsUrlOf, isIcsCalendar, type CalendarDef } from "@/lib/calendars";
+import {
+  caldavSourceIdOf,
+  icsUrlOf,
+  isCaldavCalendar,
+  isExternalCalendar,
+  type CalendarDef,
+} from "@/lib/calendars";
 
 export const ICS_STORAGE_KEY = "lavande.ics.v1";
 
 /** Un abonnement se relit au plus toutes les six heures : jamais de boucle de fetch. */
 export const ICS_REFRESH_MS = 6 * 60 * 60 * 1000;
 
+/** Un serveur CalDAV répond vite : son cache se périme plus tôt qu'un fichier ICS. */
+export const CALDAV_REFRESH_MS = 15 * 60 * 1000;
+
 /** Plafond de stockage local par calendrier : un fichier énorme ne remplit pas le localStorage. */
 export const ICS_MAX_EVENTS = 2000;
+
+export type ExternalKind = "ics" | "caldav";
 
 export type IcsEvents = Record<string, CalendarEvent[]>;
 
@@ -27,17 +38,32 @@ export type IcsState = {
 
 export const EMPTY_ICS_STATE: IcsState = { events: {}, synced: {} };
 
+export function externalEventId(
+  kind: ExternalKind,
+  calendarId: string,
+  event: ExternalEvent,
+  index: number,
+): string {
+  return `${kind}:${calendarId}:${event.uid ?? `#${index}`}`;
+}
+
 export function icsEventId(calendarId: string, event: ExternalEvent, index: number): string {
-  return `ics:${calendarId}:${event.uid ?? `#${index}`}`;
+  return externalEventId("ics", calendarId, event, index);
+}
+
+/** La famille d'un événement externe, portée par son identifiant : ni édition ni suppression. */
+export function externalEventKind(event: { id: string }): ExternalKind {
+  return event.id.startsWith("caldav:") ? "caldav" : "ics";
 }
 
 export function toCalendarEvents(
   external: ExternalEvent[],
   calendar: { id: string; name: string },
+  kind: ExternalKind = "ics",
 ): CalendarEvent[] {
   return external.map((entry, index) => {
     const event: CalendarEvent = {
-      id: icsEventId(calendar.id, entry, index),
+      id: externalEventId(kind, calendar.id, entry, index),
       date: entry.date,
       start: entry.start ?? "",
       end: entry.end ?? "",
@@ -53,10 +79,10 @@ export function toCalendarEvents(
 }
 
 /** Le nom porté par les événements suit le calendrier : un renommage se voit aussitôt. */
-export function icsCalendarEvents(state: IcsState, calendars: CalendarDef[]): CalendarEvent[] {
+export function externalCalendarEvents(state: IcsState, calendars: CalendarDef[]): CalendarEvent[] {
   const out: CalendarEvent[] = [];
   for (const def of calendars) {
-    if (!isIcsCalendar(def)) continue;
+    if (!isExternalCalendar(def)) continue;
     for (const event of state.events[def.id] ?? []) out.push({ ...event, calendar: def.name });
   }
   return out;
@@ -87,15 +113,17 @@ export function dropIcsCalendar(state: IcsState, id: string): IcsState {
   return { events, synced };
 }
 
-/** Les abonnements dont le cache a expiré (ou qui n'ont jamais été lus). */
-export function dueIcsSubscriptions(
+/** Les sources relues à leur serveur dont le cache a expiré (ou qui n'ont jamais été lues). */
+export function dueExternalSubscriptions(
   calendars: CalendarDef[],
   synced: Record<string, number>,
   now = Date.now(),
 ): CalendarDef[] {
   return calendars.filter((def) => {
-    if (!icsUrlOf(def)) return false;
-    return now - (synced[def.id] ?? 0) >= ICS_REFRESH_MS;
+    const caldav = isCaldavCalendar(def);
+    if (!caldav && !icsUrlOf(def)) return false;
+    const ttl = caldav ? CALDAV_REFRESH_MS : ICS_REFRESH_MS;
+    return now - (synced[def.id] ?? 0) >= ttl;
   });
 }
 
@@ -105,11 +133,22 @@ export async function fetchIcsCalendar(def: CalendarDef): Promise<CalendarEvent[
   return toCalendarEvents(await mailApi.importIcs({ url, source: def.name }), def);
 }
 
+/** Le démon relit la source avec les identifiants de son coffre : aucun ne passe ici. */
+export async function fetchCaldavCalendar(def: CalendarDef): Promise<CalendarEvent[]> {
+  const sourceId = caldavSourceIdOf(def);
+  if (!sourceId) throw new Error("source CalDAV sans identifiant");
+  return toCalendarEvents(await mailApi.caldavSourceEvents(sourceId), def, "caldav");
+}
+
+export async function fetchExternalCalendar(def: CalendarDef): Promise<CalendarEvent[]> {
+  return isCaldavCalendar(def) ? fetchCaldavCalendar(def) : fetchIcsCalendar(def);
+}
+
 export async function importIcsContent(def: CalendarDef, content: string): Promise<CalendarEvent[]> {
   return toCalendarEvents(await mailApi.importIcs({ content, source: def.name }), def);
 }
 
-export function icsUrlError(value: string): string | null {
+export function calendarUrlError(value: string): string | null {
   const url = value.trim();
   if (!url) return "URL du calendrier requise";
   let parsed: URL;
@@ -124,11 +163,11 @@ export function icsUrlError(value: string): string | null {
   return null;
 }
 
-export function icsNameFromUrl(value: string): string {
+export function icsNameFromUrl(value: string, fallback = "Calendrier ICS"): string {
   try {
-    return new URL(value.trim()).hostname.replace(/^www\./, "") || "Calendrier ICS";
+    return new URL(value.trim()).hostname.replace(/^www\./, "") || fallback;
   } catch {
-    return "Calendrier ICS";
+    return fallback;
   }
 }
 

@@ -29,7 +29,7 @@ import {
   Upload,
 } from "lucide-react";
 import { errorText, mailApi } from "@/lib/api";
-import type { ApiFolder } from "@/lib/api";
+import type { ApiFolder, CaldavSource } from "@/lib/api";
 import type { Account } from "@/lib/accounts";
 import type { CalendarEvent } from "@/lib/calendar";
 import {
@@ -54,13 +54,24 @@ import {
   mcpTypeAllowed,
   useMcpLog,
 } from "@/lib/mcp";
-import { calendarId, TONE_DOT, isIcsCalendar, icsUrlOf, useCalendars, type CalendarDef } from "@/lib/calendars";
 import {
+  caldavSourceIdOf,
+  calendarId,
+  TONE_DOT,
+  isCaldavCalendar,
+  isExternalCalendar,
+  isIcsCalendar,
+  icsUrlOf,
+  useCalendars,
+  type CalendarDef,
+} from "@/lib/calendars";
+import {
+  calendarUrlError,
   dropIcsCalendar,
+  fetchCaldavCalendar,
   fetchIcsCalendar,
   icsNameFromFile,
   icsNameFromUrl,
-  icsUrlError,
   importIcsContent,
   setIcsCalendarEvents,
   useIcsState,
@@ -353,11 +364,31 @@ function CalendarsSection() {
   const [draftTone, setDraftTone] = useState(0);
   const [draftUrl, setDraftUrl] = useState("");
   const [icsBusy, setIcsBusy] = useState(false);
-  const [icsError, setIcsError] = useState<string | null>(null);
+  const [caldavUrl, setCaldavUrl] = useState("");
+  const [caldavUser, setCaldavUser] = useState("");
+  const [caldavPassword, setCaldavPassword] = useState("");
+  const [caldavBusy, setCaldavBusy] = useState(false);
+  const [caldavSources, setCaldavSources] = useState<Record<string, CaldavSource>>({});
+  const [sourceError, setSourceError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [removing, setRemoving] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  /** Une liste indisponible ne bloque rien : seule l'URL des sources CalDAV manque. */
+  useEffect(() => {
+    let alive = true;
+    mailApi
+      .caldavSources()
+      .then((list) => {
+        if (!alive || !Array.isArray(list)) return;
+        setCaldavSources(Object.fromEntries(list.map((source) => [source.id, source])));
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const addCalendar = () => {
     const name = draftName.trim();
@@ -374,11 +405,11 @@ function CalendarsSection() {
     notify(`Calendrier ajouté · ${name}`);
   };
 
-  /** Nom et ton saisis au-dessus servent aussi aux sources ICS ; sans nom, l'URL ou le fichier décide. */
-  const icsDraft = (fallback: string) => {
+  /** Nom et ton saisis au-dessus servent aussi aux sources externes ; sans nom, l'URL ou le fichier décide. */
+  const sourceDraft = (fallback: string) => {
     const name = draftName.trim() || fallback;
     if (calendars.some((entry) => entry.name.toLowerCase() === name.toLowerCase())) {
-      setIcsError(`Calendrier déjà présent · ${name}`);
+      setSourceError(`Calendrier déjà présent · ${name}`);
       return null;
     }
     return { id: calendarId(name, calendars), name, tone: draftTone } satisfies CalendarDef;
@@ -389,28 +420,28 @@ function CalendarsSection() {
     setIcs(setIcsCalendarEvents(ics, def.id, events));
     setDraftName("");
     setDraftUrl("");
-    setIcsError(null);
+    setSourceError(null);
     notify(`Calendrier ICS ajouté · ${def.name} · ${events.length} événement${events.length > 1 ? "s" : ""}`);
   };
 
   const failIcs = (error: unknown) => {
     const message = errorText(error);
-    setIcsError(message);
+    setSourceError(message);
     notify(`Import ICS impossible · ${message}`);
   };
 
   const addIcsFromUrl = async () => {
     const url = draftUrl.trim();
-    const problem = icsUrlError(url);
+    const problem = calendarUrlError(url);
     if (problem) {
-      setIcsError(problem);
+      setSourceError(problem);
       return;
     }
-    const draft = icsDraft(icsNameFromUrl(url));
+    const draft = sourceDraft(icsNameFromUrl(url));
     if (!draft) return;
     const def: CalendarDef = { ...draft, source: { kind: "ics", url } };
     setIcsBusy(true);
-    setIcsError(null);
+    setSourceError(null);
     try {
       commitIcs(def, await fetchIcsCalendar(def));
     } catch (error) {
@@ -421,11 +452,11 @@ function CalendarsSection() {
   };
 
   const addIcsFromFile = async (file: File) => {
-    const draft = icsDraft(icsNameFromFile(file.name));
+    const draft = sourceDraft(icsNameFromFile(file.name));
     if (!draft) return;
     const def: CalendarDef = { ...draft, source: { kind: "ics" } };
     setIcsBusy(true);
-    setIcsError(null);
+    setSourceError(null);
     try {
       const content = await file.text();
       if (!content.trim()) throw new Error("fichier vide");
@@ -434,6 +465,64 @@ function CalendarsSection() {
       failIcs(error);
     } finally {
       setIcsBusy(false);
+    }
+  };
+
+  const failCaldav = (error: unknown, action = "Ajout") => {
+    const message = errorText(error);
+    setSourceError(message);
+    notify(`${action} CalDAV impossible · ${message}`);
+  };
+
+  const clearCaldavForm = () => {
+    setDraftName("");
+    setCaldavUrl("");
+    setCaldavUser("");
+    setCaldavPassword("");
+  };
+
+  /** Le démon teste la connexion et range les identifiants ; le mot de passe ne reste pas ici. */
+  const addCaldav = async () => {
+    const url = caldavUrl.trim();
+    const problem = calendarUrlError(url);
+    if (problem) {
+      setSourceError(problem);
+      return;
+    }
+    const username = caldavUser.trim();
+    if (!username) {
+      setSourceError("Identifiant CalDAV requis");
+      return;
+    }
+    if (!caldavPassword) {
+      setSourceError("Mot de passe CalDAV requis");
+      return;
+    }
+    const draft = sourceDraft(icsNameFromUrl(url, "Calendrier CalDAV"));
+    if (!draft) return;
+    setCaldavBusy(true);
+    setSourceError(null);
+    try {
+      const source = await mailApi.addCaldavSource({
+        url,
+        username,
+        password: caldavPassword,
+        name: draft.name,
+      });
+      const def: CalendarDef = { ...draft, source: { kind: "caldav", sourceId: source.id } };
+      setCalendars([...calendars, def]);
+      setCaldavSources((current) => ({ ...current, [source.id]: source }));
+      clearCaldavForm();
+      notify(`Calendrier CalDAV ajouté · ${def.name}`);
+      try {
+        setIcs(setIcsCalendarEvents(ics, def.id, await fetchCaldavCalendar(def)));
+      } catch (error) {
+        setSourceError(`Source ajoutée, événements non lus · ${errorText(error)}`);
+      }
+    } catch (error) {
+      failCaldav(error);
+    } finally {
+      setCaldavBusy(false);
     }
   };
 
@@ -462,12 +551,37 @@ function CalendarsSection() {
     setCalendars(calendars.map((entry) => (entry.id === id ? { ...entry, tone } : entry)));
   };
 
-  const removeCalendar = (id: string) => {
+  /** L'URL montrée dans la liste : celle de l'abonnement, ou celle que le démon rend pour la source. */
+  const sourceUrlOf = (def: CalendarDef) => {
+    if (isIcsCalendar(def)) return icsUrlOf(def) ?? "fichier importé";
+    const sourceId = caldavSourceIdOf(def);
+    return sourceId ? caldavSources[sourceId]?.url : undefined;
+  };
+
+  /** Une source CalDAV part aussi du démon : sans lui, elle reviendrait au prochain ajout. */
+  const removeCalendar = async (id: string) => {
     const target = calendars.find((entry) => entry.id === id);
+    if (!target) return;
+    const sourceId = caldavSourceIdOf(target);
+    if (sourceId) {
+      try {
+        await mailApi.removeCaldavSource(sourceId);
+      } catch (error) {
+        failCaldav(error, "Suppression");
+        return;
+      }
+    }
     setCalendars(calendars.filter((entry) => entry.id !== id));
-    if (target && isIcsCalendar(target)) setIcs(dropIcsCalendar(ics, id));
+    if (isExternalCalendar(target)) setIcs(dropIcsCalendar(ics, id));
+    if (sourceId) {
+      setCaldavSources((current) => {
+        const next = { ...current };
+        delete next[sourceId];
+        return next;
+      });
+    }
     setRemoving(null);
-    if (target) notify(`Calendrier supprimé · ${target.name}`);
+    notify(`Calendrier supprimé · ${target.name}`);
   };
 
   return (
@@ -537,14 +651,65 @@ function CalendarsSection() {
         />
       </div>
 
+      <div className="flex flex-wrap items-end gap-3 border-b border-line bg-surface-2/40 px-3.5 py-3">
+        <label className="grid min-w-[200px] flex-1 gap-1">
+          <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+            Serveur CalDAV · URL
+          </span>
+          <TextInput
+            aria-label="URL du serveur CalDAV"
+            placeholder="https://caldav.exemple.tld/"
+            value={caldavUrl}
+            onChange={(event) => setCaldavUrl(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void addCaldav();
+            }}
+            className="h-9 text-[12px] font-semibold"
+          />
+        </label>
+        <label className="grid min-w-[140px] flex-1 gap-1">
+          <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Identifiant</span>
+          <TextInput
+            aria-label="Identifiant CalDAV"
+            placeholder="romain"
+            autoComplete="username"
+            value={caldavUser}
+            onChange={(event) => setCaldavUser(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void addCaldav();
+            }}
+            className="h-9 text-[12px] font-semibold"
+          />
+        </label>
+        <label className="grid min-w-[140px] flex-1 gap-1">
+          <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Mot de passe</span>
+          <TextInput
+            type="password"
+            aria-label="Mot de passe CalDAV"
+            autoComplete="new-password"
+            value={caldavPassword}
+            onChange={(event) => setCaldavPassword(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void addCaldav();
+            }}
+            className="h-9 text-[12px] font-semibold"
+          />
+        </label>
+        <DButton variant="soft" size="sm" disabled={caldavBusy} onClick={() => void addCaldav()}>
+          <PlugZap className="size-3.5" strokeWidth={2.6} />
+          Connecter
+        </DButton>
+      </div>
+
       <p className="border-b border-line/70 px-3.5 py-2 text-[10.5px] leading-relaxed font-semibold text-ink-muted">
-        Le nom et le ton saisis ci-dessus s'appliquent aussi au calendrier ICS ; sans nom, l'URL ou le fichier fait
-        foi. Import en lecture seule : rien n'est modifié ni renvoyé au serveur.
+        Le nom et le ton saisis ci-dessus s'appliquent aussi aux sources externes ; sans nom, l'URL ou le fichier fait
+        foi. Les identifiants CalDAV partent une seule fois au démon, qui les garde dans son coffre : ils ne sont jamais
+        enregistrés ici. Lecture seule : rien n'est renvoyé au serveur.
       </p>
 
-      {icsError ? (
+      {sourceError ? (
         <p role="alert" className="border-b border-rose-500/30 bg-rose-500/10 px-3.5 py-2 text-[11px] font-bold text-rose-700 dark:text-rose-300">
-          {icsError}
+          {sourceError}
         </p>
       ) : null}
 
@@ -583,14 +748,16 @@ function CalendarsSection() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <span className="truncate text-[12px] font-bold text-ink">{entry.name}</span>
-                      <Badge tone={isIcsCalendar(entry) ? "sky" : "neutral"}>
-                        {isIcsCalendar(entry) ? "ICS" : "local"}
+                      <Badge
+                        tone={isIcsCalendar(entry) ? "sky" : isCaldavCalendar(entry) ? "green" : "neutral"}
+                      >
+                        {isIcsCalendar(entry) ? "ICS" : isCaldavCalendar(entry) ? "CalDAV" : "local"}
                       </Badge>
                     </div>
-                    {isIcsCalendar(entry) ? (
+                    {isIcsCalendar(entry) || isCaldavCalendar(entry) ? (
                       <span className="mt-0.5 flex items-center gap-1 text-[10.5px] font-semibold text-ink-muted">
                         <Link2 className="size-3 shrink-0" strokeWidth={2.2} />
-                        <span className="truncate">{icsUrlOf(entry) ?? "fichier importé"}</span>
+                        <span className="truncate">{sourceUrlOf(entry) ?? "URL inconnue"}</span>
                         <span className="shrink-0 tabular-nums">
                           · {(ics.events[entry.id] ?? []).length} événement
                           {(ics.events[entry.id] ?? []).length > 1 ? "s" : ""}
@@ -606,7 +773,7 @@ function CalendarsSection() {
                   {removing === entry.id ? (
                     <>
                       <span className="text-[10.5px] font-semibold text-ink-muted">Supprimer ?</span>
-                      <DButton variant="danger" size="sm" onClick={() => removeCalendar(entry.id)}>
+                      <DButton variant="danger" size="sm" onClick={() => void removeCalendar(entry.id)}>
                         <Trash2 className="size-3.5" />
                         Confirmer
                       </DButton>
@@ -644,8 +811,8 @@ function CalendarsSection() {
       )}
 
       <p className="border-t border-line/70 px-3.5 py-2 text-[10.5px] leading-relaxed font-semibold text-ink-muted">
-        Enregistrés sur cet appareil : l'agenda les affiche aussitôt. Supprimer une source ICS retire ses
-        événements de l'agenda.
+        Enregistrés sur cet appareil : l'agenda les affiche aussitôt. Supprimer une source ICS ou CalDAV retire ses
+        événements de l'agenda ; une source CalDAV part aussi du démon.
       </p>
     </Surface>
   );
