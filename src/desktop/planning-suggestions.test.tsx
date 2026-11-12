@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { DesktopPlanning } from "@/desktop/planning";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
@@ -148,5 +148,32 @@ describe("Kanban PC · reflow", () => {
     expect(kanban.className).toContain("overflow-x-auto");
     expect(kanban.className).toContain("grid-cols-[repeat(5,minmax(220px,1fr))]");
     expect(kanban.className).not.toContain("grid-cols-5");
+  });
+});
+
+describe("Kanban PC · colonnes", () => {
+  it("nomme chaque état et compte les tâches qu'il contient", () => {
+    mount(seededStorage([]));
+
+    expect(within(screen.getByRole("region", { name: "À faire" })).getAllByTestId("task-card")).toHaveLength(2);
+    expect(within(screen.getByRole("region", { name: "Fait" })).getAllByTestId("task-card")).toHaveLength(3);
+    expect(within(screen.getByRole("region", { name: "En cours" })).getAllByTestId("task-card")).toHaveLength(1);
+  });
+
+  it("déplace une tâche d'une colonne à l'autre par glisser-déposer", () => {
+    mount(seededStorage([]));
+
+    const title = "Importer la clé PGP de Léa";
+    const card = within(screen.getByTestId("column-todo"))
+      .getAllByTestId("task-card")
+      .find((entry) => entry.textContent?.includes(title))!;
+    const dataTransfer = { setData: () => {}, getData: () => "t6", effectAllowed: "none" };
+
+    fireEvent.dragStart(card, { dataTransfer });
+    fireEvent.dragOver(screen.getByTestId("column-doing"), { dataTransfer });
+    fireEvent.drop(screen.getByTestId("column-doing"), { dataTransfer });
+
+    expect(within(screen.getByTestId("column-doing")).getByText(title)).toBeTruthy();
+    expect(within(screen.getByTestId("column-todo")).queryByText(title)).toBeNull();
   });
 });

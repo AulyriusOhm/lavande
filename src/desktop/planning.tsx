@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 import { Badge, DButton, DChip, DIconButton, PaneTitle, SectionLabel, TextArea, TextInput } from "@/desktop/ui";
 import { SyncBadge } from "@/components/sync-badge";
 import { BorderBeam } from "@/components/ui/border-beam";
+import { BlurFade } from "@/components/ui/blur-fade";
 import { Avatar } from "@/components/ui/primitives";
 import { createTask } from "@/screens/new-task-sheet";
 
@@ -96,16 +97,18 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden pb-[104px]">
-      <header className="flex items-center justify-between gap-4 px-6 pt-5">
+      <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-line px-5 py-3">
         <PaneTitle hint={`${openTasks} ouvertes`}>Planification</PaneTitle>
-        <div className="flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2">
           <SyncBadge onOpen={onOpenSync} />
           {taskSuggestions.length > 0 ? (
-            <span className="inline-flex h-8 items-center rounded-full bg-accent-soft px-2.5 text-[11px] font-bold text-accent-ink tabular-nums">
-              {taskSuggestions.length} suggestions
+            <span className="inline-flex h-8 items-center gap-1.5 rounded-full bg-accent-soft px-3 text-[11px] font-extrabold text-accent-ink">
+              <Sparkles className="size-3" strokeWidth={2.8} />
+              <span className="tabular-nums">{taskSuggestions.length}</span>
+              <span className="font-bold">{taskSuggestions.length > 1 ? "suggestions" : "suggestion"}</span>
             </span>
           ) : null}
-          <DButton variant="primary" size="sm" onClick={onNewTask}>
+          <DButton variant="primary" size="md" onClick={onNewTask}>
             <Plus className="size-3.5" strokeWidth={3} />
             Nouvelle tâche
           </DButton>
@@ -113,7 +116,7 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
       </header>
 
       {taskSuggestions.length > 0 ? (
-        <div className="mt-4 flex shrink-0 gap-3 overflow-x-auto px-6 pb-1">
+        <div className="mt-3.5 flex shrink-0 gap-2.5 overflow-x-auto px-5 pb-1">
           {taskSuggestions.map((suggestion, index) => (
             <motion.article
               key={suggestion.id}
@@ -121,7 +124,7 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3, delay: index * 0.05, ease: [0.22, 1, 0.36, 1] }}
-              className="relative w-[272px] shrink-0 rounded-[20px] border border-dashed border-accent-ring/70 bg-accent-soft/40 p-3"
+              className="relative w-[276px] shrink-0 rounded-[20px] border border-dashed border-accent-ring/70 bg-accent-soft/40 p-3 transition-colors duration-200 hover:border-accent-ring hover:bg-accent-soft/70"
             >
               {index === 0 ? <BorderBeam /> : null}
               <button
@@ -132,7 +135,7 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
                 <span className="flex items-center gap-1.5">
                   <span
                     data-testid="suggestion-account"
-                    className="inline-flex h-[20px] shrink-0 items-center rounded-full bg-accent-soft px-1.5 text-[10.5px] font-extrabold whitespace-nowrap text-accent-ink"
+                    className="inline-flex h-[20px] shrink-0 items-center rounded-full bg-surface px-1.5 text-[10.5px] font-extrabold whitespace-nowrap text-accent-ink"
                   >
                     {sourceAccountLabel(accounts, suggestion.account)}
                   </span>
@@ -146,21 +149,21 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
                       <span className="sr-only">Suggéré par l'IA</span>
                     </span>
                   ) : null}
-                  <span className="truncate text-[11.5px] font-bold text-ink">{suggestion.from}</span>
+                  <span className="truncate text-[11px] font-bold text-ink">{suggestion.from}</span>
                 </span>
-                <span className="mt-1 line-clamp-2 block text-[12px] leading-snug font-medium text-ink-muted">
+                <span className="mt-1 line-clamp-2 block text-[11.5px] leading-snug font-medium text-ink-muted">
                   {suggestion.subject}
                 </span>
-                <span className="mt-1.5 block text-[12.5px] leading-tight font-bold text-ink">
+                <span className="mt-1.5 block text-[13px] leading-tight font-extrabold tracking-[-0.02em] text-ink">
                   {suggestion.proposal}
                 </span>
                 {suggestion.due ? (
-                  <span data-testid="suggestion-due" className="mt-1.5 flex items-center gap-1.5">
+                  <span data-testid="suggestion-due" className="mt-2 flex items-center gap-1.5">
                     <Badge tone={DUE_TONE[suggestion.dueTone]}>{suggestion.due}</Badge>
                   </span>
                 ) : null}
               </button>
-              <div className="mt-2 flex items-center gap-1.5">
+              <div className="mt-2.5 flex items-center gap-1.5">
                 <DButton
                   size="sm"
                   variant="soft"
@@ -183,9 +186,10 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
         </div>
       ) : null}
 
-      <div className="mt-4 grid min-h-0 flex-1 grid-cols-[repeat(5,minmax(220px,1fr))] gap-4 overflow-x-auto px-6 pb-2">
+      <div className="mt-4 grid min-h-0 flex-1 grid-cols-[repeat(5,minmax(220px,1fr))] gap-3.5 overflow-x-auto px-5 pb-2">
         {TASK_STATES.map((state) => {
           const columnTasks = tasks.filter((task) => task.state === state.id);
+          const active = over === state.id;
           return (
             <section
               key={state.id}
@@ -198,24 +202,30 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
               onDragLeave={() => setOver((current) => (current === state.id ? null : current))}
               onDrop={(event) => drop(event, state.id)}
               className={cn(
-                "flex min-h-0 flex-col rounded-[22px] border p-2.5 transition-colors duration-200",
-                over === state.id
-                  ? "border-accent-ring bg-accent-soft/60"
-                  : "border-line bg-surface-2/40",
+                "flex min-h-0 flex-col rounded-[24px] border p-2 transition-[background-color,border-color,box-shadow] duration-200",
+                active
+                  ? "border-accent-ring bg-accent-soft/60 shadow-[0_18px_40px_-34px_var(--accent)]"
+                  : "border-line/80 bg-surface-2/40",
               )}
             >
-              <div className="flex items-center gap-1.5 px-1 pb-2">
-                <span className={cn("size-2 rounded-full", state.dot)} />
-                <SectionLabel className="tracking-[0.1em]">{state.label}</SectionLabel>
-                <span className="ml-auto rounded-full bg-surface px-1.5 py-0.5 text-[10px] font-bold text-ink-muted tabular-nums">
+              <div className="flex items-center gap-1.5 px-1.5 pt-0.5 pb-2">
+                <span className={cn("size-2 shrink-0 rounded-full", state.dot)} />
+                <SectionLabel className="truncate tracking-[0.1em]">{state.label}</SectionLabel>
+                <span
+                  className={cn(
+                    "ml-auto grid h-[18px] min-w-[18px] shrink-0 place-items-center rounded-full px-1 text-[10px] font-extrabold tabular-nums transition-colors duration-200",
+                    columnTasks.length > 0 ? state.chip : "bg-surface text-ink-muted",
+                  )}
+                >
                   {columnTasks.length}
                 </span>
               </div>
               <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-0.5">
-                {columnTasks.map((task) => (
+                {columnTasks.map((task, index) => (
                   <TaskCard
                     key={task.id}
                     task={task}
+                    index={index}
                     dragging={dragging === task.id}
                     onOpen={() => setSelection({ kind: "task", id: task.id })}
                     onDragStart={(event) => {
@@ -229,6 +239,16 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
                     }}
                   />
                 ))}
+                {columnTasks.length === 0 ? (
+                  <p
+                    className={cn(
+                      "grid place-items-center rounded-[18px] border border-dashed px-2 py-4 text-center text-[10.5px] font-semibold transition-colors duration-200",
+                      active ? "border-accent-ring text-accent-ink" : "border-line text-ink-muted/80",
+                    )}
+                  >
+                    Aucune tâche
+                  </p>
+                ) : null}
               </div>
             </section>
           );
@@ -254,6 +274,7 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
       {selectedSuggestion ? (
         <SuggestionDetail
           suggestion={selectedSuggestion}
+          account={sourceAccountLabel(accounts, selectedSuggestion.account)}
           mail={suggestionMail}
           onClose={() => setSelection(null)}
           onAdd={() => {
@@ -276,12 +297,14 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
 
 function TaskCard({
   task,
+  index,
   dragging,
   onOpen,
   onDragStart,
   onDragEnd,
 }: {
   task: Task;
+  index: number;
   dragging: boolean;
   onOpen: () => void;
   onDragStart: (event: React.DragEvent<HTMLButtonElement>) => void;
@@ -292,70 +315,85 @@ function TaskCard({
   const doneCount = subtasks.filter((subtask) => subtask.done).length;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-    >
-    <button
-      type="button"
-      draggable
-      data-testid="task-card"
-      data-task-id={task.id}
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
-      onClick={onOpen}
-      className={cn(
-        "focus-ring w-full cursor-grab rounded-[16px] border border-line bg-surface p-2.5 text-left transition-shadow duration-200 active:cursor-grabbing",
-        dragging ? "opacity-60 shadow-[0_16px_34px_-20px_var(--accent)]" : "hover:border-accent-ring/70",
-      )}
-    >
-      <span className="flex items-start gap-1.5">
-        <span
-          className={cn(
-            "min-w-0 flex-1 text-[12.5px] leading-tight font-bold",
-            done ? "text-ink-muted line-through" : "text-ink",
-          )}
-        >
-          {task.title}
-        </span>
-        {task.mailId ? <Mail className="mt-0.5 size-3 shrink-0 text-ink-muted" /> : null}
-      </span>
-      <span className="mt-1 block truncate text-[11.5px] font-medium text-ink-muted">{task.meta}</span>
-      {typeof task.progress === "number" ? (
-        <span
-          role="progressbar"
-          aria-label={`Progression de ${task.title}`}
-          aria-valuenow={task.progress}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          className="mt-1.5 block h-1 overflow-hidden rounded-full bg-surface-2"
-        >
+    <BlurFade delay={Math.min(index, 8) * 0.04} yOffset={8}>
+      <button
+        type="button"
+        draggable
+        data-testid="task-card"
+        data-task-id={task.id}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onClick={onOpen}
+        className={cn(
+          "focus-ring w-full cursor-grab rounded-[18px] border border-line bg-surface px-3 py-2.5 text-left transition-[border-color,box-shadow,background-color,transform] duration-200 active:cursor-grabbing",
+          dragging
+            ? "rotate-[-0.75deg] border-accent-ring opacity-70 shadow-[0_22px_44px_-26px_var(--accent)]"
+            : "hover:-translate-y-px hover:border-accent-ring hover:shadow-[0_16px_34px_-28px_var(--accent)]",
+          done && "bg-surface-2/60",
+        )}
+      >
+        <span className="flex items-start gap-2">
           <span
-            className="block h-full rounded-full bg-accent"
-            style={{ width: `${task.progress}%` }}
-          />
+            className={cn(
+              "min-w-0 flex-1 text-[12.5px] leading-snug font-extrabold tracking-[-0.02em]",
+              done ? "text-ink-muted line-through" : "text-ink",
+            )}
+          >
+            {task.title}
+          </span>
+          {task.mailId ? (
+            <span
+              title="Issu d'un mail"
+              className="mt-px grid size-[18px] shrink-0 place-items-center rounded-full bg-accent-soft text-accent-ink"
+            >
+              <Mail className="size-2.5" strokeWidth={2.6} />
+              <span className="sr-only">Issu d'un mail</span>
+            </span>
+          ) : null}
         </span>
-      ) : null}
-      <span className="mt-1.5 flex items-center gap-1.5">
-        <Badge tone={DUE_TONE[task.dueTone]}>{task.due}</Badge>
-        {subtasks.length > 0 ? (
-          <span className="text-[10px] font-bold text-ink-muted tabular-nums">
-            {doneCount}/{subtasks.length}
+        <span className="mt-1 block truncate text-[11px] font-semibold text-ink-muted">{task.meta}</span>
+        {typeof task.progress === "number" ? (
+          <span className="mt-2 flex items-center gap-2">
+            <span
+              role="progressbar"
+              aria-label={`Progression de ${task.title}`}
+              aria-valuenow={task.progress}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              className="block h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-2"
+            >
+              <span
+                className="block h-full rounded-full bg-accent transition-[width] duration-300"
+                style={{ width: `${task.progress}%` }}
+              />
+            </span>
+            <span className="shrink-0 text-[10px] font-extrabold text-ink-muted tabular-nums">
+              {task.progress}%
+            </span>
           </span>
         ) : null}
-      </span>
-    </button>
-    </motion.div>
+        <span className="mt-2 flex items-center gap-1.5">
+          <Badge tone={DUE_TONE[task.dueTone]}>{task.due}</Badge>
+          {subtasks.length > 0 ? (
+            <span className="inline-flex items-center gap-1 rounded-md bg-surface-2 px-1.5 py-0.5 text-[10px] font-bold text-ink-muted tabular-nums">
+              <Check className="size-2.5" strokeWidth={3.2} />
+              {doneCount}/{subtasks.length}
+            </span>
+          ) : null}
+        </span>
+      </button>
+    </BlurFade>
   );
 }
 
 function Panel({
   label,
+  dot,
   onClose,
   children,
 }: {
   label: string;
+  dot?: string;
   onClose: () => void;
   children: React.ReactNode;
 }) {
@@ -367,6 +405,7 @@ function Panel({
       className="absolute inset-y-0 right-0 z-[25] flex w-[430px] flex-col border-l border-line bg-surface shadow-[-34px_0_80px_-56px_var(--accent)]"
     >
       <div className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-3">
+        {dot ? <span className={cn("size-2 shrink-0 rounded-full", dot)} /> : null}
         <SectionLabel>{label}</SectionLabel>
         <DIconButton label="Fermer le panneau" className="ml-auto size-8" onClick={onClose}>
           <X className="size-4" />
@@ -415,8 +454,8 @@ function TaskDetail({
   };
 
   return (
-    <Panel label="Tâche" onClose={onClose}>
-      <div className="flex flex-wrap gap-1.5">
+    <Panel label="Tâche" dot={stateMeta(task.state).dot} onClose={onClose}>
+      <div className="flex flex-wrap gap-1.5 rounded-[18px] border border-line bg-surface-2/40 p-2">
         {TASK_STATES.map((state) => {
           const active = state.id === task.state;
           return (
@@ -556,6 +595,7 @@ function TaskDetail({
 
 function SuggestionDetail({
   suggestion,
+  account,
   mail,
   onClose,
   onAdd,
@@ -563,6 +603,7 @@ function SuggestionDetail({
   onOpenMail,
 }: {
   suggestion: MailSuggestion;
+  account: string;
   mail: MailType | null;
   onClose: () => void;
   onAdd: () => void;
@@ -577,12 +618,17 @@ function SuggestionDetail({
         <div className="flex items-center gap-2">
           <Avatar name={suggestion.from} tone={suggestion.tone} size={30} />
           <div className="min-w-0 flex-1 leading-tight">
-            <p className="truncate text-[12px] font-bold text-ink">{suggestion.from}</p>
-            <p className="line-clamp-2 text-[12px] font-medium text-ink-muted">{suggestion.subject}</p>
+            <div className="flex items-center gap-1.5">
+              <span className="inline-flex h-[18px] shrink-0 items-center rounded-full bg-surface px-1.5 text-[10px] font-extrabold whitespace-nowrap text-accent-ink">
+                {account}
+              </span>
+              <p className="min-w-0 truncate text-[12px] font-bold text-ink">{suggestion.from}</p>
+            </div>
+            <p className="mt-0.5 line-clamp-2 text-[11.5px] font-medium text-ink-muted">{suggestion.subject}</p>
           </div>
           {suggestion.due ? <Badge tone={DUE_TONE[suggestion.dueTone]}>{suggestion.due}</Badge> : null}
         </div>
-        <p className="mt-3 text-[13.5px] leading-tight font-extrabold tracking-[-0.02em] text-ink">
+        <p className="mt-3 text-[13px] leading-tight font-extrabold tracking-[-0.02em] text-ink">
           {task.title}
         </p>
         <p className="mt-1.5 text-[11.5px] leading-relaxed font-medium text-ink-soft">
