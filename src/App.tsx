@@ -505,6 +505,10 @@ function PhoneApp({ native }: { native?: boolean }) {
                   restoreMail(mail);
                   closeMessage();
                 }}
+                onOpenPgp={() => {
+                  closeMessage();
+                  openPgp();
+                }}
               />
             </motion.div>
           )}

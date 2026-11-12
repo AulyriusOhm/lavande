@@ -22,6 +22,7 @@ import {
   RotateCcw,
   Search,
   ShieldCheck,
+  ShieldOff,
   Sparkles,
   Star,
   Sun,
@@ -38,6 +39,7 @@ import { ALL_ACCOUNTS } from "@/lib/accounts";
 import { PGP_STATE, formatKeyDate, keyLabel, keyState, shortFingerprint, type PgpKey } from "@/lib/pgp";
 import { listKeys } from "@/lib/pgp-api";
 import { useMailStore } from "@/lib/store";
+import { resolvePgp, usePrefs } from "@/lib/prefs";
 import type { MailNavigation } from "@/lib/app-shortcuts";
 import { useEscapeLayer } from "@/desktop/escape";
 import { useTheme } from "@/lib/theme";
@@ -419,9 +421,11 @@ function ThreadRow({
 export function DesktopInbox({
   onOpenSearch,
   navigationRef,
+  onOpenPgp,
 }: {
   onOpenSearch: () => void;
   navigationRef?: React.RefObject<MailNavigation | null>;
+  onOpenPgp?: () => void;
 }) {
   const {
     mails,
@@ -457,6 +461,7 @@ export function DesktopInbox({
     refreshSummary,
   } = useMailStore();
   const { dark, setDark } = useTheme();
+  const prefs = usePrefs();
   const [filter, setFilter] = useState<Filter>("all");
   const [summaryOpen, setSummaryOpen] = useState(true);
   const [collapsedPrevious, setCollapsedPrevious] = useState<string[]>([]);
@@ -529,6 +534,9 @@ export function DesktopInbox({
     pgpState === "expired" ? "amber" : pgpState === "revoked" ? "rose" : "green";
 
   const mail = openMail;
+  const pgpLocked = Boolean(
+    mail && mail.pgp === "encrypted" && !mail.bodyFetched && !resolvePgp(prefs, mail.account).enabled,
+  );
 
   const currentIndex = useMemo(() => {
     if (mail) {
@@ -1024,6 +1032,28 @@ export function DesktopInbox({
                       <p role="status" aria-live="polite" className="text-[11px] font-medium text-ink-muted">
                         {downloadNotice ?? "Les fichiers sont relus sur le serveur au moment du téléchargement."}
                       </p>
+                    </div>
+                  ) : null}
+
+                  {pgpLocked ? (
+                    <div
+                      role="status"
+                      className="mt-4 flex items-start gap-3 rounded-[18px] border border-accent-ring/50 bg-surface-2 px-4 py-3"
+                    >
+                      <ShieldOff className="mt-0.5 size-4 shrink-0 text-accent-ink" strokeWidth={2.4} />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[12.5px] leading-snug font-bold text-ink">
+                          Message chiffré · PGP désactivé pour ce compte
+                        </p>
+                        <p className="mt-1 text-[11.5px] leading-snug font-medium text-ink-soft">
+                          Active PGP pour ce compte dans les réglages pour le déchiffrer.
+                        </p>
+                      </div>
+                      {onOpenPgp ? (
+                        <DButton size="sm" variant="soft" onClick={onOpenPgp} className="shrink-0">
+                          Ouvrir les réglages
+                        </DButton>
+                      ) : null}
                     </div>
                   ) : null}
 

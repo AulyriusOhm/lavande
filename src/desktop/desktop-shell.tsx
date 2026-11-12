@@ -130,7 +130,11 @@ function DesktopMain() {
             className="h-full min-h-0"
           >
             {view === "inbox" && (
-              <DesktopInbox onOpenSearch={() => setSearchOpen(true)} navigationRef={mailNav} />
+              <DesktopInbox
+                onOpenSearch={() => setSearchOpen(true)}
+                navigationRef={mailNav}
+                onOpenPgp={() => changeView("settings")}
+              />
             )}
             {view === "calendar" && <DesktopCalendar onNewEvent={() => setNewEventOpen(true)} />}
             {view === "planning" && (

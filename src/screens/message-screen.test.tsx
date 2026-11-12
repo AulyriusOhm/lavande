@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { PrefsProvider } from "@/lib/prefs";
 import type { Mail } from "@/lib/mail";
 import type { Thread } from "@/lib/threads";
 
@@ -54,14 +55,84 @@ const THREAD: Thread = {
   order: 0,
 };
 
-function renderScreen(mail: Mail = MAIL) {
+function renderScreen(mail: Mail = MAIL, onOpenPgp?: () => void) {
   const thread: Thread = { ...THREAD, messages: [mail], primary: mail };
-  render(<MessageScreen thread={thread} onClose={() => {}} onToggleStar={() => {}} onReply={() => {}} />);
+  render(
+    <PrefsProvider>
+      <MessageScreen
+        thread={thread}
+        onClose={() => {}}
+        onToggleStar={() => {}}
+        onReply={() => {}}
+        onOpenPgp={onOpenPgp}
+      />
+    </PrefsProvider>,
+  );
+}
+
+const BANNER = "Message chiffré · PGP désactivé pour ce compte";
+
+function disablePgp(accountId = "perso") {
+  window.localStorage.setItem(
+    "lavande.prefs",
+    JSON.stringify({ pgpAccounts: { [accountId]: { enabled: false, encrypt: true, sign: true } } }),
+  );
 }
 
 beforeEach(() => {
   attachment.mockReset();
   saveBlob.mockReset();
+  window.localStorage.clear();
+});
+
+describe("bandeau PGP coupé", () => {
+  it("explique pourquoi le corps chiffré reste vide", () => {
+    disablePgp();
+    renderScreen({ ...MAIL, pgp: "encrypted" });
+
+    expect(screen.getByText(BANNER)).toBeTruthy();
+    expect(
+      screen.getByText("Active PGP pour ce compte dans les réglages pour le déchiffrer."),
+    ).toBeTruthy();
+  });
+
+  it("disparaît quand le compte a PGP activé", () => {
+    renderScreen({ ...MAIL, pgp: "encrypted" });
+
+    expect(screen.queryByText(BANNER)).toBeNull();
+  });
+
+  it("disparaît pour un message non chiffré", () => {
+    disablePgp();
+    renderScreen(MAIL);
+
+    expect(screen.queryByText(BANNER)).toBeNull();
+  });
+
+  it("disparaît une fois le corps chargé", () => {
+    disablePgp();
+    renderScreen({ ...MAIL, pgp: "encrypted", bodyFetched: true });
+
+    expect(screen.queryByText(BANNER)).toBeNull();
+  });
+
+  it("ouvre les réglages depuis le bouton", () => {
+    disablePgp();
+    const onOpenPgp = vi.fn();
+    renderScreen({ ...MAIL, pgp: "encrypted" }, onOpenPgp);
+
+    fireEvent.click(screen.getByText("Ouvrir les réglages"));
+
+    expect(onOpenPgp).toHaveBeenCalledTimes(1);
+  });
+
+  it("reste informatif sans bouton quand la navigation n'est pas câblée", () => {
+    disablePgp();
+    renderScreen({ ...MAIL, pgp: "encrypted" });
+
+    expect(screen.getByText(BANNER)).toBeTruthy();
+    expect(screen.queryByText("Ouvrir les réglages")).toBeNull();
+  });
 });
 
 describe("téléchargement des pièces jointes", () => {

@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Archive,
   ChevronDown,
+  ChevronRight,
   CornerUpLeft,
   CornerUpRight,
   Download,
@@ -11,6 +12,7 @@ import {
   Paperclip,
   RotateCcw,
   ShieldCheck,
+  ShieldOff,
   Star,
   Trash2,
 } from "lucide-react";
@@ -18,6 +20,7 @@ import { downloadAttachment } from "@/lib/attachments";
 import type { Mail, MailAttachment } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
 import { messagePgpStatus } from "@/lib/pgp";
+import { resolvePgp, usePrefs } from "@/lib/prefs";
 import type { Thread } from "@/lib/threads";
 import { cn } from "@/lib/utils";
 import { Avatar, IconButton } from "@/components/ui/primitives";
@@ -37,6 +40,7 @@ export function MessageScreen({
   onDelete,
   onNotSpam,
   onRestore,
+  onOpenPgp,
 }: {
   thread: Thread;
   onClose: () => void;
@@ -47,7 +51,9 @@ export function MessageScreen({
   onDelete?: (mail: Mail) => void;
   onNotSpam?: (mail: Mail) => void;
   onRestore?: (mail: Mail) => void;
+  onOpenPgp?: () => void;
 }) {
+  const prefs = usePrefs();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -63,6 +69,8 @@ export function MessageScreen({
   const inArchive = folderMail.folder === "archive";
 
   const mailPgp = messagePgpStatus(mail);
+  const pgpLocked =
+    mail.pgp === "encrypted" && !mail.bodyFetched && !resolvePgp(prefs, mail.account).enabled;
 
   const pgpBanner = (message: Mail) => {
     const status = messagePgpStatus(message);
@@ -370,6 +378,35 @@ export function MessageScreen({
             <PgpNotice status={mailPgp} />
           </BlurFade>
         )}
+
+        {pgpLocked ? (
+          <BlurFade delay={0.1}>
+            <div
+              role="status"
+              className="mt-3 flex items-start gap-2.5 rounded-2xl border border-accent-ring/50 bg-surface-2 px-3.5 py-3"
+            >
+              <ShieldOff className="mt-0.5 size-4 shrink-0 text-accent-ink" strokeWidth={2.4} />
+              <div className="min-w-0 flex-1">
+                <p className="text-[12.5px] leading-snug font-bold text-ink">
+                  Message chiffré · PGP désactivé pour ce compte
+                </p>
+                <p className="mt-1 text-[11.5px] leading-snug font-medium text-ink-soft">
+                  Active PGP pour ce compte dans les réglages pour le déchiffrer.
+                </p>
+                {onOpenPgp ? (
+                  <button
+                    type="button"
+                    onClick={onOpenPgp}
+                    className="mt-2 inline-flex min-h-9 items-center gap-1.5 rounded-full bg-accent-soft px-3 text-[11.5px] font-bold text-accent-ink transition-transform duration-200 active:scale-95"
+                  >
+                    Ouvrir les réglages
+                    <ChevronRight className="size-3.5" />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </BlurFade>
+        ) : null}
 
         <BlurFade delay={0.12}>
           <MailBody className="mt-5" html={mail.html} paragraphs={mail.body} source={mail.source} />
