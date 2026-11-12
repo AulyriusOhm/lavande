@@ -22,7 +22,8 @@ use crate::state::AppState;
 const SESSION_TTL: Duration = Duration::from_secs(600);
 const GOOGLE_AUTH: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN: &str = "https://oauth2.googleapis.com/token";
-const GOOGLE_SCOPE: &str = "https://mail.google.com/ openid email";
+const GOOGLE_SCOPE: &str =
+    "https://mail.google.com/ https://www.googleapis.com/auth/calendar openid email";
 const MICROSOFT_AUTH: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
 const MICROSOFT_TOKEN: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const MICROSOFT_SCOPE: &str =

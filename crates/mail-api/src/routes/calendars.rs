@@ -1,6 +1,6 @@
 //! `/api/calendars`: import en lecture seule d'un calendrier iCalendar, collé
-//! dans le corps de la requête ou téléchargé par le démon depuis une URL, et
-//! accès CalDAV en lecture seule.
+//! dans le corps de la requête ou téléchargé par le démon depuis une URL, accès
+//! CalDAV en lecture seule et lecture des calendriers Google d'un compte OAuth2.
 //!
 //! Une source CalDAV persistée garde son URL et son nom dans `calendars.json`
 //! et ses identifiants dans le coffre de secrets : ils ne repassent jamais par
@@ -14,6 +14,7 @@ use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use lavande_mail::caldav::{CaldavClient, CalendarCollection};
+use lavande_mail::gcal::{GcalClient, GoogleCalendar};
 use lavande_mail::ics::{parse_events, ExternalEvent, MAX_ICS_BYTES};
 use serde::Deserialize;
 
@@ -40,6 +41,14 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/calendars/caldav/sources/{id}/events",
             post(source_events),
+        )
+        .route(
+            "/api/calendars/google/{account_id}/calendars",
+            get(google_calendars),
+        )
+        .route(
+            "/api/calendars/google/{account_id}/events",
+            post(google_events),
         )
 }
 
@@ -89,6 +98,57 @@ async fn caldav_events(
     let client = request.client()?;
     let events = client.events(request.calendar_href.as_deref()).await?;
     tracing::debug!(events = events.len(), "événements CalDAV récupérés");
+    Ok(Json(events))
+}
+
+/// Calendars of a Google account already connected: the refresh token of the
+/// account is the only credential, none travels in the request.
+async fn google_calendars(
+    Path(account_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<GoogleCalendar>>, ApiError> {
+    let account = state.account(&account_id).await?;
+    let mut client = GcalClient::new(&account)?;
+    let calendars = client.calendars().await?;
+    tracing::debug!(
+        account = %account_id,
+        calendars = calendars.len(),
+        "calendriers Google listés"
+    );
+    Ok(Json(calendars))
+}
+
+#[derive(Deserialize)]
+struct GoogleEventsRequest {
+    calendar_id: String,
+    /// RFC 3339 bounds of the window; Google defaults them when absent.
+    #[serde(default)]
+    time_min: Option<String>,
+    #[serde(default)]
+    time_max: Option<String>,
+}
+
+async fn google_events(
+    Path(account_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<GoogleEventsRequest>,
+) -> Result<Json<Vec<ExternalEvent>>, ApiError> {
+    let calendar_id = request.calendar_id.trim();
+    if calendar_id.is_empty() {
+        return Err(ApiError::bad_request("gcal", "il manque « calendar_id »"));
+    }
+    let time_min = trimmed(request.time_min);
+    let time_max = trimmed(request.time_max);
+    let account = state.account(&account_id).await?;
+    let mut client = GcalClient::new(&account)?;
+    let events = client
+        .events(calendar_id, time_min.as_deref(), time_max.as_deref())
+        .await?;
+    tracing::debug!(
+        account = %account_id,
+        events = events.len(),
+        "événements Google récupérés"
+    );
     Ok(Json(events))
 }
 

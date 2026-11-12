@@ -4,6 +4,7 @@
 pub mod caldav;
 pub mod config;
 pub mod error;
+pub mod gcal;
 pub mod ics;
 pub mod imap;
 
@@ -20,6 +21,7 @@ pub mod tls;
 pub use caldav::{CaldavClient, CalendarCollection};
 pub use config::{AccountConfig, AuthConfig, Encryption, Endpoint, FolderMapping};
 pub use error::MailError;
+pub use gcal::{GcalClient, GoogleCalendar};
 pub use ics::{parse_events, ExternalEvent};
 pub use imap::SyncReport;
 pub use mime::{
