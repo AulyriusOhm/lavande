@@ -87,7 +87,7 @@ export function periodLabel(mode: ViewMode, anchorISO: string, _todayISO?: strin
     return `${start.day} ${monthName(start.month, locale)} ${start.year} – ${end.day} ${monthName(end.month, locale)} ${end.year}`;
   }
   if (mode === "day") {
-    return `${WEEKDAYS_LONG[(toDate(anchorISO).getDay() + 6) % 7]} ${anchor.day} ${monthName(anchor.month, locale)} ${anchor.year}`;
+    return `${capitalizeFirst(WEEKDAYS_LONG[(toDate(anchorISO).getDay() + 6) % 7])} ${anchor.day} ${monthName(anchor.month, locale)} ${anchor.year}`;
   }
   return "À venir";
 }

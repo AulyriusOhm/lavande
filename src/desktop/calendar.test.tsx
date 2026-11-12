@@ -127,6 +127,8 @@ const layout = () => screen.getByTestId("calendar-layout");
 const dayPanel = () => screen.getByTestId("day-panel");
 const monthGrid = () => screen.getByTestId("month-grid");
 const periodLabel = () => screen.getByTestId("period-label").textContent;
+const todayButton = () => screen.getByRole("button", { name: "Aujourd'hui" }) as HTMLButtonElement;
+const groupToggle = (label: string) => screen.getByRole("button", { name: new RegExp(`^${label}`) });
 const probeTitles = () =>
   Array.from(screen.getByTestId("probe").querySelectorAll("li")).map((item) => item.textContent ?? "");
 
@@ -139,37 +141,67 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-describe("Agenda PC · bouton « Nouveau rendez-vous »", () => {
-  it("n'expose qu'un seul bouton de création en fenêtre large", () => {
+describe("Agenda PC · pas de doublon de création avec le dock", () => {
+  it("n'expose aucun bouton « Nouveau rendez-vous » en fenêtre large", () => {
     mount(1440);
 
-    expect(calendarButtons()).toHaveLength(1);
+    expect(calendarButtons()).toHaveLength(0);
   });
 
-  it("n'expose qu'un seul bouton de création en fenêtre étroite", () => {
+  it("n'expose aucun bouton « Nouveau rendez-vous » en fenêtre étroite", () => {
     mount(860);
 
-    expect(calendarButtons()).toHaveLength(1);
+    expect(calendarButtons()).toHaveLength(0);
   });
 
-  it("reste unique à chaque redimensionnement successif", () => {
+  it("reste sans doublon à chaque redimensionnement successif", () => {
     const { viewport } = mount(1440);
-    expect(calendarButtons()).toHaveLength(1);
+    expect(calendarButtons()).toHaveLength(0);
 
     for (const width of [1180, 1024, 900, 760, 1024, 1320, 640]) {
       viewport.resize(width);
-      expect(calendarButtons(), `largeur ${width}px`).toHaveLength(1);
+      expect(calendarButtons(), `largeur ${width}px`).toHaveLength(0);
       expect(dayPanel(), `largeur ${width}px`).toBeTruthy();
       expect(monthGrid(), `largeur ${width}px`).toBeTruthy();
     }
   });
 
-  it("déclenche la création depuis l'unique bouton", () => {
+  it("déclenche la création depuis le « + » contextuel d'une case", () => {
     const { onNewEvent } = mount(1280);
+    const target = isoInDays(2);
 
-    fireEvent.click(calendarButtons()[0]!);
+    fireEvent.click(screen.getByRole("button", { name: `Ajouter un rendez-vous le ${target}` }));
 
     expect(onNewEvent).toHaveBeenCalledTimes(1);
+    expect(onNewEvent).toHaveBeenCalledWith(target);
+  });
+});
+
+describe("Agenda PC · bouton Aujourd'hui", () => {
+  it("est désactivé sur la période courante", () => {
+    mount(1440);
+
+    expect(todayButton().disabled).toBe(true);
+    expect(todayButton().getAttribute("title")).toBe("Vous êtes déjà sur aujourd'hui");
+  });
+
+  it("se réactive hors période, ramène sur aujourd'hui puis se redésactive", async () => {
+    mount(1440);
+
+    fireEvent.click(screen.getByTestId("view-day"));
+    await waitFor(() => expect(screen.getByTestId("day-view")).toBeTruthy());
+    expect(todayButton().disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Période suivante" }));
+
+    const shifted = periodLabel();
+    expect(todayButton().disabled).toBe(false);
+    expect(todayButton().getAttribute("title")).toBe("Revenir à aujourd'hui");
+
+    fireEvent.click(todayButton());
+
+    expect(todayButton().disabled).toBe(true);
+    expect(periodLabel()).not.toBe(shifted);
   });
 });
 
@@ -263,6 +295,22 @@ describe("Agenda PC · navigation entre les vues", () => {
     expect(screen.queryByTestId("mini-month")).toBeNull();
   });
 
+  it("garde une seule vue montée et dans le flux pendant la transition", async () => {
+    mount(1440);
+
+    const viewport = screen.getByTestId("grid-viewport");
+    const frame = () => viewport.firstElementChild as HTMLElement;
+    expect(frame().className).toContain("h-full");
+    expect(frame().className).not.toContain("absolute");
+
+    fireEvent.click(screen.getByTestId("view-week"));
+
+    expect(viewport.children).toHaveLength(1);
+    await waitFor(() => expect(screen.getByTestId("week-view")).toBeTruthy());
+    expect(viewport.children).toHaveLength(1);
+    expect(screen.queryByTestId("month-grid")).toBeNull();
+  });
+
   it("avance d'un mois avec la flèche suivante", () => {
     mount(1440);
 
@@ -271,6 +319,21 @@ describe("Agenda PC · navigation entre les vues", () => {
     fireEvent.click(screen.getByRole("button", { name: "Période suivante" }));
 
     expect(periodLabel()).toBe(NEXT_MONTH_LABEL);
+  });
+
+  it("affiche le jour complet sans couper le libellé", async () => {
+    mount(1440);
+
+    fireEvent.click(screen.getByTestId("view-day"));
+    await waitFor(() => expect(screen.getByTestId("day-view")).toBeTruthy());
+
+    const label = screen.getByTestId("period-label");
+    const text = label.textContent ?? "";
+    expect(label.className).not.toContain("leading-none");
+    expect(label.className).toContain("leading-tight");
+    expect(text.toLowerCase()).toContain(new Intl.DateTimeFormat("fr-FR", { weekday: "long" }).format(new Date()));
+    expect(text).toContain(monthLabel(CURRENT_MONTH).toLowerCase());
+    expect(text).toContain(String(CURRENT_YEAR));
   });
 });
 
@@ -294,6 +357,50 @@ describe("Agenda PC · filtres", () => {
 
     expect(within(dayPanel()).getByText("Déjeuner — café des Lilas")).toBeTruthy();
     expect(within(dayPanel()).queryByText("Point maquettes v3")).toBeNull();
+  });
+});
+
+describe("Agenda PC · groupes de filtres repliables", () => {
+  it("présente les deux groupes dépliés par défaut", () => {
+    mount(1440);
+
+    expect(groupToggle("Mes calendriers").getAttribute("aria-expanded")).toBe("true");
+    expect(groupToggle("Filtres").getAttribute("aria-expanded")).toBe("true");
+    expect(within(screen.getByTestId("calendar-filters")).getByLabelText("Pro")).toBeTruthy();
+    expect(screen.getByLabelText("Conflits")).toBeTruthy();
+  });
+
+  it("replie puis déplie chaque groupe au clic", () => {
+    mount(1440);
+
+    fireEvent.click(groupToggle("Mes calendriers"));
+    expect(groupToggle("Mes calendriers").getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByTestId("calendar-filters")).toBeNull();
+
+    fireEvent.click(groupToggle("Mes calendriers"));
+    expect(groupToggle("Mes calendriers").getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByTestId("calendar-filters")).toBeTruthy();
+
+    fireEvent.click(groupToggle("Filtres"));
+    expect(groupToggle("Filtres").getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByLabelText("Conflits")).toBeNull();
+
+    fireEvent.click(groupToggle("Filtres"));
+    expect(groupToggle("Filtres").getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByLabelText("Conflits")).toBeTruthy();
+  });
+
+  it("filtre toujours après un repli puis dépli", () => {
+    mount(1440);
+
+    expect(within(dayPanel()).getByText("Point maquettes v3")).toBeTruthy();
+
+    fireEvent.click(groupToggle("Mes calendriers"));
+    fireEvent.click(groupToggle("Mes calendriers"));
+    fireEvent.click(within(screen.getByTestId("calendar-filters")).getByLabelText("Pro"));
+
+    expect(within(dayPanel()).queryByText("Point maquettes v3")).toBeNull();
+    expect(within(dayPanel()).getByText("Déjeuner — café des Lilas")).toBeTruthy();
   });
 });
 

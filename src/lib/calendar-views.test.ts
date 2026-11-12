@@ -97,7 +97,7 @@ describe("calendar-views · libellés de période", () => {
   });
 
   it("nomme le jour", () => {
-    expect(periodLabel("day", "2026-11-12")).toBe("jeudi 12 novembre 2026");
+    expect(periodLabel("day", "2026-11-12")).toBe("Jeudi 12 novembre 2026");
   });
 
   it("nomme la liste", () => {

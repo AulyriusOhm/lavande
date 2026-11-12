@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, type Variants } from "motion/react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -81,6 +81,20 @@ const VIEW_TABS: { id: ViewMode; label: string }[] = [
   { id: "day", label: "Jour" },
   { id: "list", label: "Liste" },
 ];
+
+const VIEW_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
+
+const VIEW_VARIANTS: Variants = {
+  enter: (direction: number) =>
+    direction === 0
+      ? { opacity: 0, scale: 0.985, transition: { duration: 0.22, ease: VIEW_EASE } }
+      : { opacity: 0, x: direction * 48, transition: { duration: 0.22, ease: VIEW_EASE } },
+  center: { opacity: 1, x: 0, scale: 1, transition: { duration: 0.22, ease: VIEW_EASE } },
+  exit: (direction: number) =>
+    direction === 0
+      ? { opacity: 0, scale: 1.01, transition: { duration: 0.15, ease: VIEW_EASE } }
+      : { opacity: 0, x: direction * -48, transition: { duration: 0.15, ease: VIEW_EASE } },
+};
 
 const TONE_LABELS = ["Ton 1", "Ton 2", "Ton 3", "Ton 4", "Ton 5"];
 
@@ -739,6 +753,48 @@ function RailCheck({
   );
 }
 
+function FilterGroup({
+  label,
+  count,
+  testId,
+  children,
+}: {
+  label: string;
+  count: number;
+  testId?: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(true);
+
+  return (
+    <section className="flex flex-col gap-1">
+      <SectionLabel>
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((current) => !current)}
+          className="focus-ring flex w-full items-center gap-1.5 rounded-lg py-0.5 text-left transition-colors hover:text-ink"
+        >
+          {label}
+          <span className="text-[10.5px] font-bold text-ink-muted tabular-nums">{count}</span>
+          <ChevronDown
+            className={cn(
+              "ml-auto size-3.5 shrink-0 text-ink-muted transition-transform duration-200",
+              !open && "-rotate-90",
+            )}
+            strokeWidth={2.4}
+          />
+        </button>
+      </SectionLabel>
+      {open ? (
+        <div data-testid={testId} className="mt-0.5 flex flex-col gap-px">
+          {children}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function DayPanel({
   selectedDate,
   dayEvents,
@@ -1019,8 +1075,23 @@ export function DesktopCalendar({
   };
 
   const periodEvents = visible.filter((event) => inPeriod(event.date));
+  const calendarPeriodEvents = periodEvents.filter((event) =>
+    calendarList.some((def) => def.name === event.calendar),
+  );
+  const filterPeriodEvents = periodEvents.filter(
+    (event) => event.fromMail || conflicts.has(event.id) || Boolean(event.attendees?.length),
+  );
   const hasFilters =
     Boolean(query.trim()) || fromMail || conflictsOnly || attendeesOnly || hiddenCalendars.size > 0;
+
+  const isOnToday =
+    mode === "month"
+      ? anchor.slice(0, 7) === TODAY_ISO.slice(0, 7)
+      : mode === "week"
+        ? weekStartISO(anchor) === weekStartISO(TODAY_ISO)
+        : mode === "day"
+          ? anchor === TODAY_ISO
+          : selectedDate === TODAY_ISO;
 
   const periodKey =
     mode === "month"
@@ -1032,7 +1103,7 @@ export function DesktopCalendar({
           : anchor.slice(0, 7);
 
   const syncView = (date: string) => {
-    if (mode === "day" || mode === "list") return;
+    if (mode === "list") return;
     setAnchor(date);
   };
 
@@ -1075,6 +1146,7 @@ export function DesktopCalendar({
   };
 
   const goToday = () => {
+    setDirection(0);
     setAnchor(TODAY_ISO);
     setSelectedDate(TODAY_ISO);
     setDetailId(null);
@@ -1082,6 +1154,7 @@ export function DesktopCalendar({
 
   const changeMode = (next: ViewMode) => {
     if (next === mode) return;
+    setDirection(0);
     setMode(next);
     setDetailId(null);
     if (next === "list") setAnchor(selectedDate);
@@ -1153,8 +1226,8 @@ export function DesktopCalendar({
             <span
               data-testid="period-label"
               className={cn(
-                "min-w-0 truncate text-center leading-none font-extrabold tracking-[-0.035em] text-ink tabular-nums",
-                narrow ? "text-[15px]" : "min-w-[150px] text-[17px]",
+                "min-w-0 truncate text-center font-extrabold tracking-[-0.035em] text-ink tabular-nums",
+                narrow ? "text-[15px] leading-tight" : "min-w-[150px] text-[17px] leading-tight",
               )}
             >
               {periodLabel(mode, anchor)}
@@ -1164,7 +1237,13 @@ export function DesktopCalendar({
             </DIconButton>
           </div>
 
-          <DButton variant="ghost" size="md" onClick={goToday}>
+          <DButton
+            variant="ghost"
+            size="md"
+            onClick={goToday}
+            disabled={isOnToday}
+            title={isOnToday ? "Vous êtes déjà sur aujourd'hui" : "Revenir à aujourd'hui"}
+          >
             Aujourd'hui
           </DButton>
 
@@ -1176,22 +1255,18 @@ export function DesktopCalendar({
             onChange={(event) => setQuery(event.target.value)}
             className="ml-auto h-9 min-w-[110px] max-w-[260px] flex-1 rounded-full"
           />
-
-          <DButton variant="primary" size="md" onClick={() => onNewEvent()}>
-            <Plus className="size-4" strokeWidth={2.4} />
-            Nouveau rendez-vous
-          </DButton>
         </header>
 
         <div data-testid="grid-viewport" className="relative min-h-0 flex-1 overflow-auto">
-          <AnimatePresence mode="wait" initial={false}>
+          <AnimatePresence mode="wait" initial={false} custom={direction}>
             <motion.div
               key={`${mode}:${periodKey}`}
-              initial={{ opacity: 0, x: direction * 48 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: direction * -48 }}
-              transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-              className="h-full min-h-0"
+              custom={direction}
+              variants={VIEW_VARIANTS}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              className="h-full min-h-0 origin-top"
             >
               {mode === "month" ? (
                 <MonthView
@@ -1252,49 +1327,47 @@ export function DesktopCalendar({
               byDay={byDay}
               calendars={calendars}
               onPick={pick}
-              onShift={(delta) => setAnchor(shiftAnchor("month", anchor, delta))}
+              onShift={(delta) => {
+                const next = shiftAnchor("month", anchor, delta);
+                setAnchor(next);
+                if (mode === "day") setSelectedDate(next);
+              }}
             />
           )}
 
-          <section className="flex flex-col gap-1">
-            <SectionLabel>Mes calendriers</SectionLabel>
-            <div data-testid="calendar-filters" className="mt-0.5 flex flex-col gap-px">
-              {calendarList.map((def) => (
-                <RailCheck
-                  key={def.id}
-                  label={def.name}
-                  tone={def.tone}
-                  checked={!hiddenCalendars.has(def.name)}
-                  count={periodEvents.filter((event) => event.calendar === def.name).length}
-                  onChange={() => toggleCalendar(def.name)}
-                />
-              ))}
-            </div>
-          </section>
+          <FilterGroup label="Mes calendriers" count={calendarPeriodEvents.length} testId="calendar-filters">
+            {calendarList.map((def) => (
+              <RailCheck
+                key={def.id}
+                label={def.name}
+                tone={def.tone}
+                checked={!hiddenCalendars.has(def.name)}
+                count={calendarPeriodEvents.filter((event) => event.calendar === def.name).length}
+                onChange={() => toggleCalendar(def.name)}
+              />
+            ))}
+          </FilterGroup>
 
-          <section className="flex flex-col gap-1">
-            <SectionLabel>Filtres</SectionLabel>
-            <div className="mt-0.5 flex flex-col gap-px">
-              <RailCheck
-                label="Depuis un mail"
-                checked={fromMail}
-                count={periodEvents.filter((event) => event.fromMail).length}
-                onChange={() => setFromMail((current) => !current)}
-              />
-              <RailCheck
-                label="Conflits"
-                checked={conflictsOnly}
-                count={periodEvents.filter((event) => conflicts.has(event.id)).length}
-                onChange={() => setConflictsOnly((current) => !current)}
-              />
-              <RailCheck
-                label="Avec invités"
-                checked={attendeesOnly}
-                count={periodEvents.filter((event) => event.attendees?.length).length}
-                onChange={() => setAttendeesOnly((current) => !current)}
-              />
-            </div>
-          </section>
+          <FilterGroup label="Filtres" count={filterPeriodEvents.length}>
+            <RailCheck
+              label="Depuis un mail"
+              checked={fromMail}
+              count={filterPeriodEvents.filter((event) => event.fromMail).length}
+              onChange={() => setFromMail((current) => !current)}
+            />
+            <RailCheck
+              label="Conflits"
+              checked={conflictsOnly}
+              count={filterPeriodEvents.filter((event) => conflicts.has(event.id)).length}
+              onChange={() => setConflictsOnly((current) => !current)}
+            />
+            <RailCheck
+              label="Avec invités"
+              checked={attendeesOnly}
+              count={filterPeriodEvents.filter((event) => event.attendees?.length).length}
+              onChange={() => setAttendeesOnly((current) => !current)}
+            />
+          </FilterGroup>
 
           <div className="h-px shrink-0 bg-line" />
 
