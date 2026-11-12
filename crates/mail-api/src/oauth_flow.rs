@@ -324,7 +324,13 @@ async fn exchange(
         .send()
         .await
         .map_err(|error| {
-            ApiError::gateway("oauth", format!("échange du code impossible : {error}"))
+            let mut message = format!("{error}");
+            let mut cause = std::error::Error::source(&error);
+            while let Some(source) = cause {
+                message.push_str(&format!(" → {source}"));
+                cause = source.source();
+            }
+            ApiError::gateway("oauth", format!("échange du code impossible : {message}"))
         })?;
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
