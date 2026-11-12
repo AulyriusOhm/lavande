@@ -1,0 +1,645 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lavande — mail, agenda et planification, chiffrés et auto-hébergés</title>
+    <meta
+      name="description"
+      content="Lavande réunit le mail IMAP/SMTP, l’agenda CalDAV/Google/ICS et la planification kanban dans une application de bureau et Android. PGP par compte, secrets dans le trousseau système, paquets et mises à jour signés."
+    />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0e0c13" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="fr_FR" />
+    <meta property="og:title" content="Lavande — mail, agenda et planification" />
+    <meta
+      property="og:description"
+      content="Le mail, l’agenda et la planification réunis. Chiffré par compte, assisté par l’IA que vous choisissez. Auto-hébergé."
+    />
+    <link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml" />
+    <script src="assets/js/theme-init.js"></script>
+    <script src="assets/js/main.js" defer></script>
+    <link rel="preload" href="assets/fonts/plus-jakarta-sans-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link
+      rel="preload"
+      href="assets/fonts/plus-jakarta-sans-latin-ext.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link rel="stylesheet" href="assets/css/style.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#contenu">Aller au contenu</a>
+
+    <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+      <symbol id="i-mail" viewBox="0 0 24 24">
+        <rect width="20" height="16" x="2" y="4" rx="2" />
+        <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+      </symbol>
+      <symbol id="i-calendar" viewBox="0 0 24 24">
+        <path d="M8 2v4" />
+        <path d="M16 2v4" />
+        <rect width="18" height="18" x="3" y="4" rx="2" />
+        <path d="M3 10h18" />
+      </symbol>
+      <symbol id="i-columns" viewBox="0 0 24 24">
+        <rect width="18" height="18" x="3" y="3" rx="2" />
+        <path d="M9 3v18" />
+        <path d="M15 3v18" />
+      </symbol>
+      <symbol id="i-sparkles" viewBox="0 0 24 24">
+        <path
+          d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"
+        />
+        <path d="M20 3v4" />
+        <path d="M22 5h-4" />
+      </symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24">
+        <path
+          d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
+        />
+        <path d="m9 12 2 2 4-4" />
+      </symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24">
+        <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+        <path d="M21 3v5h-5" />
+        <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+        <path d="M8 16H3v5" />
+      </symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24">
+        <rect width="18" height="11" x="3" y="11" rx="2" />
+        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+      </symbol>
+      <symbol id="i-key" viewBox="0 0 24 24">
+        <path
+          d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"
+        />
+        <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
+      </symbol>
+      <symbol id="i-server" viewBox="0 0 24 24">
+        <rect width="20" height="8" x="2" y="2" rx="2" />
+        <rect width="20" height="8" x="2" y="14" rx="2" />
+        <path d="M6 6h.01" />
+        <path d="M6 18h.01" />
+      </symbol>
+      <symbol id="i-package" viewBox="0 0 24 24">
+        <path d="m7.5 4.27 9 5.15" />
+        <path
+          d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"
+        />
+        <path d="m3.3 7 8.7 5 8.7-5" />
+        <path d="M12 22V12" />
+      </symbol>
+      <symbol id="i-download" viewBox="0 0 24 24">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <path d="m7 10 5 5 5-5" />
+        <path d="M12 15V3" />
+      </symbol>
+      <symbol id="i-arrow-right" viewBox="0 0 24 24">
+        <path d="M5 12h14" />
+        <path d="m12 5 7 7-7 7" />
+      </symbol>
+      <symbol id="i-check" viewBox="0 0 24 24">
+        <path d="M20 6 9 17l-5-5" />
+      </symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24">
+        <path d="M5 12h14" />
+        <path d="M12 5v14" />
+      </symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="4" />
+        <path d="M12 2v2" />
+        <path d="M12 20v2" />
+        <path d="m4.93 4.93 1.41 1.41" />
+        <path d="m17.66 17.66 1.41 1.41" />
+        <path d="M2 12h2" />
+        <path d="M20 12h2" />
+        <path d="m6.34 17.66-1.41 1.41" />
+        <path d="m19.07 4.93-1.41 1.41" />
+      </symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24">
+        <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+      </symbol>
+      <symbol id="i-external" viewBox="0 0 24 24">
+        <path d="M15 3h6v6" />
+        <path d="M10 14 21 3" />
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+      </symbol>
+      <symbol id="i-book" viewBox="0 0 24 24">
+        <path d="M12 7v14" />
+        <path
+          d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"
+        />
+      </symbol>
+      <symbol id="i-smartphone" viewBox="0 0 24 24">
+        <rect width="14" height="20" x="5" y="2" rx="2" />
+        <path d="M12 18h.01" />
+      </symbol>
+      <symbol id="i-inbox" viewBox="0 0 24 24">
+        <path d="M22 12h-6l-2 3h-4l-2-3H2" />
+        <path
+          d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"
+        />
+      </symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24">
+        <path d="M21 4h-7" />
+        <path d="M10 4H3" />
+        <path d="M21 12h-9" />
+        <path d="M8 12H3" />
+        <path d="M21 20h-5" />
+        <path d="M12 20H3" />
+        <path d="M14 2v4" />
+        <path d="M8 10v4" />
+        <path d="M16 18v4" />
+      </symbol>
+    </svg>
+
+    <header class="site-header">
+      <div class="container header-inner">
+        <a class="brand" href="#top" aria-label="Lavande, revenir en haut de la page">
+          <span class="brand-mark" aria-hidden="true">L</span>
+          <span>Lavande</span>
+        </a>
+        <nav class="nav" aria-label="Navigation principale">
+          <a href="#fonctionnalites">Fonctionnalités</a>
+          <a href="#telecharger">Téléchargement</a>
+          <a href="#securite">Sécurité</a>
+        </nav>
+        <div class="header-actions">
+          <button
+            class="icon-btn theme-toggle"
+            id="theme-toggle"
+            type="button"
+            aria-label="Passer en thème clair"
+            aria-pressed="false"
+          >
+            <svg class="icon icon-sun" aria-hidden="true"><use href="#i-sun"></use></svg>
+            <svg class="icon icon-moon" aria-hidden="true"><use href="#i-moon"></use></svg>
+          </button>
+          <a class="btn btn--primary btn--sm header-cta" href="#telecharger" aria-label="Télécharger">
+            <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
+            <span>Télécharger</span>
+          </a>
+        </div>
+      </div>
+    </header>
+
+    <main id="contenu">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <div class="container hero-grid">
+          <div class="hero-copy">
+            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Mail · Agenda · Planification</p>
+            <h1 class="hero-title" id="hero-title">Lavande</h1>
+            <p class="hero-lead">
+              Le mail, l’agenda et la planification réunis dans une seule application. Chiffré par
+              compte, assisté par l’IA que vous choisissez.
+            </p>
+            <p class="hero-sub">
+              Vos messages deviennent des tâches et des rendez-vous sans quitter la boîte. Aucun
+              service tiers ne voit passer vos données.
+            </p>
+            <div class="hero-cta">
+              <a class="btn btn--primary" href="#telecharger">
+                <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
+                Télécharger
+              </a>
+              <a class="btn btn--ghost" href="#fonctionnalites">
+                Fonctionnalités
+                <svg class="icon" aria-hidden="true"><use href="#i-arrow-right"></use></svg>
+              </a>
+            </div>
+            <ul class="hero-meta" role="list">
+              <li><svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg>Linux · Windows · macOS</li>
+              <li><svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg>Android</li>
+              <li><svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg>Auto-hébergé</li>
+            </ul>
+          </div>
+
+          <div class="hero-visual">
+            <div
+              class="window"
+              role="img"
+              aria-label="Aperçu de Lavande : une boîte unifiée à gauche, un message dont la signature est vérifiée à droite, et une suggestion de tâche créée à partir du message."
+            >
+              <div class="window-bar" aria-hidden="true">
+                <span class="dots"><i></i><i></i><i></i></span>
+                <span class="window-title">Boîte unifiée</span>
+              </div>
+              <div class="window-body" aria-hidden="true">
+                <div class="app-dock">
+                  <span class="is-active"><svg class="icon"><use href="#i-inbox"></use></svg></span>
+                  <span><svg class="icon"><use href="#i-calendar"></use></svg></span>
+                  <span><svg class="icon"><use href="#i-columns"></use></svg></span>
+                  <span><svg class="icon"><use href="#i-sliders"></use></svg></span>
+                </div>
+                <div class="app-main">
+                  <div class="mail-list">
+                    <div class="mail-row is-active">
+                      <span class="mail-row-head">
+                        Camille Roux
+                        <svg class="icon"><use href="#i-shield"></use></svg>
+                      </span>
+                      <span class="mail-row-subject">v3 avant la démo</span>
+                      <span class="mail-row-meta">il y a 4 min · signé</span>
+                    </div>
+                    <div class="mail-row">
+                      <span class="mail-row-head">
+                        Studio Vela
+                        <span class="unread"></span>
+                      </span>
+                      <span class="mail-row-subject">Facture de novembre</span>
+                      <span class="mail-row-meta">9 h 12 · chiffré</span>
+                    </div>
+                    <div class="mail-row">
+                      <span class="mail-row-head">Léa Fontaine</span>
+                      <span class="mail-row-subject">Déjeuner jeudi ?</span>
+                      <span class="mail-row-meta">hier</span>
+                    </div>
+                  </div>
+                  <div class="reader">
+                    <span class="pgp-banner">
+                      <svg class="icon"><use href="#i-shield"></use></svg>
+                      Signature vérifiée
+                    </span>
+                    <h3>v3 avant la démo</h3>
+                    <span class="reader-to">Camille Roux · il y a 4 min</span>
+                    <p class="reader-body">
+                      Bonjour, la v3 est prête pour vendredi. Il reste deux points : la barre de
+                      recherche et la hiérarchie des états. Peux-tu confirmer avant la fin de
+                      journée ?
+                    </p>
+                    <div class="reader-actions">
+                      <span class="chip">Répondre</span>
+                      <span class="chip chip--accent">Créer une tâche</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="suggestion" aria-hidden="true">
+              <span class="suggestion-icon"><svg class="icon"><use href="#i-sparkles"></use></svg></span>
+              <span class="suggestion-text">
+                <strong>Tâche suggérée</strong>
+                <span>« Valider la v3 » · vendredi</span>
+              </span>
+              <span class="suggestion-plus"><svg class="icon"><use href="#i-plus"></use></svg></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="fonctionnalites" aria-labelledby="features-title">
+        <div class="container">
+          <div class="section-head reveal">
+            <span class="kicker">Fonctionnalités</span>
+            <h2 id="features-title">Trois outils, une seule boîte</h2>
+            <p>
+              Pas de fenêtres éparpillées ni d’onglets oubliés : lire, planifier et préparer la
+              semaine se fait au même endroit, sur PC comme sur mobile.
+            </p>
+          </div>
+
+          <div class="cards">
+            <article class="card reveal">
+              <span class="icon-badge"><svg class="icon" aria-hidden="true"><use href="#i-mail"></use></svg></span>
+              <h3>Mail</h3>
+              <p>
+                IMAP et SMTP directs, OAuth2 Google et Microsoft. Dossiers, fils de discussion,
+                pièces jointes, recherche côté serveur et notifications à l’arrivée.
+              </p>
+              <div class="tags">
+                <span class="tag">IMAP · SMTP</span>
+                <span class="tag">OAuth2</span>
+                <span class="tag">Multi-comptes</span>
+              </div>
+            </article>
+
+            <article class="card reveal delay-1">
+              <span class="icon-badge"><svg class="icon" aria-hidden="true"><use href="#i-calendar"></use></svg></span>
+              <h3>Agenda</h3>
+              <p>
+                Vue du mois et du jour, calendriers locaux et externes. Un rendez-vous reçu par mail
+                se crée en un geste, avec son lien vers le message d’origine.
+              </p>
+              <div class="tags">
+                <span class="tag">CalDAV</span>
+                <span class="tag">Google Agenda</span>
+                <span class="tag">ICS</span>
+              </div>
+            </article>
+
+            <article class="card reveal delay-2">
+              <span class="icon-badge"><svg class="icon" aria-hidden="true"><use href="#i-columns"></use></svg></span>
+              <h3>Planification</h3>
+              <p>
+                Cinq états, du kanban sur PC à la liste filtrée sur mobile. Glisser-déposer,
+                échéances, sous-tâches, et le mail lié toujours à portée de clic.
+              </p>
+              <div class="tags">
+                <span class="tag">Kanban</span>
+                <span class="tag">5 états</span>
+                <span class="tag">Suggestions</span>
+              </div>
+            </article>
+
+            <article class="card reveal">
+              <span class="icon-badge"><svg class="icon" aria-hidden="true"><use href="#i-sparkles"></use></svg></span>
+              <h3>IA</h3>
+              <p>
+                Résumés de fil, propositions de réponse et réécriture — correction, concis, formel,
+                chaleureux. Vous branchez l’endpoint compatible OpenAI de votre choix, modèle local
+                compris.
+              </p>
+              <div class="tags">
+                <span class="tag">Résumés</span>
+                <span class="tag">Réponses</span>
+                <span class="tag">Réécriture</span>
+              </div>
+            </article>
+
+            <article class="card reveal delay-1">
+              <span class="icon-badge"><svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg></span>
+              <h3>Sécurité</h3>
+              <p>
+                PGP par compte : signature et chiffrement à l’envoi, vérification à la lecture. Les
+                clés privées et les jetons restent dans le trousseau du système.
+              </p>
+              <div class="tags">
+                <span class="tag">OpenPGP</span>
+                <span class="tag">Trousseau</span>
+                <span class="tag">TLS</span>
+              </div>
+            </article>
+
+            <article class="card reveal delay-2">
+              <span class="icon-badge"><svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg></span>
+              <h3>Mises à jour</h3>
+              <p>
+                L’application vérifie un manifeste, contrôle la signature minisign du paquet,
+                installe et redémarre. Un paquet non signé n’est jamais accepté.
+              </p>
+              <div class="tags">
+                <span class="tag">minisign</span>
+                <span class="tag">Automatique</span>
+                <span class="tag">Linux</span>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section--tight" id="flux" aria-labelledby="flow-title">
+        <div class="container">
+          <div class="section-head reveal">
+            <span class="kicker">Du mail à la tâche</span>
+            <h2 id="flow-title">Un message suffit à faire avancer la journée</h2>
+            <p>
+              La suggestion n’est pas une notification de plus : elle porte l’objet du mail, l’échéance
+              déduite et le lien vers la conversation.
+            </p>
+          </div>
+
+          <ol class="flow" role="list">
+            <li class="step reveal">
+              <h3>Le message arrive</h3>
+              <p>
+                La boîte unifie vos comptes. Les messages chiffrés ou signés affichent leur état avant
+                la lecture, pas après.
+              </p>
+              <span class="step-meta">Camille Roux · v3 avant la démo</span>
+            </li>
+            <li class="step reveal delay-1">
+              <h3>La suggestion apparaît</h3>
+              <p>
+                L’assistant propose une tâche ou un rendez-vous, avec l’échéance déduite du texte. Un
+                clic sur le <strong>+</strong> et c’est planifié.
+              </p>
+              <span class="step-meta">Tâche « Valider la v3 » · vendredi</span>
+            </li>
+            <li class="step reveal delay-2">
+              <h3>La planification suit</h3>
+              <p>
+                La tâche rejoint le kanban, garde le lien vers son mail et se synchronise chiffrée de
+                bout en bout entre vos appareils.
+              </p>
+              <span class="step-meta">À faire · En cours · Fait</span>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="section" id="telecharger" aria-labelledby="download-title">
+        <div class="container">
+          <div class="section-head reveal">
+            <span class="kicker">Téléchargement</span>
+            <h2 id="download-title">Emportez Lavande avec vous</h2>
+            <p>
+              Version 0.2.0. Paquets signés pour Linux et Android, mises à jour automatiques sur le
+              bureau.
+            </p>
+            <div class="download-meta">
+              <span><svg class="icon" aria-hidden="true"><use href="#i-package"></use></svg>Paquets signés GPG</span>
+              <span><svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>Mises à jour signées minisign</span>
+              <span><svg class="icon" aria-hidden="true"><use href="#i-lock"></use></svg>Aucun compte requis</span>
+            </div>
+          </div>
+
+          <div class="platforms">
+            <article class="platform beam reveal">
+              <div class="beam-inner">
+                <span class="badge-featured">Recommandé</span>
+                <div class="platform-head">
+                  <span class="icon-badge"><svg class="icon" aria-hidden="true"><use href="#i-package"></use></svg></span>
+                  <h3>Linux · AppImage</h3>
+                  <span class="platform-os">x86_64</span>
+                </div>
+                <p>
+                  Un fichier unique, sans installation : rendez-le exécutable et lancez-le. C’est le
+                  format qui se met à jour en place.
+                </p>
+                <span class="filename">Lavande_0.2.0_amd64.AppImage.tar.gz</span>
+                <a class="btn btn--primary" href="/updates/Lavande_0.2.0_amd64.AppImage.tar.gz">
+                  <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
+                  Télécharger l’AppImage
+                </a>
+              </div>
+            </article>
+
+            <article class="platform reveal delay-1">
+              <div class="platform-head">
+                <span class="icon-badge"><svg class="icon" aria-hidden="true"><use href="#i-server"></use></svg></span>
+                <h3>Linux · RPM</h3>
+                <span class="platform-os">Fedora · RHEL</span>
+              </div>
+              <p>
+                Paquet système pour Fedora et dérivés RHEL. L’installation et les mises à jour
+                demandent polkit ou sudo.
+              </p>
+              <span class="filename">Lavande-0.2.0-1.x86_64.rpm</span>
+              <a class="btn btn--ghost" href="/updates/Lavande-0.2.0-1.x86_64.rpm">
+                <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
+                Télécharger le RPM
+              </a>
+            </article>
+
+            <article class="platform reveal delay-2">
+              <div class="platform-head">
+                <span class="icon-badge"><svg class="icon" aria-hidden="true"><use href="#i-smartphone"></use></svg></span>
+                <h3>Android · APK</h3>
+                <span class="platform-os">arm64</span>
+              </div>
+              <p>
+                La même interface, en plein écran, avec le moteur mail embarqué. L’APK se réinstalle à
+                la main à chaque version.
+              </p>
+              <span class="filename">Lavande.apk</span>
+              <a class="btn btn--ghost" href="/updates/Lavande.apk">
+                <svg class="icon" aria-hidden="true"><use href="#i-download"></use></svg>
+                Télécharger l’APK
+              </a>
+            </article>
+          </div>
+
+          <div class="note reveal">
+            <svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>
+            <div>
+              <p>
+                <strong>Mises à jour automatiques signées.</strong> L’application interroge le
+                manifeste <code>latest.json</code>, vérifie la signature minisign du paquet et refuse
+                toute version qui ne correspond pas à la version signée. Les paquets Linux sont en
+                plus signés GPG.
+              </p>
+              <div class="note-links">
+                <a href="/updates/latest.json">Manifeste de mise à jour</a>
+                <a href="/updates/lavande-release.asc">Clé publique GPG</a>
+              </div>
+            </div>
+          </div>
+
+          <p class="sec-footnote">
+            Windows et macOS se compilent depuis les sources (Tauri) ; la procédure est décrite dans la
+            <a href="https://git.lanro.eu/Roman/lavande/src/branch/main/docs">documentation</a>.
+          </p>
+        </div>
+      </section>
+
+      <section class="section" id="securite" aria-labelledby="security-title">
+        <div class="container security">
+          <div class="section-head reveal">
+            <span class="kicker">Confidentialité et sécurité</span>
+            <h2 id="security-title">Rien en clair, rien d’implicite</h2>
+            <p>
+              Vos mails restent sur votre serveur, vos clés sur votre machine. Lavande n’ajoute aucun
+              intermédiaire entre vous et eux.
+            </p>
+          </div>
+
+          <div class="sec-list">
+            <article class="sec-item reveal">
+              <span class="icon-badge"><svg class="icon" aria-hidden="true"><use href="#i-lock"></use></svg></span>
+              <div>
+                <h3>Chiffrement de bout en bout</h3>
+                <p>
+                  La planification synchronisée est chiffrée côté client : le serveur ne voit ni les
+                  titres, ni les échéances, ni les contenus.
+                </p>
+              </div>
+            </article>
+
+            <article class="sec-item reveal delay-1">
+              <span class="icon-badge"><svg class="icon" aria-hidden="true"><use href="#i-key"></use></svg></span>
+              <div>
+                <h3>PGP par compte</h3>
+                <p>
+                  Signature et chiffrement OpenPGP à l’envoi, vérification du signataire à la lecture.
+                  Les clés privées ne quittent jamais l’appareil.
+                </p>
+              </div>
+            </article>
+
+            <article class="sec-item reveal delay-2">
+              <span class="icon-badge"><svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg></span>
+              <div>
+                <h3>Secrets dans le trousseau système</h3>
+                <p>
+                  Mots de passe IMAP et SMTP, jetons OAuth2 et clés PGP dans le trousseau du système —
+                  fichier chiffré XChaCha20-Poly1305 sur Android. Jamais en clair dans un fichier de
+                  configuration.
+                </p>
+              </div>
+            </article>
+
+            <article class="sec-item reveal">
+              <span class="icon-badge"><svg class="icon" aria-hidden="true"><use href="#i-server"></use></svg></span>
+              <div>
+                <h3>Démon en boucle locale</h3>
+                <p>
+                  Le moteur mail n’écoute que sur <code>127.0.0.1</code> et exige un jeton. Il n’est
+                  jamais exposé au réseau, même quand l’application est ouverte.
+                </p>
+              </div>
+            </article>
+
+            <article class="sec-item reveal delay-1">
+              <span class="icon-badge"><svg class="icon" aria-hidden="true"><use href="#i-package"></use></svg></span>
+              <div>
+                <h3>Paquets signés</h3>
+                <p>
+                  RPM et AppImage signés GPG, mises à jour signées minisign et version vérifiée à
+                  l’installation, APK signé. Trois chaînes de confiance indépendantes.
+                </p>
+              </div>
+            </article>
+
+            <article class="sec-item reveal delay-2">
+              <span class="icon-badge"><svg class="icon" aria-hidden="true"><use href="#i-mail"></use></svg></span>
+              <div>
+                <h3>Contenu assaini</h3>
+                <p>
+                  Le HTML des mails est nettoyé à l’arrivée, les images distantes restent masquées par
+                  défaut — aucun pixel de tracking n’est chargé sans votre accord.
+                </p>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container">
+        <div class="footer-top">
+          <div class="footer-brand">
+            <a class="brand" href="#top">
+              <span class="brand-mark" aria-hidden="true">L</span>
+              <span>Lavande</span>
+            </a>
+            <p>
+              Mail, agenda et planification. Chiffré par compte, auto-hébergé sur vos machines.
+            </p>
+          </div>
+          <nav class="footer-nav" aria-label="Liens de pied de page">
+            <a href="#fonctionnalites">Fonctionnalités</a>
+            <a href="#telecharger">Téléchargement</a>
+            <a href="#securite">Sécurité</a>
+            <a href="/updates/latest.json">Manifeste de mise à jour</a>
+            <a href="https://git.lanro.eu/Roman/lavande/src/branch/main/docs">
+              Documentation
+              <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg>
+            </a>
+            <a href="https://git.lanro.eu/Roman/lavande">
+              Code source
+              <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg>
+            </a>
+          </nav>
+        </div>
+        <div class="footer-bottom">
+          <p>© <span id="year">2026</span> Lavande · auto-hébergé</p>
+          <p>Lavande le jour, Orchidée la nuit.</p>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>
