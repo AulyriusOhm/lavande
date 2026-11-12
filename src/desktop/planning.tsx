@@ -51,6 +51,9 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
   const linkedMail = selectedTask?.mailId
     ? (mails.find((mail) => mail.id === selectedTask.mailId) ?? null)
     : null;
+  const suggestionMail = selectedSuggestion?.mailId
+    ? (mails.find((mail) => mail.id === selectedSuggestion.mailId) ?? null)
+    : null;
 
   useEscapeLayer(Boolean(selection), () => setSelection(null));
 
@@ -250,6 +253,7 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
       {selectedSuggestion ? (
         <SuggestionDetail
           suggestion={selectedSuggestion}
+          mail={suggestionMail}
           onClose={() => setSelection(null)}
           onAdd={() => {
             addSuggestion(selectedSuggestion);
@@ -257,6 +261,10 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
           }}
           onDismiss={() => {
             dismissSuggestion(selectedSuggestion);
+            setSelection(null);
+          }}
+          onOpenMail={(mail) => {
+            openMessage(mail);
             setSelection(null);
           }}
         />
@@ -547,14 +555,18 @@ function TaskDetail({
 
 function SuggestionDetail({
   suggestion,
+  mail,
   onClose,
   onAdd,
   onDismiss,
+  onOpenMail,
 }: {
   suggestion: MailSuggestion;
+  mail: MailType | null;
   onClose: () => void;
   onAdd: () => void;
   onDismiss: () => void;
+  onOpenMail: (mail: MailType) => void;
 }) {
   const task = taskFromSuggestion(suggestion, `sugg-${suggestion.id}`);
 
@@ -582,6 +594,12 @@ function SuggestionDetail({
         <Plus className="size-4" strokeWidth={3} />
         Ajouter à la planification
       </DButton>
+      {mail ? (
+        <DButton variant="soft" className="mt-2 w-full" onClick={() => onOpenMail(mail)}>
+          <Mail className="size-3.5" />
+          Ouvrir le mail
+        </DButton>
+      ) : null}
       <DButton variant="ghost" className="mt-2 w-full" onClick={onDismiss}>
         <EyeOff className="size-3.5" />
         Ignorer

@@ -13,18 +13,18 @@ const ALPHA = "alpha";
 const LLM = { endpoint: "https://llm.test/v1", apiKey: "sk-test", model: "modele" };
 const H = 3_600_000;
 
-const apiAccount = (): ApiAccount => ({
-  id: ALPHA,
-  label: ALPHA,
-  email: `${ALPHA}@test.fr`,
-  username: `${ALPHA}@test.fr`,
+const apiAccount = (accountId = ALPHA): ApiAccount => ({
+  id: accountId,
+  label: accountId,
+  email: `${accountId}@test.fr`,
+  username: `${accountId}@test.fr`,
   imap: { host: "imap.test", port: 993, encryption: "tls" },
   smtp: { host: "smtp.test", port: 465, encryption: "tls" },
   folders: 1,
 });
 
-const apiFolder = (): ApiFolder => ({
-  account_id: ALPHA,
+const apiFolder = (accountId = ALPHA): ApiFolder => ({
+  account_id: accountId,
   path: "INBOX",
   name: "Boîte de réception",
   role: "inbox",
@@ -33,18 +33,24 @@ const apiFolder = (): ApiFolder => ({
   last_sync_at: null,
 });
 
-const apiThread = (uid: number, from: string, subject: string, date: string): ApiThread => {
+const apiThread = (
+  uid: number,
+  from: string,
+  subject: string,
+  date: string,
+  accountId = ALPHA,
+): ApiThread => {
   const primary: ApiMessage = {
-    account_id: ALPHA,
+    account_id: accountId,
     folder_path: "INBOX",
     uid,
     uidvalidity: 1,
-    thread_id: `t-${uid}`,
+    thread_id: `t-${accountId}-${uid}`,
     message_id: `<${uid}@test.fr>`,
     in_reply_to: null,
     references: [],
     from: { name: from, email: `${from.toLowerCase()}@test.fr` },
-    to: [{ name: null, email: `${ALPHA}@test.fr` }],
+    to: [{ name: null, email: `${accountId}@test.fr` }],
     cc: [],
     subject,
     date,
@@ -58,7 +64,7 @@ const apiThread = (uid: number, from: string, subject: string, date: string): Ap
   };
   return {
     id: primary.thread_id,
-    account_id: ALPHA,
+    account_id: accountId,
     messages: [primary],
     primary,
     count: 1,
@@ -85,6 +91,7 @@ const reply = (body: unknown) =>
 
 function mockBackend(threads: ApiThread[], tasksJson: unknown = TASKS_JSON) {
   const llmCalls: { system: string; user: string }[] = [];
+  const accountIds = threads.length > 0 ? [...new Set(threads.map((thread) => thread.account_id))] : [ALPHA];
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const { pathname } = new URL(url, "http://localhost");
@@ -99,9 +106,11 @@ function mockBackend(threads: ApiThread[], tasksJson: unknown = TASKS_JSON) {
       });
       return reply({ choices: [{ message: { content: JSON.stringify(tasksJson) } }] });
     }
-    if (path.endsWith("/api/accounts")) return reply([apiAccount()]);
-    if (path.endsWith(`/api/accounts/${ALPHA}/folders`)) return reply([apiFolder()]);
-    if (path.endsWith(`/api/accounts/${ALPHA}/folders/INBOX/threads`)) return reply(threads);
+    if (path.endsWith("/api/accounts")) return reply(accountIds.map((accountId) => apiAccount(accountId)));
+    const folders = path.match(/\/api\/accounts\/([^/]+)\/folders$/);
+    if (folders) return reply([apiFolder(folders[1])]);
+    const list = path.match(/\/api\/accounts\/([^/]+)\/folders\/INBOX\/threads$/);
+    if (list) return reply(threads.filter((thread) => thread.account_id === list[1]));
     return reply([]);
   });
   return llmCalls;
@@ -121,14 +130,14 @@ function mount(storage?: SyncStorage) {
 const seedPrefs = (aiTasks: Record<string, unknown>, summary: Record<string, unknown> = { enabled: false }) =>
   window.localStorage.setItem("lavande.prefs", JSON.stringify({ llm: LLM, summary, aiTasks }));
 
-const suggestionDoc = (id: string, proposal: string, timestamp?: number): Doc => ({
+const suggestionDoc = (id: string, proposal: string, timestamp?: number, account = "perso"): Doc => ({
   id,
   kind: "suggestion",
   v: LOCAL_SCHEMA_VERSION,
   raw: {
     status: "pending",
     mailId: `mail-${id}`,
-    account: "perso",
+    account,
     from: "Camille",
     subject: "Maquettes",
     proposal,
@@ -271,5 +280,73 @@ describe("suggestions de tâches IA · filtre d'affichage", () => {
     const { result } = mount(storage);
 
     expect(result.current.suggestions.map((entry) => entry.proposal)).toEqual(["Relance du jour"]);
+  });
+
+  it("masque les suggestions déjà stockées d'un compte exclu", () => {
+    seedPrefs({ enabled: true, windowHours: 48, excludedAccounts: ["perso"] });
+    const base = emptyState(createDevice("test", "test"));
+    const docs = {
+      [docKey("suggestion", "sg:perso")]: suggestionDoc("sg:perso", "Relance perso", Date.now() - H, "perso"),
+      [docKey("suggestion", "sg:pro")]: suggestionDoc("sg:pro", "Relance pro", Date.now() - H, "pro"),
+    };
+    const storage = createMemoryStorage({ ...base, docs });
+    const { result } = mount(storage);
+
+    expect(result.current.suggestions.map((entry) => entry.proposal)).toEqual(["Relance pro"]);
+  });
+});
+
+describe("suggestions de tâches IA · exclusion par compte", () => {
+  const SECOND = "beta";
+  const SECOND_MAIL_ID = `${SECOND}:INBOX:2`;
+
+  it("n'envoie pas au modèle les mails d'un compte exclu", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: true, windowHours: 48, excludedAccounts: [SECOND] });
+    const llmCalls = mockBackend([
+      apiThread(1, "Camille", "Maquettes v3", RECEIVED),
+      apiThread(2, "Marc", "Accès serveur", RECEIVED, SECOND),
+    ]);
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.mails.length).toBe(2), { timeout: 3000 });
+    await waitFor(() => expect(llmCalls.length).toBeGreaterThan(0), { timeout: 3000 });
+
+    expect(llmCalls.every((call) => !call.user.includes("Accès serveur"))).toBe(true);
+    expect(llmCalls[llmCalls.length - 1].user).toContain("Maquettes v3");
+  });
+
+  it("écarte la tâche proposée par le résumé quand son mail vient d'un compte exclu", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs(
+      { enabled: false, windowHours: 48, excludedAccounts: [SECOND] },
+      { enabled: true, llmConsent: true },
+    );
+    mockBackend(
+      [apiThread(1, "Camille", "Maquettes v3", RECEIVED), apiThread(2, "Marc", "Accès serveur", RECEIVED, SECOND)],
+      { resume: "Deux mails", taches: [{ titre: "Relancer Marc", echeance: "2026-11-20", de: "Marc", mailId: SECOND_MAIL_ID }] },
+    );
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.summary?.text).toBe("Deux mails"), { timeout: 3000 });
+    await new Promise((resolve) => window.setTimeout(resolve, 30));
+
+    expect(result.current.suggestions).toHaveLength(0);
+  });
+
+  it("garde la tâche du résumé quand son compte n'est pas exclu", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: false, windowHours: 48 }, { enabled: true, llmConsent: true });
+    mockBackend(
+      [apiThread(1, "Camille", "Maquettes v3", RECEIVED), apiThread(2, "Marc", "Accès serveur", RECEIVED, SECOND)],
+      { resume: "Deux mails", taches: [{ titre: "Relancer Marc", echeance: "2026-11-20", de: "Marc", mailId: SECOND_MAIL_ID }] },
+    );
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.summary?.text).toBe("Deux mails"), { timeout: 3000 });
+
+    const proposal = result.current.suggestions.find((entry) => entry.proposal === "Relancer Marc");
+    expect(proposal?.account).toBe(SECOND);
+    expect(proposal?.mailId).toBe(SECOND_MAIL_ID);
   });
 });

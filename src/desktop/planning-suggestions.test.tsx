@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { DesktopPlanning } from "@/desktop/planning";
-import { MailStoreProvider } from "@/lib/store";
+import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { ThemeProvider } from "@/lib/theme";
@@ -11,14 +11,14 @@ import { createDevice, createMemoryStorage, emptyState, type SyncStorage } from 
 
 vi.stubEnv("VITE_MAIL_BACKEND", "demo");
 
-function suggestionDoc(id: string, account: string, ai: boolean, due = ""): Doc {
+function suggestionDoc(id: string, account: string, ai: boolean, due = "", mailId = `mail-${id}`): Doc {
   return {
     id,
     kind: "suggestion",
     v: LOCAL_SCHEMA_VERSION,
     raw: {
       status: "pending",
-      mailId: `mail-${id}`,
+      mailId,
       account,
       from: "Camille",
       subject: "Maquettes v3",
@@ -43,6 +43,11 @@ function seededStorage(docs: Doc[]): SyncStorage {
   });
 }
 
+function Probe() {
+  const { openMail } = useMailStore();
+  return <span data-testid="open-mail">{openMail?.id ?? "aucun"}</span>;
+}
+
 function mount(storage: SyncStorage) {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <PrefsProvider>
@@ -53,7 +58,13 @@ function mount(storage: SyncStorage) {
       </ThemeProvider>
     </PrefsProvider>
   );
-  return render(<DesktopPlanning onNewTask={() => {}} onOpenSync={() => {}} />, { wrapper });
+  return render(
+    <>
+      <Probe />
+      <DesktopPlanning onNewTask={() => {}} onOpenSync={() => {}} />
+    </>,
+    { wrapper },
+  );
 }
 
 function cardOf(proposal: string): HTMLElement {
@@ -104,6 +115,28 @@ describe("Planification desktop · origine des suggestions", () => {
     const card = cardOf("Action s-date");
     expect(card.querySelector('[data-testid="suggestion-due"]')?.textContent).toBe("vendredi");
     expect(card.textContent).not.toContain("échéance déduite");
+  });
+});
+
+describe("Planification desktop · mail d'origine d'une suggestion", () => {
+  it("ouvre le mail source depuis le détail d'une suggestion", async () => {
+    mount(seededStorage([suggestionDoc("s-mail", "perso", true, "", "1")]));
+
+    fireEvent.click(cardOf("Action s-mail").querySelector("button")!);
+    fireEvent.click(await screen.findByText("Ouvrir le mail"));
+
+    expect(screen.getByTestId("open-mail").textContent).toBe("1");
+    expect(screen.queryByText("Suggestion issue d'un mail")).toBeNull();
+  });
+
+  it("n'affiche pas de lien quand le mail source est introuvable", async () => {
+    mount(seededStorage([suggestionDoc("s-absent", "perso", true)]));
+
+    fireEvent.click(cardOf("Action s-absent").querySelector("button")!);
+
+    expect(await screen.findByText("Suggestion issue d'un mail")).toBeTruthy();
+    expect(screen.queryByText("Ouvrir le mail")).toBeNull();
+    expect(screen.getByTestId("open-mail").textContent).toBe("aucun");
   });
 });
 

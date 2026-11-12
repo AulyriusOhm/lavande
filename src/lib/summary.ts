@@ -82,9 +82,11 @@ export type AiTasksConfig = {
   enabled: boolean;
   /** Fenêtre analysée, en heures (1 à 168). */
   windowHours: number;
+  /** Boîtes dont les mails ne produisent ni ne montrent aucune suggestion. */
+  excludedAccounts: string[];
 };
 
-export const DEFAULT_AI_TASKS: AiTasksConfig = { enabled: true, windowHours: 48 };
+export const DEFAULT_AI_TASKS: AiTasksConfig = { enabled: true, windowHours: 48, excludedAccounts: [] };
 
 export type SummaryResult = {
   period: SummaryPeriod;

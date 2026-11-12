@@ -527,6 +527,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   const myState = myKey ? keyState(myKey) : null;
   const expiringSoon = myKey ? !isExpired(myKey) && isExpired(myKey, new Date(Date.now() + 90 * 864e5)) : false;
   const publicKeys = keys?.filter((key) => !key.has_secret).length ?? 0;
+  const analyzedAccounts = accounts.filter((item) => !aiTasks.excludedAccounts.includes(item.id));
   const signatureTarget = accounts.find((item) => item.id === signatureAccount) ?? accounts[0] ?? null;
   const signedAccounts = accounts.filter((item) => activeSignature(signatures, item.id)).length;
   const pgpSettings = { pgpEncrypt, pgpSign, pgpAccounts };
@@ -1490,6 +1491,41 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                         : "Modèle configuré · suggestions de tâches désactivées."
                       : "Aucun modèle configuré · aucune suggestion générée (section IA)."}
                   </p>
+                </Surface>
+
+                <Surface className="mt-3 divide-y divide-line overflow-hidden">
+                  <div className="flex items-center gap-2 px-3.5 py-2">
+                    <SectionLabel>Par compte</SectionLabel>
+                    <span className="text-[12px] font-semibold text-ink-muted">
+                      {analyzedAccounts.length} sur {accounts.length}
+                    </span>
+                  </div>
+                  {accounts.length === 0 ? (
+                    <p className="px-3.5 py-2 text-[12px] leading-snug font-semibold text-ink-muted">
+                      Ajoute un compte pour l'exclure des suggestions.
+                    </p>
+                  ) : (
+                    accounts.map((item) => (
+                      <ToggleRow
+                        key={item.id}
+                        icon={<span className="size-2 rounded-full" style={{ backgroundColor: item.color }} />}
+                        label={item.label}
+                        hint={
+                          aiTasks.excludedAccounts.includes(item.id)
+                            ? "Exclu · ses mails ne produisent aucune suggestion"
+                            : "Analysé par l'IA"
+                        }
+                        checked={!aiTasks.excludedAccounts.includes(item.id)}
+                        onChange={(value) =>
+                          setAiTasks({
+                            excludedAccounts: value
+                              ? aiTasks.excludedAccounts.filter((id) => id !== item.id)
+                              : [...aiTasks.excludedAccounts, item.id],
+                          })
+                        }
+                      />
+                    ))
+                  )}
                 </Surface>
               </Block>
 

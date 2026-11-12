@@ -132,4 +132,21 @@ describe("Réglages · suggestions de tâches IA", () => {
       screen.getByText("Aucun modèle configuré · aucune suggestion générée (section IA)."),
     ).toBeTruthy();
   });
+
+  it("exclut puis réinclut un compte des suggestions IA", async () => {
+    stubFetch(() => response({}));
+    mount();
+
+    expect(screen.getAllByText("Analysé par l'IA")).toHaveLength(3);
+
+    fireEvent.click(screen.getByRole("switch", { name: /^Studio/ }));
+    await waitFor(() => expect(stored().aiTasks).toMatchObject({ excludedAccounts: ["pro"] }));
+    expect(screen.getAllByText("Analysé par l'IA")).toHaveLength(2);
+    expect(screen.getByText("Exclu · ses mails ne produisent aucune suggestion")).toBeTruthy();
+    expect(screen.getByRole("switch", { name: /^Studio/ }).getAttribute("aria-checked")).toBe("false");
+
+    fireEvent.click(screen.getByRole("switch", { name: /^Studio/ }));
+    await waitFor(() => expect(stored().aiTasks).toMatchObject({ excludedAccounts: [] }));
+    expect(screen.getAllByText("Analysé par l'IA")).toHaveLength(3);
+  });
 });

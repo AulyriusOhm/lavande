@@ -183,15 +183,21 @@ const asSummary = (value: unknown): SummaryConfig => {
   };
 };
 
+const asAccountIds = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? [...new Set(value.filter((id): id is string => typeof id === "string" && id !== ""))]
+    : [];
+
 const asAiTasks = (value: unknown): AiTasksConfig => {
   if (!value || typeof value !== "object") return { ...DEFAULT_AI_TASKS };
-  const { enabled, windowHours } = value as Record<string, unknown>;
+  const { enabled, windowHours, excludedAccounts } = value as Record<string, unknown>;
   return {
     enabled: asBoolean(enabled, DEFAULT_AI_TASKS.enabled),
     windowHours:
       typeof windowHours === "number" && Number.isFinite(windowHours) && windowHours >= 1
         ? Math.min(168, Math.round(windowHours))
         : DEFAULT_AI_TASKS.windowHours,
+    excludedAccounts: asAccountIds(excludedAccounts),
   };
 };
 

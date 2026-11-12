@@ -1503,11 +1503,32 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
   const inboxMails = useMemo(() => mails.filter((mail) => mail.folder === "inbox"), [mails]);
 
-  /** Suggestions affichées : celles dont le mail source est encore dans la fenêtre configurée. */
-  const suggestions = useMemo(
-    () => suggestionsInWindow(storedSuggestions, prefs.aiTasks.windowHours),
-    [storedSuggestions, prefs.aiTasks.windowHours],
+  const inboxIndex = useMemo(
+    () => new Map(inboxMails.map((mail) => [mail.id, mail])),
+    [inboxMails],
   );
+
+  /** Comptes coupés des suggestions : leurs mails ne sont ni analysés ni proposés. */
+  const excludedAccounts = useMemo(
+    () => new Set(prefs.aiTasks.excludedAccounts),
+    [prefs.aiTasks.excludedAccounts],
+  );
+
+  const aiMails = useMemo(
+    () =>
+      excludedAccounts.size === 0
+        ? inboxMails
+        : inboxMails.filter((mail) => !excludedAccounts.has(mail.account)),
+    [excludedAccounts, inboxMails],
+  );
+
+  /** Suggestions affichées : celles de la fenêtre, hors des comptes exclus. */
+  const suggestions = useMemo(() => {
+    const visible = suggestionsInWindow(storedSuggestions, prefs.aiTasks.windowHours);
+    return excludedAccounts.size === 0
+      ? visible
+      : visible.filter((suggestion) => !excludedAccounts.has(suggestion.account));
+  }, [excludedAccounts, storedSuggestions, prefs.aiTasks.windowHours]);
 
   /** Entrée minimale du moteur : expéditeur, objet, aperçu et horodatage, rien d'autre. */
   const summaryInputs = useCallback(
@@ -1576,7 +1597,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         );
         setSummary(result);
         if (result.mailCount > 0) summaryRun.current = result.period.id;
-        proposeTasks(result.tasks, new Map(inboxMails.map((mail) => [mail.id, mail])), result.period.label);
+        proposeTasks(
+          result.tasks.filter((task) => {
+            const mail = task.mailId ? inboxIndex.get(task.mailId) : undefined;
+            return !mail || !excludedAccounts.has(mail.account);
+          }),
+          inboxIndex,
+          result.period.label,
+        );
       } catch (error) {
         notify(`Résumé indisponible · ${errorText(error)}`);
       } finally {
@@ -1584,7 +1612,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         setSummaryLoading(false);
       }
     },
-    [inboxMails, mode, notify, prefs.llm, prefs.summary, proposeTasks, summaryInputs],
+    [excludedAccounts, inboxIndex, inboxMails, mode, notify, prefs.llm, prefs.summary, proposeTasks, summaryInputs],
   );
 
   /**
@@ -1599,7 +1627,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     if (mode !== "api" || !llmReady(prefs.llm) || taskRunning.current) return;
-    const recent = recentMails(summaryInputs(inboxMails), config.windowHours);
+    const recent = recentMails(summaryInputs(aiMails), config.windowHours);
     if (recent.length === 0) return;
     const signature = `${config.windowHours}:${recent.map((mail) => mail.id).join(",")}`;
     if (taskRun.current === signature) return;
@@ -1608,11 +1636,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       const proposed = await suggestTasks({ windowHours: config.windowHours }, prefs.llm, recent);
       taskRun.current = signature;
       if (proposed.length === 0) return;
-      proposeTasks(proposed, new Map(inboxMails.map((mail) => [mail.id, mail])), "Suggestion IA");
+      proposeTasks(proposed, inboxIndex, "Suggestion IA");
     } finally {
       taskRunning.current = false;
     }
-  }, [inboxMails, mode, prefs.aiTasks, prefs.llm, prefs.planningEnabled, proposeTasks, summaryInputs]);
+  }, [aiMails, inboxIndex, mode, prefs.aiTasks, prefs.llm, prefs.planningEnabled, proposeTasks, summaryInputs]);
 
   const refreshSummaryRef = useRef(refreshSummary);
   useEffect(() => {
