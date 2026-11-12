@@ -16,6 +16,7 @@ Décisions actées avec Roman le 12/11/2026 :
 - **Lisibilité** (#13) : audit + correctifs livrés, carte blanche sur les arbitrages (reflow PC responsive, palier 11px méta dense / contenu ≥12,5px, encre de compte calculée, jetons `--sync-*`, `--accent-ink` 52%, compteurs `bg-ink/10`).
 - **Clavier** : actions sur le mail sélectionné — **Suppr nu** (supprimer), Ctrl+E (archiver), Ctrl+Shift+S/U/R/F (étoile/lu/répondre/transférer) + menu « Raccourcis clavier » dans les réglages.
 - **Rédaction & réponse** (#15/#16/#17) : historique cité **repliable en lecture seule**, signature **avant** l'historique, correction LLM **sans perte d'images** — livrés.
+- **Agenda PC** (#6) : refonte livrée puis **passe de correction UI** demandée (libellé jour, transitions, doublon de création, bouton Aujourd'hui, groupes de filtres repliables, cohérence) — livrée.
 
 ## État d'avancement (12/11/2026)
 
@@ -24,14 +25,14 @@ Décisions actées avec Roman le 12/11/2026 :
 - #5 + #10 verrou distribution · #9 MCP exclu du build Android · #8 droits MCP (approbation + journal réel).
 - #12 PGP par compte (front + démon : trousseau effectif, purge des corps déchirés, bandeau lecteur).
 - #13 audit lisibilité + correctifs (contrastes WCAG, reflow, étiquette de compte, placeholders, cibles tactiles).
-- #6 (agenda PC) refonte livrée 12/11 — commit `9b9b81b` : maquette interactive validée, vues Mois/Semaine/Jour/Liste, filtres par calendrier + recherche, dialogue création/édition, couleurs par calendrier + ton libre.
+- #6 (agenda PC) refonte livrée 12/11 — commit `9b9b81b` : maquette interactive validée, vues Mois/Semaine/Jour/Liste, filtres par calendrier + recherche, dialogue création/édition, couleurs par calendrier + ton libre. **+ passe de correction UI `085107f`** : libellé jour non coupé/capitalisé, transitions vues, doublon « Nouveau rendez-vous » retiré (FAB dock), « Aujourd'hui » désactivé si déjà dessus, groupes Mes calendriers/Filtres repliables, cohérence MiniMonth en vue jour.
 - Hors todo initiale : citations de réponse (retours à la ligne), images collées dans le corps (inline CID), raccourcis clavier d'actions + menu réglages, doc distribution (README/UPDATER/android/mail-core).
 - #15 correction LLM sans perte d'images (jetons ⟦img-n⟧ + repli) · #16 historique cité repliable lecture seule (champ `quoted` séparé) · #17 signature avant l'historique (`sendInputOf` : message → signature → citation).
 
 **Restent à faire** :
 - #3 anti-spam (phase de recherche d'abord) · #6 graphisme PC planif (agenda livré) · #7 rangement des réglages (plan à valider) · #11 calendriers externes (OAuth Google à fournir) · #14 parapluie sécurité (audit autonome ; Keystore Android + trousseau système + signature paquets avec Roman) · #18 barre flottante PC (plus visible + flou gaussien autour).
 - Hors todo : auto-updater (hébergement endpoint, sauvegarde clé, 1ʳᵉ release, AppImage, test E2E) · Android insets sur appareil physique + CI.
-- Suivis mineurs : `htmlToText` avale les URL `<https://…>` dans les aperçus texte ; relecture locale des images inline CID dans Envoyés ; scénario live IMAP du gate PGP ; 2 chaînes démo cosmétiques sous verrou.
+- Suivis mineurs : `htmlToText` avale les URL `<https://…>` dans les aperçus texte ; relecture locale des images inline CID dans Envoyés ; scénario live IMAP du gate PGP ; 2 chaînes démo cosmétiques sous verrou ; agenda : événements sans calendrier non masquables par une case + compteurs de filtres qui se recoupent (préexistant).
 
 ---
 
@@ -110,7 +111,11 @@ aucune entrée pour créer/importer un calendrier — les cases « Mes calendrie
 **Agenda PC livré le 12/11** (commit `9b9b81b`, maquette interactive validée sur `plasma.int.lanro.eu:8443/lavande/maquettes/`) :
 vues Mois/Semaine/Jour/Liste avec transitions, rail droit (mini-mois hors vue Mois, calendriers cochables, filtres
 mail/conflits/invités, journée/détail), case de jour entièrement cliquable, clic sur créneau = création préremplie,
-dialogue unique création/édition/suppression, couleur = calendrier + ton libre. **Reste : la planification PC**
+dialogue unique création/édition/suppression, couleur = calendrier + ton libre.
+**Passe de correction UI le 12/11** (commit `085107f`) : libellé jour non coupé + capitalisé, transitions de vues propres
+(fondu + scale / glissement directionnel), suppression du doublon « Nouveau rendez-vous » (FAB dock = entrée unique),
+bouton « Aujourd'hui » désactivé quand déjà dessus, groupes « Mes calendriers » / « Filtres » repliables, cohérence du
+MiniMonth en vue jour. **Reste : la planification PC**
 (kanban 5 colonnes) à affiner sur le même modèle, s'aligner sur `DESIGN.md`.
 
 ### #7 — Réorganiser les réglages
