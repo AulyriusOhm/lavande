@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use lavande_mail::config::{AccountConfig, AuthConfig, Endpoint};
+use lavande_mail::http::client_builder;
 use lavande_mail::imap;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -314,7 +315,7 @@ async fn exchange(
     if let Some(secret) = &provider.client_secret {
         form.push(("client_secret", secret.as_str()));
     }
-    let client = reqwest::Client::builder()
+    let client = client_builder()
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|error| ApiError::internal("oauth", format!("client HTTP : {error}")))?;

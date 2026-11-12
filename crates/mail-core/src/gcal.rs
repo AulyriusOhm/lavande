@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{AccountConfig, AuthConfig};
 use crate::error::MailError;
+use crate::http::client_builder;
 use crate::ics::{ExternalEvent, MAX_ICS_EVENTS};
 use crate::oauth::{OAuth2Provider, GOOGLE_TOKEN_ENDPOINT};
 
@@ -81,7 +82,7 @@ impl GcalClient {
                 account.id
             )));
         }
-        let http = reqwest::Client::builder()
+        let http = client_builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
             .user_agent(concat!("Lavande/", env!("CARGO_PKG_VERSION")))
