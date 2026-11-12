@@ -100,6 +100,10 @@ CalDAV générique (Zimbra, Nextcloud, iCloud…) en lecture/écriture + Google 
 lecture seule. Ajout possible sans compte mail associé. À l'ajout d'un compte mail : choix du périmètre synchronisé
 (mails / agenda / contacts), éditable ensuite dans les réglages du compte.
 
+**Côté UI (demandé le 12/11)** : dans les **réglages**, permettre d'**ajouter un calendrier** (CalDAV / Google) et
+d'**importer** un fichier ICS ou un abonnement par URL, avec gestion (renommer, couleur, supprimer). Aujourd'hui
+aucune entrée pour créer/importer un calendrier — les cases « Mes calendriers » de l'agenda ne font que filtrer.
+
 ## UI / réglages
 
 ### #6 — Affiner le graphisme PC de l'agenda et de la planification
