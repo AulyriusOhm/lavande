@@ -98,6 +98,13 @@ fn folder(path: &str, modseq: Option<u64>) -> lavande_mail::model::Folder {
     }
 }
 
+fn custom_folder(path: &str) -> lavande_mail::model::Folder {
+    lavande_mail::model::Folder {
+        role: lavande_mail::model::FolderRole::Other,
+        ..folder(path, None)
+    }
+}
+
 fn delete(uri: &str) -> Request<Body> {
     Request::builder()
         .method("DELETE")
@@ -381,6 +388,93 @@ async fn desyncing_a_folder_purges_it_locally() {
 
     let (status, _) = call(&state, delete("/api/accounts/absent/folders/INBOX/local")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn deleting_a_folder_holding_a_role_is_a_400() {
+    let (directory, state) = state().await;
+    seed(directory.path(), &[account("perso")]);
+    state
+        .store()
+        .upsert_folder(&folder("INBOX", None))
+        .expect("dossier");
+    state
+        .store()
+        .upsert_message(&text_message())
+        .expect("message");
+
+    let (status, body) = call(&state, delete("/api/accounts/perso/folders/INBOX")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json(&body)["kind"], "config");
+    assert!(
+        state
+            .store()
+            .get_folder("perso", "INBOX")
+            .expect("dossier")
+            .is_some(),
+        "un rôle n'est jamais supprimé"
+    );
+    assert_eq!(
+        state
+            .store()
+            .messages_in_folder("perso", "INBOX", -1, 0)
+            .expect("liste")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn deleting_an_unknown_folder_is_a_404() {
+    let (directory, state) = state().await;
+    seed(directory.path(), &[account("perso")]);
+
+    let (status, body) = call(&state, delete("/api/accounts/perso/folders/Nope")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json(&body)["kind"], "store");
+
+    let (status, _) = call(&state, delete("/api/accounts/absent/folders/Nope")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// The server goes first: a refused `DELETE` leaves the local copy alone.
+#[tokio::test]
+async fn a_refused_server_delete_keeps_the_local_rows() {
+    let (_directory, state) = state().await;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port libre");
+    let port = listener.local_addr().expect("adresse").port();
+    drop(listener);
+    let mut refused = account("perso");
+    refused["imap"]["host"] = json!("127.0.0.1");
+    refused["imap"]["port"] = json!(port);
+    let config: lavande_mail::config::AccountConfig =
+        serde_json::from_value(refused).expect("config");
+    state.add_account(&config, &[]).await.expect("compte");
+    state
+        .store()
+        .upsert_folder(&custom_folder("Projets"))
+        .expect("dossier");
+    state
+        .store()
+        .upsert_message(&text_message())
+        .expect("message");
+
+    let (status, body) = call(&state, delete("/api/accounts/perso/folders/Projets")).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(json(&body)["kind"], "imap");
+    assert!(state
+        .store()
+        .get_folder("perso", "Projets")
+        .expect("dossier")
+        .is_some());
+    assert_eq!(
+        state
+            .store()
+            .messages_in_folder("perso", "INBOX", -1, 0)
+            .expect("liste")
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]

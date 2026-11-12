@@ -16,6 +16,7 @@ import { NumberTicker } from "@/components/ui/number-ticker";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { ThreadRow } from "@/components/thread-row";
 import { EmptyTrashButton } from "@/components/empty-trash";
+import { FolderDeleteRow } from "@/components/folder-delete";
 
 type Filter = "all" | "unread" | "starred" | "encrypted";
 
@@ -735,7 +736,7 @@ export function MailboxSheet({
   onSelect: (id: FolderId, path: string | null) => void;
   onClose: () => void;
 }) {
-  const { folderOptions, folderPath, emptyTrash, folderStats } = useMailStore();
+  const { folderOptions, folderPath, emptyTrash, folderStats, deleteFolder } = useMailStore();
   const trashCount = folderStats("trash").total;
 
   return (
@@ -753,9 +754,8 @@ export function MailboxSheet({
           const Icon = FOLDER_ICONS[entry.id];
           const stats = folderStats(entry.id, entry.path);
           const isActive = entry.id === folder && (entry.id !== "other" || entry.path === folderPath);
-          return (
+          const row = (
             <button
-              key={`${entry.id}:${entry.path}`}
               type="button"
               onClick={() => {
                 onSelect(entry.id, entry.id === "other" ? entry.path : null);
@@ -782,6 +782,21 @@ export function MailboxSheet({
                 </span>
               )}
             </button>
+          );
+          return (
+            <div key={`${entry.id}:${entry.path}`}>
+              {entry.id === "other" ? (
+                <FolderDeleteRow
+                  label={entry.label}
+                  variant="mobile"
+                  onConfirm={() => void deleteFolder(entry.path, entry.label)}
+                >
+                  {row}
+                </FolderDeleteRow>
+              ) : (
+                row
+              )}
+            </div>
           );
         })}
 

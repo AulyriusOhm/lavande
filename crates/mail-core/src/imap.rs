@@ -725,6 +725,15 @@ pub async fn create_folder(session: &mut ImapSession, path: &str) -> Result<(), 
     }
 }
 
+/// `DELETE`: a folder another client already removed is not an error.
+pub async fn delete_folder(session: &mut ImapSession, path: &str) -> Result<(), MailError> {
+    match session.delete(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if already_gone(&error) => Ok(()),
+        Err(error) => Err(imap_error(error)),
+    }
+}
+
 /// Pushes `\Seen` and `\Flagged`; `\Answered` is read from the server but
 /// never written.
 pub async fn set_flags(
@@ -1011,6 +1020,16 @@ fn flags_of(fetch: &Fetch) -> Flags {
 
 fn already_exists(error: &async_imap::error::Error) -> bool {
     error.to_string().to_ascii_lowercase().contains("exist")
+}
+
+fn already_gone(error: &async_imap::error::Error) -> bool {
+    match error {
+        async_imap::error::Error::No(text) => {
+            let text = text.to_ascii_lowercase();
+            text.contains("exist") || text.contains("not found") || text.contains("no such")
+        }
+        _ => false,
+    }
 }
 
 fn uidvalidity_of(

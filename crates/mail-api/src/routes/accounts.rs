@@ -9,7 +9,7 @@ use axum::routing::{delete, get, patch};
 use axum::{Json, Router};
 use lavande_mail::config::AccountConfig;
 use lavande_mail::imap;
-use lavande_mail::model::Folder;
+use lavande_mail::model::{Folder, FolderRole};
 
 use crate::config_file::StoredAccount;
 use crate::dto::{AccountSummary, ApiJson, PgpEnabledRequest, RenameRequest, SyncFoldersRequest};
@@ -23,6 +23,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/accounts/{id}/sync-folders", patch(set_sync_folders))
         .route("/api/accounts/{id}/pgp", patch(set_pgp))
         .route("/api/accounts/{id}/folders", get(folders))
+        .route("/api/accounts/{id}/folders/{path}", delete(delete_folder))
         .route("/api/accounts/{id}/folders/{path}/local", delete(desync))
 }
 
@@ -212,5 +213,38 @@ async fn desync(
     }
     let dropped = state.store().reset_folder(&id, &path)?;
     tracing::info!(account = %id, folder = %path, messages = dropped, "dossier désynchronisé");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Deletes one custom folder on the server, then locally. The local rows are
+/// only dropped once the server accepted: a refused `DELETE` leaves the store
+/// untouched. Folders holding a role are never candidates.
+async fn delete_folder(
+    Path((id, path)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+) -> Result<StatusCode, ApiError> {
+    state.ensure_account(&id)?;
+    let folder = state
+        .store()
+        .get_folder(&id, &path)?
+        .ok_or_else(|| ApiError::not_found(format!("dossier « {path} » inconnu")))?;
+    if folder.role != FolderRole::Other {
+        return Err(ApiError::bad_request(
+            "config",
+            format!(
+                "le dossier « {path} » tient le rôle {} : il ne peut pas être supprimé",
+                folder.role.as_str()
+            ),
+        ));
+    }
+    let config = state.account(&id).await?;
+    let mut session = imap::connect_with(&config, state.tls()).await?;
+    let removed = imap::delete_folder(&mut session, &path).await;
+    if let Err(error) = session.logout().await {
+        tracing::debug!(error = %error, "fermeture de la session imap");
+    }
+    removed?;
+    let dropped = state.store().delete_folder(&id, &path)?;
+    tracing::info!(account = %id, folder = %path, messages = dropped, "dossier supprimé");
     Ok(StatusCode::NO_CONTENT)
 }

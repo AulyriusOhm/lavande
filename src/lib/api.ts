@@ -417,6 +417,12 @@ export const mailApi = {
       method: "DELETE",
     }),
 
+  /** Supprime un dossier personnalisé : le serveur d'abord, le cache local ensuite. */
+  deleteFolder: (id: string, folderPath: string) =>
+    request<void>(`${accountPath(id)}/folders/${encodeURIComponent(folderPath)}`, {
+      method: "DELETE",
+    }),
+
   folderCounts: (id: string) => request<ApiFolderCount[]>(`${accountPath(id)}/folder-counts`),
 
   sync: (id: string, folderPath?: string) =>

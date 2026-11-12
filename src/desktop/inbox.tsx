@@ -52,6 +52,7 @@ import { NumberTicker } from "@/components/ui/number-ticker";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { MailBody } from "@/components/mail-body";
 import { EmptyTrashButton } from "@/components/empty-trash";
+import { FolderDeleteRow } from "@/components/folder-delete";
 import {
   Badge,
   DButton,
@@ -492,6 +493,7 @@ export function DesktopInbox({
     summary,
     summaryLoading,
     refreshSummary,
+    deleteFolder,
   } = useMailStore();
   const { dark, setDark } = useTheme();
   const prefs = usePrefs();
@@ -821,15 +823,28 @@ export function DesktopInbox({
                       : entry.id === "drafts" || entry.id === "trash"
                         ? stats.total
                         : stats.unread;
-                  return (
+                  const rail = (
                     <RailItem
-                      key={`${entry.id}:${entry.path}`}
                       active={folder === entry.id && (entry.id !== "other" || entry.path === folderPath)}
                       onClick={() => setFolder(entry.id, entry.id === "other" ? entry.path : null)}
                       label={entry.label}
                       count={count}
                       icon={<Icon className="size-4" />}
                     />
+                  );
+                  return (
+                    <div key={`${entry.id}:${entry.path}`}>
+                      {entry.id === "other" ? (
+                        <FolderDeleteRow
+                          label={entry.label}
+                          onConfirm={() => void deleteFolder(entry.path, entry.label)}
+                        >
+                          {rail}
+                        </FolderDeleteRow>
+                      ) : (
+                        rail
+                      )}
+                    </div>
                   );
                 })}
                 {folder === "trash" && (

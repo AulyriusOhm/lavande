@@ -160,6 +160,7 @@ export type MailStoreValue = {
   askRemoveAccount: (account: Account) => void;
   cancelRemoveAccount: () => void;
   confirmRemoveAccount: () => void;
+  deleteFolder: (path: string, label: string) => Promise<void>;
 };
 
 const MailStoreContext = createContext<MailStoreValue | null>(null);
@@ -1425,6 +1426,46 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       .catch((error: unknown) => notify(errorText(error)));
   }, [bootstrap, notify, removeTarget]);
 
+  /**
+   * Supprime un dossier personnalisé : le serveur d'abord, le cache local
+   * ensuite. Un refus du serveur laisse le dossier et ses messages en place.
+   */
+  const deleteFolder = useCallback(
+    async (path: string, label: string) => {
+      if (mode !== "api") return;
+      const ids =
+        account === ALL_ACCOUNTS ? accounts.map((entry) => entry.id) : account ? [account] : [];
+      const scope = folderTargets(folderRecords, ids, "other", path);
+      if (scope.length === 0) {
+        notify(`Dossier « ${label} » introuvable sur ce compte.`);
+        return;
+      }
+      let failure: string | null = null;
+      for (const target of scope) {
+        try {
+          await mailApi.deleteFolder(target.accountId, target.path);
+        } catch (error) {
+          failure = errorText(error);
+          break;
+        }
+      }
+      try {
+        const { folders: records } = await loadMailbox();
+        setFolderRecords(records);
+        if (folder === "other" && folderPath === path) setFolder("inbox", null);
+      } catch (error) {
+        failure = failure ?? errorText(error);
+      }
+      setRevision((value) => value + 1);
+      notify(
+        failure === null
+          ? `Dossier « ${label} » supprimé`
+          : `Dossier « ${label} » non supprimé · ${failure}`,
+      );
+    },
+    [account, accounts, folder, folderPath, folderRecords, mode, notify, setFolder],
+  );
+
   const inboxMails = useMemo(() => mails.filter((mail) => mail.folder === "inbox"), [mails]);
 
   /** Suggestions affichées : celles dont le mail source est encore dans la fenêtre configurée. */
@@ -1663,6 +1704,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       askRemoveAccount,
       cancelRemoveAccount,
       confirmRemoveAccount,
+      deleteFolder,
     }),
     [
       mails,
@@ -1736,6 +1778,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       askRemoveAccount,
       cancelRemoveAccount,
       confirmRemoveAccount,
+      deleteFolder,
       bootstrap,
     ],
   );

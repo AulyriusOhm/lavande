@@ -501,6 +501,28 @@ impl Store {
         Ok(deleted)
     }
 
+    /// Drops a folder row and everything stored under it in one transaction;
+    /// returns how many messages went with it. The folder is not recreated by
+    /// the next sync: its row is gone.
+    pub fn delete_folder(&self, account_id: &str, folder_path: &str) -> Result<usize, MailError> {
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
+        let deleted = tx.execute(
+            "DELETE FROM messages WHERE account_id = ?1 AND folder_path = ?2",
+            params![account_id, folder_path],
+        )?;
+        tx.execute(
+            "DELETE FROM attachments WHERE account_id = ?1 AND folder_path = ?2",
+            params![account_id, folder_path],
+        )?;
+        tx.execute(
+            "DELETE FROM folders WHERE account_id = ?1 AND path = ?2",
+            params![account_id, folder_path],
+        )?;
+        tx.commit()?;
+        Ok(deleted)
+    }
+
     /// Moves the messages replying to `message_id` into `thread_id`. Returns
     /// how many rows changed.
     pub fn relink_replies(

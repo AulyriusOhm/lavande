@@ -112,6 +112,29 @@ describe("mailApi · interrupteur PGP du compte", () => {
   });
 });
 
+describe("mailApi · suppression d'un dossier", () => {
+  it("supprime le dossier avec le chemin encodé", async () => {
+    const fetchMock = vi.fn(async () => noContent());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await mailApi.deleteFolder("a1", "Projets 2026");
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/accounts/a1/folders/Projets%202026");
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBeUndefined();
+  });
+
+  it("remonte le refus du serveur", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response({ error: "serveur IMAP : refusé", kind: "imap" }, 502)),
+    );
+
+    await expect(mailApi.deleteFolder("a1", "INBOX")).rejects.toThrow("serveur IMAP : refusé");
+  });
+});
+
 describe("mailApi · désynchronisation d'un dossier", () => {
   it("supprime le cache local avec le chemin encodé", async () => {
     const fetchMock = vi.fn(async () => noContent());

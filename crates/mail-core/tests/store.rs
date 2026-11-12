@@ -611,6 +611,62 @@ fn reset_folder_forgets_messages_and_sync_baseline() {
 }
 
 #[test]
+fn delete_folder_drops_the_folder_and_its_messages() {
+    let store = open();
+    let custom = Folder {
+        account_id: "perso".to_string(),
+        path: "Projets".to_string(),
+        name: "Projets".to_string(),
+        role: FolderRole::Other,
+        uidvalidity: 7,
+        uidnext: 10,
+        last_sync_at: Some(date(10)),
+        modseq: Some(90060115205545359),
+    };
+    store.upsert_folder(&custom).expect("folder");
+    let mut first = message(1, "t1", "Marc", "A", 10);
+    first.folder_path = "Projets".to_string();
+    first.attachments.push(AttachmentMeta {
+        filename: "a.png".to_string(),
+        mime: "image/png".to_string(),
+        size: 8,
+        inline: false,
+    });
+    store.upsert_message(&first).expect("m1");
+    let mut second = message(2, "t2", "Marc", "B", 11);
+    second.folder_path = "Projets".to_string();
+    store.upsert_message(&second).expect("m2");
+    store
+        .upsert_message(&message(3, "t3", "Marc", "C", 12))
+        .expect("inbox");
+
+    let dropped = store.delete_folder("perso", "Projets").expect("delete");
+    assert_eq!(dropped, 2);
+    assert!(store
+        .get_folder("perso", "Projets")
+        .expect("folder")
+        .is_none());
+    assert!(!store
+        .list_folders("perso")
+        .expect("folders")
+        .iter()
+        .any(|folder| folder.path == "Projets"));
+    assert!(store
+        .messages_in_folder("perso", "Projets", -1, 0)
+        .expect("list")
+        .is_empty());
+    assert_eq!(
+        store
+            .messages_in_folder("perso", "INBOX", -1, 0)
+            .expect("inbox")
+            .len(),
+        1,
+        "les autres dossiers sont intacts"
+    );
+    assert_eq!(store.delete_folder("perso", "Projets").expect("again"), 0);
+}
+
+#[test]
 fn list_accounts_returns_id_label_email() {
     let store = open();
     store
