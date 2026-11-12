@@ -27,6 +27,7 @@ Décisions actées avec Roman le 12/11/2026 :
 
 **Restent à faire** :
 - #3 anti-spam (phase de recherche d'abord) · #6 graphisme PC agenda/planif (maquettes à valider) · #7 rangement des réglages (plan à valider) · #11 calendriers externes (OAuth Google à fournir) · #14 parapluie sécurité (audit autonome ; Keystore Android + trousseau système + signature paquets avec Roman).
+- Rédaction & réponse : #15 correction LLM sans perte d'images · #16 historique cité repliable en lecture seule · #17 signature avant l'historique (à faire ensemble, #17 dépend de #16).
 - Hors todo : auto-updater (hébergement endpoint, sauvegarde clé, 1ʳᵉ release, AppImage, test E2E) · Android insets sur appareil physique + CI.
 - Suivis mineurs : `htmlToText` avale les URL `<https://…>` dans les aperçus texte ; relecture locale des images inline CID dans Envoyés ; scénario live IMAP du gate PGP ; 2 chaînes démo cosmétiques sous verrou.
 
@@ -113,6 +114,28 @@ Audit visuel de lisibilité sur toute l'app (PC + mobile) : contrastes insuffisa
 libellés tronqués, débordements, textes qui se chevauchent au redimensionnement — puis corriger. S'appuyer sur
 `DESIGN.md` comme référence (tailles, couleurs). Complémentaire de #4 (agenda au resize) et #6 (refonte graphique PC).
 
+## Rédaction & réponse
+
+### #15 — La correction automatique via LLM ne doit pas perdre les images
+La correction / réécriture automatique via LLM (`src/screens/compose-screen.tsx`, flux `rewriteOpen` /
+`applySuggestion`, `src/lib/llm.ts`) repart du texte brut (`htmlToText(draft.body)`) et remplace le corps par du
+texte : les images collées inline et le contenu riche sont perdus. Préserver les images inline (et la structure
+riche) à travers la correction LLM — ne réécrire que le texte, réinjecter les images / éléments non textuels à
+leur place. Lié aux images collées (inline CID) livrées.
+
+### #16 — Réponse : historique cité repliable et en lecture seule
+À la réponse, ne pas afficher toute la conversation précédente en texte éditable dans le corps. Faire un bloc
+propre, replié / déroulable (« voir la conversation précédente »), en **lecture seule** (non éditable, non
+interactif), à la manière des clients mail. Le corps éditable ne contient que le nouveau message ; l'historique
+cité est un bloc distinct repliable, inclus à l'envoi mais pas modifiable dans l'éditeur. Remplace le `> …` brut
+construit dans `replyTo` (`src/lib/store.tsx`). Interagit avec #17 (placement de la signature).
+
+### #17 — Signature à la fin du mail envoyé, pas après l'historique
+La signature est apposée tout à la fin du corps (après l'historique cité) alors qu'elle doit clore le mail
+envoyé : juste après le nouveau message, **avant** la conversation citée. Corriger l'insertion (`sendInputOf`
+dans `src/lib/mail-backend.ts` + construction de la réponse dans `src/lib/store.tsx`) pour placer la signature
+entre le nouveau message et la citation. Dépend de la structure de citation de #16.
+
 ---
 
 ## Ordre d'attaque suggéré
@@ -120,7 +143,8 @@ libellés tronqués, débordements, textes qui se chevauchent au redimensionneme
 2. Clavier + rendu HTML : **#1, #2**
 3. Gros morceaux : **#3, #8, #11, #12**
 4. Refonte graphique + réglages (allers-retours maquette) : **#6, #7, #13**
-5. Parapluie sécurité en dernier : **#14**
+5. Rédaction & réponse : **#16 puis #17** (signature), **#15** (LLM sans perte d'images)
+6. Parapluie sécurité en dernier : **#14**
 
 ## Reste à faire hors todo (doc existante)
 - **Auto-updater** (`docs/UPDATER.md`) : héberger l'endpoint, sauvegarder la clé privée, publier une première
