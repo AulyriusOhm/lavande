@@ -26,7 +26,8 @@ export type ApiErrorKind =
   | "tls"
   | "oauth"
   | "store"
-  | "mime";
+  | "mime"
+  | "calendar";
 
 export type ApiEndpoint = {
   host: string;
@@ -237,6 +238,28 @@ export type HtmlImages = {
   html: string;
 };
 
+/** Un `VEVENT` tel que le démon le projette : jour et heures murales, sans récurrence développée. */
+export type ExternalEvent = {
+  uid: string | null;
+  title: string;
+  date: string;
+  start: string | null;
+  end: string | null;
+  all_day: boolean;
+  timezone: string | null;
+  location: string | null;
+  description: string | null;
+  recurring: boolean;
+  source: string | null;
+};
+
+/** `content` (fichier) ou `url` (abonnement) : jamais les deux. */
+export type IcsImport = {
+  content?: string;
+  url?: string;
+  source?: string;
+};
+
 export type SendInput = {
   to: ApiAddress[];
   cc: ApiAddress[];
@@ -299,6 +322,7 @@ const KINDS: readonly ApiErrorKind[] = [
   "oauth",
   "store",
   "mime",
+  "calendar",
 ];
 
 type RequestOptions = {
@@ -486,6 +510,13 @@ export const mailApi = {
       timeout: LONG_TIMEOUT,
     }),
 
+  /** Lecture seule : le démon analyse le fichier ou télécharge l'URL, rien n'est enregistré chez lui. */
+  importIcs: (input: IcsImport) =>
+    request<ExternalEvent[]>("/calendars/ics", {
+      method: "POST",
+      body: input,
+      timeout: LONG_TIMEOUT,
+    }),
 
   oauthStart: (input: OAuthStartInput) =>
     request<ApiOAuthStart>("/oauth/start", { method: "POST", body: input }),

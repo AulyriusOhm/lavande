@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, type Variants } from "motion/react";
 import {
   AlertTriangle,
@@ -10,10 +10,12 @@ import {
   Clock,
   EyeOff,
   Inbox,
+  Link2,
   Mail,
   MapPin,
   Pencil,
   Plus,
+  RefreshCw,
   Trash2,
   X,
 } from "lucide-react";
@@ -30,7 +32,9 @@ import {
   monthGrid,
   overlappingEvents,
 } from "@/lib/calendar";
-import { TONE_DOT, TONE_PILL, calendarsInUse, toneOfEvent, useCalendars, type CalendarDef } from "@/lib/calendars";
+import { TONE_DOT, TONE_PILL, calendarsInUse, icsUrlOf, toneOfEvent, useCalendars, type CalendarDef } from "@/lib/calendars";
+import { dueIcsSubscriptions, fetchIcsCalendar, icsCalendarEvents, markIcsSynced, setIcsCalendarEvents, useIcsState } from "@/lib/ics";
+import { errorText } from "@/lib/api";
 import {
   DAY_END_MIN,
   DAY_START_MIN,
@@ -149,6 +153,12 @@ const monthCells = (year: number, month: number) => {
   return Array.from({ length: 42 }, (_, index) => addDaysISO(start, index));
 };
 
+/** Un événement ICS sans heure (journée entière) n'a ni début ni fin : on le dit. */
+const timeRange = (event: CalendarEvent) => {
+  if (!event.start) return "Journée entière";
+  return event.end ? `${event.start} → ${event.end}` : event.start;
+};
+
 function EventPill({
   event,
   tone,
@@ -163,7 +173,7 @@ function EventPill({
   return (
     <button
       type="button"
-      title={`${event.title} · ${event.start}–${event.end}`}
+      title={`${event.title} · ${timeRange(event)}`}
       onClick={(clickEvent) => {
         clickEvent.stopPropagation();
         onOpen();
@@ -386,7 +396,7 @@ function Timeline({
                   <button
                     key={event.id}
                     type="button"
-                    title={`${event.title} · ${event.start}–${event.end}`}
+                    title={`${event.title} · ${timeRange(event)}`}
                     onClick={(clickEvent) => {
                       clickEvent.stopPropagation();
                       onOpen(event);
@@ -954,12 +964,14 @@ function DayPanel({
                   mail
                 </Badge>
               ) : null}
+              {detail.external ? <Badge tone="sky">ICS · lecture seule</Badge> : null}
+              {detail.recurring ? <Badge tone="neutral">récurrent</Badge> : null}
               {conflicts.has(detail.id) ? <Badge tone="amber">Conflit</Badge> : null}
             </div>
 
             <p className="mt-4 flex items-center gap-2 text-[13px] font-bold text-ink tabular-nums">
               <Clock className="size-4 shrink-0" strokeWidth={2.2} />
-              {detail.start} → {detail.end}
+              {timeRange(detail)}
             </p>
 
             {detail.location ? (
@@ -1007,16 +1019,23 @@ function DayPanel({
             ) : null}
           </div>
 
-          <div className="flex items-center gap-2">
-            <DButton variant="soft" size="md" className="flex-1" onClick={() => onEdit(detail)}>
-              <Pencil className="size-3.5" strokeWidth={2.2} />
-              Modifier
-            </DButton>
-            <DButton variant="danger" size="md" className="flex-1" onClick={() => onDelete(detail)}>
-              <Trash2 className="size-3.5" strokeWidth={2.2} />
-              Supprimer
-            </DButton>
-          </div>
+          {detail.external ? (
+            <p className="flex items-center gap-2 rounded-[16px] border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-[11px] font-bold text-sky-700 dark:text-sky-300">
+              <Link2 className="size-3.5 shrink-0" strokeWidth={2.4} />
+              Calendrier ICS : lecture seule, modifiable à la source uniquement.
+            </p>
+          ) : (
+            <div className="flex items-center gap-2">
+              <DButton variant="soft" size="md" className="flex-1" onClick={() => onEdit(detail)}>
+                <Pencil className="size-3.5" strokeWidth={2.2} />
+                Modifier
+              </DButton>
+              <DButton variant="danger" size="md" className="flex-1" onClick={() => onDelete(detail)}>
+                <Trash2 className="size-3.5" strokeWidth={2.2} />
+                Supprimer
+              </DButton>
+            </div>
+          )}
         </div>
       ) : dayEvents.length === 0 ? (
         <EmptyState
@@ -1044,7 +1063,7 @@ function DayPanel({
                   <span className="flex items-center gap-1.5">
                     <span className={cn("size-2 shrink-0 rounded-full", TONE_DOT[eventTone])} />
                     <span className="text-[11.5px] font-bold text-ink tabular-nums">
-                      {event.start} → {event.end}
+                      {timeRange(event)}
                     </span>
                     {event.fromMail || event.mailId ? (
                       <Badge tone="accent">
@@ -1052,6 +1071,8 @@ function DayPanel({
                         mail
                       </Badge>
                     ) : null}
+                    {event.external ? <Badge tone="sky">ICS</Badge> : null}
+                    {event.recurring ? <Badge tone="neutral">récurrent</Badge> : null}
                     {conflicts.has(event.id) ? <Badge tone="amber">Conflit</Badge> : null}
                   </span>
 
@@ -1139,6 +1160,11 @@ export function DesktopCalendar({
     notify,
   } = useMailStore();
   const [calendars] = useCalendars();
+  const [ics, setIcs] = useIcsState();
+  const [icsSyncing, setIcsSyncing] = useState(false);
+  const icsRef = useRef(ics);
+  icsRef.current = ics;
+  const icsInFlight = useRef(new Set<string>());
   const [mode, setMode] = useState<ViewMode>("month");
   const [anchor, setAnchor] = useState(selectedDate);
   const [direction, setDirection] = useState(0);
@@ -1150,8 +1176,43 @@ export function DesktopCalendar({
   const [detailId, setDetailId] = useState<string | null>(null);
   const narrow = useNarrowViewport();
 
-  const calendarList = useMemo(() => calendarsInUse(events, calendars), [events, calendars]);
-  const conflicts = useMemo(() => conflictingIds(events), [events]);
+  const icsEvents = useMemo(() => icsCalendarEvents(ics, calendars), [ics, calendars]);
+  const allEvents = useMemo(() => [...events, ...icsEvents], [events, icsEvents]);
+  const icsSubscriptions = useMemo(() => calendars.filter((def) => icsUrlOf(def)), [calendars]);
+
+  const refreshIcs = useCallback(
+    async (targets: CalendarDef[]) => {
+      const queue = targets.filter((def) => !icsInFlight.current.has(def.id));
+      if (queue.length === 0) return;
+      for (const def of queue) icsInFlight.current.add(def.id);
+      setIcsSyncing(true);
+      let next = icsRef.current;
+      const failures: string[] = [];
+      for (const def of queue) {
+        try {
+          next = setIcsCalendarEvents(next, def.id, await fetchIcsCalendar(def));
+        } catch (error) {
+          next = markIcsSynced(next, def.id);
+          failures.push(`${def.name} · ${errorText(error)}`);
+        } finally {
+          icsInFlight.current.delete(def.id);
+        }
+      }
+      icsRef.current = next;
+      setIcs(next);
+      setIcsSyncing(false);
+      if (failures.length > 0) notify(`Abonnement ICS · ${failures.join(" ; ")}`);
+    },
+    [notify, setIcs],
+  );
+
+  useEffect(() => {
+    const due = dueIcsSubscriptions(calendars, icsRef.current.synced);
+    if (due.length > 0) void refreshIcs(due);
+  }, [calendars, refreshIcs]);
+
+  const calendarList = useMemo(() => calendarsInUse(allEvents, calendars), [allEvents, calendars]);
+  const conflicts = useMemo(() => conflictingIds(allEvents), [allEvents]);
   const eventSuggestions = useMemo(
     () => suggestions.filter((suggestion) => suggestion.kind === "event"),
     [suggestions],
@@ -1164,18 +1225,18 @@ export function DesktopCalendar({
     const names = new Set(
       calendarList.filter((def) => !hiddenCalendars.has(def.name)).map((def) => def.name),
     );
-    if (events.some((event) => !event.calendar)) names.add("");
+    if (allEvents.some((event) => !event.calendar)) names.add("");
     return names;
-  }, [calendarList, hiddenCalendars, events]);
+  }, [calendarList, hiddenCalendars, allEvents]);
 
   const visible = useMemo(
     () =>
       filterEvents(
-        events,
+        allEvents,
         { calendars: activeCalendars, fromMail, conflictsOnly, attendeesOnly, query },
         conflicts,
       ),
-    [events, activeCalendars, fromMail, conflictsOnly, attendeesOnly, query, conflicts],
+    [allEvents, activeCalendars, fromMail, conflictsOnly, attendeesOnly, query, conflicts],
   );
 
   const byDay = useMemo(() => {
@@ -1190,7 +1251,7 @@ export function DesktopCalendar({
   }, [visible]);
 
   const dayEvents = byDay.get(selectedDate) ?? [];
-  const detail = detailId ? (events.find((event) => event.id === detailId) ?? null) : null;
+  const detail = detailId ? (allEvents.find((event) => event.id === detailId) ?? null) : null;
   const mail = detail?.mailId ? mails.find((entry) => entry.id === detail.mailId) : undefined;
 
   const inPeriod = (iso: string) => {
@@ -1292,13 +1353,17 @@ export function DesktopCalendar({
   };
 
   const removeEvent = (target: CalendarEvent) => {
+    if (target.external) {
+      notify("Événement d'un calendrier ICS · lecture seule");
+      return;
+    }
     setEvents((current) => current.filter((event) => event.id !== target.id));
     notify("Rendez-vous supprimé");
     setDetailId(null);
   };
 
   const overlaps = detail
-    ? overlappingEvents(events, detail.date, detail.start, detail.end).filter(
+    ? overlappingEvents(allEvents, detail.date, detail.start, detail.end).filter(
         (event) => event.id !== detail.id,
       )
     : [];
@@ -1316,7 +1381,7 @@ export function DesktopCalendar({
             narrow ? "px-4 py-3" : "px-5 py-3",
           )}
         >
-          <PaneTitle hint={`${visible.length} sur ${events.length} événement${events.length > 1 ? "s" : ""}`}>
+          <PaneTitle hint={`${visible.length} sur ${allEvents.length} événement${allEvents.length > 1 ? "s" : ""}`}>
             Agenda
           </PaneTitle>
 
@@ -1469,6 +1534,25 @@ export function DesktopCalendar({
               />
             ))}
           </FilterGroup>
+
+          {icsSubscriptions.length > 0 ? (
+            <div className="flex items-center gap-2 px-1">
+              <span className="text-[10.5px] font-semibold text-ink-muted">
+                Abonnements ICS · {icsEvents.length} événement{icsEvents.length > 1 ? "s" : ""}
+              </span>
+              <DButton
+                variant="ghost"
+                size="sm"
+                className="ml-auto"
+                aria-label="Actualiser les abonnements ICS"
+                disabled={icsSyncing}
+                onClick={() => void refreshIcs(icsSubscriptions)}
+              >
+                <RefreshCw className={cn("size-3.5", icsSyncing && "animate-spin")} strokeWidth={2.4} />
+                Actualiser
+              </DButton>
+            </div>
+          ) : null}
 
           <FilterGroup label="Filtres" count={filterPeriodEvents.length}>
             <RailCheck

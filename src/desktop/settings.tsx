@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -10,6 +10,7 @@ import {
   FolderTree,
   Globe,
   KeyRound,
+  Link2,
   ListChecks,
   Loader2,
   Lock,
@@ -25,10 +26,12 @@ import {
   SunMoon,
   Terminal,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { errorText, mailApi } from "@/lib/api";
 import type { ApiFolder } from "@/lib/api";
 import type { Account } from "@/lib/accounts";
+import type { CalendarEvent } from "@/lib/calendar";
 import {
   PGP_STATE,
   formatFingerprint,
@@ -51,7 +54,17 @@ import {
   mcpTypeAllowed,
   useMcpLog,
 } from "@/lib/mcp";
-import { calendarId, TONE_DOT, useCalendars } from "@/lib/calendars";
+import { calendarId, TONE_DOT, isIcsCalendar, icsUrlOf, useCalendars, type CalendarDef } from "@/lib/calendars";
+import {
+  dropIcsCalendar,
+  fetchIcsCalendar,
+  icsNameFromFile,
+  icsNameFromUrl,
+  icsUrlError,
+  importIcsContent,
+  setIcsCalendarEvents,
+  useIcsState,
+} from "@/lib/ics";
 import { accountPgp, activeSignature, mergeFlags, usePrefs } from "@/lib/prefs";
 import { APP_VERSION, phaseLabel, useUpdater } from "@/lib/updater";
 import { llmProbe, llmReady } from "@/lib/llm";
@@ -335,11 +348,16 @@ function TonePicker({
 function CalendarsSection() {
   const { notify } = useMailStore();
   const [calendars, setCalendars] = useCalendars();
+  const [ics, setIcs] = useIcsState();
   const [draftName, setDraftName] = useState("");
   const [draftTone, setDraftTone] = useState(0);
+  const [draftUrl, setDraftUrl] = useState("");
+  const [icsBusy, setIcsBusy] = useState(false);
+  const [icsError, setIcsError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [removing, setRemoving] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
 
   const addCalendar = () => {
     const name = draftName.trim();
@@ -354,6 +372,69 @@ function CalendarsSection() {
     setCalendars([...calendars, { id: calendarId(name, calendars), name, tone: draftTone }]);
     setDraftName("");
     notify(`Calendrier ajouté · ${name}`);
+  };
+
+  /** Nom et ton saisis au-dessus servent aussi aux sources ICS ; sans nom, l'URL ou le fichier décide. */
+  const icsDraft = (fallback: string) => {
+    const name = draftName.trim() || fallback;
+    if (calendars.some((entry) => entry.name.toLowerCase() === name.toLowerCase())) {
+      setIcsError(`Calendrier déjà présent · ${name}`);
+      return null;
+    }
+    return { id: calendarId(name, calendars), name, tone: draftTone } satisfies CalendarDef;
+  };
+
+  const commitIcs = (def: CalendarDef, events: CalendarEvent[]) => {
+    setCalendars([...calendars, def]);
+    setIcs(setIcsCalendarEvents(ics, def.id, events));
+    setDraftName("");
+    setDraftUrl("");
+    setIcsError(null);
+    notify(`Calendrier ICS ajouté · ${def.name} · ${events.length} événement${events.length > 1 ? "s" : ""}`);
+  };
+
+  const failIcs = (error: unknown) => {
+    const message = errorText(error);
+    setIcsError(message);
+    notify(`Import ICS impossible · ${message}`);
+  };
+
+  const addIcsFromUrl = async () => {
+    const url = draftUrl.trim();
+    const problem = icsUrlError(url);
+    if (problem) {
+      setIcsError(problem);
+      return;
+    }
+    const draft = icsDraft(icsNameFromUrl(url));
+    if (!draft) return;
+    const def: CalendarDef = { ...draft, source: { kind: "ics", url } };
+    setIcsBusy(true);
+    setIcsError(null);
+    try {
+      commitIcs(def, await fetchIcsCalendar(def));
+    } catch (error) {
+      failIcs(error);
+    } finally {
+      setIcsBusy(false);
+    }
+  };
+
+  const addIcsFromFile = async (file: File) => {
+    const draft = icsDraft(icsNameFromFile(file.name));
+    if (!draft) return;
+    const def: CalendarDef = { ...draft, source: { kind: "ics" } };
+    setIcsBusy(true);
+    setIcsError(null);
+    try {
+      const content = await file.text();
+      if (!content.trim()) throw new Error("fichier vide");
+      commitIcs(def, await importIcsContent(def, content));
+    } catch (error) {
+      failIcs(error);
+    } finally {
+      setIcsBusy(false);
+    }
   };
 
   const startRename = (id: string, name: string) => {
@@ -384,6 +465,7 @@ function CalendarsSection() {
   const removeCalendar = (id: string) => {
     const target = calendars.find((entry) => entry.id === id);
     setCalendars(calendars.filter((entry) => entry.id !== id));
+    if (target && isIcsCalendar(target)) setIcs(dropIcsCalendar(ics, id));
     setRemoving(null);
     if (target) notify(`Calendrier supprimé · ${target.name}`);
   };
@@ -415,6 +497,56 @@ function CalendarsSection() {
           Ajouter
         </DButton>
       </div>
+
+      <div className="flex flex-wrap items-end gap-3 border-b border-line bg-surface-2/40 px-3.5 py-3">
+        <label className="grid min-w-[220px] flex-1 gap-1">
+          <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+            Abonnement iCalendar · URL
+          </span>
+          <TextInput
+            aria-label="URL du calendrier ICS"
+            placeholder="https://exemple.tld/calendrier.ics"
+            value={draftUrl}
+            onChange={(event) => setDraftUrl(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void addIcsFromUrl();
+            }}
+            className="h-9 text-[12px] font-semibold"
+          />
+        </label>
+        <DButton variant="soft" size="sm" disabled={icsBusy} onClick={() => void addIcsFromUrl()}>
+          <Link2 className="size-3.5" strokeWidth={2.6} />
+          Abonner
+        </DButton>
+        <DButton variant="ghost" size="sm" disabled={icsBusy} onClick={() => fileInput.current?.click()}>
+          <Upload className="size-3.5" strokeWidth={2.6} />
+          Fichier .ics
+        </DButton>
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".ics,text/calendar"
+          hidden
+          data-testid="ics-file-input"
+          aria-label="Fichier iCalendar"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) void addIcsFromFile(file);
+          }}
+        />
+      </div>
+
+      <p className="border-b border-line/70 px-3.5 py-2 text-[10.5px] leading-relaxed font-semibold text-ink-muted">
+        Le nom et le ton saisis ci-dessus s'appliquent aussi au calendrier ICS ; sans nom, l'URL ou le fichier fait
+        foi. Import en lecture seule : rien n'est modifié ni renvoyé au serveur.
+      </p>
+
+      {icsError ? (
+        <p role="alert" className="border-b border-rose-500/30 bg-rose-500/10 px-3.5 py-2 text-[11px] font-bold text-rose-700 dark:text-rose-300">
+          {icsError}
+        </p>
+      ) : null}
 
       {calendars.length === 0 ? (
         <p className="px-3.5 py-4 text-[11px] font-medium text-ink-muted">
@@ -448,7 +580,24 @@ function CalendarsSection() {
                 </>
               ) : (
                 <>
-                  <span className="min-w-0 flex-1 truncate text-[12px] font-bold text-ink">{entry.name}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-[12px] font-bold text-ink">{entry.name}</span>
+                      <Badge tone={isIcsCalendar(entry) ? "sky" : "neutral"}>
+                        {isIcsCalendar(entry) ? "ICS" : "local"}
+                      </Badge>
+                    </div>
+                    {isIcsCalendar(entry) ? (
+                      <span className="mt-0.5 flex items-center gap-1 text-[10.5px] font-semibold text-ink-muted">
+                        <Link2 className="size-3 shrink-0" strokeWidth={2.2} />
+                        <span className="truncate">{icsUrlOf(entry) ?? "fichier importé"}</span>
+                        <span className="shrink-0 tabular-nums">
+                          · {(ics.events[entry.id] ?? []).length} événement
+                          {(ics.events[entry.id] ?? []).length > 1 ? "s" : ""}
+                        </span>
+                      </span>
+                    ) : null}
+                  </div>
                   <TonePicker
                     label={`Ton de ${entry.name}`}
                     value={entry.tone % TONE_DOT.length}
@@ -495,7 +644,8 @@ function CalendarsSection() {
       )}
 
       <p className="border-t border-line/70 px-3.5 py-2 text-[10.5px] leading-relaxed font-semibold text-ink-muted">
-        Enregistrés sur cet appareil : l'agenda les affiche aussitôt.
+        Enregistrés sur cet appareil : l'agenda les affiche aussitôt. Supprimer une source ICS retire ses
+        événements de l'agenda.
       </p>
     </Surface>
   );

@@ -11,6 +11,10 @@ export type CalendarEvent = {
   mailId?: string;
   attendees?: string[];
   calendar?: string;
+  /** Événement venu d'un calendrier ICS : affiché, jamais édité ni supprimé ici. */
+  external?: boolean;
+  /** Règle de récurrence présente dans le fichier : l'occurrence n'est pas développée. */
+  recurring?: boolean;
 };
 
 const TODAY = new Date();

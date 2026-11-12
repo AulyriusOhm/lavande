@@ -1,7 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CalendarEvent } from "@/lib/calendar";
 
-export type CalendarDef = { id: string; name: string; tone: number };
+export type CalendarSource = { kind: "local" } | { kind: "ics"; url?: string };
+
+/** `source` absent : calendrier local, comme avant l'arrivée des sources ICS. */
+export type CalendarDef = { id: string; name: string; tone: number; source?: CalendarSource };
+
+export function isIcsCalendar(def: CalendarDef): boolean {
+  return def.source?.kind === "ics";
+}
+
+/** L'URL de l'abonnement ; un import fichier n'en a pas. */
+export function icsUrlOf(def: CalendarDef): string | undefined {
+  return def.source?.kind === "ics" ? def.source.url : undefined;
+}
 
 export const TONE_PILL = [
   "bg-accent-soft text-accent-ink",
@@ -21,16 +33,24 @@ export const DEFAULT_CALENDARS: CalendarDef[] = [
 
 const STORAGE_KEY = "lavande.calendars.v1";
 
+function parseSource(raw: unknown): CalendarSource | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const { kind, url } = raw as { kind?: unknown; url?: unknown };
+  if (kind === "local") return { kind: "local" };
+  if (kind !== "ics") return undefined;
+  return typeof url === "string" && url.trim() ? { kind: "ics", url: url.trim() } : { kind: "ics" };
+}
+
 function parseCalendars(raw: unknown): CalendarDef[] | null {
   if (!Array.isArray(raw)) return null;
-  const list = raw.filter(
-    (entry): entry is CalendarDef =>
-      Boolean(entry) &&
-      typeof entry === "object" &&
-      typeof (entry as CalendarDef).id === "string" &&
-      typeof (entry as CalendarDef).name === "string" &&
-      typeof (entry as CalendarDef).tone === "number",
-  );
+  const list: CalendarDef[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const { id, name, tone, source } = entry as CalendarDef;
+    if (typeof id !== "string" || typeof name !== "string" || typeof tone !== "number") continue;
+    const parsed = parseSource(source);
+    list.push(parsed ? { id, name, tone, source: parsed } : { id, name, tone });
+  }
   return list.length > 0 ? list : null;
 }
 
