@@ -26,6 +26,7 @@ import {
   type Doc,
 } from "@/lib/sync/merge";
 import { createLocalStorageSyncStorage, type SyncStorage, type SyncState } from "@/lib/sync/storage";
+import { createDaemonVault } from "@/lib/sync/vault";
 
 const TASK_FIELDS = [
   "title",
@@ -322,7 +323,10 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
   const { sync: syncPrefs } = usePrefs();
   const kanbanSync = syncPrefs.enabled && syncPrefs.kanban;
   const calendarSync = syncPrefs.enabled && syncPrefs.calendar;
-  const syncStorage = useMemo(() => storage ?? createLocalStorageSyncStorage(), [storage]);
+  const syncStorage = useMemo(
+    () => storage ?? createLocalStorageSyncStorage(undefined, mailMode() === "demo" ? null : createDaemonVault()),
+    [storage],
+  );
   const engine = useMemo(() => createSyncEngine(syncStorage), [syncStorage]);
   const clock = useMemo<Clock>(() => createClock(syncStorage.read().device.id), [syncStorage]);
 
@@ -344,6 +348,10 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
   );
   const getVersion = useCallback(() => versionRef.current, []);
   const version = useSyncExternalStore(subscribe, getVersion, getVersion);
+
+  // Les secrets de synchro arrivent du coffre du démon : la synchro ne démarre
+  // qu'une fois qu'ils sont en mémoire, sinon les mutations partiraient sans op.
+  const vaulted = useSyncExternalStore(subscribe, () => syncStorage.vaulted(), () => syncStorage.vaulted());
 
   const state = useMemo(() => engine.getState(), [engine, version]);
 
@@ -382,13 +390,13 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
     engine.setEnabledKinds(kinds);
     const anySync = kanbanSync || calendarSync;
     engine.setPaused(!anySync);
-    if (!anySync) return;
+    if (!anySync || !vaulted) return;
     return engine.start();
-  }, [engine, kanbanSync, calendarSync]);
+  }, [engine, kanbanSync, calendarSync, vaulted]);
 
   const seeded = useRef(false);
   useEffect(() => {
-    if (seeded.current) return;
+    if (!vaulted || seeded.current) return;
     seeded.current = true;
     // Les fixtures de la maquette ne sont semées qu'en mode démo : en api le
     // planning démarre vide et ne contient que les données de l'utilisateur.
@@ -403,7 +411,7 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
     if (visibleDocs(initial.docs, "event").length === 0) {
       for (const event of initialEvents()) emit("event", event.id, eventFields(event));
     }
-  }, [emit, syncStorage]);
+  }, [emit, syncStorage, vaulted]);
 
   const tasks = useMemo(() => projectTasks(state), [state]);
   const suggestions = useMemo(() => projectSuggestions(state), [state]);

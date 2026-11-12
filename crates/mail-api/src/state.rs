@@ -18,6 +18,7 @@ use crate::events::Events;
 use crate::oauth_flow::Sessions;
 use crate::pgp_keys::PgpStore;
 use crate::secrets::{AccountSecrets, SecretBackend, Secrets};
+use crate::sync_secrets;
 use crate::token;
 
 pub const ACCOUNTS_FILE: &str = "accounts.json";
@@ -365,6 +366,66 @@ impl AppState {
                 ),
             )),
         }
+    }
+
+    /// Clé privée de l'appareil de synchronisation, `None` tant que le front ne
+    /// l'a pas déposée (appareil neuf ou migration pas encore faite).
+    pub async fn sync_device_key(&self) -> Result<Option<String>, ApiError> {
+        match self.secrets.get(sync_secrets::DEVICE_SECRET_ID).await? {
+            Some(AccountSecrets::SyncDevice { private_key }) => Ok(Some(private_key)),
+            Some(_) => Err(ApiError::internal(
+                "sync",
+                "secret d'appareil incompatible : clé privée attendue",
+            )),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn set_sync_device_key(&self, private_key: &str) -> Result<(), ApiError> {
+        self.secrets
+            .put(
+                sync_secrets::DEVICE_SECRET_ID,
+                &AccountSecrets::SyncDevice {
+                    private_key: private_key.to_string(),
+                },
+            )
+            .await
+    }
+
+    pub async fn sync_account_token(&self, account_id: &str) -> Result<Option<String>, ApiError> {
+        match self
+            .secrets
+            .get(&sync_secrets::account_secret_id(account_id))
+            .await?
+        {
+            Some(AccountSecrets::SyncAccount { token }) => Ok(Some(token)),
+            Some(_) => Err(ApiError::internal(
+                "sync",
+                format!("secret du compte « {account_id} » incompatible : jeton attendu"),
+            )),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn set_sync_account_token(
+        &self,
+        account_id: &str,
+        token: &str,
+    ) -> Result<(), ApiError> {
+        self.secrets
+            .put(
+                &sync_secrets::account_secret_id(account_id),
+                &AccountSecrets::SyncAccount {
+                    token: token.to_string(),
+                },
+            )
+            .await
+    }
+
+    pub async fn remove_sync_account_token(&self, account_id: &str) -> Result<(), ApiError> {
+        self.secrets
+            .delete(&sync_secrets::account_secret_id(account_id))
+            .await
     }
 }
 

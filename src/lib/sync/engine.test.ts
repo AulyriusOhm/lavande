@@ -5,6 +5,7 @@ import { createSyncEngine, type SyncEngine } from "./engine";
 import { docKey, LOCAL_SCHEMA_VERSION, type OpPayload } from "./merge";
 import {
   createDevice,
+  createLocalStorageSyncStorage,
   createMemoryStorage,
   emptyState,
   resolveDek,
@@ -12,6 +13,7 @@ import {
   type SyncState,
   type SyncStorage,
 } from "./storage";
+import { createMemoryVault } from "./vault";
 
 const SERVER = "https://sync.test/";
 const ACCOUNT = { serverUrl: SERVER, email: "a@b.c", password: "mot-de-passe" };
@@ -45,8 +47,8 @@ function json(status: number, body?: unknown): Response {
   return { ok: status >= 200 && status < 300, status, text: async () => text } as unknown as Response;
 }
 
-function createHarness(initial?: SyncState): Harness {
-  const storage = createMemoryStorage(initial ?? emptyState(createDevice("Test", "node")));
+function createHarness(initial?: SyncState, prepared?: SyncStorage): Harness {
+  const storage = prepared ?? createMemoryStorage(initial ?? emptyState(createDevice("Test", "node")));
   const calls: Call[] = [];
   const handlers: Handlers = {
     register: () =>
@@ -156,6 +158,34 @@ describe("createSyncEngine", () => {
     expect(harness.engine.getState().account).toBeUndefined();
     expect(harness.engine.getState().outbox).toEqual([]);
     expect(harness.calls).toHaveLength(0);
+  });
+
+  it("reprend la synchro après un redémarrage : les secrets viennent du coffre", async () => {
+    const key = "lavande.test.engine";
+    localStorage.removeItem(key);
+    const vault = createMemoryVault();
+    const first = createLocalStorageSyncStorage(key, vault);
+    await first.settled();
+    const harness = createHarness(undefined, first);
+    await harness.connect();
+    await first.settled();
+
+    const device = harness.engine.getState().device;
+    const dek = dekOf(harness);
+    expect(device.privKey).toHaveLength(43);
+    expect(vault.snapshot()).toMatchObject({ deviceKey: device.privKey, accountTokens: { "user-1": "session-1" } });
+    const persisted = JSON.parse(localStorage.getItem(key) as string) as Record<string, Record<string, unknown>>;
+    expect(persisted.device.privKey).toBeUndefined();
+    expect(persisted.account.token).toBeUndefined();
+
+    const restarted = createLocalStorageSyncStorage(key, vault);
+    await restarted.settled();
+
+    expect(restarted.read().device.id).toBe(device.id);
+    expect(restarted.read().device.privKey).toBe(device.privKey);
+    expect(restarted.read().account?.token).toBe("session-1");
+    expect(resolveDek(restarted.read())).toEqual(dek);
+    localStorage.removeItem(key);
   });
 
   it("createAccount configure le compte puis emitLocal produit l'op deviceId:1 scellée", async () => {

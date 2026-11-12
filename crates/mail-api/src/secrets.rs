@@ -48,6 +48,16 @@ pub enum AccountSecrets {
         username: String,
         password: String,
     },
+    /// Clé privée de l'appareil de synchronisation E2EE, rangée sous
+    /// `sync:device` : elle déchiffre les documents du carnet.
+    SyncDevice {
+        private_key: String,
+    },
+    /// Jeton de session d'un compte de synchronisation, rangé par compte
+    /// (`sync:<COMPTE>`).
+    SyncAccount {
+        token: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

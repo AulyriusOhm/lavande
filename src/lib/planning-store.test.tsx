@@ -364,6 +364,44 @@ describe("PlanningProvider · interrupteurs de synchronisation", () => {
     vi.unstubAllGlobals();
   });
 
+  it("attend les secrets du coffre avant de démarrer la synchro", async () => {
+    const inner = configuredStorage();
+    const listeners = new Set<() => void>();
+    let vaulted = false;
+    const storage: SyncStorage = {
+      read: () => inner.read(),
+      write: (state) => inner.write(state),
+      subscribe(listener) {
+        const stop = inner.subscribe(listener);
+        listeners.add(listener);
+        return () => {
+          stop();
+          listeners.delete(listener);
+        };
+      },
+      vaulted: () => vaulted,
+      settled: () => Promise.resolve(),
+    };
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ ops: [], nextSeq: 0, hasMore: false }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    mountWithPrefs(storage, { sync: { kanban: true, calendar: false } });
+
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    vaulted = true;
+    act(() => {
+      for (const listener of [...listeners]) listener();
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    vi.unstubAllGlobals();
+  });
+
   it("relance la synchronisation quand le Kanban est réactivé", () => {
     const storage = configuredStorage();
     const fetchMock = vi.fn(async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ ops: [], nextSeq: 0, hasMore: false }) }));

@@ -15,6 +15,7 @@ import {
   type SyncOp,
   type SyncState,
 } from "./storage";
+import { createMemoryVault, type SecretVault } from "./vault";
 
 const KEY = "lavande.test.sync";
 
@@ -73,7 +74,7 @@ describe("createLocalStorageSyncStorage", () => {
     expect(state.cursor).toBe(0);
   });
 
-  it("normalise un état partiellement corrompu", () => {
+  it("normalise un état partiellement corrompu (identité d'appareil illisible)", () => {
     localStorage.setItem(
       KEY,
       JSON.stringify({
@@ -89,6 +90,26 @@ describe("createLocalStorageSyncStorage", () => {
     expect(state.cursor).toBe(0);
     expect(state.outbox).toEqual([]);
     expect(state.device.privKey).toHaveLength(43);
+    expect(state.docs).toEqual({});
+    expect(state.status).toEqual({});
+  });
+
+  it("garde les documents d'un état dont l'appareil est encore lisible", () => {
+    localStorage.setItem(
+      KEY,
+      JSON.stringify({
+        proto: 1,
+        device: { id: "device-1", pubKey: "pub", name: "Portable", platform: "web" },
+        cursor: "x",
+        outbox: "nope",
+        docs: { "task:a": { id: "a", kind: "task" }, perdu: null },
+        status: 3,
+      }),
+    );
+    const state = createLocalStorageSyncStorage(KEY).read();
+    expect(state.device.id).toBe("device-1");
+    expect(state.cursor).toBe(0);
+    expect(state.outbox).toEqual([]);
     expect(Object.keys(state.docs)).toEqual([docKey("task", "a")]);
     expect(state.docs[docKey("task", "a")]).toEqual({
       id: "a",
@@ -153,8 +174,145 @@ describe("createLocalStorageSyncStorage", () => {
   });
 });
 
+const ACCOUNT = {
+  serverUrl: "http://sync.test",
+  userId: "user-1",
+  email: "a@b.c",
+  accountSalt: "salt-1",
+  token: "session-1",
+};
+
+function readable(state: SyncState): Record<string, unknown> {
+  return JSON.parse(localStorage.getItem(KEY) as string) as Record<string, unknown>;
+}
+
+function legacyState(): { state: SyncState; dek: Uint8Array } {
+  const device = createDevice("Portable", "web");
+  const dek = randomDek();
+  const state: SyncState = {
+    ...emptyState(device),
+    account: ACCOUNT,
+    envelopes: { devices: { [device.id]: wrapForDevice(dek, device.pubKey) } },
+  };
+  localStorage.setItem(KEY, JSON.stringify(state));
+  return { state, dek };
+}
+
+describe("createLocalStorageSyncStorage · coffre des secrets", () => {
+  it("migre clé privée et jeton du localStorage vers le coffre, sans perdre la clé", async () => {
+    const { state, dek } = legacyState();
+    const vault = createMemoryVault();
+    const storage = createLocalStorageSyncStorage(KEY, vault);
+    expect(storage.vaulted()).toBe(false);
+
+    await storage.settled();
+
+    expect(storage.vaulted()).toBe(true);
+    expect(vault.snapshot()).toEqual({
+      deviceKey: state.device.privKey,
+      accountTokens: { "user-1": "session-1" },
+    });
+    const persisted = readable(state);
+    expect((persisted.device as Record<string, unknown>).privKey).toBeUndefined();
+    expect((persisted.account as Record<string, unknown>).token).toBeUndefined();
+    expect(persisted.envelopes).toEqual(state.envelopes);
+
+    const read = storage.read();
+    expect(read.device.privKey).toBe(state.device.privKey);
+    expect(read.account).toEqual(ACCOUNT);
+    expect(resolveDek(read)).toEqual(dek);
+  });
+
+  it("relit les secrets du coffre quand le localStorage n'en porte plus", async () => {
+    const device = createDevice("Portable", "web");
+    const dek = randomDek();
+    const state: SyncState = {
+      ...emptyState(device),
+      envelopes: { devices: { [device.id]: wrapForDevice(dek, device.pubKey) } },
+    };
+    const stored = { ...state, device: { ...device, privKey: "" } };
+    localStorage.setItem(KEY, JSON.stringify(stored));
+    const vault = createMemoryVault({ deviceKey: device.privKey });
+
+    const storage = createLocalStorageSyncStorage(KEY, vault);
+    await storage.settled();
+
+    expect(storage.read().device.privKey).toBe(device.privKey);
+    expect(resolveDek(storage.read())).toEqual(dek);
+    expect(readable(state).device).toMatchObject({ id: device.id, pubKey: device.pubKey });
+    expect((readable(state).device as Record<string, unknown>).privKey).toBeUndefined();
+  });
+
+  it("garde un secret dans le localStorage jusqu'à l'acquittement du coffre", async () => {
+    const vault = createMemoryVault();
+    const storage = createLocalStorageSyncStorage(KEY, vault);
+    await storage.settled();
+    const created = storage.read();
+    await storage.settled();
+
+    expect(vault.snapshot().deviceKey).toBe(created.device.privKey);
+    expect(readable(created).device).not.toHaveProperty("privKey");
+    expect(storage.read().device.privKey).toBe(created.device.privKey);
+
+    storage.write({ ...storage.read(), account: { ...ACCOUNT } });
+    expect((readable(created).account as Record<string, unknown>).token).toBe("session-1");
+
+    await storage.settled();
+    expect(vault.snapshot().accountTokens).toEqual({ "user-1": "session-1" });
+    expect(readable(created).account).not.toHaveProperty("token");
+    expect(storage.read().account?.token).toBe("session-1");
+  });
+
+  it("retire le jeton du coffre à la déconnexion", async () => {
+    const vault = createMemoryVault();
+    const storage = createLocalStorageSyncStorage(KEY, vault);
+    await storage.settled();
+    storage.write({ ...storage.read(), account: { ...ACCOUNT } });
+    await storage.settled();
+    expect(vault.snapshot().accountTokens).toEqual({ "user-1": "session-1" });
+
+    storage.write({ ...storage.read(), account: undefined });
+    await storage.settled();
+
+    expect(vault.snapshot().accountTokens).toEqual({});
+    expect(storage.read().account).toBeUndefined();
+  });
+
+  it("replie sur le localStorage quand le démon ne répond pas", async () => {
+    const { state, dek } = legacyState();
+    const unreachable = () => Promise.reject(new Error("démon absent"));
+    const vault: SecretVault = {
+      readDeviceKey: unreachable,
+      writeDeviceKey: unreachable,
+      readAccountToken: unreachable,
+      writeAccountToken: unreachable,
+      deleteAccountToken: unreachable,
+    };
+    const storage = createLocalStorageSyncStorage(KEY, vault);
+
+    await storage.settled();
+
+    expect(storage.vaulted()).toBe(true);
+    expect((readable(state).device as Record<string, unknown>).privKey).toBe(state.device.privKey);
+    expect((readable(state).account as Record<string, unknown>).token).toBe("session-1");
+    expect(storage.read().device.privKey).toBe(state.device.privKey);
+    expect(resolveDek(storage.read())).toEqual(dek);
+  });
+
+  it("sans coffre, garde les secrets dans le localStorage (mode démo)", async () => {
+    const { state, dek } = legacyState();
+    const storage = createLocalStorageSyncStorage(KEY);
+    expect(storage.vaulted()).toBe(true);
+
+    await storage.settled();
+
+    expect((readable(state).device as Record<string, unknown>).privKey).toBe(state.device.privKey);
+    expect(resolveDek(storage.read())).toEqual(dek);
+  });
+});
+
 describe("createMemoryStorage", () => {
-  it("garde l'état en mémoire et notifie", () => {
+  it("garde l'état en mémoire et notifie", async () => {
     const initial = emptyState(createDevice("Portable", "web"));
     const storage = createMemoryStorage(initial);
     const listener = vi.fn();
@@ -164,6 +322,8 @@ describe("createMemoryStorage", () => {
     storage.write(next);
     expect(storage.read()).toBe(next);
     expect(listener).toHaveBeenCalledTimes(1);
+    expect(storage.vaulted()).toBe(true);
+    await expect(storage.settled()).resolves.toBeUndefined();
   });
 });
 

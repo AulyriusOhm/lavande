@@ -16,6 +16,7 @@ pub mod private_file;
 pub mod routes;
 pub mod secrets;
 pub mod state;
+pub mod sync_secrets;
 pub mod token;
 
 use std::path::PathBuf;
@@ -84,6 +85,7 @@ pub fn app(state: Arc<AppState>) -> Router {
         .merge(routes::oauth::router())
         .merge(routes::pgp::router())
         .merge(routes::search::router())
+        .merge(routes::sync::router())
         .merge(routes::events::router())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

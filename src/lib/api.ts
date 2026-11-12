@@ -298,6 +298,15 @@ export type GoogleEventsInput = {
   time_max?: string;
 };
 
+/**
+ * Secrets de la synchronisation E2EE : ils vivent dans le coffre du démon
+ * (trousseau système ou fichier chiffré), plus dans le `localStorage` du front.
+ * `null` : le coffre n'en a pas encore.
+ */
+export type SyncDeviceKey = { private_key: string | null };
+
+export type SyncAccountToken = { token: string | null };
+
 /** Les identifiants ne voyagent qu'une fois, à la création de la source. */
 export type CaldavSourceInput = {
   url: string;
@@ -624,6 +633,23 @@ export const mailApi = {
 
   oauthStart: (input: OAuthStartInput) =>
     request<ApiOAuthStart>("/oauth/start", { method: "POST", body: input }),
+
+  syncDeviceKey: () => request<SyncDeviceKey>("/sync/secrets/device"),
+
+  setSyncDeviceKey: (privateKey: string) =>
+    request<void>("/sync/secrets/device", { method: "PUT", body: { private_key: privateKey } }),
+
+  syncAccountToken: (accountId: string) =>
+    request<SyncAccountToken>(`/sync/secrets/accounts/${encodeURIComponent(accountId)}`),
+
+  setSyncAccountToken: (accountId: string, token: string) =>
+    request<void>(`/sync/secrets/accounts/${encodeURIComponent(accountId)}`, {
+      method: "PUT",
+      body: { token },
+    }),
+
+  deleteSyncAccountToken: (accountId: string) =>
+    request<void>(`/sync/secrets/accounts/${encodeURIComponent(accountId)}`, { method: "DELETE" }),
 
   oauthStatus: (session: string) =>
     request<ApiOAuthStatus>(`/oauth/status?session=${encodeURIComponent(session)}`),

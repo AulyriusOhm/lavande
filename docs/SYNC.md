@@ -20,7 +20,8 @@ Portée : entités `task` et `suggestion` du kanban de planification. Serveur : 
 | `src/lib/sync/crypto.ts` | Argon2id, HKDF, HMAC, X25519, XChaCha20-Poly1305, enveloppes, scellement d'op |
 | `src/lib/sync/clock.ts` | horloge hybride logique (HLC) |
 | `src/lib/sync/merge.ts` | fusion LWW par champ, tombstones, ids déterministes |
-| `src/lib/sync/storage.ts` | état persistant `lavande.sync.v1`, outbox, compteur d'`opId` |
+| `src/lib/sync/storage.ts` | état persistant `lavande.sync.v1` (sans secret : docs, refs, outbox, compteur d'`opId`), migration des secrets |
+| `src/lib/sync/vault.ts` | coffre des secrets du front : clé privée d'appareil et jetons, gardés par le démon (§9.1) |
 | `src/lib/sync/client.ts` | client HTTP (`fetch`, timeout 15 s) |
 | `src/lib/sync/engine.ts` | moteur : comptes, appairage, push/pull, backoff, états |
 | `src/lib/planning-store.tsx` | projection `Doc` → `Task`/`MailSuggestion`, émission locale hors ligne |
@@ -294,11 +295,11 @@ la voie sans mot de passe.
 | `kek` | 32 o | jamais | dérivée | enveloppe (a) |
 | `dek` | 32 o | jamais en clair | mémoire + enveloppes | chiffrement des ops |
 | `indexKey` | 32 o | jamais | dérivée de la DEK | `entityRef` |
-| `devicePriv` (X25519) | 32 o | jamais | `localStorage` | ouverture de l'enveloppe (b) |
+| `devicePriv` (X25519) | 32 o | jamais | coffre du démon (§9.1) | ouverture de l'enveloppe (b) |
 | enveloppe (a) | ~120 o | oui (`users.key_envelope`) | oui | récupération de la DEK par mot de passe |
 | `accountSalt` | 16 o | oui (`users.account_salt`) | oui | Argon2id |
 | `auth_salt` | 16 o | oui (`users.auth_salt`) | non | sel du vérifieur |
-| token de session | 32 o | SHA-256 seulement (`sessions.token_hash`) | oui | `Authorization: Bearer` |
+| token de session | 32 o | SHA-256 seulement (`sessions.token_hash`) | coffre du démon (§9.1) | `Authorization: Bearer` |
 | `pollSecret` | ≥ 16 o (client : 32) | SHA-256 de sa forme base64url | oui | retrait du résultat d'appairage |
 | code d'appairage | 6 car. | SHA-256 (`pairing_sessions.code_hash`) | oui, éphémère | claim |
 
@@ -341,13 +342,13 @@ qui permet de retirer le résultat : deviner le code ne suffit pas. Aucun compte
 | Mot de passe compromis | changer le mot de passe n'est **pas** possible (`authKey`/`auth_verifier` figés, aucun endpoint) | nouveau compte ; les données de l'ancien restent accessibles à qui détient `authKey`/`dek` |
 | Mot de passe oublié | pas de récupération | idem |
 | Code d'appairage divulgué | il ne donne rien sans `pollSecret` ; au pire un `claim` par un compte tiers, qui ne peut pas produire d'enveloppe utilisable et fait échouer l'appairage (`pairing_already_claimed`) | refaire un `start` |
-| Appareil réinstallé | la DEK et l'enveloppe (b) vivaient dans `localStorage` : perdues | se reconnecter avec le mot de passe (enveloppe (a) restituée par `POST /auth/login`) ou ré-appairer |
+| Appareil réinstallé | la DEK et l'enveloppe (b) vivaient dans `localStorage` : perdues (la clé privée d'appareil, elle, survit dans le coffre du démon) | se reconnecter avec le mot de passe (enveloppe (a) restituée par `POST /auth/login`) ou ré-appairer |
 
 ### 6.7 Limites de sécurité assumées
 
 | Limite | Conséquence |
 | --- | --- |
-| clés privées X25519, enveloppes et `token` dans `localStorage` (`lavande.sync.v1`) | un XSS exfiltre la DEK ; keystore natif Tauri non branché |
+| enveloppes de la DEK, `docs` déchiffrés et `refs` dans `localStorage` (`lavande.sync.v1`) | un XSS lit les documents et le jeton de session courant ; clé privée X25519 et jetons ne sont plus dans le `localStorage` (coffre du démon), mais restent lisibles en mémoire du front |
 | aucune attestation matérielle, aucune vérification croisée des clés d'appareil | un appareil compromis est un client légitime ; l'appairage repose sur le code + `pollSecret` |
 | pas de rotation de DEK, pas de nouveau `indexKey` | DEK compromise = historique lisible |
 | `entityRef` stable par entité | le serveur corrèle toutes les ops d'une entité (métadonnée assumée) |
@@ -535,8 +536,11 @@ implique `hasMore: true` et une page suivante ; l'engine boucle jusqu'à `hasMor
 
 ### 9.1 État persistant (`localStorage`, clé `lavande.sync.v1`)
 
+Deux parts. `SyncState` est l'état complet, en mémoire ; `localStorage` n'en reçoit que la part non
+sensible (`device.privKey` et `account.token` en sont retirés).
+
 ```ts
-type SyncState = {
+type SyncState = {                     // en mémoire
   proto: 1;
   device: { id: string; name: string; platform: string; pubKey: string; privKey: string;
             schemaVersion: number; opCounter: number };
@@ -555,14 +559,29 @@ Toute lecture passe par une normalisation tolérante (`normalizeState`) : une en
 reconstruite ou écartée, jamais fatale. Le HLC n'est pas persisté. DEK et `indexKey` sont recalculés ou
 ouverts à la demande, jamais stockés en clair.
 
+Les deux secrets vivent dans le coffre du démon (trousseau système ou fichier chiffré, comme les
+identifiants CalDAV), sous des identifiants stables : `sync:device` pour la clé privée d'appareil,
+`sync:<userId>` pour le jeton de session. Routes : `GET|PUT /api/sync/secrets/device` et
+`GET|PUT|DELETE /api/sync/secrets/accounts/{id}`, derrière le jeton du démon ; aucune valeur n'est
+journalisée. `src/lib/sync/vault.ts` en est le client.
+
+Invariant de migration : un secret n'est retiré du `localStorage` qu'après l'acquittement du coffre. Un
+`PUT` échoué (démon absent, mode démo) laisse le secret en place — repli local assumé, rien n'est perdu.
+Le premier `read()` migre un état d'avant G3 (`device.privKey`/`account.token` inline) vers le coffre, puis
+réécrit l'entrée sans eux.
+
 ### 9.2 Démarrage
 
-1. `storage.read()` : état absent → création d'un appareil (`randomUuid()`, paire X25519,
-   `schemaVersion = LOCAL_SCHEMA_VERSION`) — `phase = "unconfigured"`.
-2. `PlanningProvider` seed les fixtures si `docs` ne contient aucune entité `task`/`suggestion` : en
+1. `createLocalStorageSyncStorage` : lecture de l'état persisté, secrets en mémoire, puis
+   `settled()` (asynchrone) : `PUT` des secrets inline (migration), `GET` de ceux qui manquent. Tant que
+   `vaulted()` est faux, `PlanningProvider` ne démarre pas le moteur : une mutation émise sans la DEK
+   partirait sans op.
+2. `storage.read()` : état absent → création d'un appareil (`randomUuid()`, paire X25519,
+   `schemaVersion = LOCAL_SCHEMA_VERSION`), clé privée déposée au coffre — `phase = "unconfigured"`.
+3. `PlanningProvider` seed les fixtures si `docs` ne contient aucune entité `task`/`suggestion` : en
    `unconfigured`, les mutations passent par `applyLocal` (référence `${kind}:${id}`, aucun chiffrement,
    aucune op) ; les docs seedés ne partent pas tant qu'aucun compte n'existe.
-3. Compte présent → `phase = "offline"` ; `engine.start()` branche les écouteurs `online`/`offline` et
+4. Compte présent → `phase = "offline"` ; `engine.start()` branche les écouteurs `online`/`offline` et
    l'intervalle de 30 s. **Aucune synchro n'est déclenchée au montage.**
 
 ### 9.3 Mutation locale (`engine.emitLocal`)
@@ -651,7 +670,7 @@ serveur. `pending` = longueur de l'outbox.
 | `pairing_sessions` jamais purgée | lignes expirées accumulées, `wrapped_key` conservé côté serveur | tâche de purge (`delete … where expires_at < now()`) |
 | aucune rotation de DEK / d'`indexKey` | DEK compromise = historique lisible ; `entityRef` figé | nouvelle DEK + réémission (nouveaux `entityRef`) |
 | `subtasks` = un champ | deux coches simultanées : une perdue | id stable par sous-tâche, `subtasks.<id>` |
-| clés privées et enveloppes dans `localStorage` | XSS ⇒ DEK | keystore natif Tauri |
+| documents déchiffrés dans `localStorage` | XSS ⇒ lecture du carnet | stockage chiffré côté client |
 | `MIN_CLIENT_SCHEMA` global, appliqué seulement à `/devices` et `/pairing/start` | un vieux build peut encore pousser des ops `schemaVersion` obsolète après appairage | contrôle en tête de `/ops`, seuil par appareil |
 | limitations de débit en mémoire | non partagées entre instances, perdues au redémarrage | limiteur en base/Redis |
 | `mailKey = account:mailId` (fixtures locales) | ids de suggestion instables si `mailId` change | `account:messageId` (RFC 822) + migration |
