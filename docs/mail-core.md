@@ -191,6 +191,93 @@ pub fn parse_message(raw: &[u8]) -> Result<ParsedMessage, MailError>;
   individuels (`split_ids`).
 - Erreur : `MailError::Mime("could not parse message")` si `mail-parser` refuse le message.
 
+### Contrat d'assainissement HTML (`mime.rs`)
+
+`sanitize_html(html) -> Option<String>` (corps stocké) et `sanitize_html_with_images(html)`
+(relu à la demande du lecteur) partagent le **même** filtre, à une différence près : les images.
+`None` quand plus aucun texte visible n'est laissé (ou, avec images, aucun `<img>`).
+
+**Tags** (31) : `p br div span a ul ol li b strong i em u s blockquote code pre h1 h2 h3 h4 table
+thead tbody tr td th hr center font caption` (+ `img` quand `images`). Tout autre tag perd sa
+balise et garde son texte — `script`, `iframe`, `object`, `embed`, `form`, `input`, `meta`, `link`,
+`base`, `svg`, `button`… n'existent pas dans la sortie. Les éléments `<style>` sont retirés du
+markup eux aussi, mais leur CSS est extrait **avant** ammonia et réinjecté assaini (voir plus bas).
+
+**Attributs conservés**, tous validés valeur par valeur (`attribute_filter`) :
+
+| Élément | Attributs |
+| --- | --- |
+| tous | `title`, `class`, `style` (filtré, voir plus bas) |
+| `a` | `href` — schémas `http`, `https`, `mailto` seulement ; `rel="noopener noreferrer"` et `target="_blank"` ajoutés |
+| `table` | `width`, `align` (`left`/`center`/`right`), `cellpadding`, `cellspacing`, `border` |
+| `td`, `th` | `colspan`, `rowspan`, `width`, `align` (`left`/`center`/`right`/`justify`), `valign` (`top`/`middle`/`bottom`/`baseline`), `bgcolor` |
+| `tr` | `align`, `valign`, `bgcolor` |
+| `font` | `color`, `face` (noms de police), `size` (échelle 1-7) |
+| `img` (`images` seulement) | `src` (URL absolue `http(s)`, jamais `mailto:`/`data:`/relative), `alt`, `width`, `height` |
+
+`width`/`height`/`cellpadding`/`cellspacing`/`border` : chiffres ou pourcentage de 4 chiffres au
+plus, sinon l'attribut disparaît. `bgcolor`/`font color` : `#rgb`, `#rrggbb`, `rgb()`/`rgba()`
+numériques, ou un nom de couleur CSS de la liste fermée `CSS_COLORS`.
+
+Ces attributs dépréciés ne sont pas convertis en CSS : les navigateurs les honorent encore, et le
+mail garde exactement la géométrie (largeurs, gouttières, fonds de cellule) que son auteur a écrite.
+
+**`style` inline** : les déclarations sont découpées puis **re-sérialisées** depuis leurs tokens
+(`cssparser`), propriété par propriété. Whitelist :
+
+```
+background background-color border* border-collapse border-spacing box-shadow clear color
+direction display float font-family font-size font-style font-weight height letter-spacing
+line-height list-style* margin* max-height max-width min-height min-width opacity overflow-wrap
+padding* table-layout text-align text-decoration text-indent text-transform vertical-align
+white-space width word-break word-spacing
+```
+
+(`*` = n'importe quel longhand : `padding-top`, `margin-left`, `border-bottom-left-radius`, …)
+`display` n'accepte que `block inline inline-block flex table table-row table-cell list-item none`.
+
+Une déclaration est **rejetée** (les autres survivent) si :
+
+- la propriété n'est pas dans la whitelist — donc `position`, `z-index`, `overflow`, `inset`,
+  `clip`, `cursor`, `behavior`, `-moz-binding`, `content`, `filter`, `animation`… sont refusées ;
+- la valeur contient un `url(`, un `expression(`, `javascript:`, `vbscript:`, `behavior`,
+  `-moz-binding` — la recherche porte sur les tokens **décodés**, donc `u\72 l(…)` (échappement
+  CSS) et `url/**/(…)` (commentaire intercalé) tombent aussi ;
+- la valeur contient un `@`, un `<`, un `>`, une accolade ou une chaîne/URL malformée
+  (`BadString`, `BadUrl`), ou une déclaration mal fermée. Ce refus est ce qui empêche une
+  évasion de la balise `<style>`.
+
+Les commentaires CSS sont retirés **avant** l'analyse (hors chaînes), et `!important` est conservé.
+
+**Blocs `<style>`** : extraits du HTML brut **avant** ammonia (l'extraction va jusqu'au premier
+`</style`, donc le contenu ne peut pas refermer l'élément), assainis par le même filtre, puis
+réinjectés en tête du corps nettoyé :
+
+```html
+<style>.promo{background-color:#8b7cf6;color:#fff}</style><table width="600" …>…
+```
+
+Le document du lecteur met sa feuille de repli dans le `<head>` (`src/components/mail-body.tsx`) :
+les blocs du mail arrivent **après** dans l'ordre du document et gagnent donc à spécificité égale,
+comme dans Gmail. Un bloc est assaini règle par règle : chaque règle qualifiée garde son sélecteur
+(validé : identifiants, classes, attributs, pseudo-classes, combinateurs) et ses déclarations
+filtrées ; `@media` est conservé avec ses règles internes (3 niveaux) ; `@import`, `@font-face`,
+`@charset`, `@supports` et tout autre at-rule sont supprimés en bloc. Toute séquence `</` de la
+sortie est neutralisée en `<\/`, et un mail réduit à un bloc `<style>` n'a pas de corps (aucun
+texte visible).
+
+**Toujours retirés** : scripts et `on*`, `srcset`, images de tracking (à l'ingestion), `iframe`,
+`form`/`input`/`button`, `meta`/`link`/`base`, `svg`/`object`/`embed`, tout `url()` y compris dans
+`background`, `position`/`z-index`/`overflow` (redressing), et les schémas d'URL autres que
+`http`/`https` (et `mailto` pour les liens).
+
+**Aperçu** : `html_to_text` ignore le contenu de `style` et `script`, donc le CSS réinjecté ne
+pollue ni `body_text` ni `preview`.
+
+Côté front, `htmlImagesOf(source, encrypted)` ne refuse que le couple *message chiffré + compte dont
+l'interrupteur PGP est fermé* : un message en clair n'a besoin d'aucune clé, sa politique de compte
+ne le concerne pas.
+
 ### Threading (`threading.rs`)
 
 ```rust
@@ -919,7 +1006,7 @@ clair (`usesCleartextTraffic`), le démon n'écoutant que sur la boucle locale.
 
 ## Tests
 
-### Hors-ligne (174 tests, `cargo test --workspace`)
+### Hors-ligne (192 tests, `cargo test --workspace`)
 
 Presque tout est dans `tests/`, sans réseau ; les `#[cfg(test)] mod tests` de `src/` couvrent le
 store (pièces jointes emportées par `delete_messages`, `Store: Send + Sync`, migrations de colonnes),
@@ -928,7 +1015,8 @@ le MIME (assainissement HTML), `sync::auto_syncs` et le `Content-Disposition` de
 | Fichier | Tests | Couverture |
 | --- | --- | --- |
 | `tests/config.rs` | 9 | SPECIAL-USE prioritaire sur le nom, noms anglais/français, `Other`, `path_for`, `validate` (TLS/STARTTLS acceptés, `plain` refusé, champs vides), `Debug` sans secret |
-| `tests/mime.rs` | 11 | message texte simple, quoted-printable, repli HTML → texte, préférence `text/plain`, métadonnées de pièces jointes, `PgpState`, aperçu compacté/tronqué, en-têtes de threading, en-têtes absents |
+| `tests/mime.rs` | 17 | message texte simple, quoted-printable, repli HTML → texte, préférence `text/plain`, métadonnées de pièces jointes, `PgpState`, aperçu compacté/tronqué, en-têtes de threading, en-têtes absents |
+| `tests/sanitize.rs` | 18 | `style` inline préservé et normalisé, valeurs qui chargent/exécutent refusées (`url(`, `expression(`, `position`, `behavior`, `-moz-binding`, `javascript:`), obfuscation (échappements CSS, commentaires intercalés, casse mixte, `image-set(url())`), déclarations mal fermées, `display` restreint, blocs `<style>` assainis et hissés avant le corps, `@media` conservé, `@import`/`@font-face`/`@supports` supprimés, évasion `</style>` neutralisée, attributs de table conservés/validés, `center`/`font`/`caption`, fixture « mail marketing » (table 600 px, styles inline, bloc `<style>`, `bgcolor`) et pixel de tracking toujours retiré du corps stocké |
 | `tests/threading.rs` | 7 | `References` prioritaire, repli `In-Reply-To`, repli sujet (préfixes + accents), isolation par compte, `Message-ID` de repli, `split_ids` |
 | `tests/oauth.rs` | 4 | payload XOAUTH2, cache de l'access token, rafraîchissement après expiration, message d'erreur lisible sans secret (serveur HTTP local) |
 | `tests/store.rs` | 28 | upsert idempotent, flags/corps/`delete_message`, `flags_in_folder`, `delete_messages` (vide → 0, UID inconnus ignorés, pièces jointes emportées), `set_flags_batch`, `list_accounts`/`list_folders`/`delete_account`, tri `date DESC` + pagination, agrégation des threads, absence de préfixe expéditeur dans `Sent`, migration rejouable, `relink_replies`, `clear_folder`, interrupteur PGP (défaut ouvert, par compte, survit à `upsert_account`, compte inconnu refusé) et `close_encrypted_bodies` (messages chiffrés seuls, état PGP conservé) |
@@ -1001,8 +1089,12 @@ Variables lues par `scripts/mail-test-server.sh` : `LAVANDE_MAIL_TEST_DIR`, `…
 - **IDLE sur INBOX seulement.** La veille surveille le dossier de réception de chaque compte ; les
   autres dossiers ne se rafraîchissent qu'à la demande, et il n'y a rien côté serveur pour pousser
   vers un appareil éteint (pas de service de notification type UnifiedPush).
-- **Images des mails retirées.** Le HTML est assaini à l'ingestion sans `img` (pixels de tracking),
-  et sans feuille de style : le rendu est fonctionnel mais plus sobre que dans le mail d'origine.
+- **Images des mails retirées à l'ingestion.** Le corps stocké n'a aucun `img` (pixels de
+  tracking) ; elles ne reviennent que sur demande, message par message, via `html-images`. Le
+  reste du rendu suit le mail : styles inline et blocs `<style>` filtrés, attributs de table,
+  `center`/`font`. Ce qui n'est pas dans la whitelist CSS (positionnements absolus, `url()`,
+  `@font-face`) est perdu : un mail qui découpe sa mise en page en `position:absolute` retombe sur
+  un flux normal.
 - **OAuth2 sans identifiant embarqué** : un `client_id` doit être enregistré (ou fourni par
   l'environnement). Le parcours n'est validé qu'avec un fournisseur factice et GreenMail, pas contre
   Google/Microsoft en vrai.

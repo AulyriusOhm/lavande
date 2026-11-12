@@ -302,7 +302,6 @@ fn html_is_sanitized_at_ingestion() {
     let out = parsed.body_html.as_deref().expect("html");
     for forbidden in [
         "<script",
-        "<style",
         "<iframe",
         "<img",
         "<form",
@@ -313,10 +312,12 @@ fn html_is_sanitized_at_ingestion() {
         "onclick",
         "onerror",
         "onload",
-        "style=",
+        "position",
     ] {
         assert!(!out.contains(forbidden), "{forbidden} in {out}");
     }
+    assert!(out.starts_with("<style>p{color:red}</style>"), "{out}");
+    assert!(out.contains(r#"style="color:red""#), "{out}");
     assert!(out.contains("Bonjour <b>monde</b>"), "{out}");
     assert!(out.contains("href=\"https://example.com/x\""), "{out}");
     assert!(out.contains("title=\"exemple\""), "{out}");
@@ -329,6 +330,16 @@ fn html_is_sanitized_at_ingestion() {
         parsed.preview
     );
     assert!(!parsed.preview.contains("javascript"), "{}", parsed.preview);
+    assert!(!parsed.preview.contains("color:red"), "{}", parsed.preview);
+    assert!(
+        !parsed
+            .body_text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("color"),
+        "{}",
+        parsed.body_text.as_deref().unwrap_or_default()
+    );
 }
 
 #[test]

@@ -4,6 +4,11 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use cssparser::{
+    parse_important, AtRuleParser, BasicParseErrorKind, CowRcStr, DeclarationParser, ParseError,
+    Parser, ParserState, QualifiedRuleParser, RuleBodyItemParser, RuleBodyParser, StyleSheetParser,
+    ToCss, Token,
+};
 use mail_parser::{Address as RawAddress, HeaderValue, MessageParser, MimeHeaders, PartType};
 
 use crate::error::MailError;
@@ -194,11 +199,13 @@ fn text_body_of(message: &mail_parser::Message<'_>, body_html: Option<&str>) -> 
 
 /// Repli texte du HTML assaini : les balises de bloc deviennent des sauts de
 /// ligne (sinon les cellules d'un tableau se collent), les autres disparaissent,
-/// puis le texte est débarrassé de ses caractères invisibles et de ses espaces.
+/// le contenu de `style` et de `script` est ignoré, puis le texte est débarrassé
+/// de ses caractères invisibles et de ses espaces.
 fn html_to_text(html: &str) -> Option<String> {
     let mut text = String::with_capacity(html.len());
     let mut in_tag = false;
     let mut tag = String::new();
+    let mut skipped: Option<String> = None;
     for character in html.chars() {
         match character {
             '<' => {
@@ -207,13 +214,26 @@ fn html_to_text(html: &str) -> Option<String> {
             }
             '>' if in_tag => {
                 in_tag = false;
+                let closing = tag.starts_with('/');
                 let name = tag
                     .trim_start_matches('/')
-                    .split([' ', '/'])
+                    .split([' ', '\t', '\n', '\r', '/'])
                     .next()
-                    .unwrap_or("");
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let ends = matches!(&skipped, Some(open) if closing && name == *open);
+                if skipped.is_some() {
+                    if ends {
+                        skipped = None;
+                    }
+                    continue;
+                }
+                if !closing && matches!(name.as_str(), "style" | "script") {
+                    skipped = Some(name);
+                    continue;
+                }
                 if matches!(
-                    name,
+                    name.as_str(),
                     "p" | "br"
                         | "div"
                         | "tr"
@@ -226,12 +246,13 @@ fn html_to_text(html: &str) -> Option<String> {
                         | "pre"
                 ) {
                     text.push('\n');
-                } else if matches!(name, "td" | "th") {
+                } else if matches!(name.as_str(), "td" | "th") {
                     text.push(' ');
                 }
             }
             _ if in_tag => tag.push(character),
-            _ => text.push(character),
+            _ if skipped.is_none() => text.push(character),
+            _ => {}
         }
     }
     let decoded = decode_entities(&text);
@@ -321,8 +342,9 @@ fn to_utc(date: &mail_parser::DateTime) -> Option<DateTime<Utc>> {
     Utc.from_utc_datetime(&naive).checked_sub_signed(offset)
 }
 
-/// Tags kept by `sanitize_html`: structure and inline emphasis only.
-const HTML_TAGS: [&str; 28] = [
+/// Tags kept by `sanitize_html`: structure and inline emphasis only, plus the
+/// presentational helpers a mail still relies on (`center`, `font`, `caption`).
+const HTML_TAGS: [&str; 31] = [
     "p",
     "br",
     "div",
@@ -351,6 +373,9 @@ const HTML_TAGS: [&str; 28] = [
     "td",
     "th",
     "hr",
+    "center",
+    "font",
+    "caption",
 ];
 
 /// The HTML body of a raw message with its remote images kept, ready to render
@@ -374,31 +399,35 @@ pub fn html_with_images(raw: &[u8], keyring: &PgpKeyring) -> Result<Option<Strin
     Ok(html_source(&source).and_then(|html| sanitize_html_with_images(&html)))
 }
 
-/// Strips everything a mail can use to break out of the message view: only the
-/// tags of `HTML_TAGS` survive, with `href` (http/https/mailto only), `title`,
-/// `colspan` and `rowspan`. `script`/`style` keep nothing, images (tracking
-/// pixels) are dropped, `on*`/`style`/`srcset` and unknown tags lose their tag
-/// but keep their text, links get `rel="noopener noreferrer"` and
-/// `target="_blank"`. Returns `None` when no visible text is left.
+/// Strips everything a mail can use to break out of the message view and keeps
+/// what makes its design: only the tags of `HTML_TAGS` survive, with `href`
+/// (http/https/mailto only), `title`, `class`, the table geometry attributes
+/// (`width`, `align`, `valign`, `bgcolor`, `cellpadding`, `cellspacing`,
+/// `border`) and a `style` attribute / `<style>` blocks filtered by
+/// `sanitize_declarations`. `script`/`iframe`/`form`/`on*`/`srcset` and unknown
+/// tags lose their tag but keep their text, images (tracking pixels) are
+/// dropped, links get `rel="noopener noreferrer"` and `target="_blank"`.
+/// Returns `None` when no visible text is left.
 pub fn sanitize_html(html: &str) -> Option<String> {
-    let cleaned = html_sanitizer(false).clean(html).to_string();
-    if visible_text(&cleaned).is_empty() {
-        return None;
-    }
-    Some(open_in_new_tab(cleaned))
+    sanitize(html, false)
 }
 
 /// Same allow-list as `sanitize_html`, plus `img` with an absolute http(s)
 /// `src`: the reader opted in for this message, showing its remote images is
-/// what they asked for. `script`, `style`, `on*`, `srcset`, the inline `style`
-/// attribute and `javascript:`/`data:`/`mailto:` sources are still dropped, and
-/// the markup is sanitized here, on the server, never on the client.
+/// what they asked for. `script`, `on*`, `srcset`, `javascript:`/`data:`/
+/// `mailto:` sources and every `url()` in a CSS value are still dropped, and the
+/// markup is sanitized here, on the server, never on the client.
 pub fn sanitize_html_with_images(html: &str) -> Option<String> {
-    let cleaned = html_sanitizer(true).clean(html).to_string();
-    if visible_text(&cleaned).is_empty() && !cleaned.contains("<img") {
+    sanitize(html, true)
+}
+
+fn sanitize(html: &str, images: bool) -> Option<String> {
+    let (markup, styles) = extract_style_blocks(html);
+    let cleaned = html_sanitizer(images).clean(&markup).to_string();
+    if visible_text(&cleaned).is_empty() && !(images && cleaned.contains("<img")) {
         return None;
     }
-    Some(open_in_new_tab(cleaned))
+    Some(with_style_blocks(&styles, open_in_new_tab(cleaned)))
 }
 
 /// Links leave the message view: they open in a new tab, never in the app's.
@@ -411,8 +440,20 @@ fn html_sanitizer(images: bool) -> ammonia::Builder<'static> {
     let mut tags: HashSet<&str> = HTML_TAGS.into_iter().collect();
     let mut attributes = HashMap::from([
         ("a", HashSet::from(["href"])),
-        ("td", HashSet::from(["colspan", "rowspan"])),
-        ("th", HashSet::from(["colspan", "rowspan"])),
+        (
+            "td",
+            HashSet::from(["colspan", "rowspan", "width", "align", "valign", "bgcolor"]),
+        ),
+        (
+            "th",
+            HashSet::from(["colspan", "rowspan", "width", "align", "valign", "bgcolor"]),
+        ),
+        ("tr", HashSet::from(["align", "valign", "bgcolor"])),
+        (
+            "table",
+            HashSet::from(["width", "align", "cellpadding", "cellspacing", "border"]),
+        ),
+        ("font", HashSet::from(["color", "face", "size"])),
     ]);
     if images {
         tags.insert("img");
@@ -423,28 +464,811 @@ fn html_sanitizer(images: bool) -> ammonia::Builder<'static> {
     builder
         .tags(tags)
         .tag_attributes(attributes)
-        .generic_attributes(HashSet::from(["title"]))
+        .generic_attributes(HashSet::from(["title", "style", "class"]))
         .url_schemes(HashSet::from(["http", "https", "mailto"]))
-        .link_rel(Some("noopener noreferrer"));
-    if images {
-        builder.attribute_filter(image_source);
-    }
+        .link_rel(Some("noopener noreferrer"))
+        .attribute_filter(filter_attribute);
     builder
+}
+
+/// Second line of defence, element by element: an image `src` is an absolute
+/// http(s) URL, a `style` attribute is filtered down to `sanitize_declarations`,
+/// the geometry attributes are checked against their own grammar (a length, an
+/// enumeration, a colour) and everything else passes untouched.
+fn filter_attribute<'a>(element: &str, attribute: &str, value: &'a str) -> Option<Cow<'a, str>> {
+    match (element, attribute) {
+        ("img", "src") => is_remote_url(value).then(|| value.into()),
+        (_, "style") => {
+            let cleaned = sanitize_declarations(value);
+            (!cleaned.is_empty()).then_some(Cow::Owned(cleaned))
+        }
+        (_, "width") | (_, "height") if matches!(element, "table" | "td" | "th" | "img") => {
+            is_length(value).then(|| value.into())
+        }
+        (_, "cellpadding") | (_, "cellspacing") | (_, "border") if element == "table" => {
+            is_length(value).then(|| value.into())
+        }
+        ("table", "align") => in_enumeration(value, &["left", "center", "right"]),
+        ("td" | "th" | "tr", "align") => {
+            in_enumeration(value, &["left", "center", "right", "justify"])
+        }
+        ("td" | "th" | "tr", "valign") => {
+            in_enumeration(value, &["top", "middle", "bottom", "baseline"])
+        }
+        (_, "bgcolor") | ("font", "color") => is_html_color(value).then(|| value.into()),
+        ("font", "face") => is_font_face(value).then(|| value.into()),
+        ("font", "size") => is_font_size(value).then(|| value.into()),
+        _ => Some(value.into()),
+    }
+}
+
+fn in_enumeration<'a>(value: &'a str, allowed: &[&str]) -> Option<Cow<'a, str>> {
+    allowed
+        .iter()
+        .any(|one| one.eq_ignore_ascii_case(value.trim()))
+        .then(|| value.into())
 }
 
 /// `src` of an image: an absolute http(s) URL, nothing else. Ammonia already
 /// refuses unknown schemes, but `mailto:` is allowed for `href` and must not
 /// reach an image.
-fn image_source<'a>(element: &str, attribute: &str, value: &'a str) -> Option<Cow<'a, str>> {
-    if matches!((element, attribute), ("img", "src")) && !is_remote_url(value) {
-        return None;
-    }
-    Some(value.into())
-}
-
 fn is_remote_url(value: &str) -> bool {
     let head = value.trim_start().to_ascii_lowercase();
     head.starts_with("http://") || head.starts_with("https://")
+}
+
+/// A width, a height or a cell padding: digits, or digits and a `%`.
+fn is_length(value: &str) -> bool {
+    let value = value.trim();
+    let digits = value.strip_suffix('%').unwrap_or(value);
+    !digits.is_empty() && digits.len() <= 4 && digits.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// `bgcolor` and `font color`: `#rgb`, `#rrggbb`, `rgb()`/`rgba()` or a CSS
+/// colour name.
+fn is_html_color(value: &str) -> bool {
+    let value = value.trim();
+    if let Some(hex) = value.strip_prefix('#') {
+        return matches!(hex.len(), 3 | 6) && hex.bytes().all(|byte| byte.is_ascii_hexdigit());
+    }
+    let lower = value.to_ascii_lowercase();
+    is_rgb_color(&lower) || CSS_COLORS.iter().any(|name| *name == lower)
+}
+
+fn is_rgb_color(lower: &str) -> bool {
+    let inner = match lower.strip_prefix("rgb(") {
+        Some(inner) => inner,
+        None => match lower.strip_prefix("rgba(") {
+            Some(inner) => inner,
+            None => return false,
+        },
+    };
+    let Some(inner) = inner.strip_suffix(')') else {
+        return false;
+    };
+    let parts: Vec<&str> = inner.split(',').collect();
+    matches!(parts.len(), 3 | 4)
+        && parts.iter().all(|part| {
+            let part = part.trim();
+            let digits = part.strip_suffix('%').unwrap_or(part);
+            !digits.is_empty()
+                && digits
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || byte == b'.')
+        })
+}
+
+/// `font face`: a font name, so letters, digits, spaces, quotes and commas.
+fn is_font_face(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 120
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(byte, b' ' | b',' | b'-' | b'\'' | b'"' | b'.' | b'_')
+        })
+}
+
+/// `font size`: the legacy 1-7 scale, optionally relative.
+fn is_font_size(value: &str) -> bool {
+    let value = value.trim();
+    let digits = value.trim_start_matches(['+', '-']);
+    digits.len() == 1 && matches!(digits.as_bytes()[0], b'1'..=b'7')
+}
+
+/// Properties a mail keeps: the presentation of its own design, nothing that
+/// can redraw the message view (`position`, `z-index`, `overflow`,
+/// `-moz-binding`, `behavior`) or load a resource (every `url()` is refused).
+const STYLE_PROPERTIES: &[&str] = &[
+    "background",
+    "background-color",
+    "border",
+    "border-collapse",
+    "border-spacing",
+    "box-shadow",
+    "clear",
+    "color",
+    "direction",
+    "display",
+    "float",
+    "font-family",
+    "font-size",
+    "font-style",
+    "font-weight",
+    "height",
+    "letter-spacing",
+    "line-height",
+    "list-style",
+    "margin",
+    "max-height",
+    "max-width",
+    "min-height",
+    "min-width",
+    "opacity",
+    "overflow-wrap",
+    "padding",
+    "table-layout",
+    "text-align",
+    "text-decoration",
+    "text-indent",
+    "text-transform",
+    "vertical-align",
+    "white-space",
+    "width",
+    "word-break",
+    "word-spacing",
+];
+
+/// Longhands of the shorthands above: `padding-top`, `margin-left`,
+/// `border-bottom-left-radius`, `list-style-type`…
+const STYLE_PREFIXES: &[&str] = &["border-", "list-style-", "margin-", "padding-"];
+
+/// Words that never belong in a value: they either run code (`expression()`,
+/// `javascript:`), bind a behaviour to the element (`behavior`,
+/// `-moz-binding`) or fetch something.
+const DENIED_VALUE_WORDS: &[&str] = &[
+    "-moz-binding",
+    "behavior",
+    "expression",
+    "javascript",
+    "url",
+    "vbscript",
+];
+
+const DISPLAY_VALUES: &[&str] = &[
+    "block",
+    "flex",
+    "inline",
+    "inline-block",
+    "list-item",
+    "none",
+    "table",
+    "table-cell",
+    "table-row",
+];
+
+/// CSS colour names a mail may put in a `bgcolor` or a `font color`. Named
+/// colours are the only values left once hex and `rgb()` are handled, so the
+/// list is closed rather than guessed from the shape of the token.
+const CSS_COLORS: &[&str] = &[
+    "aliceblue",
+    "antiquewhite",
+    "aqua",
+    "aquamarine",
+    "azure",
+    "beige",
+    "bisque",
+    "black",
+    "blanchedalmond",
+    "blue",
+    "blueviolet",
+    "brown",
+    "burlywood",
+    "cadetblue",
+    "chartreuse",
+    "chocolate",
+    "coral",
+    "cornflowerblue",
+    "cornsilk",
+    "crimson",
+    "cyan",
+    "darkblue",
+    "darkcyan",
+    "darkgoldenrod",
+    "darkgray",
+    "darkgreen",
+    "darkgrey",
+    "darkkhaki",
+    "darkmagenta",
+    "darkolivegreen",
+    "darkorange",
+    "darkorchid",
+    "darkred",
+    "darksalmon",
+    "darkseagreen",
+    "darkslateblue",
+    "darkslategray",
+    "darkslategrey",
+    "darkturquoise",
+    "darkviolet",
+    "deeppink",
+    "deepskyblue",
+    "dimgray",
+    "dimgrey",
+    "dodgerblue",
+    "firebrick",
+    "floralwhite",
+    "forestgreen",
+    "fuchsia",
+    "gainsboro",
+    "ghostwhite",
+    "gold",
+    "goldenrod",
+    "gray",
+    "green",
+    "greenyellow",
+    "grey",
+    "honeydew",
+    "hotpink",
+    "indianred",
+    "indigo",
+    "ivory",
+    "khaki",
+    "lavender",
+    "lavenderblush",
+    "lawngreen",
+    "lemonchiffon",
+    "lightblue",
+    "lightcoral",
+    "lightcyan",
+    "lightgoldenrodyellow",
+    "lightgray",
+    "lightgreen",
+    "lightgrey",
+    "lightpink",
+    "lightsalmon",
+    "lightseagreen",
+    "lightskyblue",
+    "lightslategray",
+    "lightslategrey",
+    "lightsteelblue",
+    "lightyellow",
+    "lime",
+    "limegreen",
+    "linen",
+    "magenta",
+    "maroon",
+    "mediumaquamarine",
+    "mediumblue",
+    "mediumorchid",
+    "mediumpurple",
+    "mediumseagreen",
+    "mediumslateblue",
+    "mediumspringgreen",
+    "mediumturquoise",
+    "mediumvioletred",
+    "midnightblue",
+    "mintcream",
+    "mistyrose",
+    "moccasin",
+    "navajowhite",
+    "navy",
+    "oldlace",
+    "olive",
+    "olivedrab",
+    "orange",
+    "orangered",
+    "orchid",
+    "palegoldenrod",
+    "palegreen",
+    "paleturquoise",
+    "palevioletred",
+    "papayawhip",
+    "peachpuff",
+    "peru",
+    "pink",
+    "plum",
+    "powderblue",
+    "purple",
+    "rebeccapurple",
+    "red",
+    "rosybrown",
+    "royalblue",
+    "saddlebrown",
+    "salmon",
+    "sandybrown",
+    "seagreen",
+    "seashell",
+    "sienna",
+    "silver",
+    "skyblue",
+    "slateblue",
+    "slategray",
+    "slategrey",
+    "snow",
+    "springgreen",
+    "steelblue",
+    "tan",
+    "teal",
+    "thistle",
+    "tomato",
+    "transparent",
+    "turquoise",
+    "violet",
+    "wheat",
+    "white",
+    "whitesmoke",
+    "yellow",
+    "yellowgreen",
+];
+
+/// Deeper ``@media`` nesting is not a mail design, it is a way to grow the
+/// parser: three levels cover the responsive templates.
+const MAX_STYLE_DEPTH: usize = 3;
+
+/// One CSS declaration list, filtered: a property of the allow-list, a value
+/// without a forbidden word, function or token.
+struct Declarations;
+
+impl<'i> DeclarationParser<'i> for Declarations {
+    type Declaration = String;
+    type Error = ();
+
+    fn parse_value(
+        &mut self,
+        name: CowRcStr<'i>,
+        input: &mut Parser<'i>,
+        _start: &ParserState,
+    ) -> Result<Self::Declaration, ParseError<()>> {
+        if !style_property_allowed(&name) {
+            return Err(ParseError::unexpected_token());
+        }
+        let mut value = String::new();
+        let mut important = false;
+        loop {
+            if input.try_parse(parse_important).is_ok() {
+                important = true;
+                break;
+            }
+            let token = match input.next() {
+                Ok(token) => token.clone(),
+                Err(error) if error.kind == BasicParseErrorKind::EndOfInput => break,
+                Err(error) => return Err(error.into()),
+            };
+            write_token(&token, input, &mut value)?;
+        }
+        let value = value.trim();
+        if value.is_empty() || !style_value_allowed(&name, value) {
+            return Err(ParseError::unexpected_token());
+        }
+        let mut declaration = format!("{}:{}", name.to_ascii_lowercase(), value);
+        if important {
+            declaration.push_str(" !important");
+        }
+        Ok(declaration)
+    }
+}
+
+impl<'i> AtRuleParser<'i> for Declarations {
+    type Prelude = ();
+    type AtRule = String;
+    type Error = ();
+}
+
+impl<'i> QualifiedRuleParser<'i> for Declarations {
+    type Prelude = ();
+    type QualifiedRule = String;
+    type Error = ();
+}
+
+impl<'i> RuleBodyItemParser<'i, String, ()> for Declarations {
+    fn parse_declarations(&self) -> bool {
+        true
+    }
+
+    fn parse_qualified(&self) -> bool {
+        false
+    }
+}
+
+/// Keeps the declarations of `css` that survive the allow-list, re-serialized
+/// from their tokens: a `style` attribute and a rule of a `<style>` block go
+/// through the same filter.
+fn sanitize_declarations(css: &str) -> String {
+    let css = strip_comments(css);
+    let mut parser = Parser::new(&css);
+    declarations_of(&mut parser)
+}
+
+fn declarations_of(input: &mut Parser) -> String {
+    let mut declarations = Declarations;
+    RuleBodyParser::new(input, &mut declarations)
+        .filter_map(|item| item.ok())
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+fn style_property_allowed(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    STYLE_PROPERTIES.contains(&name.as_str())
+        || STYLE_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+}
+
+fn style_value_allowed(property: &str, value: &str) -> bool {
+    !property.eq_ignore_ascii_case("display")
+        || DISPLAY_VALUES
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(value))
+}
+
+fn is_denied_value_word(word: &str) -> bool {
+    DENIED_VALUE_WORDS
+        .iter()
+        .any(|denied| word.eq_ignore_ascii_case(denied))
+}
+
+/// Re-serializes one token of a declaration value, refusing anything that
+/// executes, binds or fetches. Blocks are walked recursively, so a `url(`
+/// hidden in `image-set()` is refused too.
+fn write_token<'i>(
+    token: &Token<'i>,
+    input: &mut Parser<'i>,
+    value: &mut String,
+) -> Result<(), ParseError<()>> {
+    match token {
+        Token::UnquotedUrl(_)
+        | Token::BadUrl(_)
+        | Token::BadString(_)
+        | Token::AtKeyword(_)
+        | Token::Semicolon
+        | Token::CurlyBracketBlock
+        | Token::CloseParenthesis
+        | Token::CloseSquareBracket
+        | Token::CloseCurlyBracket => Err(ParseError::unexpected_token()),
+        Token::Delim('<' | '>' | '\\' | '@' | '{' | '}') => Err(ParseError::unexpected_token()),
+        Token::Ident(word) if is_denied_value_word(word) => Err(ParseError::unexpected_token()),
+        Token::Function(name) => {
+            if is_denied_value_word(name) {
+                return Err(ParseError::unexpected_token());
+            }
+            separate(value);
+            value.push_str(name);
+            value.push('(');
+            input.parse_nested_block(|nested| write_tokens(nested, value))?;
+            value.push(')');
+            Ok(())
+        }
+        Token::ParenthesisBlock => {
+            separate(value);
+            value.push('(');
+            input.parse_nested_block(|nested| write_tokens(nested, value))?;
+            value.push(')');
+            Ok(())
+        }
+        Token::SquareBracketBlock => {
+            separate(value);
+            value.push('[');
+            input.parse_nested_block(|nested| write_tokens(nested, value))?;
+            value.push(']');
+            Ok(())
+        }
+        _ => {
+            if !matches!(token, Token::Comma) {
+                separate(value);
+            }
+            token
+                .to_css(value)
+                .map_err(|_| ParseError::unexpected_token())
+        }
+    }
+}
+
+fn write_tokens(input: &mut Parser, value: &mut String) -> Result<(), ParseError<()>> {
+    loop {
+        let token = match input.next() {
+            Ok(token) => token.clone(),
+            Err(error) if error.kind == BasicParseErrorKind::EndOfInput => break Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        write_token(&token, input, value)?;
+    }
+}
+
+fn separate(value: &mut String) {
+    if !value.is_empty() && !value.ends_with([' ', '(', '[']) {
+        value.push(' ');
+    }
+}
+
+/// CSS comments hidden between two tokens (`co/**/lor`, `url/**/(`) never reach
+/// the parser: they are removed first, inside strings excluded.
+fn strip_comments(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut chars = css.chars().peekable();
+    let mut quote: Option<char> = None;
+    while let Some(character) = chars.next() {
+        if let Some(opened) = quote {
+            out.push(character);
+            match character {
+                '\\' => out.extend(chars.next()),
+                _ if character == opened => quote = None,
+                _ => {}
+            }
+            continue;
+        }
+        match character {
+            '"' | '\'' => {
+                quote = Some(character);
+                out.push(character);
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut closed = false;
+                while let Some(next) = chars.next() {
+                    if next == '*' && chars.peek() == Some(&'/') {
+                        chars.next();
+                        closed = true;
+                        break;
+                    }
+                }
+                if !closed {
+                    return out;
+                }
+                out.push(' ');
+            }
+            _ => out.push(character),
+        }
+    }
+    out
+}
+
+/// A style rule list: qualified rules keep their selector and their filtered
+/// declarations, `@media` keeps its nested rules, every other at-rule
+/// (`@import`, `@font-face`, `@charset`, `@supports`…) is dropped whole.
+enum StyleRule {
+    Block {
+        prelude: String,
+        declarations: String,
+    },
+    Media {
+        condition: String,
+        rules: Vec<StyleRule>,
+    },
+}
+
+struct Sheet {
+    depth: usize,
+}
+
+impl<'i> QualifiedRuleParser<'i> for Sheet {
+    type Prelude = String;
+    type QualifiedRule = StyleRule;
+    type Error = ();
+
+    fn parse_prelude(&mut self, input: &mut Parser<'i>) -> Result<Self::Prelude, ParseError<()>> {
+        let start = input.position();
+        scan_selector(input)?;
+        let prelude = input.slice(start..input.position()).trim();
+        if prelude.is_empty() {
+            return Err(ParseError::unexpected_token());
+        }
+        Ok(prelude.to_string())
+    }
+
+    fn parse_block(
+        &mut self,
+        prelude: String,
+        _start: &ParserState,
+        input: &mut Parser<'i>,
+    ) -> Result<Self::QualifiedRule, ParseError<()>> {
+        Ok(StyleRule::Block {
+            prelude,
+            declarations: declarations_of(input),
+        })
+    }
+}
+
+impl<'i> AtRuleParser<'i> for Sheet {
+    type Prelude = String;
+    type AtRule = StyleRule;
+    type Error = ();
+
+    fn parse_prelude(
+        &mut self,
+        name: CowRcStr<'i>,
+        input: &mut Parser<'i>,
+    ) -> Result<Self::Prelude, ParseError<()>> {
+        if self.depth >= MAX_STYLE_DEPTH || !name.eq_ignore_ascii_case("media") {
+            return Err(ParseError::from_basic_kind(
+                BasicParseErrorKind::AtRuleInvalid,
+            ));
+        }
+        let start = input.position();
+        scan_media(input)?;
+        Ok(input.slice(start..input.position()).trim().to_string())
+    }
+
+    fn parse_block(
+        &mut self,
+        condition: String,
+        _start: &ParserState,
+        input: &mut Parser<'i>,
+    ) -> Result<Self::AtRule, ParseError<()>> {
+        Ok(StyleRule::Media {
+            condition,
+            rules: style_rules(input, self.depth + 1),
+        })
+    }
+}
+
+/// A selector: tokens are walked through every nested block so a `url(` or a
+/// stray `<` cannot hide in a pseudo-class argument.
+fn scan_selector(input: &mut Parser) -> Result<(), ParseError<()>> {
+    loop {
+        let token = match input.next() {
+            Ok(token) => token,
+            Err(error) if error.kind == BasicParseErrorKind::EndOfInput => break Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        match token {
+            Token::Ident(word) if is_denied_value_word(word) => {
+                return Err(ParseError::unexpected_token())
+            }
+            Token::Ident(_)
+            | Token::Hash(_)
+            | Token::IDHash(_)
+            | Token::QuotedString(_)
+            | Token::Number { .. }
+            | Token::Dimension { .. }
+            | Token::Percentage { .. }
+            | Token::Comma
+            | Token::Colon
+            | Token::IncludeMatch
+            | Token::DashMatch
+            | Token::PrefixMatch
+            | Token::SuffixMatch
+            | Token::SubstringMatch
+            | Token::Delim('.' | '>' | '~' | '+' | '*' | '|' | '=' | '^' | '$' | '-') => {}
+            Token::Function(name) => {
+                if is_denied_value_word(name) {
+                    return Err(ParseError::unexpected_token());
+                }
+                input.parse_nested_block(scan_selector)?;
+            }
+            Token::ParenthesisBlock | Token::SquareBracketBlock => {
+                input.parse_nested_block(scan_selector)?;
+            }
+            _ => return Err(ParseError::unexpected_token()),
+        }
+    }
+}
+
+/// A media query: the shape of `screen and (max-width:600px)`, nothing else.
+fn scan_media(input: &mut Parser) -> Result<(), ParseError<()>> {
+    loop {
+        let token = match input.next() {
+            Ok(token) => token,
+            Err(error) if error.kind == BasicParseErrorKind::EndOfInput => break Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        match token {
+            Token::Ident(word) if is_denied_value_word(word) => {
+                return Err(ParseError::unexpected_token())
+            }
+            Token::Ident(_)
+            | Token::Number { .. }
+            | Token::Percentage { .. }
+            | Token::Dimension { .. }
+            | Token::Colon
+            | Token::Comma
+            | Token::Delim('/' | '.' | '+' | '-') => {}
+            Token::ParenthesisBlock => input.parse_nested_block(scan_media)?,
+            _ => return Err(ParseError::unexpected_token()),
+        }
+    }
+}
+
+fn style_rules(input: &mut Parser, depth: usize) -> Vec<StyleRule> {
+    let mut sheet = Sheet { depth };
+    StyleSheetParser::new(input, &mut sheet)
+        .filter_map(|item| item.ok())
+        .collect()
+}
+
+/// A `<style>` block, filtered rule by rule. The result is prepended to the
+/// cleaned body, so it lands after the client sheet of the document and wins
+/// at equal specificity. Nothing that could close the element survives.
+fn sanitize_style_block(css: &str) -> String {
+    let css = strip_comments(css);
+    let mut parser = Parser::new(&css);
+    let mut out = String::new();
+    write_style_rules(&style_rules(&mut parser, 0), &mut out);
+    out.replace("</", "<\\/")
+}
+
+fn write_style_rules(rules: &[StyleRule], out: &mut String) {
+    for rule in rules {
+        match rule {
+            StyleRule::Block {
+                prelude,
+                declarations,
+            } => {
+                if declarations.is_empty() {
+                    continue;
+                }
+                out.push_str(prelude);
+                out.push('{');
+                out.push_str(declarations);
+                out.push('}');
+            }
+            StyleRule::Media { condition, rules } => {
+                out.push_str("@media ");
+                out.push_str(condition);
+                out.push('{');
+                write_style_rules(rules, out);
+                out.push('}');
+            }
+        }
+    }
+}
+
+/// Removes every `<style>` element from the raw markup and returns the
+/// sanitized CSS of each, in document order: ammonia never sees them, and they
+/// are put back at the top of the cleaned body. An unclosed block runs to the end
+/// of the message, exactly as a browser reads it.
+fn extract_style_blocks(html: &str) -> (String, Vec<String>) {
+    let lowered = html.to_ascii_lowercase();
+    let mut markup = String::with_capacity(html.len());
+    let mut styles = Vec::new();
+    let mut cursor = 0;
+    while let Some(found) = lowered[cursor..].find("<style") {
+        let opening = cursor + found;
+        let after_name = opening + "<style".len();
+        let boundary = lowered[after_name..].chars().next();
+        if !matches!(boundary, Some('>' | ' ' | '\t' | '\n' | '\r' | '/')) {
+            markup.push_str(&html[cursor..after_name]);
+            cursor = after_name;
+            continue;
+        }
+        let Some(content_start) = lowered[after_name..]
+            .find('>')
+            .map(|offset| after_name + offset + 1)
+        else {
+            break;
+        };
+        markup.push_str(&html[cursor..opening]);
+        let (content_end, next) = match lowered[content_start..].find("</style") {
+            Some(offset) => {
+                let closing = content_start + offset;
+                let next = lowered[closing..]
+                    .find('>')
+                    .map_or(lowered.len(), |end| closing + end + 1);
+                (closing, next)
+            }
+            None => (lowered.len(), lowered.len()),
+        };
+        let css = sanitize_style_block(&html[content_start..content_end]);
+        if !css.is_empty() {
+            styles.push(css);
+        }
+        cursor = next;
+    }
+    markup.push_str(&html[cursor..]);
+    (markup, styles)
+}
+
+fn with_style_blocks(styles: &[String], body: String) -> String {
+    if styles.is_empty() {
+        return body;
+    }
+    let mut out = String::new();
+    for css in styles {
+        out.push_str("<style>");
+        out.push_str(css);
+        out.push_str("</style>");
+    }
+    out.push_str(&body);
+    out
 }
 
 /// Text left once the sanitized markup is reduced to its text content.

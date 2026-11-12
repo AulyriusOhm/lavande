@@ -145,15 +145,25 @@ describe("htmlImagesOf · interrupteur PGP du compte", () => {
 
   afterEach(() => setAccountDecryptPolicy({}));
 
-  it("refuse le compte dont l'interrupteur est fermé, sans appeler le démon", async () => {
+  it("refuse un message chiffré d'un compte fermé, sans appeler le démon", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     setAccountDecryptPolicy({ pro: false });
 
-    await expect(htmlImagesOf(source)).rejects.toThrow(
+    await expect(htmlImagesOf(source, true)).rejects.toThrow(
       "PGP désactivé pour ce compte · message chiffré laissé fermé",
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("laisse révéler les images d'un message en clair, même compte fermé", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ html: "<p>x</p>" }) })),
+    );
+    setAccountDecryptPolicy({ pro: false });
+
+    expect(await htmlImagesOf(source, false)).toBe("<p>x</p>");
   });
 
   it("laisse passer les comptes ouverts et ceux que la politique ignore", async () => {
@@ -162,9 +172,9 @@ describe("htmlImagesOf · interrupteur PGP du compte", () => {
       vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ html: "<p>x</p>" }) })),
     );
 
-    expect(await htmlImagesOf(source)).toBe("<p>x</p>");
+    expect(await htmlImagesOf(source, true)).toBe("<p>x</p>");
     setAccountDecryptPolicy({ autre: false });
-    expect(await htmlImagesOf(source)).toBe("<p>x</p>");
+    expect(await htmlImagesOf(source, true)).toBe("<p>x</p>");
     expect(accountDecrypts("pro")).toBe(true);
     expect(accountDecrypts("autre")).toBe(false);
   });

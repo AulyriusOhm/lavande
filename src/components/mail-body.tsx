@@ -51,8 +51,11 @@ function themeSnapshot(): Theme {
   return { dark: root.classList.contains("dark"), accent: HEX.test(accent) ? accent : DEFAULT_ACCENT };
 }
 
-/** Feuille de style du document mail : la palette de DESIGN.md, sans dépendre
- *  du CSS de l'app (l'iframe a son propre document). */
+/** Feuille de repli du document mail : la palette de DESIGN.md pour le contenu
+ *  que le mail ne style pas lui-même, sans dépendre du CSS de l'app (l'iframe a
+ *  son propre document). Aucune règle de mise en page ici : les bordures de
+ *  cellules, les marges de paragraphes et la largeur des tables appartiennent au
+ *  mail. */
 function mailStyles({ dark, accent }: Theme) {
   const palette = dark ? DARK : LIGHT;
   return `@font-face{font-family:"Plus Jakarta Sans";font-style:normal;font-weight:300 800;font-display:swap;src:url("${jakartaFont}") format("woff2")}
@@ -70,17 +73,8 @@ function mailStyles({ dark, accent }: Theme) {
 html{background:transparent;color:var(--ink)}
 body{margin:0;background:transparent;color:var(--ink-soft);font-family:"Plus Jakarta Sans",ui-sans-serif,system-ui,-apple-system,sans-serif;font-size:13.5px;line-height:1.7;font-weight:500;overflow-wrap:anywhere}
 img{max-width:100%;height:auto}
-p,div{margin:0 0 .85em}
-p:last-child,div:last-child{margin-bottom:0}
 a{color:var(--accent-ink);text-decoration:underline;text-underline-offset:2px}
 blockquote{margin:0 0 .85em;padding-left:.9em;border-left:3px solid var(--line);color:var(--ink-muted)}
-ul,ol{margin:0 0 .85em;padding-left:1.3em;list-style:disc}
-ol{list-style:decimal}
-h1,h2,h3,h4,h5,h6{margin:0 0 .5em;font-weight:800;font-size:1.05em;color:var(--ink)}
-table{width:100%;border-collapse:collapse;margin:0 0 .85em;font-size:.95em}
-th,td{border:1px solid var(--line);padding:.35em .5em;text-align:left}
-th{font-weight:700}
-hr{border:0;border-top:1px solid var(--line);margin:1em 0}
 code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em}
 pre{white-space:pre-wrap;background:var(--surface-2);padding:.6em;border-radius:.5em}`;
 }
@@ -99,25 +93,32 @@ function mailDocument(body: string, theme: Theme) {
 
 /**
  * Corps du message : le HTML est **déjà assaini côté service** (liste blanche
- * stricte, images de tracking retirées, liens `noopener`), on ne fait donc que
- * le rendre — dans une iframe `srcdoc` sans `allow-scripts`, donc sans aucun
- * script et sans fuite de styles vers l'app. La feuille injectée reprend la
- * palette de DESIGN.md selon le thème actif, et les liens s'ouvrent dans un
- * nouvel onglet. Sans HTML, on retombe sur les paragraphes texte.
+ * stricte, styles filtrés, images de tracking retirées, liens `noopener`), on ne
+ * fait donc que le rendre — dans une iframe `srcdoc` sans `allow-scripts`, donc
+ * sans aucun script et sans fuite de styles vers l'app. La feuille injectée est
+ * un simple **repli**, placée dans le `<head>` : le mail garde sa propre mise en
+ * page (styles inline, blocs `<style>` réinjectés en tête du body, attributs de
+ * table) et notre palette ne sert qu'au contenu non stylé — le rendu fidèle
+ * prime, y compris en thème sombre. Les liens s'ouvrent dans un nouvel onglet.
+ * Sans HTML, on retombe sur les paragraphes texte.
  *
  * Les images distantes restent masquées par défaut : le bandeau ne fait que
  * demander au service de relire ce message-ci, jamais d'office, et le markup qui
- * revient est assaini à nouveau là-bas.
+ * revient est assaini à nouveau là-bas. `encrypted` ne sert qu'à ce rachat : un
+ * message chiffré d'un compte dont l'interrupteur PGP est fermé est refusé, un
+ * message en clair passe.
  */
 export function MailBody({
   html,
   paragraphs,
   source,
+  encrypted = false,
   className,
 }: {
   html?: string;
   paragraphs: string[];
   source?: MailSource;
+  encrypted?: boolean;
   className?: string;
 }) {
   const [reveal, setReveal] = useState<Reveal | null>(null);
@@ -134,7 +135,7 @@ export function MailBody({
     if (!source || !key || current?.busy) return;
     setReveal({ key, busy: true });
     try {
-      setReveal({ key, html: await htmlImagesOf(source) });
+      setReveal({ key, html: await htmlImagesOf(source, encrypted) });
     } catch (error) {
       setReveal({ key, error: errorText(error) });
     }

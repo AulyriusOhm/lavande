@@ -409,7 +409,13 @@ export function MessageScreen({
         ) : null}
 
         <BlurFade delay={0.12}>
-          <MailBody className="mt-5" html={mail.html} paragraphs={mail.body} source={mail.source} />
+          <MailBody
+            className="mt-5"
+            html={mail.html}
+            paragraphs={mail.body}
+            source={mail.source}
+            encrypted={mail.pgp === "encrypted"}
+          />
         </BlurFade>
 
         {mail.attachments?.length ? <BlurFade delay={0.18}>{attachmentList(mail)}</BlurFade> : null}

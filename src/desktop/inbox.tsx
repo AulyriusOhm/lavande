@@ -1062,6 +1062,7 @@ export function DesktopInbox({
                     html={mail.html}
                     paragraphs={mail.body}
                     source={mail.source}
+                    encrypted={mail.pgp === "encrypted"}
                   />
 
                   {previous.length > 0 ? (

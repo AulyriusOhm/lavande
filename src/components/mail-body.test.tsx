@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { MailSource } from "@/lib/mail";
+import { setAccountDecryptPolicy } from "@/lib/mail-backend";
 
 const { htmlImages } = vi.hoisted(() => ({ htmlImages: vi.fn() }));
 
@@ -15,13 +16,18 @@ const SOURCE: MailSource = { accountId: "perso", folderPath: "INBOX", uid: 12 };
 const STORED = "<p>Soldes du mois</p>";
 const WITH_IMAGES = '<p>Soldes du mois <img src="https://pix.example/solde.png" alt="visuel"></p>';
 
-function renderBody(html: string | null = STORED, source: MailSource | null = SOURCE) {
+function renderBody(
+  html: string | null = STORED,
+  source: MailSource | null = SOURCE,
+  encrypted = false,
+) {
   return render(
     <MailBody
       className="mt-5"
       html={html ?? undefined}
       paragraphs={["Soldes du mois"]}
       source={source ?? undefined}
+      encrypted={encrypted}
     />,
   );
 }
@@ -52,6 +58,7 @@ beforeEach(() => {
 afterEach(() => {
   document.documentElement.classList.remove("dark");
   document.documentElement.style.removeProperty("--accent");
+  setAccountDecryptPolicy({});
 });
 
 describe("isolation du HTML", () => {
@@ -85,6 +92,41 @@ describe("isolation du HTML", () => {
     expect(doc).toContain("body{margin:0");
     expect(doc).toContain("a{color:var(--accent-ink)");
     expect(document.querySelector("style")).toBeNull();
+  });
+});
+
+describe("feuille de repli", () => {
+  it("n'impose ni bordures de cellules ni marges de paragraphes", () => {
+    const doc = srcDoc(renderBody().container);
+
+    expect(doc).not.toContain("th,td{");
+    expect(doc).not.toContain("border:1px solid var(--line)");
+    expect(doc).not.toContain("p,div{margin");
+    expect(doc).not.toContain("table{width:100%");
+    expect(doc).not.toContain("h1,h2");
+    expect(doc).not.toContain("ul,ol{");
+  });
+
+  it("laisse le mail écrire sa mise en page après la feuille du client", () => {
+    const mail =
+      '<style>.promo{background-color:#8b7cf6;color:#fff}</style>' +
+      '<table width="600" cellpadding="0" bgcolor="#ffffff"><tr><td style="padding:24px">x</td></tr></table>';
+    const doc = srcDoc(renderBody(mail).container);
+
+    expect(doc).toContain(`<body><style>.promo{background-color:#8b7cf6;color:#fff}</style>`);
+    expect(doc.indexOf(".promo{")).toBeGreaterThan(doc.indexOf("--accent-ink"));
+    expect(doc).toContain('width="600"');
+    expect(doc).toContain('style="padding:24px"');
+  });
+
+  it("ne touche pas aux couleurs du mail en thème sombre", () => {
+    document.documentElement.classList.add("dark");
+    const doc = srcDoc(renderBody().container);
+
+    expect(doc).toContain("color-scheme:dark");
+    expect(doc).toContain("background:transparent");
+    expect(doc).not.toContain("invert");
+    expect(doc).not.toContain("filter:");
   });
 });
 
@@ -196,6 +238,31 @@ describe("images distantes", () => {
     expect(await screen.findByText("Réessayer")).toBeTruthy();
     expect(screen.getByText(/Images non affichées · message 12 introuvable/)).toBeTruthy();
     expect(srcDoc(container)).toContain("Soldes du mois");
+  });
+
+  it("refuse de relire un message chiffré d'un compte PGP fermé", async () => {
+    setAccountDecryptPolicy({ perso: false });
+    renderBody(STORED, SOURCE, true);
+
+    fireEvent.click(screen.getByLabelText("Afficher les images de ce message"));
+
+    expect(
+      await screen.findByText(/Images non affichées · PGP désactivé pour ce compte/),
+    ).toBeTruthy();
+    expect(htmlImages).not.toHaveBeenCalled();
+  });
+
+  it("relit un message en clair même quand le compte est fermé", async () => {
+    setAccountDecryptPolicy({ perso: false });
+    htmlImages.mockResolvedValue({ html: WITH_IMAGES });
+    const { container } = renderBody(STORED, SOURCE, false);
+
+    fireEvent.click(screen.getByLabelText("Afficher les images de ce message"));
+
+    await waitFor(() => expect(htmlImages).toHaveBeenCalledWith("perso", "INBOX", 12));
+    await waitFor(() =>
+      expect(srcDoc(container)).toContain('src="https://pix.example/solde.png"'),
+    );
   });
 
   it("n'affiche aucun bandeau pour un message sans HTML", () => {
