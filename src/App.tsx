@@ -317,27 +317,39 @@ function PhoneApp({ native }: { native?: boolean }) {
   );
   const availableMailIds = useMemo(() => new Set(mails.map((mail) => mail.id)), [mails]);
 
-  const shortcuts = useMemo(
-    () =>
-      appShortcuts({
-        navigate: changeTab,
-        calendarEnabled,
-        planningEnabled,
-        calendarActive: tab === "calendar",
-        compose: openComposer,
-        newTask: openTaskDraft,
-        newEvent: openEventDraft,
-        search: openSearch,
-        toggleHelp: () => setHelpOpen((current) => !current),
-        mail: {
-          canMove: () => mailNav.current?.canMove() ?? false,
-          canOpen: () => mailNav.current?.canOpen() ?? false,
-          next: () => mailNav.current?.next(),
-          previous: () => mailNav.current?.previous(),
-          open: () => mailNav.current?.open(),
-        },
-      }),
+  const shortcutActions = useMemo(
+    () => ({
+      navigate: changeTab,
+      calendarEnabled,
+      planningEnabled,
+      calendarActive: tab === "calendar",
+      compose: openComposer,
+      newTask: openTaskDraft,
+      newEvent: openEventDraft,
+      search: openSearch,
+      toggleHelp: () => setHelpOpen((current) => !current),
+      mail: {
+        canMove: () => mailNav.current?.canMove() ?? false,
+        canOpen: () => mailNav.current?.canOpen() ?? false,
+        canAct: () => tab === "inbox" && depthRef.current === 0 && (mailNav.current?.canAct() ?? false),
+        current: () => mailNav.current?.current() ?? null,
+        next: () => mailNav.current?.next(),
+        previous: () => mailNav.current?.previous(),
+        open: () => mailNav.current?.open(),
+        deleteSelected: () => mailNav.current?.deleteSelected(),
+        archiveSelected: () => mailNav.current?.archiveSelected(),
+        toggleStarSelected: () => mailNav.current?.toggleStarSelected(),
+        toggleReadSelected: () => mailNav.current?.toggleReadSelected(),
+        replySelected: () => mailNav.current?.replySelected(),
+        forwardSelected: () => mailNav.current?.forwardSelected(),
+      },
+    }),
     [changeTab, calendarEnabled, planningEnabled, tab, openComposer, openSearch, openTaskDraft, openEventDraft],
+  );
+  const shortcuts = useMemo(() => appShortcuts(shortcutActions), [shortcutActions]);
+  const helpShortcuts = useMemo(
+    () => appShortcuts({ ...shortcutActions, mail: { ...shortcutActions.mail, canAct: () => true } }),
+    [shortcutActions],
   );
   const mod = useShortcuts(shortcuts);
 
@@ -409,6 +421,7 @@ function PhoneApp({ native }: { native?: boolean }) {
                   onSearch={openSearch}
                   onMailAction={mailAction}
                   onReply={replyTo}
+                  onForward={forwardMail}
                   onNotSpam={moveToInbox}
                   onRestore={restoreMail}
                 />
@@ -816,7 +829,7 @@ function PhoneApp({ native }: { native?: boolean }) {
       <ShortcutsOverlay
         open={helpOpen}
         onClose={() => setHelpOpen(false)}
-        shortcuts={shortcuts}
+        shortcuts={helpShortcuts}
         mod={mod}
       />
     </div>

@@ -2,7 +2,14 @@ import { useEffect, useMemo, useRef } from "react";
 
 export type ModKey = "meta" | "ctrl";
 
-export type ShortcutGroup = "Navigation" | "Actions" | "Aide";
+export type ShortcutGroup = "Navigation" | "Actions" | "Actions sur le message" | "Aide";
+
+export const SHORTCUT_GROUPS: { id: ShortcutGroup; hint: string }[] = [
+  { id: "Navigation", hint: "Se déplacer dans l’application" },
+  { id: "Actions", hint: "Créer et retrouver" },
+  { id: "Actions sur le message", hint: "Sur le message sélectionné" },
+  { id: "Aide", hint: "Cette fenêtre" },
+];
 
 export type Shortcut = {
   id: string;
@@ -59,6 +66,8 @@ const KEY_LABELS: Record<string, string> = {
   arrowdown: "↓",
   enter: "Entrée",
   escape: "Échap",
+  delete: "Suppr",
+  backspace: "⌫",
 };
 
 export function parseKeys(keys: string): ParsedKeys {

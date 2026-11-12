@@ -1,14 +1,8 @@
 import { AnimatePresence, motion } from "motion/react";
 import { Keyboard, X } from "lucide-react";
-import { availableShortcuts, keyLabels, type ModKey, type Shortcut, type ShortcutGroup } from "@/lib/shortcuts";
+import { type ModKey, type Shortcut } from "@/lib/shortcuts";
 import { Kbd } from "@/desktop/ui";
-import { cn } from "@/lib/utils";
-
-const GROUPS: { id: ShortcutGroup; hint: string }[] = [
-  { id: "Navigation", hint: "Se déplacer dans l’application" },
-  { id: "Actions", hint: "Créer et retrouver" },
-  { id: "Aide", hint: "Cette fenêtre" },
-];
+import { ShortcutList } from "@/components/shortcut-list";
 
 export function ShortcutsOverlay({
   open,
@@ -21,8 +15,6 @@ export function ShortcutsOverlay({
   shortcuts: readonly Shortcut[];
   mod: ModKey;
 }) {
-  const items = availableShortcuts(shortcuts);
-
   return (
     <AnimatePresence>
       {open && (
@@ -81,43 +73,7 @@ export function ShortcutsOverlay({
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto p-3">
-              {GROUPS.map((group) => {
-                const rows = items.filter((shortcut) => shortcut.group === group.id);
-                if (rows.length === 0) return null;
-                return (
-                  <section key={group.id} className="mb-1 last:mb-0">
-                    <div className="flex items-baseline justify-between gap-3 px-2 pt-2 pb-1">
-                      <h3 className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
-                        {group.id}
-                      </h3>
-                      <span className="text-[10.5px] font-semibold text-ink-muted">{group.hint}</span>
-                    </div>
-                    <ul>
-                      {rows.map((shortcut) => (
-                        <li
-                          key={shortcut.id}
-                          className={cn(
-                            "flex items-center justify-between gap-4 rounded-xl px-2 py-1.5",
-                            "transition-colors duration-200 hover:bg-surface-2",
-                          )}
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-[12.5px] font-bold text-ink">{shortcut.label}</p>
-                            <p className="truncate text-[11px] font-medium text-ink-muted">
-                              {shortcut.description}
-                            </p>
-                          </div>
-                          <span className="flex shrink-0 items-center gap-1">
-                            {keyLabels(shortcut.keys, mod).map((label, index) => (
-                              <Kbd key={`${shortcut.id}-${index}`}>{label}</Kbd>
-                            ))}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                );
-              })}
+              <ShortcutList shortcuts={shortcuts} mod={mod} />
             </div>
           </motion.div>
         </motion.div>

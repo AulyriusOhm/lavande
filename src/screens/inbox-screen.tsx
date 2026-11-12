@@ -35,6 +35,7 @@ export function InboxScreen({
   onReply,
   onNotSpam,
   onRestore,
+  onForward,
 }: {
   mails: Mail[];
   account: string;
@@ -48,6 +49,7 @@ export function InboxScreen({
   onSearch: () => void;
   onMailAction: (kind: "delete" | "archive" | "read", mail: Mail) => void;
   onReply: (mail: Mail) => void;
+  onForward?: (mail: Mail) => void;
   onNotSpam?: (mail: Mail) => void;
   onRestore?: (mail: Mail) => void;
 }) {
@@ -83,6 +85,7 @@ export function InboxScreen({
     summaryLoading,
     refreshSummary,
     openMail,
+    closeMessage,
   } = useMailStore();
 
   useEffect(() => {
@@ -179,6 +182,33 @@ export function InboxScreen({
       return state.active && !state.openMail && state.visible.length > 0;
     };
 
+    const selected = () => {
+      const state = navState.current;
+      if (state.openMail) return state.openMail;
+      if (state.currentIndex === null) return null;
+      return state.visible[state.currentIndex]?.primary ?? null;
+    };
+
+    const threadIdOf = (mail: Mail) =>
+      navState.current.visible.find((thread) =>
+        thread.messages.some((message) => message.id === mail.id),
+      )?.id ?? null;
+
+    const advance = (removed: string | null) => {
+      const state = navState.current;
+      const index = state.currentIndex ?? 0;
+      const remaining = state.visible.filter((thread) => thread.id !== removed).length;
+      setCursor(remaining === 0 ? null : Math.min(index, remaining - 1));
+      if (state.openMail) closeMessage();
+    };
+
+    const guarded = (run: (mail: Mail) => void) => {
+      const mail = selected();
+      if (!mail) return null;
+      run(mail);
+      return mail;
+    };
+
     const move = (step: number) => {
       const state = navState.current;
       if (state.visible.length === 0) return;
@@ -193,6 +223,8 @@ export function InboxScreen({
     navigationRef.current = {
       canMove: available,
       canOpen: available,
+      canAct: () => navState.current.active && selected() !== null,
+      current: selected,
       next: () => move(1),
       previous: () => move(-1),
       open: () => {
@@ -203,12 +235,32 @@ export function InboxScreen({
         setCursor(index);
         onOpen(thread.primary);
       },
+      deleteSelected: () => {
+        const mail = guarded((entry) => onMailAction("delete", entry));
+        if (mail) advance(threadIdOf(mail));
+      },
+      archiveSelected: () => {
+        const mail = guarded((entry) => onMailAction("archive", entry));
+        if (mail) advance(threadIdOf(mail));
+      },
+      toggleStarSelected: () => {
+        guarded((entry) => onToggleStar(entry.id));
+      },
+      toggleReadSelected: () => {
+        guarded((entry) => onMailAction("read", entry));
+      },
+      replySelected: () => {
+        guarded(onReply);
+      },
+      forwardSelected: () => {
+        if (onForward) guarded(onForward);
+      },
     };
 
     return () => {
       navigationRef.current = null;
     };
-  }, [navigationRef, onOpen, focusRow]);
+  }, [navigationRef, onOpen, onMailAction, onToggleStar, onReply, onForward, closeMessage, focusRow]);
 
   useEffect(() => {
     if (wasOpen.current && !openMail && cursor !== null) focusRow(selectedThreadId);

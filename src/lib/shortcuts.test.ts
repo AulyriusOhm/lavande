@@ -87,6 +87,10 @@ describe("raccourcis · plateforme", () => {
     expect(keyLabels("?", "ctrl")).toEqual(["?"]);
     expect(keyLabels("arrowdown", "ctrl")).toEqual(["↓"]);
     expect(keyLabels("enter", "meta")).toEqual(["Entrée"]);
+    expect(keyLabels("mod+delete", "ctrl")).toEqual(["Ctrl", "Suppr"]);
+    expect(keyLabels("mod+delete", "meta")).toEqual(["⌘", "Suppr"]);
+    expect(keyLabels("backspace", "ctrl")).toEqual(["⌫"]);
+    expect(keyLabels("mod+shift+s", "ctrl")).toEqual(["Ctrl", "Maj", "S"]);
   });
 });
 

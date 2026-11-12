@@ -562,6 +562,34 @@ export function DesktopInbox({
   useEffect(() => {
     if (!navigationRef) return;
 
+    const selected = () => {
+      const state = navState.current;
+      if (state.mail) return state.mail;
+      if (state.currentIndex === null) return null;
+      return state.visible[state.currentIndex]?.primary ?? null;
+    };
+
+    const threadIdOf = (mail: Mail) =>
+      navState.current.visible.find((thread) =>
+        thread.messages.some((message) => message.id === mail.id),
+      )?.id ?? null;
+
+    const advance = (removed: string | null) => {
+      const state = navState.current;
+      const index = state.currentIndex ?? 0;
+      const remaining = state.visible.filter((thread) => thread.id !== removed).length;
+      setCursor(remaining === 0 ? null : Math.min(index, remaining - 1));
+      pendingFocus.current = "list";
+      if (state.mail) closeMessage();
+    };
+
+    const guarded = (run: (mail: Mail) => void) => {
+      const mail = selected();
+      if (!mail) return null;
+      run(mail);
+      return mail;
+    };
+
     const move = (step: number) => {
       const state = navState.current;
       if (state.visible.length === 0) return;
@@ -581,6 +609,8 @@ export function DesktopInbox({
     navigationRef.current = {
       canMove: () => navState.current.visible.length > 0,
       canOpen: () => navState.current.visible.length > 0 && listFocused(),
+      canAct: () => selected() !== null,
+      current: selected,
       next: () => move(1),
       previous: () => move(-1),
       open: () => {
@@ -592,12 +622,32 @@ export function DesktopInbox({
         openMessage(thread.primary);
         pendingFocus.current = "reader";
       },
+      deleteSelected: () => {
+        const mail = guarded((entry) => mailAction("delete", entry));
+        if (mail) advance(threadIdOf(mail));
+      },
+      archiveSelected: () => {
+        const mail = guarded((entry) => mailAction("archive", entry));
+        if (mail) advance(threadIdOf(mail));
+      },
+      toggleStarSelected: () => {
+        guarded((entry) => toggleStar(entry.id));
+      },
+      toggleReadSelected: () => {
+        guarded((entry) => mailAction("read", entry));
+      },
+      replySelected: () => {
+        guarded(replyTo);
+      },
+      forwardSelected: () => {
+        guarded(forwardMail);
+      },
     };
 
     return () => {
       navigationRef.current = null;
     };
-  }, [navigationRef, openMessage, focusRow, listFocused]);
+  }, [navigationRef, openMessage, closeMessage, mailAction, toggleStar, replyTo, forwardMail, focusRow, listFocused]);
 
   useEffect(() => {
     if (pendingFocus.current === "reader" && mail) {

@@ -3,8 +3,10 @@ import {
   Bell,
   Blocks,
   CalendarDays,
+  ChevronDown,
   ChevronRight,
   KeyRound,
+  Keyboard,
   ListChecks,
   Moon,
   Palette,
@@ -25,6 +27,9 @@ import type { Mail } from "@/lib/mail";
 import { cn } from "@/lib/utils";
 import { Avatar, Card, SectionTitle, ToggleRow } from "@/components/ui/primitives";
 import { SyncSettings } from "@/components/sync-settings";
+import { ShortcutList } from "@/components/shortcut-list";
+import { detectModKey } from "@/lib/shortcuts";
+import { shortcutCatalog } from "@/lib/app-shortcuts";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { AnimatedGradientText } from "@/components/ui/animated-text";
@@ -63,12 +68,15 @@ export function SettingsScreen({
     setPlanningEnabled,
   } = usePrefs();
   const [notifications, setNotifications] = useState(true);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [preview, setPreview] = useState<PreviewMode>("unlocked");
   const enabled = mergeFlags(
     Object.fromEntries(MCP_SERVERS.map((server) => [server.id, server.status === "connected"])),
     mcpEnabled,
   );
   const mcp = mcpCounts((server) => enabled[server.id]);
+  const mod = detectModKey();
+  const shortcuts = shortcutCatalog();
 
   const unreadFor = (id: string) =>
     mails.filter(
@@ -384,6 +392,39 @@ export function SettingsScreen({
             Ces gestes s'appliquent aux mails de la boîte. Les gestes des suggestions de la
             planification sont gérés séparément.
           </p>
+        </Card>
+      </BlurFade>
+
+      <SectionTitle hint={mod === "meta" ? "⌘ sur Mac" : "Ctrl sur cet appareil"}>Raccourcis clavier</SectionTitle>
+      <BlurFade delay={0.175}>
+        <Card className="mx-5 overflow-hidden">
+          <button
+            type="button"
+            aria-expanded={shortcutsOpen}
+            onClick={() => setShortcutsOpen(!shortcutsOpen)}
+            className="focus-row flex w-full items-center gap-3 px-3.5 py-3 transition-colors hover:bg-surface-2/70"
+          >
+            <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-surface-2 text-ink-soft">
+              <Keyboard className="size-4" />
+            </span>
+            <span className="min-w-0 flex-1 text-left leading-tight">
+              <span className="block text-[12.5px] font-bold text-ink">Toutes les touches</span>
+              <span className="block text-[10.5px] font-medium text-ink-muted">
+                {shortcuts.length} raccourcis · navigation, message et aide
+              </span>
+            </span>
+            <ChevronDown
+              className={cn(
+                "size-4 shrink-0 text-ink-muted transition-transform duration-200",
+                shortcutsOpen && "rotate-180",
+              )}
+            />
+          </button>
+          {shortcutsOpen && (
+            <div className="border-t border-line px-1 py-1">
+              <ShortcutList shortcuts={shortcuts} mod={mod} />
+            </div>
+          )}
         </Card>
       </BlurFade>
 

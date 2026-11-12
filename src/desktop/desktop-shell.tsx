@@ -27,8 +27,18 @@ export function DesktopApp() {
 }
 
 function DesktopMain() {
-  const { notices, dismissNotice, openComposer, openMail, mode, phase, connectOpen, closeConnect } =
-    useMailStore();
+  const {
+    notices,
+    dismissNotice,
+    openComposer,
+    openMail,
+    mode,
+    phase,
+    connectOpen,
+    closeConnect,
+    composeOpen,
+    removeTarget,
+  } = useMailStore();
   const { calendarEnabled, planningEnabled } = usePrefs();
   const [view, setView] = useState<DesktopView>(() => {
     const initial = window.location.hash.slice(1) as DesktopView;
@@ -67,27 +77,49 @@ function DesktopMain() {
 
   const toggleHelp = useCallback(() => setHelpOpen((current) => !current), []);
 
-  const shortcuts = useMemo(
-    () =>
-      appShortcuts({
-        navigate: changeView,
-        calendarEnabled,
-        planningEnabled,
-        calendarActive: view === "calendar",
-        compose: openComposer,
-        newTask: () => setNewTaskOpen(true),
-        newEvent: () => setNewEventOpen(true),
-        search: () => setSearchOpen(true),
-        toggleHelp,
-        mail: {
-          canMove: () => mailNav.current?.canMove() ?? false,
-          canOpen: () => mailNav.current?.canOpen() ?? false,
-          next: () => mailNav.current?.next(),
-          previous: () => mailNav.current?.previous(),
-          open: () => mailNav.current?.open(),
-        },
-      }),
-    [changeView, calendarEnabled, planningEnabled, view, openComposer, toggleHelp],
+  const overlayOpen =
+    searchOpen ||
+    newTaskOpen ||
+    newEventOpen ||
+    pgpOpen ||
+    helpOpen ||
+    connectOpen ||
+    composeOpen ||
+    Boolean(removeTarget);
+
+  const shortcutActions = useMemo(
+    () => ({
+      navigate: changeView,
+      calendarEnabled,
+      planningEnabled,
+      calendarActive: view === "calendar",
+      compose: openComposer,
+      newTask: () => setNewTaskOpen(true),
+      newEvent: () => setNewEventOpen(true),
+      search: () => setSearchOpen(true),
+      toggleHelp,
+      mail: {
+        canMove: () => mailNav.current?.canMove() ?? false,
+        canOpen: () => mailNav.current?.canOpen() ?? false,
+        canAct: () => view === "inbox" && !overlayOpen && (mailNav.current?.canAct() ?? false),
+        current: () => mailNav.current?.current() ?? null,
+        next: () => mailNav.current?.next(),
+        previous: () => mailNav.current?.previous(),
+        open: () => mailNav.current?.open(),
+        deleteSelected: () => mailNav.current?.deleteSelected(),
+        archiveSelected: () => mailNav.current?.archiveSelected(),
+        toggleStarSelected: () => mailNav.current?.toggleStarSelected(),
+        toggleReadSelected: () => mailNav.current?.toggleReadSelected(),
+        replySelected: () => mailNav.current?.replySelected(),
+        forwardSelected: () => mailNav.current?.forwardSelected(),
+      },
+    }),
+    [changeView, calendarEnabled, planningEnabled, view, overlayOpen, openComposer, toggleHelp],
+  );
+  const shortcuts = useMemo(() => appShortcuts(shortcutActions), [shortcutActions]);
+  const helpShortcuts = useMemo(
+    () => appShortcuts({ ...shortcutActions, mail: { ...shortcutActions.mail, canAct: () => true } }),
+    [shortcutActions],
   );
   const mod = useShortcuts(shortcuts);
 
@@ -211,7 +243,7 @@ function DesktopMain() {
       <ShortcutsOverlay
         open={helpOpen}
         onClose={() => setHelpOpen(false)}
-        shortcuts={shortcuts}
+        shortcuts={helpShortcuts}
         mod={mod}
       />
     </div>

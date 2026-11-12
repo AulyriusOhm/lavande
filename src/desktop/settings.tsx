@@ -57,10 +57,13 @@ import { llmProbe, llmReady } from "@/lib/llm";
 import type { SummaryConfig } from "@/lib/summary";
 import { ACCENT_PRESETS, useTheme, type ThemeMode } from "@/lib/theme";
 import { useMailStore } from "@/lib/store";
+import { detectModKey } from "@/lib/shortcuts";
+import { shortcutCatalog } from "@/lib/app-shortcuts";
 import { cn } from "@/lib/utils";
 import { Avatar, Switch, ToggleRow } from "@/components/ui/primitives";
 import { SignatureEditor } from "@/components/signature-editor";
 import { SyncSettings } from "@/components/sync-settings";
+import { ShortcutList } from "@/components/shortcut-list";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import {
@@ -86,6 +89,7 @@ const SECTIONS = [
   { id: "comptes", label: "Comptes" },
   { id: "signatures", label: "Signatures" },
   { id: "apparence", label: "Apparence" },
+  { id: "clavier", label: "Raccourcis clavier" },
   { id: "modules", label: "Modules" },
   { id: "securite", label: "Sécurité" },
   { id: "synchronisation", label: "Synchronisation" },
@@ -306,6 +310,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   const [savingRename, setSavingRename] = useState(false);
   const [probing, setProbing] = useState(false);
   const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(null);
+  const mod = detectModKey();
+  const shortcutList = shortcutCatalog();
 
   useEffect(() => setHex(accent), [accent]);
 
@@ -736,6 +742,12 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                     </div>
                   </Surface>
                 </div>
+              </Block>
+
+              <Block id="clavier" label="Raccourcis clavier" hint={mod === "meta" ? "⌘ sur Mac" : "Ctrl sur cet appareil"}>
+                <Surface className="px-1 py-1">
+                  <ShortcutList shortcuts={shortcutList} mod={mod} />
+                </Surface>
               </Block>
 
               <Block id="modules" label="Modules">

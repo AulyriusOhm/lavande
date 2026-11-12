@@ -1,11 +1,20 @@
+import type { Mail } from "@/lib/mail";
 import { defineShortcuts, type Shortcut } from "@/lib/shortcuts";
 
 export type MailNavigation = {
   canMove: () => boolean;
   canOpen: () => boolean;
+  canAct: () => boolean;
+  current: () => Mail | null;
   next: () => void;
   previous: () => void;
   open: () => void;
+  deleteSelected: () => void;
+  archiveSelected: () => void;
+  toggleStarSelected: () => void;
+  toggleReadSelected: () => void;
+  replySelected: () => void;
+  forwardSelected: () => void;
 };
 
 export type AppShortcutActions = {
@@ -164,5 +173,92 @@ export function appShortcuts(actions: AppShortcutActions): Shortcut[] {
       when: mail.canOpen,
       run: mail.open,
     },
+    {
+      id: "mail-delete",
+      keys: "delete",
+      group: "Actions sur le message",
+      label: "Supprimer",
+      description: "Mettre le message sélectionné à la corbeille",
+      when: mail.canAct,
+      run: mail.deleteSelected,
+    },
+    {
+      id: "mail-archive",
+      keys: "mod+e",
+      group: "Actions sur le message",
+      label: "Archiver",
+      description: "Archiver le message sélectionné",
+      when: mail.canAct,
+      run: mail.archiveSelected,
+    },
+    {
+      id: "mail-star",
+      keys: "mod+shift+s",
+      group: "Actions sur le message",
+      label: "Suivre le message",
+      description: "Ajouter ou retirer l’étoile",
+      when: mail.canAct,
+      run: mail.toggleStarSelected,
+    },
+    {
+      id: "mail-read",
+      keys: "mod+shift+u",
+      group: "Actions sur le message",
+      label: "Lu / non lu",
+      description: "Basculer l’état de lecture",
+      when: mail.canAct,
+      run: mail.toggleReadSelected,
+    },
+    {
+      id: "mail-reply",
+      keys: "mod+shift+r",
+      group: "Actions sur le message",
+      label: "Répondre",
+      description: "Répondre au message sélectionné",
+      when: mail.canAct,
+      run: mail.replySelected,
+    },
+    {
+      id: "mail-forward",
+      keys: "mod+shift+f",
+      group: "Actions sur le message",
+      label: "Transférer",
+      description: "Transférer le message sélectionné",
+      when: mail.canAct,
+      run: mail.forwardSelected,
+    },
   ]);
+}
+
+const noop = () => {};
+
+const CATALOG_NAVIGATION: MailNavigation = {
+  canMove: () => true,
+  canOpen: () => true,
+  canAct: () => true,
+  current: () => null,
+  next: noop,
+  previous: noop,
+  open: noop,
+  deleteSelected: noop,
+  archiveSelected: noop,
+  toggleStarSelected: noop,
+  toggleReadSelected: noop,
+  replySelected: noop,
+  forwardSelected: noop,
+};
+
+export function shortcutCatalog(): Shortcut[] {
+  return appShortcuts({
+    navigate: noop,
+    calendarEnabled: true,
+    planningEnabled: true,
+    calendarActive: false,
+    compose: noop,
+    newTask: noop,
+    newEvent: noop,
+    search: noop,
+    toggleHelp: noop,
+    mail: CATALOG_NAVIGATION,
+  });
 }

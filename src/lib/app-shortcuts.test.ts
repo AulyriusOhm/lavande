@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { appShortcuts, type AppShortcutActions, type MailNavigation } from "@/lib/app-shortcuts";
+import {
+  appShortcuts,
+  shortcutCatalog,
+  type AppShortcutActions,
+  type MailNavigation,
+} from "@/lib/app-shortcuts";
 import { detectModKey, resolveShortcut, type ShortcutEvent } from "@/lib/shortcuts";
 
 const mod = detectModKey();
@@ -16,9 +21,17 @@ function navigation(overrides: Partial<MailNavigation> = {}): MailNavigation {
   return {
     canMove: () => true,
     canOpen: () => true,
+    canAct: () => true,
+    current: () => null,
     next: vi.fn(),
     previous: vi.fn(),
     open: vi.fn(),
+    deleteSelected: vi.fn(),
+    archiveSelected: vi.fn(),
+    toggleStarSelected: vi.fn(),
+    toggleReadSelected: vi.fn(),
+    replySelected: vi.fn(),
+    forwardSelected: vi.fn(),
     ...overrides,
   };
 }
@@ -83,5 +96,78 @@ describe("raccourcis · navigation des mails", () => {
     expect(resolveShortcut(list, press("?", { shiftKey: true }), mod)?.id).toBe("help-question");
     expect(resolveShortcut(list, press("/", MODIFIER), mod)?.id).toBe("help");
     expect(resolveShortcut(list, press(",", MODIFIER), mod)?.id).toBe("settings-shortcut");
+  });
+});
+
+describe("raccourcis · actions sur le message", () => {
+  const shifted = { ...MODIFIER, shiftKey: true };
+
+  it("associe chaque action à sa combinaison", () => {
+    const mail = navigation();
+    const list = appShortcuts(actions(mail));
+
+    expect(resolveShortcut(list, press("Delete"), mod)?.id).toBe("mail-delete");
+    expect(resolveShortcut(list, press("e", MODIFIER), mod)?.id).toBe("mail-archive");
+    expect(resolveShortcut(list, press("S", shifted), mod)?.id).toBe("mail-star");
+    expect(resolveShortcut(list, press("U", shifted), mod)?.id).toBe("mail-read");
+    expect(resolveShortcut(list, press("R", shifted), mod)?.id).toBe("mail-reply");
+    expect(resolveShortcut(list, press("F", shifted), mod)?.id).toBe("mail-forward");
+
+    resolveShortcut(list, press("Delete"), mod)?.run();
+    resolveShortcut(list, press("e", MODIFIER), mod)?.run();
+    resolveShortcut(list, press("S", shifted), mod)?.run();
+    resolveShortcut(list, press("U", shifted), mod)?.run();
+    resolveShortcut(list, press("R", shifted), mod)?.run();
+    resolveShortcut(list, press("F", shifted), mod)?.run();
+
+    expect(mail.deleteSelected).toHaveBeenCalledTimes(1);
+    expect(mail.archiveSelected).toHaveBeenCalledTimes(1);
+    expect(mail.toggleStarSelected).toHaveBeenCalledTimes(1);
+    expect(mail.toggleReadSelected).toHaveBeenCalledTimes(1);
+    expect(mail.replySelected).toHaveBeenCalledTimes(1);
+    expect(mail.forwardSelected).toHaveBeenCalledTimes(1);
+  });
+
+  it("ne déclenche rien sans message actif", () => {
+    const mail = navigation({ canAct: () => false });
+    const list = appShortcuts(actions(mail));
+
+    expect(resolveShortcut(list, press("Delete"), mod)).toBeNull();
+    expect(resolveShortcut(list, press("e", MODIFIER), mod)).toBeNull();
+    expect(resolveShortcut(list, press("S", shifted), mod)).toBeNull();
+    expect(resolveShortcut(list, press("U", shifted), mod)).toBeNull();
+    expect(resolveShortcut(list, press("R", shifted), mod)).toBeNull();
+    expect(resolveShortcut(list, press("F", shifted), mod)).toBeNull();
+  });
+
+  it("ne déclenche rien depuis un champ de saisie", () => {
+    const mail = navigation();
+    const list = appShortcuts(actions(mail));
+    const field = document.createElement("input");
+
+    expect(resolveShortcut(list, press("Delete", { ...MODIFIER, target: field }), mod)).toBeNull();
+    expect(resolveShortcut(list, press("e", { ...MODIFIER, target: field }), mod)).toBeNull();
+    expect(resolveShortcut(list, press("S", { ...shifted, target: field }), mod)).toBeNull();
+  });
+
+  it("nomme les combinaisons d'action dans le catalogue des réglages", () => {
+    const list = shortcutCatalog();
+    const ids = list.map((entry) => entry.id);
+
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        "mail-delete",
+        "mail-archive",
+        "mail-star",
+        "mail-read",
+        "mail-reply",
+        "mail-forward",
+      ]),
+    );
+    expect(
+      list
+        .filter((entry) => entry.group === "Actions sur le message")
+        .map((entry) => entry.keys),
+    ).toEqual(["delete", "mod+e", "mod+shift+s", "mod+shift+u", "mod+shift+r", "mod+shift+f"]);
   });
 });
