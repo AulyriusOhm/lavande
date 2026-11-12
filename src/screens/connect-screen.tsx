@@ -24,6 +24,34 @@ const LABEL = "text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercas
 const portsOf = (value: Encryption) =>
   ENCRYPTIONS.find((entry) => entry.value === value) ?? ENCRYPTIONS[0];
 
+export type OAuthProvider = "google" | "microsoft" | "custom";
+
+type OAuthEnv = Pick<
+  ImportMetaEnv,
+  "VITE_OAUTH_CLIENT_ID" | "VITE_MICROSOFT_CLIENT_ID" | "VITE_GOOGLE_CLIENT_ID"
+>;
+
+const OAUTH_PROVIDERS: { value: OAuthProvider; label: string }[] = [
+  { value: "google", label: "Google" },
+  { value: "microsoft", label: "Microsoft" },
+];
+
+export function builtInClientId(provider: OAuthProvider, env: OAuthEnv = import.meta.env): string {
+  if (provider === "google") return env.VITE_GOOGLE_CLIENT_ID ?? "";
+  if (provider === "microsoft") {
+    return env.VITE_OAUTH_CLIENT_ID ?? env.VITE_MICROSOFT_CLIENT_ID ?? "";
+  }
+  return "";
+}
+
+export function resolveClientId(
+  provider: OAuthProvider,
+  manualClientId: string,
+  env: OAuthEnv = import.meta.env,
+): string {
+  return manualClientId.trim() || builtInClientId(provider, env);
+}
+
 async function waitForOAuth(session: string) {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const status = await mailApi.oauthStatus(session);
@@ -63,12 +91,11 @@ export function ConnectScreen({
   const [syncFolders, setSyncFolders] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [discovering, setDiscovering] = useState(false);
-  const builtInClientId =
-    import.meta.env.VITE_OAUTH_CLIENT_ID ??
-    import.meta.env.VITE_MICROSOFT_CLIENT_ID ??
-    import.meta.env.VITE_GOOGLE_CLIENT_ID ??
-    "";
-  const [clientId, setClientId] = useState(builtInClientId);
+  const [manualClientIds, setManualClientIds] = useState<Record<OAuthProvider, string>>({
+    google: "",
+    microsoft: "",
+    custom: "",
+  });
   const [oauthBusy, setOauthBusy] = useState<string | null>(null);
   const [oauthError, setOauthError] = useState<string | null>(null);
   const [pendingUrl, setPendingUrl] = useState<string | null>(null);
@@ -143,7 +170,13 @@ export function ConnectScreen({
     setSmtpPort(String(portsOf(value).smtp));
   };
 
-  const startOAuth = async (provider: "google" | "microsoft" | "custom") => {
+  const manualProviders = OAUTH_PROVIDERS.filter((entry) => !builtInClientId(entry.value));
+  const embeddedNames = OAUTH_PROVIDERS.filter((entry) => builtInClientId(entry.value))
+    .map((entry) => entry.label)
+    .join(" et ");
+  const manualNames = manualProviders.map((entry) => entry.label).join(" et ");
+
+  const startOAuth = async (provider: OAuthProvider) => {
     const address = email.trim();
     if (!address.includes("@")) {
       setOauthError("Renseigne d'abord l'adresse e-mail.");
@@ -165,7 +198,7 @@ export function ConnectScreen({
         id: accountSlug(address),
         imap: { host: imapHost.trim(), port: Number(imapPort), encryption: imapEncryption },
         smtp: { host: smtpHost.trim(), port: Number(smtpPort), encryption: smtpEncryption },
-        client_id: clientId.trim() || undefined,
+        client_id: resolveClientId(provider, manualClientIds[provider]) || undefined,
       });
       if (tab) {
         tab.location.replace(started.auth_url);
@@ -368,50 +401,44 @@ export function ConnectScreen({
             <div className={cn("rounded-2xl border border-line bg-surface/60 p-3", desktop && "col-span-2")}>
               <p className={LABEL}>Connexion par OAuth2</p>
               <p className="mt-1 text-[11px] leading-relaxed font-medium text-ink-muted">
-                {builtInClientId
-                  ? "Le consentement s'ouvre dans ton navigateur, puis la boîte est relevée par le service local. Aucun mot de passe ne transite par l'interface."
-                  : "Le consentement s'ouvre dans un nouvel onglet. Il faut un identifiant d'application OAuth (client_id) enregistré chez le fournisseur : rien n'est embarqué dans Lavande."}
+                {manualProviders.length === 0
+                  ? "Le consentement s'ouvre dans ton navigateur : l'identifiant d'application de chaque fournisseur est embarqué dans Lavande. Aucun mot de passe ne transite par l'interface."
+                  : `Le consentement s'ouvre dans ton navigateur. ${embeddedNames ? `${embeddedNames} : identifiant d'application embarqué. ` : ""}${manualNames} : aucun identifiant embarqué, saisis le tien ci-dessous.`}
               </p>
-              {builtInClientId ? null : (
-                <>
-                  <input
-                    className={cn(FIELD, "mt-2 h-9 text-[12px]")}
-                    value={clientId}
-                    onChange={(event) => setClientId(event.target.value)}
-                    placeholder="Application (client) ID"
-                    autoComplete="off"
-                    aria-label="Identifiant d'application OAuth"
-                  />
-                  <OAuthGuide redirectUri={redirectUri} />
-                </>
-              )}
+              {manualProviders.map((entry) => (
+                <input
+                  key={entry.value}
+                  className={cn(FIELD, "mt-2 h-9 text-[12px]")}
+                  value={manualClientIds[entry.value]}
+                  onChange={(event) =>
+                    setManualClientIds((current) => ({
+                      ...current,
+                      [entry.value]: event.target.value,
+                    }))
+                  }
+                  placeholder="Application (client) ID"
+                  autoComplete="off"
+                  aria-label={`Identifiant d'application ${entry.label} (client_id)`}
+                />
+              ))}
+              {manualProviders.length > 0 ? <OAuthGuide redirectUri={redirectUri} /> : null}
               <div className="mt-2 flex flex-wrap gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => void startOAuth("google")}
-                  disabled={oauthBusy !== null}
-                  className="focus-ring inline-flex min-h-9 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11.5px] font-bold text-ink transition-colors hover:border-accent-ring disabled:opacity-50"
-                >
-                  {oauthBusy === "google" ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <PlugZap className="size-3.5" strokeWidth={2.4} />
-                  )}
-                  Google
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void startOAuth("microsoft")}
-                  disabled={oauthBusy !== null}
-                  className="focus-ring inline-flex min-h-9 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11.5px] font-bold text-ink transition-colors hover:border-accent-ring disabled:opacity-50"
-                >
-                  {oauthBusy === "microsoft" ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <PlugZap className="size-3.5" strokeWidth={2.4} />
-                  )}
-                  Microsoft
-                </button>
+                {OAUTH_PROVIDERS.map((entry) => (
+                  <button
+                    key={entry.value}
+                    type="button"
+                    onClick={() => void startOAuth(entry.value)}
+                    disabled={oauthBusy !== null}
+                    className="focus-ring inline-flex min-h-9 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11.5px] font-bold text-ink transition-colors hover:border-accent-ring disabled:opacity-50"
+                  >
+                    {oauthBusy === entry.value ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <PlugZap className="size-3.5" strokeWidth={2.4} />
+                    )}
+                    {entry.label}
+                  </button>
+                ))}
                 {oauthBusy ? (
                   <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted">
                     <CheckCircle2 className="size-3.5" />
