@@ -19,7 +19,8 @@ export function textToHtml(text: string): string {
   if (!text.trim()) return "";
   return text
     .split(/\n{2,}/)
-    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
+    .filter((paragraph) => paragraph.trim())
+    .map((paragraph) => `<p>${escapeHtml(paragraph.replace(/^\n+|\n+$/g, "")).replace(/\n/g, "<br>")}</p>`)
     .join("");
 }
 
@@ -36,8 +37,11 @@ export function isHtmlEmpty(html: string): boolean {
   return htmlToText(html).length === 0;
 }
 
+const HTML_TAG =
+  /<\/?(?:article|blockquote|body|center|code|div|font|head|html|img|pre|section|span|strong|table|tbody|td|th|thead|tr|ul|hr|br|h[1-6]|a|b|em|i|u|li|ol|p)\b[^>]*>/i;
+
 export function looksLikeHtml(value: string): boolean {
-  return /<\/?[a-z][\s\S]*>/i.test(value);
+  return HTML_TAG.test(value);
 }
 
 export function ensureHtml(value: string): string {

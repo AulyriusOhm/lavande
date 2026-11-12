@@ -24,6 +24,10 @@ describe("textToHtml", () => {
   it("renvoie une chaîne vide pour un texte vide", () => {
     expect(textToHtml("   \n  ")).toBe("");
   });
+
+  it("ignore les lignes vides de tête et de queue", () => {
+    expect(textToHtml("\n\nBonjour\n")).toBe("<p>Bonjour</p>");
+  });
 });
 
 describe("htmlToText", () => {
@@ -72,6 +76,49 @@ describe("ensureHtml / looksLikeHtml", () => {
 
   it("renvoie vide pour une entrée vide", () => {
     expect(ensureHtml("  ")).toBe("");
+  });
+
+  it("ne prend pas une URL entre chevrons, un mailto ou un émoticône pour du HTML", () => {
+    expect(looksLikeHtml("<https://bbfhigcd.r.af.d.sendibt2.com/tr/cl/abc123>")).toBe(false);
+    expect(looksLikeHtml("<mailto:a@b.c>")).toBe(false);
+    expect(looksLikeHtml("j'ai vu <3")).toBe(false);
+    expect(looksLikeHtml("Bonjour\n> citation")).toBe(false);
+  });
+
+  it("reconnaît les vraies balises HTML", () => {
+    expect(looksLikeHtml("<p>")).toBe(true);
+    expect(looksLikeHtml("<div class=x>")).toBe(true);
+    expect(looksLikeHtml("<br/>")).toBe(true);
+    expect(looksLikeHtml('<a href="https://x.fr">lien</a>')).toBe(true);
+    expect(looksLikeHtml("</blockquote>")).toBe(true);
+  });
+
+  it("garde une ligne par ligne d'une réponse citée contenant <https://…>", () => {
+    const body = [
+      "",
+      "---",
+      "Le lundi 9 novembre, Support a écrit :",
+      "> Bonjour,",
+      ">",
+      "> Suivi :",
+      "> <https://example.com/a/b>",
+      "> Je vais relancer.",
+    ].join("\n");
+
+    const html = ensureHtml(body);
+
+    expect(html.split("<br>").length).toBe(7);
+    expect(html).toContain(
+      "Suivi :<br>&gt; &lt;https://example.com/a/b&gt;<br>&gt; Je vais relancer.",
+    );
+    expect(html).not.toContain("<https");
+  });
+
+  it("préserve les paragraphes d'un texte brut contenant une URL entre chevrons", () => {
+    const html = ensureHtml("Bonjour\n\n> citation\n<https://x.fr>\n\nMerci");
+
+    expect(html.match(/<p>/g)?.length).toBe(3);
+    expect(html).toContain("&gt; citation<br>&lt;https://x.fr&gt;");
   });
 });
 

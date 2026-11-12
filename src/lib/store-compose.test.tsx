@@ -6,6 +6,7 @@ import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { PrefsProvider } from "@/lib/prefs";
 import { MAILS } from "@/lib/mail";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
+import { ensureHtml, looksLikeHtml } from "@/lib/rich-text";
 import { createMemoryStorage } from "@/lib/sync/storage";
 import { emptyDraft } from "@/lib/draft";
 
@@ -122,6 +123,52 @@ describe("garde du brouillon en cours", () => {
     expect(result.current.composeOpen).toBe(true);
     expect(result.current.composeDraft?.to).toBe(target.email);
     expect(emptyDraft(result.current.composeDraft!)).toBe(false);
+  });
+});
+
+describe("citation d'un mail texte contenant une URL entre chevrons", () => {
+  const QUOTED_BODY = [
+    "Bonjour,",
+    "Merci de votre retour, voici le suivi :",
+    "<https://bbfhigcd.r.af.d.sendibt2.com/tr/cl/abc123>",
+    "Je vais relancer.",
+  ];
+
+  const targetMail = (result: ReturnType<typeof mount>["result"]) => ({
+    ...result.current.mails.find((mail) => mail.folder === "inbox")!,
+    body: QUOTED_BODY,
+  });
+
+  it("répondre produit une ligne citée par ligne, pas un pavé", () => {
+    const { result } = mount();
+    act(() => {
+      result.current.replyTo(targetMail(result));
+    });
+
+    const body = result.current.composeDraft!.body;
+    const html = ensureHtml(body);
+
+    expect(looksLikeHtml(body)).toBe(false);
+    expect(html).toContain(
+      "&gt; Bonjour,<br>&gt; Merci de votre retour, voici le suivi :<br>&gt; &lt;https://bbfhigcd.r.af.d.sendibt2.com/tr/cl/abc123&gt;<br>&gt; Je vais relancer.",
+    );
+    expect(html.match(/&gt; /g)?.length).toBe(QUOTED_BODY.length);
+    expect(html.split("<br>").length).toBe(body.replace(/^\n+/, "").split("\n").length);
+  });
+
+  it("transférer garde une ligne par ligne du corps transféré", () => {
+    const { result } = mount();
+    act(() => {
+      result.current.forwardMail(targetMail(result));
+    });
+
+    const body = result.current.composeDraft!.body;
+    const html = ensureHtml(body);
+
+    expect(looksLikeHtml(body)).toBe(false);
+    expect(html).toContain(
+      "Bonjour,<br>Merci de votre retour, voici le suivi :<br>&lt;https://bbfhigcd.r.af.d.sendibt2.com/tr/cl/abc123&gt;<br>Je vais relancer.",
+    );
   });
 });
 
