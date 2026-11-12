@@ -78,7 +78,7 @@ async fn sync(
     let config = state.account(&id).await?;
     let selection = state.sync_folders(&id)?;
     let mapping = FolderMapping::default();
-    let keys = state.pgp().keyring().await?;
+    let keys = state.keyring_for(&id).await?;
     let reports: Vec<FolderReport> = match request.folder_path {
         Some(folder_path) => {
             let mut session = imap::connect_with(&config, state.tls()).await?;
@@ -141,7 +141,7 @@ async fn message(
         return Ok(Json(stored));
     }
 
-    let keys = state.pgp().keyring().await?;
+    let keys = state.keyring_for(&id).await?;
     let mut session = imap::connect_with(&config, state.tls()).await?;
     imap::fetch_body(&mut session, state.store(), &id, &folder_path, uid, &keys).await?;
     logout(session).await;
@@ -164,7 +164,7 @@ async fn attachment(
         .store()
         .get_message(&id, &folder_path, uid)?
         .ok_or_else(|| unknown(&id, &folder_path, uid))?;
-    let keys = state.pgp().keyring().await?;
+    let keys = state.keyring_for(&id).await?;
     let mut session = imap::connect_with(&config, state.tls()).await?;
     let fetched = imap::fetch_attachment(&mut session, &folder_path, uid, index, &keys).await;
     logout(session).await;
@@ -200,7 +200,7 @@ async fn html_images(
         return Err(no_html(&folder_path, uid));
     }
 
-    let keys = state.pgp().keyring().await?;
+    let keys = state.keyring_for(&id).await?;
     let mut session = imap::connect_with(&config, state.tls()).await?;
     let fetched = imap::fetch_html_with_images(&mut session, &folder_path, uid, &keys).await;
     logout(session).await;
@@ -280,7 +280,7 @@ async fn move_message(
     ApiJson(request): ApiJson<MoveRequest>,
 ) -> Result<StatusCode, ApiError> {
     let config = state.account(&id).await?;
-    let keys = state.pgp().keyring().await?;
+    let keys = state.keyring_for(&id).await?;
     let mut session = imap::connect_with(&config, state.tls()).await?;
     imap::move_message(
         &mut session,
@@ -349,7 +349,7 @@ async fn send(
 
     // Best effort: the mail is gone, a failing Sent copy or \Answered push
     // must not turn a successful send into an error.
-    let keys = state.pgp().keyring().await.unwrap_or_default();
+    let keys = state.keyring_for(&id).await.unwrap_or_default();
     let sent_folder = state
         .store()
         .list_folders(&id)?
@@ -419,7 +419,7 @@ async fn save_draft(
         })?;
     let email = smtp::build_message(&outgoing)?;
     let raw = email.formatted();
-    let keys = state.pgp().keyring().await.unwrap_or_default();
+    let keys = state.keyring_for(&id).await.unwrap_or_default();
     let mut session = imap::connect_with(&config, state.tls()).await?;
     imap::append_draft(
         &mut session,

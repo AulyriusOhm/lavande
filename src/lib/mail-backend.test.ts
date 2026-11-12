@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { folderOptionsForAll, folderTargets, sendInputOf } from "@/lib/mail-backend";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  accountDecrypts,
+  folderOptionsForAll,
+  folderTargets,
+  htmlImagesOf,
+  sendInputOf,
+  setAccountDecryptPolicy,
+} from "@/lib/mail-backend";
 import type { FolderRecord } from "@/lib/mail-backend";
 import type { ComposeDraft } from "@/lib/draft";
 import { baseDraft } from "@/lib/draft";
@@ -130,5 +137,35 @@ describe("sendInputOf", () => {
   it("n'envoie aucun tableau de pièces jointes quand le brouillon n'en a pas", () => {
     expect(sendInputOf(draft()).attachments).toBeUndefined();
     expect(sendInputOf(draft({ attachments: [] })).attachments).toBeUndefined();
+  });
+});
+
+describe("htmlImagesOf · interrupteur PGP du compte", () => {
+  const source = { accountId: "pro", folderPath: "INBOX", uid: 7 };
+
+  afterEach(() => setAccountDecryptPolicy({}));
+
+  it("refuse le compte dont l'interrupteur est fermé, sans appeler le démon", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    setAccountDecryptPolicy({ pro: false });
+
+    await expect(htmlImagesOf(source)).rejects.toThrow(
+      "PGP désactivé pour ce compte · message chiffré laissé fermé",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("laisse passer les comptes ouverts et ceux que la politique ignore", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ html: "<p>x</p>" }) })),
+    );
+
+    expect(await htmlImagesOf(source)).toBe("<p>x</p>");
+    setAccountDecryptPolicy({ autre: false });
+    expect(await htmlImagesOf(source)).toBe("<p>x</p>");
+    expect(accountDecrypts("pro")).toBe(true);
+    expect(accountDecrypts("autre")).toBe(false);
   });
 });

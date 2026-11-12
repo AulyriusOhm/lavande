@@ -123,7 +123,7 @@ async fn sync_and_publish(
     folder_path: &str,
 ) {
     let mapping = FolderMapping::default();
-    let keys = match state.pgp().keyring().await {
+    let keys = match state.keyring_for(&config.id).await {
         Ok(keys) => keys,
         Err(error) => {
             tracing::warn!(%error, "trousseau PGP illisible : synchronisation sans déchiffrement");

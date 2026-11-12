@@ -1,7 +1,8 @@
 CREATE TABLE IF NOT EXISTS accounts (
     id TEXT PRIMARY KEY,
     label TEXT,
-    email TEXT
+    email TEXT,
+    pgp INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS folders (

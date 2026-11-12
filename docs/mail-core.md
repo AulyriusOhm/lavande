@@ -395,6 +395,9 @@ impl Store {
     pub fn migrate(&self) -> Result<(), MailError>;
 
     pub fn upsert_account(&self, id: &str, label: &str, email: &str) -> Result<(), MailError>;
+    pub fn pgp_enabled(&self, account_id: &str) -> Result<bool, MailError>;
+    pub fn set_pgp_enabled(&self, account_id: &str, enabled: bool) -> Result<(), MailError>;
+    pub fn close_encrypted_bodies(&self, account_id: &str) -> Result<usize, MailError>;
     pub fn upsert_folder(&self, folder: &Folder) -> Result<(), MailError>;
     pub fn get_folder(&self, account_id: &str, path: &str) -> Result<Option<Folder>, MailError>;
 
@@ -413,7 +416,7 @@ impl Store {
     ) -> Result<usize, MailError>;
     pub fn set_body(
         &self, account_id: &str, folder_path: &str, uid: u32,
-        text: Option<&str>, html: Option<&str>,
+        text: Option<&str>, html: Option<&str>, pgp_detail: Option<&PgpDetail>,
     ) -> Result<(), MailError>;
     pub fn delete_message(
         &self, account_id: &str, folder_path: &str, uid: u32,
@@ -439,8 +442,18 @@ Détails :
 
 - `from_connection` (privé) active `PRAGMA foreign_keys` et tente `journal_mode=WAL` (échec ignoré :
   une base `:memory:` le refuse).
-- `migrate` est idempotent, piloté par `PRAGMA user_version` (`SCHEMA_VERSION = 1`). Il faut
-  l'appeler une fois à l'ouverture.
+- `migrate` est idempotent, piloté par `PRAGMA user_version` (`SCHEMA_VERSION = 4`). Il faut
+  l'appeler une fois à l'ouverture : il applique `schema.sql` (`CREATE TABLE IF NOT EXISTS`) puis
+  `add_missing_columns`, qui ajoute à une base existante les colonnes apparues depuis
+  (`messages.pgp_detail`, `folders.modseq`, `accounts.pgp`) après un `PRAGMA table_info`, sans
+  toucher aux données.
+- **Interrupteur PGP par compte** : `accounts.pgp` (`INTEGER NOT NULL DEFAULT 1`). `pgp_enabled`
+  rend `true` pour un compte que la base ne connaît pas (défaut ouvert, jamais de fermeture
+  silencieuse) ; `set_pgp_enabled` remonte `InvalidData("account not found")` si la ligne n'existe
+  pas. `upsert_account` ne touche pas à la colonne : une synchro ne rallume pas un compte fermé.
+  `close_encrypted_bodies` efface `body_text`, `body_html`, `preview` et `pgp_detail` des messages
+  `pgp = 'encrypted'` du compte et rend le nombre de messages fermés ; l'état PGP du message reste
+  `encrypted`, et `fetch_body` reconstruit le corps une fois l'interrupteur rouvert.
 - `messages_in_folder` trie `date DESC, uid DESC`; `limit <= 0` = tout. `offset` sert à la pagination.
 - `threads_in_folder` regroupe en mémoire (tous les messages du dossier, pas de pagination), trie chaque
   thread du plus récent au plus ancien, `primary` = message le plus récent, `subject` = celui du plus
@@ -489,7 +502,8 @@ retourné associe le chemin du dossier à son `SyncReport`.
 CREATE TABLE IF NOT EXISTS accounts (
     id TEXT PRIMARY KEY,
     label TEXT,
-    email TEXT
+    email TEXT,
+    pgp INTEGER NOT NULL DEFAULT 1   -- interrupteur PGP du compte (1 = activé)
 );
 
 CREATE TABLE IF NOT EXISTS folders (
@@ -559,7 +573,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_thread
   après coup par `relink_replies` (appelé à chaque insertion qui porte un `Message-ID`).
 - `folders` porte l'état de synchro : `uidnext` = `UIDNEXT` annoncé par le serveur au dernier
   passage (valeur informative : la réconciliation ne repart pas de là), `last_sync_at` = dernier
-  passage réussi. `migrate` ne touche pas aux données, `user_version = 1` sert de garde.
+  passage réussi. `migrate` ne touche pas aux données, `user_version = 4` sert de garde.
 - **La base reflète l'état serveur après chaque synchro.** Disparitions (UID absent côté serveur)
   supprimées par `delete_messages`, flags alignés par `set_flags_batch`, nouveaux UID insérés;
   `UIDVALIDITY` changé → `clear_folder` puis réinsertion complète. Corollaire : un UID stocké sans
@@ -695,6 +709,8 @@ jamais un reset silencieux.
 | GET | `/api/accounts` | — | `[AccountSummary]` (jamais de secret) |
 | POST | `/api/accounts` | `AccountConfig` | 201 `AccountSummary`, 400 config, 409 id pris, 401/502 connexion refusée |
 | DELETE | `/api/accounts/{id}` | — | 204 (purge base + `accounts.json`), 404 |
+| PATCH | `/api/accounts/{id}/sync-folders` | `{ "folders": ["INBOX"] \| null }` | 200 `AccountSummary` (`null` = tous les dossiers à rôle connu, `[]` = aucun), 400 dossier inconnu, 404 |
+| PATCH | `/api/accounts/{id}/pgp` | `{ "enabled": bool }` | 200 `AccountSummary` (`pgp`), 404 compte inconnu |
 | GET | `/api/discover?email=…` | — | 200 `Discovery` (`found: false` si rien publié), 400 adresse invalide |
 | GET | `/api/accounts/{id}/folders` | — | `[Folder]` |
 | POST | `/api/accounts/{id}/sync` | `{ "folder_path"? }` | `{ "reports": [{ folder_path, inserted, flags_updated, removed, uidvalidity_changed, uidnext }] }` |
@@ -800,6 +816,40 @@ un `keep-alive` de 20 s maintient la connexion. La veille se reconnecte 30 s apr
 Sur le web, le proxy injecte le jeton ; dans la coquille, l'URL porte `?token=…` (voir
 « Authentification du démon »).
 
+### Interrupteur PGP par compte (`PATCH /api/accounts/{id}/pgp`)
+
+Le réglage vit dans la base (`accounts.pgp`, défaut `1`) et non dans `accounts.json` : c'est une
+politique de stockage, lue à chaque déchiffrement. `PATCH /api/accounts/{id}/pgp` avec
+`{ "enabled": false }` ferme le compte, `{ "enabled": true }` le rouvre ; la réponse est un
+`AccountSummary` dont le champ `pgp` porte l'état (comme `synced_folders` pour la sélection de
+dossiers). Un compte inconnu d'`accounts.json` répond 404 ; un compte connu mais jamais synchronisé
+voit sa ligne d'identité écrite au passage, pour que l'interrupteur soit stockable.
+
+Côté démon, **tous les chemins qui déchiffrent** passent par `AppState::keyring_for(account_id)` :
+trousseau complet quand l'interrupteur est ouvert, `PgpKeyring::new()` **vide** sinon. Avec un
+trousseau vide, `pgp::mime::open` ne trouve aucune clé secrète (« Clé secrète manquante ») et
+`mime::parse_message_with_keys` laisse le message fermé : `body_text`/`body_html` nuls, pièces
+jointes vidées, aperçu vide, `pgp` toujours `encrypted`. Sites gatés :
+
+| Chemin | Ce qu'il faisait |
+| --- | --- |
+| `POST /api/accounts/{id}/sync` (dossier et compte) | corps déchiffrés à l'ingestion (`import_bodies`) |
+| `GET /api/accounts/{id}/folders/{path}/messages/{uid}?fetch_body=true` | `imap::fetch_body` réécrivait le corps déchiffré |
+| `GET …/messages/{uid}/attachments/{index}` | `imap::fetch_attachment` ouvrait le message pour la pièce jointe |
+| `GET …/messages/{uid}/html-images` | `imap::fetch_html_with_images` ouvrait le message (sans clé : 404, pas de HTML) |
+| `POST /api/accounts/{id}/move` | la réconciliation de la destination réimporte le corps déchiffré |
+| `POST /api/accounts/{id}/send` (copie « Envoyés »), `POST …/drafts` | `imap::append_sent`/`append_draft` analysent les octets déposés |
+| veille IDLE (`events::sync_and_publish`) | même réconciliation que la synchro |
+
+Fermer l'interrupteur **efface aussi ce qui était déjà déchiffré** : la route appelle
+`Store::close_encrypted_bodies`, qui vide corps, aperçu et détail PGP des messages `encrypted` du
+compte. Rouvrir ne restaure pas ces corps : `fetch_body` les relit sur le serveur, message par
+message, comme avant la première lecture.
+
+L'**envoi** (`submit`, signer/chiffrer) garde le trousseau complet : la composition est déjà gatée
+côté front par les drapeaux du brouillon (`resolvePgp`), et un message signé ou chiffré doit l'être
+pour de vrai, quel que soit l'état de la réception.
+
 ### Exemples de payloads
 
 `POST /api/accounts` :
@@ -838,7 +888,14 @@ Les identifiants de message (`message_id`, `in_reply_to`, `references`) sont sto
   `window.isTauri` est présent (démon embarqué). Dans la coquille, le jeton Bearer vient de la
   commande `mail_daemon_token` ; sur le web, le proxy l'injecte.
 - `src/lib/mail-backend.ts` : traduction `Message`/`Thread` → `Mail`/`Thread` du store, rôles de
-  dossiers → `FolderId`, formatage des dates.
+  dossiers → `FolderId`, formatage des dates. `setAccountDecryptPolicy` y tient un instantané
+  module des comptes ouverts, poussé par `MailStoreProvider` ; `htmlImagesOf` refuse un compte fermé
+  (défense en profondeur, le démon est déjà gaté) avec le message
+  « PGP désactivé pour ce compte · message chiffré laissé fermé ».
+- `src/lib/store.tsx` : `resolvePgp(prefs, compte).enabled` est poussé au démon
+  (`mailApi.setAccountPgp`) et à cet instantané au chargement des comptes et à chaque changement de
+  `pgpAccounts`/`pgpEncrypt`/`pgpSign`. Une valeur déjà transmise n'est pas renvoyée (pas de boucle) ;
+  un échec est notifié et retenté au rendu suivant.
 - `VITE_MAIL_BACKEND=demo` garde les fixtures (calendrier, planning, MCP) ; `api` (défaut) branche la
   vraie boîte. Si le démon est absent, un bandeau propose de le démarrer ou de passer en démo.
 - Coquille Tauri (`src-tauri/src/lib.rs`) : `lavande_mail_api::serve()` démarre le routeur sur
@@ -862,10 +919,11 @@ clair (`usesCleartextTraffic`), le démon n'écoutant que sur la boucle locale.
 
 ## Tests
 
-### Hors-ligne (72 tests, `cargo test --workspace`)
+### Hors-ligne (174 tests, `cargo test --workspace`)
 
-Presque tout est dans `tests/`, sans réseau ; le seul `#[cfg(test)] mod tests` de `src/` est dans
-`store/mod.rs` (suppression des pièces jointes par `delete_messages`).
+Presque tout est dans `tests/`, sans réseau ; les `#[cfg(test)] mod tests` de `src/` couvrent le
+store (pièces jointes emportées par `delete_messages`, `Store: Send + Sync`, migrations de colonnes),
+le MIME (assainissement HTML), `sync::auto_syncs` et le `Content-Disposition` des pièces jointes.
 
 | Fichier | Tests | Couverture |
 | --- | --- | --- |
@@ -873,9 +931,10 @@ Presque tout est dans `tests/`, sans réseau ; le seul `#[cfg(test)] mod tests` 
 | `tests/mime.rs` | 11 | message texte simple, quoted-printable, repli HTML → texte, préférence `text/plain`, métadonnées de pièces jointes, `PgpState`, aperçu compacté/tronqué, en-têtes de threading, en-têtes absents |
 | `tests/threading.rs` | 7 | `References` prioritaire, repli `In-Reply-To`, repli sujet (préfixes + accents), isolation par compte, `Message-ID` de repli, `split_ids` |
 | `tests/oauth.rs` | 4 | payload XOAUTH2, cache de l'access token, rafraîchissement après expiration, message d'erreur lisible sans secret (serveur HTTP local) |
-| `tests/store.rs` | 16 | upsert idempotent, flags/corps/`delete_message`, `flags_in_folder`, `delete_messages` (vide → 0, UID inconnus ignorés, pièces jointes emportées), `set_flags_batch`, `list_accounts`/`list_folders`/`delete_account`, tri `date DESC` + pagination, agrégation des threads, absence de préfixe expéditeur dans `Sent`, migration rejouable, `relink_replies`, `clear_folder` |
-| `src/store/mod.rs` (`mod tests`) | 2 | pièces jointes emportées par `delete_messages`, `Store: Send + Sync` |
-| `crates/mail-api/tests/http.rs` | 13 | routeur sans socket : `/api/health`, 400 config/JSON invalide, 409 id déjà pris, aucun secret dans `GET /api/accounts`, connexion échouée n'écrit rien, 404 inconnus, chemin de dossier percent-encodé, mapping `MailError` → statut |
+| `tests/store.rs` | 28 | upsert idempotent, flags/corps/`delete_message`, `flags_in_folder`, `delete_messages` (vide → 0, UID inconnus ignorés, pièces jointes emportées), `set_flags_batch`, `list_accounts`/`list_folders`/`delete_account`, tri `date DESC` + pagination, agrégation des threads, absence de préfixe expéditeur dans `Sent`, migration rejouable, `relink_replies`, `clear_folder`, interrupteur PGP (défaut ouvert, par compte, survit à `upsert_account`, compte inconnu refusé) et `close_encrypted_bodies` (messages chiffrés seuls, état PGP conservé) |
+| `src/store/mod.rs` (`mod tests`) | 4 | pièces jointes emportées par `delete_messages`, `Store: Send + Sync`, migration `folders.modseq` et `accounts.pgp` sur une base ancienne |
+| `crates/mail-api/tests/http.rs` | 43 | routeur sans socket : `/api/health`, 400 config/JSON invalide, 409 id déjà pris, aucun secret dans `GET /api/accounts`, connexion échouée n'écrit rien, 404 inconnus, chemin de dossier percent-encodé, mapping `MailError` → statut, sélection de dossiers, `PATCH /api/accounts/{id}/pgp` (défaut ouvert, bascule par compte, corps chiffrés déjà déchiffrés effacés, 404 compte inconnu) |
+| `crates/mail-api/tests/pgp_gate.rs` | 3 | gate du trousseau, hors réseau : compte ouvert → `keyring_for` complet et corps déchiffré ; compte fermé → trousseau vide, corps/HTML/aperçu/pièces jointes fermés (`Clé secrète manquante`), `html_with_images` → `None` ; l'interrupteur est lu par compte |
 | `crates/mail-api/tests/discovery.rs` | 10 (+2 réseau) | parsing ISPDB Gmail/LaPoste et autoconfig lanro.eu, `SSL`/`STARTTLS`, `%EMAILADDRESS%`/`%EMAILLOCALPART%`, chaîne HTTP avec serveur local (`source: ispdb`), adresse invalide, domaine inconnu |
 | `tests/live.rs` (mail-core + mail-api) | 13 | réseau GreenMail, `#[ignore]` (voir ci-dessous) |
 
@@ -978,5 +1037,12 @@ Variables lues par `scripts/mail-test-server.sh` : `LAVANDE_MAIL_TEST_DIR`, `…
 - **Threading heuristique** : repli sur le sujet normalisé quand aucun identifiant n'existe (deux
   conversations au même sujet fusionnent), et `relink_replies` matche `references_json` par
   sous-chaîne.
-- **Le schéma n'a aucune migration incrémentale** : `user_version = 1` et un script unique ; tout
-  changement de schéma demandera une vraie étape de migration.
+- **Migration par colonnes ajoutées, pas par étapes numérotées** : `schema.sql` (dont le
+  `CREATE TABLE IF NOT EXISTS`) puis `add_missing_columns` (`PRAGMA table_info` + `ALTER TABLE`)
+  amènent une base ancienne à `user_version = 4`. Une colonne renommée, une contrainte changée ou
+  une donnée à réécrire demanderont une vraie étape de migration.
+- **L'interrupteur PGP ne couvre que la réception.** Fermer un compte n'empêche pas le démon de
+  signer ou chiffrer à l'envoi (`submit` garde le trousseau complet) : la composition est gatée côté
+  front (`resolvePgp`), pas par la route `/send`. Un message déjà déchiffré avant la fermeture est
+  effacé de la base, mais rien ne garantit la disparition des copies hors base (sauvegardes,
+  `mail.db` copié).

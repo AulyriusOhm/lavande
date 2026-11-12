@@ -1136,3 +1136,98 @@ async fn saving_a_draft_without_a_drafts_folder_is_a_400() {
         "Aucun dossier Brouillons pour ce compte"
     );
 }
+
+fn encrypted_message(uid: u32) -> lavande_mail::model::Message {
+    lavande_mail::model::Message {
+        account_id: "perso".to_string(),
+        folder_path: "INBOX".to_string(),
+        uid,
+        uidvalidity: 1,
+        thread_id: "t1".to_string(),
+        message_id: Some(format!("<m{uid}@x>")),
+        in_reply_to: None,
+        references: Vec::new(),
+        from: lavande_mail::model::Address {
+            name: Some("Camille".to_string()),
+            email: "camille@studio-lilas.fr".to_string(),
+        },
+        to: Vec::new(),
+        cc: Vec::new(),
+        subject: "Chiffré".to_string(),
+        date: None,
+        flags: lavande_mail::model::Flags::default(),
+        size: 512,
+        pgp: lavande_mail::model::PgpState::Encrypted,
+        pgp_detail: Some(lavande_mail::pgp::PgpDetail {
+            verified: None,
+            signer: None,
+            decrypted: true,
+            error: None,
+        }),
+        preview: "Bonjour Camille".to_string(),
+        body_text: Some("Bonjour Camille".to_string()),
+        body_html: None,
+        attachments: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn the_pgp_switch_is_per_account_and_closes_decrypted_bodies() {
+    let (directory, state) = state().await;
+    seed(directory.path(), &[account("perso")]);
+
+    let (status, body) = call(&state, get("/api/accounts")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json(&body)[0]["pgp"], json!(true), "ouvert par défaut");
+
+    state
+        .store()
+        .upsert_message(&encrypted_message(1))
+        .expect("message");
+
+    let (status, body) = call(
+        &state,
+        patch("/api/accounts/perso/pgp", &json!({ "enabled": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "corps: {body:?}");
+    let summary = json(&body);
+    assert_eq!(summary["id"], "perso");
+    assert_eq!(summary["label"], "Perso", "le reste du compte est intact");
+    assert_eq!(summary["pgp"], json!(false));
+    assert!(!state.store().pgp_enabled("perso").expect("interrupteur"));
+
+    let stored = state
+        .store()
+        .get_message("perso", "INBOX", 1)
+        .expect("lecture")
+        .expect("message");
+    assert!(
+        stored.body_text.is_none(),
+        "ce qui avait été déchiffré est effacé"
+    );
+    assert_eq!(stored.preview, "");
+    assert_eq!(stored.pgp_detail, None);
+    assert_eq!(
+        stored.pgp,
+        lavande_mail::model::PgpState::Encrypted,
+        "le message reste chiffré"
+    );
+
+    let (status, body) = call(
+        &state,
+        patch("/api/accounts/perso/pgp", &json!({ "enabled": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json(&body)["pgp"], json!(true));
+    assert!(state.store().pgp_enabled("perso").expect("interrupteur"));
+
+    let (status, body) = call(
+        &state,
+        patch("/api/accounts/absent/pgp", &json!({ "enabled": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json(&body)["kind"], "store");
+}

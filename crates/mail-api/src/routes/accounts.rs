@@ -12,7 +12,7 @@ use lavande_mail::imap;
 use lavande_mail::model::Folder;
 
 use crate::config_file::StoredAccount;
-use crate::dto::{AccountSummary, ApiJson, RenameRequest, SyncFoldersRequest};
+use crate::dto::{AccountSummary, ApiJson, PgpEnabledRequest, RenameRequest, SyncFoldersRequest};
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -21,6 +21,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/accounts", get(list).post(add))
         .route("/api/accounts/{id}", delete(remove).patch(rename))
         .route("/api/accounts/{id}/sync-folders", patch(set_sync_folders))
+        .route("/api/accounts/{id}/pgp", patch(set_pgp))
         .route("/api/accounts/{id}/folders", get(folders))
         .route("/api/accounts/{id}/folders/{path}/local", delete(desync))
 }
@@ -30,7 +31,8 @@ async fn list(State(state): State<Arc<AppState>>) -> Result<Json<Vec<AccountSumm
     let mut summaries = Vec::with_capacity(accounts.len());
     for config in &accounts {
         let folders = state.store().list_folders(&config.id)?.len();
-        summaries.push(AccountSummary::new(config, folders));
+        let pgp = state.store().pgp_enabled(&config.id)?;
+        summaries.push(AccountSummary::new(config, folders, pgp));
     }
     Ok(Json(summaries))
 }
@@ -60,6 +62,7 @@ async fn add(
         Json(AccountSummary::new(
             &StoredAccount::from_config(&config),
             folders.len(),
+            state.store().pgp_enabled(&config.id)?,
         )),
     ))
 }
@@ -111,7 +114,11 @@ async fn rename(
     let renamed = state.rename_account(&id, label).await?;
     let folders = state.store().list_folders(&id)?.len();
     tracing::info!(account = %id, label, "compte renommé");
-    Ok(Json(AccountSummary::new(&renamed, folders)))
+    Ok(Json(AccountSummary::new(
+        &renamed,
+        folders,
+        state.store().pgp_enabled(&id)?,
+    )))
 }
 
 /// Selects the folders the account syncs by itself. `folders: null` restores
@@ -157,7 +164,41 @@ async fn set_sync_folders(
         selection = updated.synced_folders.as_ref().map_or(-1, |paths| paths.len() as i64),
         "dossiers synchronisés choisis"
     );
-    Ok(Json(AccountSummary::new(&updated, folders)))
+    Ok(Json(AccountSummary::new(
+        &updated,
+        folders,
+        state.store().pgp_enabled(&id)?,
+    )))
+}
+
+/// Ouvre ou ferme l'interrupteur PGP du compte : fermé, le démon ne déchiffre
+/// plus rien pour lui, et ce qui avait été déchiffré de messages chiffrés est
+/// effacé de la base (le corps revient sur demande une fois l'interrupteur
+/// rouvert).
+async fn set_pgp(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<PgpEnabledRequest>,
+) -> Result<Json<AccountSummary>, ApiError> {
+    let account = state.stored_account(&id)?;
+    state.set_pgp_enabled(&account, request.enabled)?;
+    let closed = if request.enabled {
+        0
+    } else {
+        state.store().close_encrypted_bodies(&id)?
+    };
+    let folders = state.store().list_folders(&id)?.len();
+    tracing::info!(
+        account = %id,
+        pgp = request.enabled,
+        messages = closed,
+        "interrupteur pgp"
+    );
+    Ok(Json(AccountSummary::new(
+        &account,
+        folders,
+        state.store().pgp_enabled(&id)?,
+    )))
 }
 
 /// Forgets what is stored locally for one folder; the server is left alone.

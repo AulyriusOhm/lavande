@@ -31,6 +31,7 @@ import {
   mailMode,
   messageToMail,
   sendInputOf,
+  setAccountDecryptPolicy,
   syncNotice,
   threadToMails,
 } from "@/lib/mail-backend";
@@ -240,6 +241,29 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (mode === "api") void bootstrap();
   }, [bootstrap, mode]);
+
+  // Interrupteur PGP effectif de chaque compte : poussé au démon (les corps
+  // chiffrés restent fermés en base) et au lecteur (défense en profondeur).
+  // Une valeur déjà transmise n'est pas renvoyée.
+  const pgpPolicy = useMemo(() => {
+    const next: Record<string, boolean> = {};
+    for (const entry of accounts) next[entry.id] = resolvePgp(pgpPrefs, entry.id).enabled;
+    return next;
+  }, [accounts, pgpPrefs]);
+  const pushedPgp = useRef<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setAccountDecryptPolicy(pgpPolicy);
+    if (mode !== "api") return;
+    for (const [id, enabled] of Object.entries(pgpPolicy)) {
+      if (pushedPgp.current[id] === enabled) continue;
+      pushedPgp.current[id] = enabled;
+      mailApi.setAccountPgp(id, enabled).catch((error: unknown) => {
+        delete pushedPgp.current[id];
+        notify(`Interrupteur PGP non transmis · ${errorText(error)}`);
+      });
+    }
+  }, [mode, notify, pgpPolicy]);
 
   // Le service pousse un événement après chaque détection IDLE : la liste se
   // rafraîchit sans clic, et sans bloquer l'interface.

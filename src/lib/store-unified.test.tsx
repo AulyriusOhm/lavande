@@ -82,6 +82,8 @@ function mockBackend(options: { failing?: string } = {}) {
     const { pathname } = new URL(String(input), "http://localhost");
     const path = decodeURIComponent(pathname);
     if (path.endsWith("/api/accounts")) return reply([apiAccount(ALPHA), apiAccount(BETA)]);
+    const pgpMatch = path.match(/\/api\/accounts\/([^/]+)\/pgp$/);
+    if (pgpMatch) return reply(apiAccount(pgpMatch[1]));
     const syncMatch = path.match(/\/api\/accounts\/([^/]+)\/sync$/);
     if (syncMatch) {
       const accountId = syncMatch[1];

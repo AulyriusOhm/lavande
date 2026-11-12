@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use lavande_mail::config::AccountConfig;
 use lavande_mail::model::Folder;
+use lavande_mail::pgp::PgpKeyring;
 use lavande_mail::store::Store;
 use lavande_mail::tls::TlsOptions;
 
@@ -159,6 +160,34 @@ impl AppState {
         }
     }
 
+    /// One account as `accounts.json` holds it, still without its secrets.
+    pub fn stored_account(&self, id: &str) -> Result<StoredAccount, ApiError> {
+        self.stored_accounts()?
+            .into_iter()
+            .find(|account| account.id == id)
+            .ok_or_else(|| ApiError::not_found(format!("compte « {id} » inconnu")))
+    }
+
+    /// Sets the PGP switch of one account. The identity row of the store is
+    /// written first: an account known to `accounts.json` but never synced has
+    /// no SQLite row yet, and its switch must still be storable.
+    pub fn set_pgp_enabled(&self, account: &StoredAccount, enabled: bool) -> Result<(), ApiError> {
+        self.store
+            .upsert_account(&account.id, &account.label, &account.email)?;
+        self.store.set_pgp_enabled(&account.id, enabled)?;
+        Ok(())
+    }
+
+    /// The keyring one account may decrypt with: the whole one when its PGP
+    /// switch is on, an empty one otherwise, so encrypted bodies stay closed.
+    pub async fn keyring_for(&self, account_id: &str) -> Result<PgpKeyring, ApiError> {
+        if self.store.pgp_enabled(account_id)? {
+            self.pgp.keyring().await
+        } else {
+            Ok(PgpKeyring::new())
+        }
+    }
+
     pub async fn accounts(&self) -> Result<Vec<AccountConfig>, ApiError> {
         let stored = self.stored_accounts()?;
         let mut configs = Vec::with_capacity(stored.len());
@@ -170,11 +199,7 @@ impl AppState {
     }
 
     pub async fn account(&self, id: &str) -> Result<AccountConfig, ApiError> {
-        let stored = self
-            .stored_accounts()?
-            .into_iter()
-            .find(|account| account.id == id)
-            .ok_or_else(|| ApiError::not_found(format!("compte « {id} » inconnu")))?;
+        let stored = self.stored_account(id)?;
         let secrets = self.secrets.get(id).await?;
         stored.into_config(secrets)
     }
@@ -197,12 +222,7 @@ impl AppState {
     /// Which folders an account syncs. `None` means the default selection
     /// (every folder with a known role).
     pub fn sync_folders(&self, id: &str) -> Result<Option<Vec<String>>, ApiError> {
-        let account = self
-            .stored_accounts()?
-            .into_iter()
-            .find(|account| account.id == id)
-            .ok_or_else(|| ApiError::not_found(format!("compte « {id} » inconnu")))?;
-        Ok(account.synced_folders)
+        Ok(self.stored_account(id)?.synced_folders)
     }
 
     pub async fn add_account(

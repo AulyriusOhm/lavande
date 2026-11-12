@@ -136,10 +136,12 @@ pub struct AccountSummary {
     /// `null`: every folder with a known role; `[]`: none. Mirrors
     /// `StoredAccount::synced_folders`.
     pub synced_folders: Option<Vec<String>>,
+    /// Interrupteur PGP du compte: `false` laisse les corps chiffrés fermés.
+    pub pgp: bool,
 }
 
 impl AccountSummary {
-    pub fn new(account: &StoredAccount, folders: usize) -> Self {
+    pub fn new(account: &StoredAccount, folders: usize, pgp: bool) -> Self {
         Self {
             id: account.id.clone(),
             label: account.label.clone(),
@@ -149,6 +151,7 @@ impl AccountSummary {
             smtp: EndpointSummary::new(&account.smtp),
             folders,
             synced_folders: account.synced_folders.clone(),
+            pgp,
         }
     }
 }
@@ -223,6 +226,11 @@ pub struct RenameRequest {
 pub struct SyncFoldersRequest {
     #[serde(default)]
     pub folders: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+pub struct PgpEnabledRequest {
+    pub enabled: bool,
 }
 
 #[derive(Serialize)]

@@ -124,6 +124,8 @@ export type ApiAccount = {
   folders: number;
   /** `null` : tous les dossiers à rôle connu ; `[]` : aucun. */
   synced_folders?: string[] | null;
+  /** Interrupteur PGP du compte : `false` laisse les corps chiffrés fermés. */
+  pgp?: boolean;
 };
 
 export type ApiHealth = {
@@ -397,6 +399,13 @@ export const mailApi = {
       method: "PATCH",
       body: { folders },
     }),
+
+  /**
+   * Interrupteur PGP du compte. Fermé, le démon ne déchiffre plus rien pour lui
+   * et efface de la base ce qui avait été déchiffré de messages chiffrés.
+   */
+  setAccountPgp: (id: string, enabled: boolean) =>
+    request<ApiAccount>(`${accountPath(id)}/pgp`, { method: "PATCH", body: { enabled } }),
 
   deleteAccount: (id: string) => request<void>(accountPath(id), { method: "DELETE" }),
 

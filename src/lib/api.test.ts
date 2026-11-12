@@ -88,6 +88,30 @@ describe("mailApi · choix des dossiers synchronisés", () => {
   });
 });
 
+describe("mailApi · interrupteur PGP du compte", () => {
+  it("envoie le booléen en PATCH sur /pgp", async () => {
+    const fetchMock = vi.fn(async () => response({ id: "a1", folders: 2, pgp: false }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const summary = await mailApi.setAccountPgp("a 1", false);
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/accounts/a%201/pgp");
+    expect(init.method).toBe("PATCH");
+    expect(init.body).toBe(JSON.stringify({ enabled: false }));
+    expect(summary.pgp).toBe(false);
+  });
+
+  it("remonte un compte inconnu refusé par le démon", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response({ error: "compte « absent » inconnu", kind: "store" }, 404)),
+    );
+
+    await expect(mailApi.setAccountPgp("absent", true)).rejects.toThrow("compte « absent » inconnu");
+  });
+});
+
 describe("mailApi · désynchronisation d'un dossier", () => {
   it("supprime le cache local avec le chemin encodé", async () => {
     const fetchMock = vi.fn(async () => noContent());

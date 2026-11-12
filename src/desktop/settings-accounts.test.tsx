@@ -113,7 +113,9 @@ describe("Réglages · comptes", () => {
     fireEvent.click(screen.getByText("Valider"));
 
     await waitFor(() => expect(state.label).toBe("Bureau"));
-    const patch = fetchMock.mock.calls.find(([, init]) => init?.method === "PATCH");
+    const patch = fetchMock.mock.calls.find(
+      ([url, init]) => init?.method === "PATCH" && String(url) === "/api/accounts/a1",
+    );
     expect(patch?.[1]?.body).toBe(JSON.stringify({ label: "Bureau" }));
     expect((await screen.findAllByText("Bureau")).length).toBeGreaterThan(0);
     expect(screen.queryByLabelText("Renommer Perso")).toBeNull();

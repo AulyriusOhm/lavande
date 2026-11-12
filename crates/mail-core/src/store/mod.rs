@@ -15,7 +15,7 @@ use crate::model::{AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState,
 use crate::pgp::PgpDetail;
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const MESSAGE_COLUMNS: &str = "account_id, folder_path, uid, uidvalidity, thread_id, message_id, \
      in_reply_to, references_json, from_json, to_json, cc_json, subject, date, unread, starred, \
      answered, size, pgp, preview, body_text, body_html, pgp_detail";
@@ -77,6 +77,46 @@ impl Store {
             params![id, label, email],
         )?;
         Ok(())
+    }
+
+    /// Interrupteur PGP of an account: `false` keeps its encrypted bodies
+    /// closed. An account the store has never seen is enabled (`accounts.pgp`
+    /// defaults to `1`).
+    pub fn pgp_enabled(&self, account_id: &str) -> Result<bool, MailError> {
+        let conn = self.conn()?;
+        let stored: Option<i64> = conn
+            .query_row(
+                "SELECT pgp FROM accounts WHERE id = ?1",
+                params![account_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(stored.unwrap_or(1) != 0)
+    }
+
+    /// Sets the PGP switch of one account; nothing else changes.
+    pub fn set_pgp_enabled(&self, account_id: &str, enabled: bool) -> Result<(), MailError> {
+        let conn = self.conn()?;
+        require_one(
+            conn.execute(
+                "UPDATE accounts SET pgp = ?2 WHERE id = ?1",
+                params![account_id, enabled],
+            )?,
+            "account",
+        )
+    }
+
+    /// Drops what was decrypted from encrypted messages: the body, the preview
+    /// derived from it and the PGP detail. `fetch_body` fills the body again
+    /// once the account allows decryption. Returns how many messages were
+    /// closed.
+    pub fn close_encrypted_bodies(&self, account_id: &str) -> Result<usize, MailError> {
+        let conn = self.conn()?;
+        Ok(conn.execute(
+            "UPDATE messages SET body_text = NULL, body_html = NULL, preview = '', \
+             pgp_detail = NULL WHERE account_id = ?1 AND pgp = ?2",
+            params![account_id, PgpState::Encrypted.as_str()],
+        )?)
     }
 
     pub fn upsert_folder(&self, folder: &Folder) -> Result<(), MailError> {
@@ -888,6 +928,12 @@ fn add_missing_columns(conn: &Connection) -> Result<(), MailError> {
     if !column_exists(conn, "folders", "modseq")? {
         conn.execute("ALTER TABLE folders ADD COLUMN modseq INTEGER", [])?;
     }
+    if !column_exists(conn, "accounts", "pgp")? {
+        conn.execute(
+            "ALTER TABLE accounts ADD COLUMN pgp INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -1014,14 +1060,13 @@ mod tests {
         assert_send_sync::<Store>();
     }
 
-    /// A database written by the schema that predates `modseq` keeps its rows
-    /// and gains the column, empty: the next sync of those folders is the full
-    /// pass, which is the safe path.
-    #[test]
-    fn migrate_adds_modseq_to_an_older_database() {
+    /// A database written before `pgp_detail`, `modseq` and the per-account PGP
+    /// switch: the three columns `add_missing_columns` adds.
+    fn legacy_database() -> Connection {
         let conn = Connection::open_in_memory().expect("open");
         conn.execute_batch(
-            "CREATE TABLE folders (account_id TEXT, path TEXT, name TEXT, role TEXT, \
+            "CREATE TABLE accounts (id TEXT PRIMARY KEY, label TEXT, email TEXT); \
+             CREATE TABLE folders (account_id TEXT, path TEXT, name TEXT, role TEXT, \
              uidvalidity INTEGER, uidnext INTEGER, last_sync_at TEXT, \
              PRIMARY KEY (account_id, path)); \
              CREATE TABLE messages (account_id TEXT, folder_path TEXT, uid INTEGER, \
@@ -1030,9 +1075,19 @@ mod tests {
              subject TEXT, date TEXT, unread INTEGER, starred INTEGER, answered INTEGER, \
              size INTEGER, pgp TEXT, preview TEXT, body_text TEXT, body_html TEXT, \
              PRIMARY KEY (account_id, folder_path, uid)); \
+             INSERT INTO accounts VALUES ('perso', 'Perso', 'roman@lavande.fr'); \
              INSERT INTO folders VALUES ('perso', 'INBOX', 'Boite', 'inbox', 7, 10, NULL);",
         )
         .expect("old schema");
+        conn
+    }
+
+    /// A database written by the schema that predates `modseq` keeps its rows
+    /// and gains the column, empty: the next sync of those folders is the full
+    /// pass, which is the safe path.
+    #[test]
+    fn migrate_adds_modseq_to_an_older_database() {
+        let conn = legacy_database();
         assert!(!column_exists(&conn, "folders", "modseq").expect("probe"));
 
         add_missing_columns(&conn).expect("migrate");
@@ -1042,6 +1097,25 @@ mod tests {
             .expect("present");
         assert_eq!(folder.uidvalidity, 7);
         assert_eq!(folder.modseq, None);
+
+        add_missing_columns(&conn).expect("migrate again");
+    }
+
+    /// A database written before the PGP switch keeps its accounts and gains
+    /// the column enabled: a migration never closes an account by surprise.
+    #[test]
+    fn migrate_adds_the_pgp_switch_to_an_older_database() {
+        let conn = legacy_database();
+        assert!(!column_exists(&conn, "accounts", "pgp").expect("probe"));
+
+        add_missing_columns(&conn).expect("migrate");
+        assert!(column_exists(&conn, "accounts", "pgp").expect("probe"));
+        let pgp: i64 = conn
+            .query_row("SELECT pgp FROM accounts WHERE id = 'perso'", [], |row| {
+                row.get(0)
+            })
+            .expect("compte");
+        assert_eq!(pgp, 1, "l'interrupteur est ouvert par défaut");
 
         add_missing_columns(&conn).expect("migrate again");
     }

@@ -239,14 +239,30 @@ export function threadToMails(
   return thread.messages.map((message) => messageToMail(message, records, fallback));
 }
 
+/** Politique PGP poussée par le store : `false` = compte laissé fermé. */
+let decryptPolicy: Record<string, boolean> = {};
+
+export function setAccountDecryptPolicy(next: Record<string, boolean>): void {
+  decryptPolicy = { ...next };
+}
+
+export function accountDecrypts(accountId: string): boolean {
+  return decryptPolicy[accountId] !== false;
+}
+
 /**
  * Le corps HTML d'un message relu sur le serveur avec ses images distantes.
  *
  * Le corps stocké n'en porte aucune (pixels de tracking retirés à l'ingestion) :
  * c'est un choix explicite du lecteur, message par message, et le service
- * ré-assainit le markup avant de le rendre.
+ * ré-assainit le markup avant de le rendre. Un compte dont l'interrupteur PGP
+ * est fermé est refusé : le démon relirait le message avec un trousseau vide et
+ * le rendu n'aurait aucun sens.
  */
 export async function htmlImagesOf(source: MailSource): Promise<string> {
+  if (!accountDecrypts(source.accountId)) {
+    throw new Error("PGP désactivé pour ce compte · message chiffré laissé fermé");
+  }
   const { html } = await mailApi.htmlImages(source.accountId, source.folderPath, source.uid);
   return html;
 }

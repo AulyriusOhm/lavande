@@ -844,3 +844,77 @@ fn a_message_without_pgp_detail_reads_back_with_none() {
         .expect("message");
     assert_eq!(read.pgp_detail, None);
 }
+
+#[test]
+fn the_pgp_switch_defaults_to_enabled() {
+    let store = open();
+    assert!(store.pgp_enabled("perso").expect("interrupteur"));
+    assert!(
+        store.pgp_enabled("inconnu").expect("interrupteur"),
+        "un compte que le store ignore est ouvert"
+    );
+}
+
+#[test]
+fn the_pgp_switch_is_stored_per_account() {
+    let store = open();
+    store
+        .upsert_account("pro", "Pro", "roman@lavande.mail")
+        .expect("compte");
+
+    store.set_pgp_enabled("perso", false).expect("coupe");
+    assert!(!store.pgp_enabled("perso").expect("interrupteur"));
+    assert!(store.pgp_enabled("pro").expect("l'autre compte est intact"));
+
+    store.set_pgp_enabled("perso", true).expect("rallume");
+    assert!(store.pgp_enabled("perso").expect("interrupteur"));
+
+    assert!(
+        store.set_pgp_enabled("absent", false).is_err(),
+        "un compte inconnu ne s'invente pas"
+    );
+}
+
+#[test]
+fn upsert_account_keeps_the_pgp_switch() {
+    let store = open();
+    store.set_pgp_enabled("perso", false).expect("coupe");
+    store
+        .upsert_account("perso", "Perso renommé", "roman@lavande.mail")
+        .expect("upsert");
+    assert!(!store.pgp_enabled("perso").expect("interrupteur"));
+}
+
+#[test]
+fn closing_bodies_only_touches_encrypted_messages() {
+    let store = open();
+    let mut encrypted = message(1, "t1", "Camille", "Chiffré", 1);
+    encrypted.pgp = PgpState::Encrypted;
+    encrypted.pgp_detail = Some(PgpDetail {
+        verified: None,
+        signer: None,
+        decrypted: true,
+        error: None,
+    });
+    store.upsert_message(&encrypted).expect("insertion");
+    let clear = message(2, "t2", "Marc", "Clair", 2);
+    store.upsert_message(&clear).expect("insertion");
+
+    assert_eq!(store.close_encrypted_bodies("perso").expect("ferme"), 1);
+
+    let read = store
+        .get_message("perso", "INBOX", 1)
+        .expect("lecture")
+        .expect("message");
+    assert!(read.body_text.is_none());
+    assert!(read.body_html.is_none());
+    assert_eq!(read.preview, "");
+    assert_eq!(read.pgp_detail, None);
+    assert_eq!(read.pgp, PgpState::Encrypted, "l'état PGP reste lisible");
+
+    let untouched = store
+        .get_message("perso", "INBOX", 2)
+        .expect("lecture")
+        .expect("message");
+    assert_eq!(untouched, clear);
+}
