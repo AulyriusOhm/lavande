@@ -30,7 +30,7 @@ Décisions actées avec Roman le 12/11/2026 :
 - #15 correction LLM sans perte d'images (jetons ⟦img-n⟧ + repli) · #16 historique cité repliable lecture seule (champ `quoted` séparé) · #17 signature avant l'historique (`sendInputOf` : message → signature → citation).
 
 **Restent à faire** :
-- #3 anti-spam (phase de recherche d'abord) · #6 graphisme PC planif (agenda livré) · #7 rangement des réglages (plan à valider) · #11 calendriers externes (OAuth Google à fournir) · #14 parapluie sécurité (audit autonome ; Keystore Android + trousseau système + signature paquets avec Roman) · #18 barre flottante PC (plus visible + flou gaussien autour) · #19 connexion Google (401 invalid_client).
+- #3 anti-spam (phase de recherche d'abord) · #6 graphisme PC planif (agenda livré) · #7 rangement des réglages (plan à valider) · #11 calendriers externes (OAuth Google à fournir) · #14 parapluie sécurité (audit autonome ; Keystore Android + trousseau système + signature paquets avec Roman) · #18 barre flottante PC (plus visible + flou gaussien autour) · #19 connexion Google (401 invalid_client) · #20 résumé IA (BAL sélectionnée + pièces jointes + cache) · #21 liens dans le navigateur extérieur · #22 nettoyage intelligent des mails (utilitaire réglages) · #23 supprimer/masquer des dossiers mails · #24 planif (suggestions IA par compte + mail d'origine) · #25 agenda (suggestions IA de RDV depuis les mails).
 - Hors todo : auto-updater (hébergement endpoint, sauvegarde clé, 1ʳᵉ release, AppImage, test E2E) · Android insets sur appareil physique + CI.
 - Suivis mineurs : `htmlToText` avale les URL `<https://…>` dans les aperçus texte ; relecture locale des images inline CID dans Envoyés ; scénario live IMAP du gate PGP ; 2 chaînes démo cosmétiques sous verrou ; agenda : événements sans calendrier non masquables par une case + compteurs de filtres qui se recoupent (préexistant).
 
@@ -60,6 +60,13 @@ La connexion Google échoue avec « Erreur 401 : invalid_client » — détails 
 configurés dans la Google Cloud Console. Flux concerné : `crates/mail-core/src/oauth.rs` +
 `crates/mail-api/src/oauth_flow.rs`, écran de connexion (`src/screens/connect-screen.tsx`). Lié à #11
 (Google Calendar OAuth).
+
+### #21 — Ouvrir les liens dans le navigateur extérieur
+Les liens cliqués dans l'app (mails HTML, etc.) doivent s'ouvrir dans le **navigateur du système** (PC +
+Android), pas dans le webview. Aujourd'hui le rendu des mails (`src/components/mail-body.tsx`) repose sur
+`<base target="_blank">` + iframe sandbox, et ces liens ne partent pas vers le navigateur extérieur dans la
+coquille Tauri. Câbler les clics de liens sur l'existant `openExternal` (`src/lib/open-external.ts`, plugin
+`opener`), déjà utilisé pour l'OAuth et les notifications.
 
 ## Production / distribution
 
@@ -112,6 +119,40 @@ lecture seule. Ajout possible sans compte mail associé. À l'ajout d'un compte 
 d'**importer** un fichier ICS ou un abonnement par URL, avec gestion (renommer, couleur, supprimer). Aujourd'hui
 aucune entrée pour créer/importer un calendrier — les cases « Mes calendriers » de l'agenda ne font que filtrer.
 
+### #20 — Résumé IA : BAL sélectionnée, aperçus de pièces jointes et cache
+Le résumé IA matin/midi/soir doit s'adapter à la **boîte aux lettres sélectionnée** ; si « tous les comptes »
+est sélectionné, le résumé se base sur **tous les comptes**. Améliorer l'**UI du résumé** avec des petits
+aperçus des pièces jointes des mails, visibles en direct dans le résumé. Une fois qu'une passe IA est faite,
+**garder le résultat en cache** pour éviter de refaire des requêtes en permanence (le bouton « Régénérer le
+résumé » reste le moyen de forcer une nouvelle passe). Existant : `src/lib/summary.ts`, `refreshSummary`
+(`src/lib/store.tsx`), UI `MorningSummary` (`src/desktop/inbox.tsx`) + mobile (`src/screens/inbox-screen.tsx`).
+
+### #22 — Nettoyage intelligent des mails (utilitaire dans les réglages)
+Nouvelle fonctionnalité : un utilitaire dans les **réglages** pour nettoyer en masse les mails inutiles —
+**Publicité** / promotions, **vieux codes TOTP** / OTP, etc. Détection à concevoir (expéditeurs, en-têtes,
+mots-clés, âge), avec aperçu des mails concernés avant suppression par lot. Complémentaire de #3 (anti-spam :
+mutualiser la détection) et #7 (emplacement dans les réglages).
+
+### #23 — Supprimer ou masquer des dossiers mails
+Donner la possibilité de **supprimer** des dossiers mails ou de les **masquer**. Suppression : le démon
+(`crates/mail-core/src/imap.rs`) a `list_folders` / `create_folder` mais pas de suppression de dossier —
+ajouter l'IMAP DELETE + l'API, puis l'action côté front (liste des dossiers, `src/lib/api.ts` + store).
+Masquage : réglage local (prefs) pour ne pas afficher certains dossiers, sans rien supprimer sur le serveur.
+
+### #25 — Agenda : suggestions IA de rendez-vous
+La passe IA qui alimente aujourd'hui la **planification** doit aussi extraire des **suggestions de rendez-vous** des
+mails (titre, date/heure, lieu) et les proposer dans l'**agenda**. Elles doivent être visibles **dans l'agenda
+lui-même** (pas seulement dans le panneau de suggestions côté mails/planification) ; les mails en sont la source.
+Emplacement à concevoir (rail droit de l'agenda `src/desktop/calendar.tsx` ou panneau dédié) ; accepter une
+suggestion **préremplit le dialogue de création existant** (pas de chemin de création parallèle). Chaque suggestion
+doit permettre de **revenir au mail d'origine** (`openMessage`) et une **exclusion par compte** est à prévoir,
+cohérente avec #24 (l'interrupteur `aiTasks` est global aujourd'hui, `src/lib/prefs.tsx`). Réutiliser le pipeline
+existant plutôt qu'un système parallèle : `summarySuggestion` (`src/lib/store.tsx`), `refreshSummary`,
+`MailSuggestion` (`src/lib/tasks.ts`, qui porte déjà `mailId` + `account`) — orienté tâches aujourd'hui, il devra
+porter une variante événement (à concevoir).
+Mutualiser avec #24 (exclusion par compte + mail d'origine), s'appuyer sur la passe IA et le cache de #20, UI
+agenda de #6, calendriers cibles de #11.
+
 ## UI / réglages
 
 ### #6 — Affiner le graphisme PC de l'agenda et de la planification
@@ -142,6 +183,13 @@ ajouter un **flou gaussien autour** d'elle (halo / backdrop étendu) pour la dé
 Aujourd'hui simple classe `glass` (`src/index.css` : `backdrop-filter: blur(20px) saturate(180%)`, fond surface 72 %).
 S'aligner sur `DESIGN.md` ; complémentaire de #13 (lisibilité).
 
+### #24 — Planification : suggestions IA par compte et lien vers le mail d'origine
+Dans les **réglages de la planification**, permettre d'**empêcher les suggestions IA depuis certains comptes
+mail** (exclusion par compte ; aujourd'hui l'interrupteur est global, `src/lib/prefs.tsx`). Chaque suggestion
+doit permettre d'être **redirigé vers le mail d'origine** : `MailSuggestion` porte déjà `mailId` + `account`
+(`src/lib/tasks.ts`) — câbler l'ouverture (`openMessage`) dans le panneau suggestion (`src/desktop/planning.tsx`),
+comme pour les tâches. Génération : `summarySuggestion` (`src/lib/store.tsx`).
+
 ## Rédaction & réponse
 
 ### #15 ✓ — La correction automatique via LLM ne doit pas perdre les images
@@ -166,13 +214,15 @@ entre le nouveau message et la citation. Dépend de la structure de citation de 
 
 ---
 
-## Ordre d'attaque suggéré
-1. Correctifs rapides + verrou distribution : **#4, #5, #10, #9**
-2. Clavier + rendu HTML : **#1, #2**
-3. Gros morceaux : **#3, #8, #11, #12**
-4. Refonte graphique + réglages (allers-retours maquette) : **#6, #7, #13, #18**
-5. Rédaction & réponse : **#15, #16, #17** — livrés ✓
-6. Parapluie sécurité en dernier : **#14**
+## Ordre d'attaque (priorités actées avec Roman le 12/11/2026)
+1. Correctifs : **#19** (connexion Google 401 — config OAuth à vérifier avec Roman) + **#21** (liens vers le navigateur extérieur)
+2. Sécurité : **#14** (secrets, paquets signés, audits)
+3. Calendriers externes : **#11** (CalDAV + Google OAuth + ICS)
+4. **#23** (supprimer/masquer des dossiers) · **#24** (suggestions planif par compte + mail d'origine) · **#25** (suggestions IA de RDV dans l'agenda)
+5. UI polish : **#6** (planif PC) · **#7** (rangement des réglages) · **#18** (dock)
+6. **Auto-updater** (hors todo : endpoint, sauvegarde clé, 1ʳᵉ release, AppImage, test E2E)
+
+Hors priorités actées : #3 (garé, recherche d'abord), #20, #22, suivis mineurs, Android (release signée + insets + CI).
 
 ## Reste à faire hors todo (doc existante)
 - **Auto-updater** (`docs/UPDATER.md`) : héberger l'endpoint, sauvegarder la clé privée, publier une première
