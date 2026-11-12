@@ -56,10 +56,41 @@ manifeste sont relatives à `--url-base` (par défaut le dossier de l'endpoint).
 
 1. Incrémenter la version dans `src-tauri/tauri.conf.json` (le manifeste la
    reprend) et `package.json`.
-2. Construire les paquets : `npm run tauri build -- --bundles rpm,appimage`
-   (en conteneur, le montage `/src:ro → /work` utilisé pour
-   `lavande-rpm-builder` fonctionne à l'identique ; l'AppImage demande
-   `linuxdeploy`/`appimtool`, téléchargés par le bundler).
+2. Construire les paquets : `npx tauri build --bundles rpm,appimage`.
+   Le verrou distribution n'est pas à poser : `beforeBuildCommand` pointe sur
+   `npm run build:distribution` (`VITE_DISTRIBUTION=1`), donc les fixtures de
+   maquette et l'aperçu n'entrent dans aucun paquet. `node
+   scripts/release-updater.mjs --build` fait le même build et exporte la variable
+   explicitement ; sans `--build`, le script avertit si les binaires réutilisés
+   ne l'ont pas. L'AppImage demande `linuxdeploy`/`appimagetool`, téléchargés par
+   le bundler.
+
+   Le RPM se construit dans le conteneur local `lavande-rpm-builder` (Debian bookworm,
+   node 22, rust, `libwebkit2gtk-4.1-dev`, `rpm`) : dépôt monté en `/src:ro`, copié dans
+   `/work`, puis `npx tauri build --bundles rpm`. Le RPM sort dans
+   `src-tauri/target/release/bundle/rpm/` (dans le conteneur :
+   `/work/src-tauri/target/release/bundle/rpm/`, copié vers `/out`). `.env.production`
+   est copié explicitement : il porte `VITE_OAUTH_CLIENT_ID`, sans lequel le build
+   conteneur perdrait l'identifiant OAuth.
+
+```bash
+mkdir -p artifacts/rpm && docker run --rm \
+  -v "$PWD":/src:ro \
+  -v "$PWD/artifacts/rpm":/out \
+  -v "$HOME/.cargo/registry":/root/.cargo/registry \
+  -w /work lavande-rpm-builder:latest bash -lc '
+set -e
+mkdir -p /work /out && cd /work
+cp -a /src/package.json /src/package-lock.json /src/index.html /src/tsconfig.json /src/vite.config.ts /src/vitest.config.ts /src/Cargo.toml /src/Cargo.lock /src/app-icon.svg /src/.env.production /work/
+tar -C /src --exclude=target --exclude=gen --exclude=node_modules -cf - src src-tauri crates | tar -xf - -C /work
+npm ci --no-audit --no-fund >/dev/null 2>&1
+npx tauri build --bundles rpm
+cp src-tauri/target/release/bundle/rpm/*.rpm /out/
+chown $(stat -c %u /src/package.json):$(stat -c %g /src/package.json) /out/*.rpm
+ls -la /out/*.rpm
+'
+```
+
 3. Générer le manifeste et signer :
 
 ```bash

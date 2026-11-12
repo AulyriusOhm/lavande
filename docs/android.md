@@ -1,8 +1,9 @@
 # Android — coquille native (APK)
 
 La même interface que la maquette mobile, dans une coquille **Tauri v2** : plein écran, sans le cadre
-téléphone ni la fausse barre de statut de la version web. Toujours aucun backend : les données restent
-des fixtures de `src/lib/mail.ts`.
+téléphone ni la fausse barre de statut de la version web. Le démon mail (`crates/mail-api`) est embarqué
+dans le processus de l'app (`127.0.0.1:8790`, données dans le stockage privé) : l'APK est un vrai client
+mail, sans mode démo (verrou distribution — voir ci-dessous).
 
 ## Prérequis
 
@@ -60,9 +61,22 @@ Le script `scripts/build-android-release.sh` enchaîne : `patch-android.mjs`, `t
 `apksigner`. `npm run android:build:debug` existe pour déboguer (`chrome://inspect`), mais **pas pour un usage
 réel** : voir « Fluidité ».
 
-Le front est construit avant le build natif (`beforeBuildCommand: npm run build` dans
+Le front est construit avant le build natif (`beforeBuildCommand: npm run build:distribution` dans
 `src-tauri/tauri.conf.json`). `[profile.release] strip = true` fait tomber le `.so` à 6,2 Mo (contre 21,7 Mo
 en dev, et 127 Mo sans strip).
+
+### Verrou distribution et gate plateforme
+
+Les deux builds, release et debug, produisent un APK **verrouillé** :
+
+| Variable | Posée par | Effet |
+| --- | --- | --- |
+| `VITE_DISTRIBUTION=1` | `scripts/build-android-release.sh` l'exporte ; en debug c'est `beforeBuildCommand` (`npm run build:distribution`) qui s'en charge, donc tout `tauri android build` en hérite | `mailMode()` (`src/lib/mail-backend.ts`) renvoie toujours `api` (`VITE_MAIL_BACKEND=demo` ignoré) ; fixtures purgées du bundle (`EVENTS`, `TASKS`, `MAILS`, `MAIL_SUGGESTIONS`, `RECENT_SEARCHES` valent `[]`) ; aucun aperçu maquette (« Voir la démo », « Voir la maquette PC », badges « maquette PC » / « design preview ») |
+| `VITE_PLATFORM=android` | `scripts/build-android-release.sh` et `npm run android:build:debug` | `vite.config.ts` aliase `@/lib/mcp` et `@/screens/mcp-screen` vers `src/lib/mcp.android.ts` et `src/screens/mcp-screen.android.tsx` : le code MCP **n'est pas dans l'APK** (stubs vides, pas du code masqué), et ses sections sortent des réglages |
+
+Conséquence pratique : l'APK n'a **pas de mode démo**. Sans compte configuré, il s'arrête à l'écran de
+connexion ; les données de la maquette n'existent pas dans le bundle. Pour revoir la maquette mobile, il
+faut le web (`?app` ou le portail), où les deux variables sont absentes.
 
 ### Build mono-ABI arm64
 
@@ -187,9 +201,9 @@ le dock est visible, c'est le premier suspect.
 - **Bouton retour Android = historique WebView** : chaque couche ouverte pousse un état d'historique
   (`pushState` dans `src/App.tsx`), donc retour ferme la couche du dessus (message, feuille, overlay) ;
   sans couche ouverte, il sort de l'app.
-- **Pas de backend mail** : fixtures uniquement (sauf la planification, synchronisée — voir ci-dessous) ;
-  thème, accent, préférences de gestes et documents de planification en `localStorage`.
-- Pas de build release signé, pas de `--split-per-abi`, pas de CI Android.
+- **Démon mail embarqué** : API locale `127.0.0.1:8790`, données dans le stockage privé de l'app ;
+  planification synchronisée (voir ci-dessous) ; thème, accent et préférences de gestes en `localStorage`.
+- Pas de `--split-per-abi`, pas de CI Android : l'APK arm64 est signé par `scripts/build-android-release.sh`.
 
 ## Synchronisation de la planification (APK)
 

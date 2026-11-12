@@ -3,16 +3,19 @@
 Client mail **PC + Android**, front en React/Vite/Tailwind, shell natif **Rust + Tauri v2**,
 composants inspirés de [Magic UI](https://magicui.design/docs/components).
 
-> **État actuel : maquette de design (mobile first) + coquille Android.** Aucun backend mail, aucune
-> authentification mail : les données sont des fixtures dans `src/lib/mail.ts`. La **synchronisation
-> E2EE de la planification** existe en revanche (serveur `server/` + client `src/lib/sync/`, protocole
-> dans [`docs/SYNC.md`](./docs/SYNC.md), e2e `npm run e2e`).
+> **État actuel : client mail fonctionnel (PC + Android), maquette de design disponible en mode démo.**
+> Le moteur mail Rust (`crates/mail-core`) est exposé en HTTP local par le démon `crates/mail-api`
+> (`lavande-maild`), embarqué dans la coquille Android ; le front s'y branche (`src/lib/api.ts`). Les
+> fixtures de `src/lib/mail.ts` ne servent qu'au mode démo (`VITE_MAIL_BACKEND=demo`, builds non
+> verrouillés — voir « Builds distribués »). La **synchronisation E2EE de la planification** existe
+> (serveur `server/` + client `src/lib/sync/`, protocole dans [`docs/SYNC.md`](./docs/SYNC.md),
+> e2e `npm run e2e`).
 >
 > 🎨 **Intentions de design, palette, motion et arbitrages : [`DESIGN.md`](./DESIGN.md).**
 >
 > Deux maquettes navigables, mêmes fixtures et même design system : **mobile** sur `/lavande/`
-> (cadre téléphone) et **PC** sur `/lavande/?desktop`. La coquille native **Android** reprend la
-> maquette mobile en plein écran, toujours sans backend ([`docs/android.md`](./docs/android.md)).
+> (cadre téléphone) et **PC** sur `/lavande/?desktop`. La coquille native **Android** reprend
+> l'interface mobile en plein écran, démon mail embarqué ([`docs/android.md`](./docs/android.md)).
 
 ## Implémentation (périmètre Mails)
 
@@ -230,6 +233,34 @@ npm install
 npm run dev        # http://0.0.0.0:1420
 npm run build      # typecheck + build
 ```
+
+### Builds distribués
+
+`VITE_DISTRIBUTION=1` est le verrou : le mode maquette disparaît du bundle.
+
+| Commande | Front produit |
+| --- | --- |
+| `npm run dev`, `npm run dev:portal`, `npm run build` | maquette complète (fixtures, démo, aperçu PC) |
+| `npm run build:distribution` (`tsc --noEmit && VITE_DISTRIBUTION=1 vite build`) | verrouillé |
+
+`src-tauri/tauri.conf.json` met `beforeBuildCommand` sur `npm run build:distribution` : **tout**
+`tauri build` / `tauri android build`, même lancé à la main, embarque un front verrouillé. Les scripts de
+release le posent en plus explicitement : `scripts/build-android-release.sh` exporte `VITE_DISTRIBUTION=1`,
+`node scripts/release-updater.mjs --build` aussi (et il avertit si des binaires réutilisés ne l'ont pas).
+
+Ce que le verrou retire du bundle :
+
+- `mailMode()` (`src/lib/mail-backend.ts`) renvoie toujours `api` : `VITE_MAIL_BACKEND=demo` est ignoré ;
+- les fixtures de maquette sont purgées au build (`EVENTS`, `TASKS`, `MAILS`, `MAIL_SUGGESTIONS`,
+  `RECENT_SEARCHES` valent `[]` derrière un ternaire `import.meta.env`, donc éliminées à la compilation) ;
+- plus d'aperçu maquette : « Voir la démo » (écran de connexion, bandeau backend), les liens croisés des
+  réglages (« Voir la maquette PC », « Aperçu de la maquette mobile »), les badges « maquette PC » et
+  « design preview », la légende sous la maquette mobile (`src/App.tsx`).
+
+`VITE_PLATFORM=android` (posé par `scripts/build-android-release.sh` et `npm run android:build:debug`)
+aliase `@/lib/mcp` et `@/screens/mcp-screen` vers `src/lib/mcp.android.ts` et
+`src/screens/mcp-screen.android.tsx` (`vite.config.ts`) : le code MCP est **absent** du bundle Android, pas
+seulement masqué, et ses sections sortent des réglages. PC et web gardent MCP.
 
 ## Écrans
 
