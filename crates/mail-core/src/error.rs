@@ -18,6 +18,8 @@ pub enum MailError {
     Json(#[from] serde_json::Error),
     #[error("config error: {0}")]
     Config(String),
+    #[error("calendar error: {0}")]
+    Calendar(String),
     #[error("auth error: {0}")]
     Auth(String),
     #[error("imap error: {0}")]

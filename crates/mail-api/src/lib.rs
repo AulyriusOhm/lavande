@@ -53,6 +53,7 @@ pub fn app(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .merge(routes::accounts::router())
+        .merge(routes::calendars::router())
         .merge(routes::counts::router())
         .merge(routes::discover::router())
         .merge(routes::mail::router())

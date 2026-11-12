@@ -74,6 +74,7 @@ impl From<MailError> for ApiError {
     fn from(error: MailError) -> Self {
         let (status, kind) = match &error {
             MailError::Config(_) => (StatusCode::BAD_REQUEST, "config"),
+            MailError::Calendar(_) => (StatusCode::BAD_REQUEST, "calendar"),
             MailError::Auth(_) => (StatusCode::UNAUTHORIZED, "auth"),
             MailError::InvalidData(_) => (StatusCode::NOT_FOUND, "store"),
             MailError::Imap(_) => (StatusCode::BAD_GATEWAY, "imap"),
@@ -108,6 +109,7 @@ impl IntoResponse for ApiError {
 fn label(error: &MailError) -> String {
     match error {
         MailError::Config(message) => format!("configuration invalide : {message}"),
+        MailError::Calendar(message) => format!("calendrier illisible : {message}"),
         MailError::Auth(message) => format!("authentification refusée : {message}"),
         MailError::InvalidData(message) => format!("donnée introuvable : {message}"),
         MailError::Imap(message) => format!("serveur IMAP : {message}"),

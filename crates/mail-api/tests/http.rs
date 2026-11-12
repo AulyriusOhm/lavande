@@ -1347,3 +1347,99 @@ async fn a_composition_body_above_two_megabytes_reaches_the_handler() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json(&body)["kind"], "store");
 }
+
+const ICS: &str = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Lavande//Tests//FR\r\n\
+BEGIN:VEVENT\r\n\
+UID:abc-123\r\n\
+SUMMARY:Réunion équipe\r\n\
+DTSTART:20240315T090000Z\r\n\
+DTEND:20240315T100000Z\r\n\
+LOCATION:Bureau\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:jour-6\r\n\
+SUMMARY:Journée off\r\n\
+DTSTART;VALUE=DATE:20240320\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+#[tokio::test]
+async fn an_ics_payload_is_parsed_and_returns_wall_clock_events() {
+    let (_directory, state) = state().await;
+    let (status, body) = call(
+        &state,
+        post(
+            "/api/calendars/ics",
+            &json!({ "content": ICS, "source": "Google" }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let events = json(&body);
+    let events = events.as_array().expect("liste d'événements");
+    assert_eq!(events.len(), 2);
+
+    assert_eq!(events[0]["uid"], "abc-123");
+    assert_eq!(events[0]["title"], "Réunion équipe");
+    assert_eq!(events[0]["date"], "2024-03-15");
+    assert_eq!(events[0]["start"], "09:00");
+    assert_eq!(events[0]["end"], "10:00");
+    assert_eq!(events[0]["all_day"], json!(false));
+    assert_eq!(events[0]["timezone"], "UTC");
+    assert_eq!(events[0]["location"], "Bureau");
+    assert_eq!(events[0]["recurring"], json!(false));
+    assert_eq!(events[0]["source"], "Google");
+
+    assert_eq!(events[1]["uid"], "jour-6");
+    assert_eq!(events[1]["date"], "2024-03-20");
+    assert_eq!(events[1]["start"], Value::Null);
+    assert_eq!(events[1]["end"], Value::Null);
+    assert_eq!(events[1]["all_day"], json!(true));
+    assert_eq!(events[1]["timezone"], Value::Null);
+    assert_eq!(events[1]["source"], "Google");
+}
+
+#[tokio::test]
+async fn calendar_import_requires_the_daemon_token() {
+    let (_directory, state) = state().await;
+    let request = post("/api/calendars/ics", &json!({ "content": ICS }));
+    let (status, body) = call_bare(&state, request).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(json(&body)["kind"], "auth");
+}
+
+#[tokio::test]
+async fn an_invalid_calendar_is_a_400_kind_calendar() {
+    let (_directory, state) = state().await;
+    for payload in [
+        json!({}),
+        json!({ "content": "   " }),
+        json!({ "content": "ceci n'est pas un calendrier" }),
+        json!({ "content": "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nEND:VCALENDAR\r\n" }),
+        json!({ "content": ICS, "url": "https://exemple.tld/calendrier.ics" }),
+        json!({ "url": "pas une url" }),
+        json!({ "url": "file:///etc/passwd" }),
+    ] {
+        let (status, body) = call(&state, post("/api/calendars/ics", &payload)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{payload} : {body:?}");
+        assert_eq!(json(&body)["kind"], "calendar", "{payload}");
+    }
+}
+
+#[tokio::test]
+async fn an_unreachable_calendar_url_is_a_502() {
+    let (_directory, state) = state().await;
+    let (status, body) = call(
+        &state,
+        post(
+            "/api/calendars/ics",
+            &json!({ "url": "http://127.0.0.1:1/calendrier.ics" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body:?}");
+    assert_eq!(json(&body)["kind"], "calendar");
+}
