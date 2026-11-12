@@ -10,6 +10,26 @@ Décisions actées avec Roman le 11/11/2026 :
 - **Lisibilité** (#13) : **audit visuel UI** (contrastes, tailles, troncatures, débordements) puis corrections.
 - **Maquette** (#5, #10) : un **verrou build « distribution »** unique retire données factices et aperçu maquette.
 
+Décisions actées avec Roman le 12/11/2026 :
+
+- **Anti-spam** (#3) : **pas d'implémentation à la va-vite** — une vraie phase de recherche est requise avant (en-têtes serveur, moteurs de règles, bayésien, Rspamd/SpamAssassin, apprentissage). Garé en attendant.
+- **Lisibilité** (#13) : audit + correctifs livrés, carte blanche sur les arbitrages (reflow PC responsive, palier 11px méta dense / contenu ≥12,5px, encre de compte calculée, jetons `--sync-*`, `--accent-ink` 52%, compteurs `bg-ink/10`).
+- **Clavier** : actions sur le mail sélectionné — **Suppr nu** (supprimer), Ctrl+E (archiver), Ctrl+Shift+S/U/R/F (étoile/lu/répondre/transférer) + menu « Raccourcis clavier » dans les réglages.
+
+## État d'avancement (12/11/2026)
+
+**Livrés et vérifiés** (tests + builds, un commit par tâche) :
+- #1 navigation clavier de mail en mail · #4 agenda PC responsive · #2 rendu HTML fidèle (iframe sandbox + sanitizer CSS sûr).
+- #5 + #10 verrou distribution · #9 MCP exclu du build Android · #8 droits MCP (approbation + journal réel).
+- #12 PGP par compte (front + démon : trousseau effectif, purge des corps déchirés, bandeau lecteur).
+- #13 audit lisibilité + correctifs (contrastes WCAG, reflow, étiquette de compte, placeholders, cibles tactiles).
+- Hors todo initiale : citations de réponse (retours à la ligne), images collées dans le corps (inline CID), raccourcis clavier d'actions + menu réglages, doc distribution (README/UPDATER/android/mail-core).
+
+**Restent à faire** :
+- #3 anti-spam (phase de recherche d'abord) · #6 graphisme PC agenda/planif (maquettes à valider) · #7 rangement des réglages (plan à valider) · #11 calendriers externes (OAuth Google à fournir) · #14 parapluie sécurité (audit autonome ; Keystore Android + trousseau système + signature paquets avec Roman).
+- Hors todo : auto-updater (hébergement endpoint, sauvegarde clé, 1ʳᵉ release, AppImage, test E2E) · Android insets sur appareil physique + CI.
+- Suivis mineurs : `htmlToText` avale les URL `<https://…>` dans les aperçus texte ; relecture locale des images inline CID dans Envoyés ; scénario live IMAP du gate PGP ; 2 chaînes démo cosmétiques sous verrou.
+
 ---
 
 ## Navigation & rendu des mails
