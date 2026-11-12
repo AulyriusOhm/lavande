@@ -43,6 +43,11 @@ pub enum AccountSecrets {
     Pgp {
         secret_key: String,
     },
+    /// Identifiants d'une source CalDAV, rangés par source (`caldav:<ID>`).
+    Caldav {
+        username: String,
+        password: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

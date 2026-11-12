@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod auth;
+pub mod calendar_sources;
 pub mod config_file;
 pub mod discovery;
 pub mod dto;

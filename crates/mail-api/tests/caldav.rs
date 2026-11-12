@@ -1,6 +1,8 @@
 //! CalDAV en lecture seule : découverte des calendriers et récupération des
 //! événements, servies par un faux serveur WebDAV en boucle locale.
 
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
@@ -165,20 +167,36 @@ async fn serve() -> String {
     format!("http://{address}/dav/")
 }
 
-async fn post(state: &Arc<AppState>, path: &str, payload: Value) -> (StatusCode, Bytes) {
-    let request = Request::builder()
-        .method("POST")
+async fn call(
+    state: &Arc<AppState>,
+    method: Method,
+    path: &str,
+    payload: Option<Value>,
+) -> (StatusCode, Bytes) {
+    let mut builder = Request::builder()
+        .method(method)
         .uri(path)
-        .header("content-type", "application/json")
-        .header("authorization", format!("Bearer {}", state.token()))
-        .body(Body::from(payload.to_string()))
-        .expect("requête");
-    let response = app(state.clone()).oneshot(request).await.expect("réponse");
+        .header("authorization", format!("Bearer {}", state.token()));
+    let body = match payload {
+        Some(payload) => {
+            builder = builder.header("content-type", "application/json");
+            Body::from(payload.to_string())
+        }
+        None => Body::empty(),
+    };
+    let response = app(state.clone())
+        .oneshot(builder.body(body).expect("requête"))
+        .await
+        .expect("réponse");
     let status = response.status();
     let body = axum::body::to_bytes(response.into_body(), 1 << 20)
         .await
         .expect("corps");
     (status, body)
+}
+
+async fn post(state: &Arc<AppState>, path: &str, payload: Value) -> (StatusCode, Bytes) {
+    call(state, Method::POST, path, Some(payload)).await
 }
 
 fn json(body: &Bytes) -> Value {
@@ -282,6 +300,232 @@ async fn missing_credentials_are_refused() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "corps : {body:?}");
     assert_eq!(json(&body)["kind"], "caldav");
+}
+
+#[tokio::test]
+async fn a_stored_source_keeps_its_credentials_out_of_every_file_and_answer() {
+    let (directory, state) = state().await;
+    let url = serve().await;
+    let (status, body) = post(
+        &state,
+        "/api/calendars/caldav/sources",
+        json!({ "url": url, "username": "roman", "password": "secret", "name": "Travail" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "corps : {body:?}");
+    let source = json(&body);
+    assert_eq!(source["id"], "travail");
+    assert_eq!(source["name"], "Travail");
+    assert_eq!(source["url"], url);
+    assert_eq!(source["calendar_href"], Value::Null);
+    let answer = String::from_utf8_lossy(&body);
+    assert!(!answer.contains("secret"), "réponse : {answer}");
+    assert!(!answer.contains("roman"), "réponse : {answer}");
+
+    let path = directory.path().join("calendars.json");
+    let text = fs::read_to_string(&path).expect("calendars.json");
+    assert!(text.contains("Travail"), "{text}");
+    assert!(!text.contains("secret"), "{text}");
+    assert!(!text.contains("roman"), "{text}");
+    let mode = fs::metadata(&path).expect("fichier").permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+
+    assert_eq!(
+        state.secrets().get("caldav:travail").await.expect("secret"),
+        Some(lavande_mail_api::secrets::AccountSecrets::Caldav {
+            username: "roman".to_string(),
+            password: "secret".to_string(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_stored_source_reads_its_events_without_credentials_in_the_request() {
+    let (_directory, state) = state().await;
+    let url = serve().await;
+    let (status, body) = post(
+        &state,
+        "/api/calendars/caldav/sources",
+        json!({
+            "url": url,
+            "username": "roman",
+            "password": "secret",
+            "name": "Travail",
+            "calendar_href": "/dav/roman/travail/"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "corps : {body:?}");
+    let id = json(&body)["id"].as_str().expect("id").to_string();
+    let (status, body) = call(
+        &state,
+        Method::POST,
+        &format!("/api/calendars/caldav/sources/{id}/events"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "corps : {body:?}");
+    let events = json(&body);
+    assert_eq!(events.as_array().expect("liste").len(), 1);
+    assert_eq!(events[0]["title"], "Revue de sprint");
+}
+
+#[tokio::test]
+async fn a_source_without_a_collection_reads_every_discovered_calendar() {
+    let (_directory, state) = state().await;
+    let url = serve().await;
+    let (status, body) = post(
+        &state,
+        "/api/calendars/caldav/sources",
+        json!({ "url": url, "username": "roman", "password": "secret" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "corps : {body:?}");
+    let source = json(&body);
+    let host = reqwest::Url::parse(&url)
+        .expect("url")
+        .host_str()
+        .expect("hôte")
+        .to_string();
+    assert_eq!(source["name"], host);
+    let id = source["id"].as_str().expect("id").to_string();
+    let (status, body) = call(
+        &state,
+        Method::POST,
+        &format!("/api/calendars/caldav/sources/{id}/events"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "corps : {body:?}");
+    assert_eq!(json(&body).as_array().expect("liste").len(), 1);
+}
+
+#[tokio::test]
+async fn a_refused_password_stores_nothing() {
+    let (directory, state) = state().await;
+    let url = serve().await;
+    let (status, body) = post(
+        &state,
+        "/api/calendars/caldav/sources",
+        json!({ "url": url, "username": "roman", "password": "mauvais-secret" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "corps : {body:?}");
+    assert!(state.calendar_sources().expect("sources").is_empty());
+    assert!(!directory.path().join("calendars.json").exists());
+    assert!(!directory.path().join("secrets.enc").exists());
+}
+
+#[tokio::test]
+async fn sources_are_listed_under_unique_ids_and_deleted_with_their_secret() {
+    let (directory, state) = state().await;
+    let url = serve().await;
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let (status, body) = post(
+            &state,
+            "/api/calendars/caldav/sources",
+            json!({ "url": url, "username": "roman", "password": "secret", "name": "Perso" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "corps : {body:?}");
+        ids.push(json(&body)["id"].as_str().expect("id").to_string());
+    }
+    assert_eq!(ids, vec!["perso", "perso-2"]);
+
+    let (status, body) = call(&state, Method::GET, "/api/calendars/caldav/sources", None).await;
+    assert_eq!(status, StatusCode::OK, "corps : {body:?}");
+    let sources = json(&body);
+    assert_eq!(sources.as_array().expect("liste").len(), 2);
+    let answer = String::from_utf8_lossy(&body);
+    assert!(!answer.contains("secret"), "réponse : {answer}");
+    assert!(!answer.contains("username"), "réponse : {answer}");
+
+    let (status, _) = call(
+        &state,
+        Method::DELETE,
+        "/api/calendars/caldav/sources/perso",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        state.secrets().get("caldav:perso").await.expect("secret"),
+        None
+    );
+    assert_eq!(
+        state.secrets().get("caldav:perso-2").await.expect("secret"),
+        Some(lavande_mail_api::secrets::AccountSecrets::Caldav {
+            username: "roman".to_string(),
+            password: "secret".to_string(),
+        })
+    );
+    let (status, body) = call(&state, Method::GET, "/api/calendars/caldav/sources", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json(&body).as_array().expect("liste").len(), 1);
+
+    let (status, _) = call(
+        &state,
+        Method::DELETE,
+        "/api/calendars/caldav/sources/perso",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(directory.path().join("calendars.json").exists());
+}
+
+#[tokio::test]
+async fn the_events_of_an_unknown_source_are_a_404() {
+    let (_directory, state) = state().await;
+    let (status, body) = call(
+        &state,
+        Method::POST,
+        "/api/calendars/caldav/sources/inconnu/events",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corps : {body:?}");
+    assert_eq!(json(&body)["kind"], "store");
+}
+
+#[tokio::test]
+async fn a_stored_source_survives_a_restart() {
+    let (directory, state) = state().await;
+    let url = serve().await;
+    let (status, body) = post(
+        &state,
+        "/api/calendars/caldav/sources",
+        json!({
+            "url": url,
+            "username": "roman",
+            "password": "secret",
+            "name": "Travail",
+            "calendar_href": "/dav/roman/travail/"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "corps : {body:?}");
+
+    let reopened = Arc::new(
+        AppState::open_with(
+            directory.path(),
+            TlsOptions::default(),
+            Default::default(),
+            SecretBackend::File,
+        )
+        .await
+        .expect("état rouvert"),
+    );
+    let (status, body) = call(
+        &reopened,
+        Method::POST,
+        "/api/calendars/caldav/sources/travail/events",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "corps : {body:?}");
+    assert_eq!(json(&body).as_array().expect("liste").len(), 1);
 }
 
 /// Serveur CalDAV réel : `CALDAV_TEST_URL`, `CALDAV_TEST_USER`,

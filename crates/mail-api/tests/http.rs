@@ -934,6 +934,104 @@ async fn remove_account_forgets_the_secret() {
 }
 
 #[tokio::test]
+async fn calendar_sources_keep_their_credentials_in_the_secret_store() {
+    let (directory, state) = state().await;
+    let source = state
+        .add_calendar_source(
+            "Travail",
+            "https://caldav.exemple.tld/dav/",
+            Some("/dav/calendars/travail/".to_string()),
+            lavande_mail_api::secrets::AccountSecrets::Caldav {
+                username: "roman".to_string(),
+                password: "secret-en-clair".to_string(),
+            },
+        )
+        .await
+        .expect("source ajoutée");
+    assert_eq!(source.id, "travail");
+
+    let path = directory.path().join("calendars.json");
+    let text = fs::read_to_string(&path).expect("calendars.json");
+    assert!(!text.contains("secret-en-clair"), "{text}");
+    assert!(!text.contains("roman"), "{text}");
+    assert!(!text.contains("password"), "{text}");
+    assert!(text.contains("https://caldav.exemple.tld/dav/"), "{text}");
+    let mode = fs::metadata(&path).expect("fichier").permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+
+    assert_eq!(
+        state
+            .calendar_credentials("travail")
+            .await
+            .expect("identifiants"),
+        ("roman".to_string(), "secret-en-clair".to_string())
+    );
+    assert_eq!(
+        state.calendar_source("travail").expect("source").url,
+        "https://caldav.exemple.tld/dav/"
+    );
+}
+
+#[tokio::test]
+async fn removing_a_calendar_source_forgets_its_credentials() {
+    let (_directory, state) = state().await;
+    state
+        .add_calendar_source(
+            "Travail",
+            "https://caldav.exemple.tld/dav/",
+            None,
+            lavande_mail_api::secrets::AccountSecrets::Caldav {
+                username: "roman".to_string(),
+                password: "secret-en-clair".to_string(),
+            },
+        )
+        .await
+        .expect("source ajoutée");
+
+    assert!(state
+        .remove_calendar_source("travail")
+        .await
+        .expect("suppression"));
+    assert!(state.calendar_sources().expect("sources").is_empty());
+    assert_eq!(
+        state.secrets().get("caldav:travail").await.expect("secret"),
+        None
+    );
+    assert!(state.calendar_source("travail").is_err());
+    assert!(!state
+        .remove_calendar_source("travail")
+        .await
+        .expect("seconde suppression"));
+}
+
+#[tokio::test]
+async fn a_calendar_source_without_its_secret_is_an_error() {
+    let (_directory, state) = state().await;
+    state
+        .add_calendar_source(
+            "Travail",
+            "https://caldav.exemple.tld/dav/",
+            None,
+            lavande_mail_api::secrets::AccountSecrets::Caldav {
+                username: "roman".to_string(),
+                password: "secret-en-clair".to_string(),
+            },
+        )
+        .await
+        .expect("source ajoutée");
+    state
+        .secrets()
+        .delete("caldav:travail")
+        .await
+        .expect("secret effacé");
+    let error = state
+        .calendar_credentials("travail")
+        .await
+        .expect_err("identifiants absents");
+    assert!(error.message().contains("coffre"), "{error}");
+}
+
+#[tokio::test]
 async fn a_corrupt_secret_file_is_an_error() {
     let directory = tempfile::tempdir().expect("répertoire temporaire");
     let mut stripped = account("perso");

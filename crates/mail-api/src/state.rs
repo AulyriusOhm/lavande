@@ -10,13 +10,14 @@ use lavande_mail::pgp::PgpKeyring;
 use lavande_mail::store::Store;
 use lavande_mail::tls::TlsOptions;
 
+use crate::calendar_sources::{self, CalendarSource};
 use crate::config_file::{self, StoredAccount};
 use crate::discovery::{Discovery, DiscoveryEndpoints};
 use crate::error::ApiError;
 use crate::events::Events;
 use crate::oauth_flow::Sessions;
 use crate::pgp_keys::PgpStore;
-use crate::secrets::{SecretBackend, Secrets};
+use crate::secrets::{AccountSecrets, SecretBackend, Secrets};
 use crate::token;
 
 pub const ACCOUNTS_FILE: &str = "accounts.json";
@@ -25,6 +26,7 @@ pub const DATABASE_FILE: &str = "mail.db";
 pub struct AppState {
     store: Store,
     accounts_path: PathBuf,
+    calendars_path: PathBuf,
     secrets: Secrets,
     token: String,
     tls: TlsOptions,
@@ -66,6 +68,7 @@ impl AppState {
         let state = Self {
             store,
             accounts_path: data_dir.join(ACCOUNTS_FILE),
+            calendars_path: data_dir.join(calendar_sources::SOURCES_FILE),
             secrets,
             token,
             tls,
@@ -284,6 +287,84 @@ impl AppState {
     async fn save_accounts(&self, accounts: &mut [StoredAccount]) -> Result<(), ApiError> {
         self.extract_secrets(accounts).await?;
         config_file::save(&self.accounts_path, accounts)
+    }
+
+    /// CalDAV sources without their credentials: listing and existence checks.
+    pub fn calendar_sources(&self) -> Result<Vec<CalendarSource>, ApiError> {
+        calendar_sources::load(&self.calendars_path)
+    }
+
+    pub fn calendar_source(&self, id: &str) -> Result<CalendarSource, ApiError> {
+        self.calendar_sources()?
+            .into_iter()
+            .find(|source| source.id == id)
+            .ok_or_else(|| ApiError::not_found(format!("source CalDAV « {id} » inconnue")))
+    }
+
+    /// Stores the credentials first, then the source: a source whose secrets
+    /// could not be written is dropped again. The identifier is derived from
+    /// the name and made unique against the sources already stored.
+    pub async fn add_calendar_source(
+        &self,
+        name: &str,
+        url: &str,
+        calendar_href: Option<String>,
+        credentials: AccountSecrets,
+    ) -> Result<CalendarSource, ApiError> {
+        let mut sources = self.calendar_sources()?;
+        let source = CalendarSource {
+            id: calendar_sources::unique_id(name, &sources),
+            name: name.to_string(),
+            url: url.to_string(),
+            calendar_href,
+        };
+        let secret_id = calendar_sources::secret_id(&source.id);
+        self.secrets.put(&secret_id, &credentials).await?;
+        sources.push(source.clone());
+        if let Err(error) = calendar_sources::save(&self.calendars_path, &sources) {
+            let _ = self.secrets.delete(&secret_id).await;
+            return Err(error);
+        }
+        Ok(source)
+    }
+
+    /// `true` when the source was listed in `calendars.json`.
+    pub async fn remove_calendar_source(&self, id: &str) -> Result<bool, ApiError> {
+        let sources = self.calendar_sources()?;
+        if !sources.iter().any(|source| source.id == id) {
+            return Ok(false);
+        }
+        let kept: Vec<CalendarSource> = sources
+            .into_iter()
+            .filter(|source| source.id != id)
+            .collect();
+        calendar_sources::save(&self.calendars_path, &kept)?;
+        self.secrets
+            .delete(&calendar_sources::secret_id(id))
+            .await?;
+        Ok(true)
+    }
+
+    /// Credentials of one stored source. A source without a usable secret is
+    /// an error, never an anonymous request.
+    pub async fn calendar_credentials(&self, id: &str) -> Result<(String, String), ApiError> {
+        match self
+            .secrets
+            .get(&calendar_sources::secret_id(id))
+            .await?
+        {
+            Some(AccountSecrets::Caldav { username, password }) => Ok((username, password)),
+            Some(_) => Err(ApiError::internal(
+                "caldav",
+                format!("identifiants de la source « {id} » incompatibles avec CalDAV"),
+            )),
+            None => Err(ApiError::internal(
+                "caldav",
+                format!(
+                    "identifiants de la source « {id} » absents du coffre : supprimez la source et rajoutez-la"
+                ),
+            )),
+        }
     }
 }
 

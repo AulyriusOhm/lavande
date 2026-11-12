@@ -1,32 +1,50 @@
 //! `/api/calendars`: import en lecture seule d'un calendrier iCalendar, collé
 //! dans le corps de la requête ou téléchargé par le démon depuis une URL, et
-//! accès CalDAV en lecture seule. Aucun identifiant CalDAV n'est stocké.
+//! accès CalDAV en lecture seule.
+//!
+//! Une source CalDAV persistée garde son URL et son nom dans `calendars.json`
+//! et ses identifiants dans le coffre de secrets : ils ne repassent jamais par
+//! une réponse ni par une ligne de journal.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::post;
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use lavande_mail::caldav::{CaldavClient, CalendarCollection};
 use lavande_mail::ics::{parse_events, ExternalEvent, MAX_ICS_BYTES};
 use serde::Deserialize;
 
+use crate::calendar_sources::CalendarSource;
 use crate::dto::ApiJson;
 use crate::error::ApiError;
+use crate::secrets::AccountSecrets;
 use crate::state::AppState;
 
 /// A calendar server that never answers must not hold a request open.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub fn router() -> Router<std::sync::Arc<AppState>> {
+pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/calendars/ics", post(import))
         .route("/api/calendars/caldav/discover", post(caldav_discover))
         .route("/api/calendars/caldav/events", post(caldav_events))
+        .route(
+            "/api/calendars/caldav/sources",
+            get(list_sources).post(add_source),
+        )
+        .route("/api/calendars/caldav/sources/{id}", delete(remove_source))
+        .route(
+            "/api/calendars/caldav/sources/{id}/events",
+            post(source_events),
+        )
 }
 
-/// Credentials travel with each call and are never stored by the daemon.
+/// Credentials of a one-shot call: the stateless setup routes never store
+/// them, the sources routes put them in the secret store.
 #[derive(Deserialize)]
 struct CaldavRequest {
     url: String,
@@ -71,6 +89,82 @@ async fn caldav_events(
     let client = request.client()?;
     let events = client.events(request.calendar_href.as_deref()).await?;
     tracing::debug!(events = events.len(), "événements CalDAV récupérés");
+    Ok(Json(events))
+}
+
+/// Credentials travel once, in the body: they end up in the secret store.
+#[derive(Deserialize)]
+struct SourceRequest {
+    #[serde(flatten)]
+    credentials: CaldavRequest,
+    /// Label of the source; defaults to the host of the URL.
+    #[serde(default)]
+    name: Option<String>,
+}
+
+async fn list_sources(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<CalendarSource>>, ApiError> {
+    Ok(Json(state.calendar_sources()?))
+}
+
+/// Nothing is stored unless the server answers: the collection named by
+/// `calendar_href` is read, every discovered calendar otherwise.
+async fn add_source(
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<SourceRequest>,
+) -> Result<(StatusCode, Json<CalendarSource>), ApiError> {
+    let client = request.credentials.client()?;
+    let calendar_href = trimmed(request.credentials.calendar_href);
+    match calendar_href.as_deref() {
+        Some(href) => {
+            let events = client.events(Some(href)).await?;
+            tracing::debug!(events = events.len(), "calendrier CalDAV lu à l'ajout");
+        }
+        None => {
+            let calendars = client.discover().await?;
+            tracing::debug!(calendars = calendars.len(), "source CalDAV découverte");
+        }
+    }
+    let url = request.credentials.url.trim().to_string();
+    let name = match trimmed(request.name) {
+        Some(name) => name,
+        None => host(&url)?,
+    };
+    let credentials = AccountSecrets::Caldav {
+        username: request.credentials.username.trim().to_string(),
+        password: request.credentials.password,
+    };
+    let source = state
+        .add_calendar_source(&name, &url, calendar_href, credentials)
+        .await?;
+    tracing::info!(source = %source.id, "source CalDAV ajoutée");
+    Ok((StatusCode::CREATED, Json(source)))
+}
+
+async fn remove_source(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<StatusCode, ApiError> {
+    if !state.remove_calendar_source(&id).await? {
+        return Err(ApiError::not_found(format!(
+            "source CalDAV « {id} » inconnue"
+        )));
+    }
+    tracing::info!(source = %id, "source CalDAV supprimée");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Reads a stored source with its own credentials: none travels in the request.
+async fn source_events(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<ExternalEvent>>, ApiError> {
+    let source = state.calendar_source(&id)?;
+    let (username, password) = state.calendar_credentials(&id).await?;
+    let client = CaldavClient::new(&source.url, &username, &password)?;
+    let events = client.events(source.calendar_href.as_deref()).await?;
+    tracing::debug!(source = %id, events = events.len(), "événements CalDAV récupérés");
     Ok(Json(events))
 }
 
@@ -119,6 +213,14 @@ fn trimmed(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+/// Default label of a source: the server it points at.
+fn host(url: &str) -> Result<String, ApiError> {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+        .ok_or_else(|| ApiError::bad_request("caldav", format!("URL sans hôte : « {url} »")))
 }
 
 fn calendar_url(raw: &str) -> Result<reqwest::Url, ApiError> {
