@@ -3,6 +3,7 @@ import { ImageOff, Loader2 } from "lucide-react";
 import { errorText } from "@/lib/api";
 import type { MailSource } from "@/lib/mail";
 import { htmlImagesOf } from "@/lib/mail-backend";
+import { openExternal } from "@/lib/open-external";
 import { cn } from "@/lib/utils";
 import jakartaFont from "@/assets/fonts/plus-jakarta-sans-latin.woff2?url";
 import jakartaFontExt from "@/assets/fonts/plus-jakarta-sans-latin-ext.woff2?url";
@@ -99,7 +100,9 @@ function mailDocument(body: string, theme: Theme) {
  * un simple **repli**, placée dans le `<head>` : le mail garde sa propre mise en
  * page (styles inline, blocs `<style>` réinjectés en tête du body, attributs de
  * table) et notre palette ne sert qu'au contenu non stylé — le rendu fidèle
- * prime, y compris en thème sombre. Les liens s'ouvrent dans un nouvel onglet.
+ * prime, y compris en thème sombre. Les liens sont interceptés côté parent —
+ * l'iframe n'exécute aucun script — et remis au navigateur du système, la base
+ * `target="_blank"` ne restant qu'un repli.
  * Sans HTML, on retombe sur les paragraphes texte.
  *
  * Les images distantes restent masquées par défaut : le bandeau ne fait que
@@ -174,6 +177,35 @@ export function MailBody({
     observerRef.current.observe(contentBody);
   }, [measure]);
 
+  const interceptLinks = useCallback(() => {
+    const contentDocument = frameRef.current?.contentDocument;
+    if (!contentDocument) return;
+    contentDocument.addEventListener(
+      "click",
+      (event) => {
+        const target = event.target as Element | null;
+        if (typeof target?.closest !== "function") return;
+        const href = target.closest("a[href]")?.getAttribute("href");
+        if (!href) return;
+        let url: URL;
+        try {
+          url = new URL(href, contentDocument.baseURI);
+        } catch {
+          return;
+        }
+        if (url.protocol !== "http:" && url.protocol !== "https:") return;
+        event.preventDefault();
+        openExternal(url.href);
+      },
+      { capture: true },
+    );
+  }, []);
+
+  const handleFrameLoad = useCallback(() => {
+    syncHeight();
+    interceptLinks();
+  }, [interceptLinks, syncHeight]);
+
   useEffect(() => {
     if (!body) return;
     syncHeight();
@@ -225,7 +257,7 @@ export function MailBody({
         sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="no-referrer"
         srcDoc={frameDocument}
-        onLoad={syncHeight}
+        onLoad={handleFrameLoad}
         className="block w-full border-0 bg-transparent"
         style={{ height: height ?? "65vh" }}
       />

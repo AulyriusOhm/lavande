@@ -3,12 +3,17 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { MailSource } from "@/lib/mail";
 import { setAccountDecryptPolicy } from "@/lib/mail-backend";
 
-const { htmlImages } = vi.hoisted(() => ({ htmlImages: vi.fn() }));
+const { htmlImages, openExternal } = vi.hoisted(() => ({
+  htmlImages: vi.fn(),
+  openExternal: vi.fn(),
+}));
 
 vi.mock("@/lib/api", () => ({
   mailApi: { htmlImages },
   errorText: (error: unknown) => (error instanceof Error ? error.message : "erreur inconnue"),
 }));
+
+vi.mock("@/lib/open-external", () => ({ openExternal, isTauriShell: () => false }));
 
 const { MailBody } = await import("@/components/mail-body");
 
@@ -42,17 +47,38 @@ function srcDoc(container: HTMLElement) {
   return frame(container).getAttribute("srcdoc") ?? "";
 }
 
-function measureWith(container: HTMLElement, scrollHeight: number) {
+function loadedDocument(container: HTMLElement, markup = "") {
+  const contentDocument = document.implementation.createHTMLDocument("message");
+  contentDocument.body.innerHTML = markup;
   const element = frame(container);
   Object.defineProperty(element, "contentDocument", {
     configurable: true,
-    value: { documentElement: { scrollHeight }, body: null },
+    value: contentDocument,
   });
   fireEvent.load(element);
+  return contentDocument;
+}
+
+function measureWith(container: HTMLElement, scrollHeight: number) {
+  const contentDocument = loadedDocument(container);
+  Object.defineProperty(contentDocument.documentElement, "scrollHeight", {
+    configurable: true,
+    value: scrollHeight,
+  });
+  fireEvent.load(frame(container));
+}
+
+function clickInside(contentDocument: Document, selector: string) {
+  const target = contentDocument.querySelector(selector);
+  if (!target) throw new Error(`cible absente : ${selector}`);
+  const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+  target.dispatchEvent(event);
+  return event;
 }
 
 beforeEach(() => {
   htmlImages.mockReset();
+  openExternal.mockReset();
 });
 
 afterEach(() => {
@@ -190,6 +216,72 @@ describe("hauteur", () => {
 
     measureWith(container, 0);
     expect(element.style.height).toBe("65vh");
+  });
+});
+
+describe("liens externes", () => {
+  it("ouvre un lien http dans le navigateur du système, pas dans la webview", () => {
+    const { container } = renderBody('<p><a href="https://lavande.example/promo">Le site</a></p>');
+    const contentDocument = loadedDocument(
+      container,
+      '<p><a href="https://lavande.example/promo">Le site</a></p>',
+    );
+
+    const event = clickInside(contentDocument, "a");
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(openExternal).toHaveBeenCalledWith("https://lavande.example/promo");
+  });
+
+  it("intercepte aussi un lien cliqué depuis son contenu imbriqué", () => {
+    const { container } = renderBody('<p><a href="http://lavande.example"><span>Le site</span></a></p>');
+    const contentDocument = loadedDocument(
+      container,
+      '<p><a href="http://lavande.example"><span>Le site</span></a></p>',
+    );
+
+    clickInside(contentDocument, "span");
+
+    expect(openExternal).toHaveBeenCalledWith("http://lavande.example/");
+  });
+
+  it("laisse les liens mailto au document", () => {
+    const { container } = renderBody('<p><a href="mailto:contact@lavande.example">Écrire</a></p>');
+    const contentDocument = loadedDocument(
+      container,
+      '<p><a href="mailto:contact@lavande.example">Écrire</a></p>',
+    );
+
+    const event = clickInside(contentDocument, "a");
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it("réattache l'interception au document recréé par un nouveau srcdoc", () => {
+    const { container, rerender } = renderBody('<p><a href="https://un.example">Un</a></p>');
+    loadedDocument(container, '<p><a href="https://un.example">Un</a></p>');
+    const previous = srcDoc(container);
+
+    rerender(
+      <MailBody
+        className="mt-5"
+        html={'<p><a href="https://deux.example">Deux</a></p>'}
+        paragraphs={["Soldes du mois"]}
+        source={SOURCE}
+      />,
+    );
+    const contentDocument = loadedDocument(
+      container,
+      '<p><a href="https://deux.example">Deux</a></p>',
+    );
+
+    expect(srcDoc(container)).not.toBe(previous);
+    const event = clickInside(contentDocument, "a");
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(openExternal).toHaveBeenCalledTimes(1);
+    expect(openExternal).toHaveBeenCalledWith("https://deux.example/");
   });
 });
 
