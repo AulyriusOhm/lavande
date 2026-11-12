@@ -5,7 +5,8 @@ export type CalendarEvent = {
   end: string;
   title: string;
   location?: string;
-  tone: number;
+  description?: string;
+  tone?: number;
   fromMail?: boolean;
   mailId?: string;
   attendees?: string[];
@@ -51,7 +52,6 @@ export const EVENTS: CalendarEvent[] = import.meta.env.VITE_DISTRIBUTION === "1"
     end: "10:30",
     title: "Point maquettes v3",
     location: "Visio · Meet",
-    tone: 0,
     fromMail: true,
     mailId: "1",
     attendees: ["Camille Rousseau", "Léa Fontaine"],
@@ -64,7 +64,6 @@ export const EVENTS: CalendarEvent[] = import.meta.env.VITE_DISTRIBUTION === "1"
     end: "14:00",
     title: "Déjeuner — café des Lilas",
     location: "Rue des Lilas, Lyon",
-    tone: 3,
     fromMail: true,
     mailId: "4",
     attendees: ["Léa Fontaine"],
@@ -77,7 +76,6 @@ export const EVENTS: CalendarEvent[] = import.meta.env.VITE_DISTRIBUTION === "1"
     end: "17:00",
     title: "Revue PR feat/imap-sync",
     location: "GitHub",
-    tone: 2,
     attendees: ["Marie"],
     calendar: "Pro",
   },
@@ -87,7 +85,7 @@ export const EVENTS: CalendarEvent[] = import.meta.env.VITE_DISTRIBUTION === "1"
     start: "09:15",
     end: "09:45",
     title: "Daily équipe mobile",
-    tone: 0,
+    calendar: "Pro",
   },
   {
     id: "e5",
@@ -108,6 +106,7 @@ export const EVENTS: CalendarEvent[] = import.meta.env.VITE_DISTRIBUTION === "1"
     location: "Visio",
     tone: 1,
     attendees: ["Marc Delaunay"],
+    calendar: "Pro",
   },
   {
     id: "e7",
@@ -115,7 +114,6 @@ export const EVENTS: CalendarEvent[] = import.meta.env.VITE_DISTRIBUTION === "1"
     start: "18:30",
     end: "20:00",
     title: "Concert — Halle 0",
-    tone: 5,
     calendar: "Perso",
   },
   {
@@ -124,7 +122,7 @@ export const EVENTS: CalendarEvent[] = import.meta.env.VITE_DISTRIBUTION === "1"
     start: "08:00",
     end: "09:00",
     title: "Revue de design système",
-    tone: 0,
+    calendar: "Pro",
   },
 ];
 

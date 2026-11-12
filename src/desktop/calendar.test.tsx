@@ -1,13 +1,21 @@
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { DesktopCalendar } from "@/desktop/calendar";
-import { MailStoreProvider } from "@/lib/store";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { DesktopCalendar, NewEventDialog } from "@/desktop/calendar";
+import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { ThemeProvider } from "@/lib/theme";
 import { createMemoryStorage } from "@/lib/sync/storage";
-import { CURRENT_MONTH, CURRENT_YEAR, monthLabel } from "@/lib/calendar";
+import {
+  CURRENT_MONTH,
+  CURRENT_YEAR,
+  EVENTS,
+  TODAY_ISO,
+  isoInDays,
+  monthLabel,
+  type CalendarEvent,
+} from "@/lib/calendar";
 
 vi.stubEnv("VITE_MAIL_BACKEND", "demo");
 
@@ -15,6 +23,7 @@ type ChangeListener = (event: { matches: boolean; media: string }) => void;
 
 const ORIGINAL_MATCH_MEDIA = window.matchMedia;
 const CTA = "Nouveau rendez-vous";
+const NEXT_MONTH_LABEL = `${monthLabel((CURRENT_MONTH + 1) % 12)} ${CURRENT_YEAR + (CURRENT_MONTH === 11 ? 1 : 0)}`;
 
 function installViewport(width: number) {
   let current = width;
@@ -67,10 +76,8 @@ function installViewport(width: number) {
   };
 }
 
-function mount(width: number) {
-  const viewport = installViewport(width);
-  const onNewEvent = vi.fn();
-  const wrapper = ({ children }: { children: ReactNode }) => (
+function Providers({ children }: { children: ReactNode }) {
+  return (
     <PrefsProvider>
       <ThemeProvider>
         <PlanningProvider storage={createMemoryStorage()}>
@@ -79,14 +86,49 @@ function mount(width: number) {
       </ThemeProvider>
     </PrefsProvider>
   );
-  render(<DesktopCalendar onNewEvent={onNewEvent} />, { wrapper });
-  return { viewport, onNewEvent };
+}
+
+function mount(width: number) {
+  const viewport = installViewport(width);
+  const onNewEvent = vi.fn();
+  const onEditEvent = vi.fn();
+  render(<DesktopCalendar onNewEvent={onNewEvent} onEditEvent={onEditEvent} />, { wrapper: Providers });
+  return { viewport, onNewEvent, onEditEvent };
+}
+
+function Probe() {
+  const { events } = useMailStore();
+  return (
+    <ul data-testid="probe">
+      {events.map((event) => (
+        <li key={event.id} data-id={event.id}>
+          {`${event.title} | ${event.date} | ${event.start} | ${event.end} | ${event.calendar ?? ""}`}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function mountDialog(event: CalendarEvent | null, initialDate?: string) {
+  installViewport(1440);
+  const onClose = vi.fn();
+  render(
+    <>
+      <Probe />
+      <NewEventDialog open event={event} initialDate={initialDate} onClose={onClose} />
+    </>,
+    { wrapper: Providers },
+  );
+  return { onClose };
 }
 
 const calendarButtons = () => screen.queryAllByRole("button", { name: CTA });
 const layout = () => screen.getByTestId("calendar-layout");
 const dayPanel = () => screen.getByTestId("day-panel");
 const monthGrid = () => screen.getByTestId("month-grid");
+const periodLabel = () => screen.getByTestId("period-label").textContent;
+const probeTitles = () =>
+  Array.from(screen.getByTestId("probe").querySelectorAll("li")).map((item) => item.textContent ?? "");
 
 afterEach(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -102,14 +144,12 @@ describe("Agenda PC · bouton « Nouveau rendez-vous »", () => {
     mount(1440);
 
     expect(calendarButtons()).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "Ajouter" })).toBeNull();
   });
 
   it("n'expose qu'un seul bouton de création en fenêtre étroite", () => {
     mount(860);
 
     expect(calendarButtons()).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "Ajouter" })).toBeNull();
   });
 
   it("reste unique à chaque redimensionnement successif", () => {
@@ -134,26 +174,25 @@ describe("Agenda PC · bouton « Nouveau rendez-vous »", () => {
 });
 
 describe("Agenda PC · layout responsive", () => {
-  it("place la journée à droite et garde l'indicateur de mois en large", () => {
+  it("place la journée à droite et garde l'en-tête complet en large", () => {
     mount(1440);
 
     expect(layout().className).toContain("flex-row");
     expect(layout().className).not.toContain("flex-col");
     expect(dayPanel().className).toContain("min-w-[320px]");
     expect(dayPanel().className).toContain("max-w-[440px]");
-    expect(within(screen.getByTestId("calendar-header")).getByText(/^\d+ événements?$/)).toBeTruthy();
-    expect(screen.getByText(`${monthLabel(CURRENT_MONTH)} ${CURRENT_YEAR}`)).toBeTruthy();
+    expect(within(screen.getByTestId("calendar-header")).getByText(/^\d+ sur \d+ événements?$/)).toBeTruthy();
+    expect(periodLabel()).toBe(`${monthLabel(CURRENT_MONTH)} ${CURRENT_YEAR}`);
   });
 
-  it("empile la journée sous la grille et libère l'en-tête en étroit", () => {
+  it("empile la journée sous la grille en étroit", () => {
     mount(820);
 
     expect(layout().className).toContain("flex-col");
     expect(layout().className).toContain("overflow-y-auto");
     expect(dayPanel().className).toContain("w-full");
     expect(dayPanel().className).toContain("border-t");
-    expect(within(screen.getByTestId("calendar-header")).queryByText(/^\d+ événements?$/)).toBeNull();
-    expect(screen.getByText(`${monthLabel(CURRENT_MONTH)} ${CURRENT_YEAR}`)).toBeTruthy();
+    expect(periodLabel()).toBe(`${monthLabel(CURRENT_MONTH)} ${CURRENT_YEAR}`);
   });
 
   it("conserve 7 colonnes, 42 cases et une grille défilante à toute largeur", () => {
@@ -167,13 +206,173 @@ describe("Agenda PC · layout responsive", () => {
     }
   });
 
-  it("garde la journée lisible en étroit, sans troncature du titre du jour", () => {
+  it("garde la journée lisible en étroit", () => {
     mount(820);
 
     const panel = dayPanel();
     expect(within(panel).getByText("Journée")).toBeTruthy();
-    const dayHeading = within(panel).getByText(/^(Lundi|Mardi|Mercredi|Jeudi|Vendredi|Samedi|Dimanche) /);
-    expect(dayHeading.className).toContain("truncate");
+    expect(screen.getByTestId("day-heading").className).toContain("truncate");
     expect(within(panel).getByText("Point maquettes v3")).toBeTruthy();
+  });
+});
+
+describe("Agenda PC · vue mois", () => {
+  it("sélectionne le jour depuis la case entière", () => {
+    mount(1440);
+
+    const target = isoInDays(1);
+    const cell = monthGrid().querySelector(`[data-date="${target}"]`);
+    expect(cell).toBeTruthy();
+
+    fireEvent.click(cell!);
+
+    expect(within(dayPanel()).getByText("Daily équipe mobile")).toBeTruthy();
+    expect(within(dayPanel()).queryByText("Point maquettes v3")).toBeNull();
+  });
+
+  it("crée un rendez-vous depuis le « + » d'une case", () => {
+    const { onNewEvent } = mount(1440);
+
+    const target = isoInDays(2);
+    fireEvent.click(screen.getByRole("button", { name: `Ajouter un rendez-vous le ${target}` }));
+
+    expect(onNewEvent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Agenda PC · navigation entre les vues", () => {
+  it("bascule mois → semaine → jour → liste → mois", async () => {
+    mount(1440);
+
+    fireEvent.click(screen.getByTestId("view-week"));
+    await waitFor(() => expect(screen.getByTestId("week-view")).toBeTruthy());
+    expect(screen.queryByTestId("month-grid")).toBeNull();
+    expect(screen.getByTestId("week-grid")).toBeTruthy();
+    expect(screen.getByTestId("mini-month")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("view-day"));
+    await waitFor(() => expect(screen.getByTestId("day-view")).toBeTruthy());
+    expect(screen.queryByTestId("week-view")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("view-list"));
+    await waitFor(() => expect(screen.getByTestId("list-view")).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId("view-month"));
+    await waitFor(() => expect(screen.getByTestId("month-grid")).toBeTruthy());
+    expect(screen.queryByTestId("list-view")).toBeNull();
+    expect(screen.queryByTestId("mini-month")).toBeNull();
+  });
+
+  it("avance d'un mois avec la flèche suivante", () => {
+    mount(1440);
+
+    expect(periodLabel()).toBe(`${monthLabel(CURRENT_MONTH)} ${CURRENT_YEAR}`);
+
+    fireEvent.click(screen.getByRole("button", { name: "Période suivante" }));
+
+    expect(periodLabel()).toBe(NEXT_MONTH_LABEL);
+  });
+});
+
+describe("Agenda PC · filtres", () => {
+  it("masque un calendrier décoché", () => {
+    mount(1440);
+
+    expect(within(dayPanel()).getByText("Point maquettes v3")).toBeTruthy();
+
+    const filters = screen.getByTestId("calendar-filters");
+    fireEvent.click(within(filters).getByLabelText("Pro"));
+
+    expect(within(dayPanel()).queryByText("Point maquettes v3")).toBeNull();
+    expect(within(dayPanel()).getByText("Déjeuner — café des Lilas")).toBeTruthy();
+  });
+
+  it("filtre la recherche en direct", () => {
+    mount(1440);
+
+    fireEvent.change(screen.getByLabelText("Rechercher"), { target: { value: "déjeuner" } });
+
+    expect(within(dayPanel()).getByText("Déjeuner — café des Lilas")).toBeTruthy();
+    expect(within(dayPanel()).queryByText("Point maquettes v3")).toBeNull();
+  });
+});
+
+describe("Agenda PC · dialogue de rendez-vous", () => {
+  it("crée un rendez-vous et ferme le dialogue", () => {
+    const { onClose } = mountDialog(null);
+
+    expect(screen.getByTestId("event-dialog")).toBeTruthy();
+    fireEvent.change(screen.getByTestId("event-title-input"), { target: { value: "Nouveau test" } });
+    fireEvent.click(screen.getByRole("button", { name: "Créer le rendez-vous" }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    const created = probeTitles().filter((line) => line.startsWith("Nouveau test"));
+    expect(created).toHaveLength(1);
+    expect(created[0]).toContain(TODAY_ISO);
+    expect(created[0]).toContain("Pro");
+  });
+
+  it("préremplit la date depuis initialDate", () => {
+    mountDialog(null, isoInDays(3));
+
+    expect((screen.getByTestId("event-date-input") as HTMLInputElement).value).toBe(isoInDays(3));
+  });
+
+  it("préremplit date et heure depuis un créneau cliqué (YYYY-MM-DDTHH:MM)", () => {
+    mountDialog(null, `${isoInDays(2)}T09:30`);
+
+    expect((screen.getByTestId("event-date-input") as HTMLInputElement).value).toBe(isoInDays(2));
+    expect((screen.getByTestId("event-start-input") as HTMLInputElement).value).toBe("09:30");
+    expect((screen.getByTestId("event-end-input") as HTMLInputElement).value).toBe("10:30");
+  });
+
+  it("ferme sur Échap", () => {
+    const { onClose } = mountDialog(null);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("alerte sur un chevauchement sans bloquer la création", () => {
+    mountDialog(null);
+
+    fireEvent.change(screen.getByTestId("event-title-input"), { target: { value: "Doublon" } });
+    fireEvent.change(screen.getByTestId("event-start-input"), { target: { value: "10:00" } });
+
+    expect(screen.getByRole("alert").textContent).toContain("Chevauchement");
+    expect(screen.getByTestId("event-end-input")).toHaveProperty("value", "11:00");
+    expect((screen.getByRole("button", { name: "Créer le rendez-vous" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("préremplit et enregistre une modification", () => {
+    const { onClose } = mountDialog(EVENTS[0]!);
+
+    expect((screen.getByTestId("event-title-input") as HTMLInputElement).value).toBe("Point maquettes v3");
+    expect((screen.getByTestId("event-date-input") as HTMLInputElement).value).toBe(TODAY_ISO);
+    expect((screen.getByTestId("event-start-input") as HTMLInputElement).value).toBe("10:00");
+
+    fireEvent.change(screen.getByTestId("event-title-input"), { target: { value: "Point maquettes v4" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(probeTitles()).toHaveLength(EVENTS.length);
+    expect(probeTitles().filter((line) => line.startsWith("Point maquettes v4"))).toHaveLength(1);
+  });
+
+  it("supprime le rendez-vous édité", () => {
+    const { onClose } = mountDialog(EVENTS[0]!);
+
+    fireEvent.click(screen.getByRole("button", { name: "Supprimer" }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(probeTitles()).toHaveLength(EVENTS.length - 1);
+    expect(probeTitles().some((line) => line.startsWith("Point maquettes v3"))).toBe(false);
+  });
+
+  it("désactive la création sans titre", () => {
+    mountDialog(null);
+
+    expect((screen.getByRole("button", { name: "Créer le rendez-vous" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

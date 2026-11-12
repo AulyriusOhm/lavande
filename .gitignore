@@ -5,6 +5,7 @@ src-tauri/gen
 .DS_Store
 *.log
 .plasma
+public/maquettes
 artifacts
 /target
 

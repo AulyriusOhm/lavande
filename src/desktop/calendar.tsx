@@ -2,19 +2,22 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   AlertTriangle,
+  ArrowLeft,
   CalendarDays,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
+  Inbox,
   Mail,
   MapPin,
+  Pencil,
   Plus,
+  Trash2,
   X,
 } from "lucide-react";
 import type { CalendarEvent } from "@/lib/calendar";
 import {
-  CURRENT_MONTH,
-  CURRENT_YEAR,
   TODAY_ISO,
   WEEKDAYS,
   capitalizeFirst,
@@ -22,9 +25,27 @@ import {
   daysInMonth,
   isoDay,
   monthGrid,
-  monthLabel,
   overlappingEvents,
 } from "@/lib/calendar";
+import { TONE_DOT, TONE_PILL, calendarsInUse, toneOfEvent, useCalendars, type CalendarDef } from "@/lib/calendars";
+import {
+  DAY_END_MIN,
+  DAY_START_MIN,
+  PX_PER_MIN,
+  addDaysISO,
+  blockGeometry,
+  filterEvents,
+  layoutDay,
+  miniMonthCells,
+  minutesOf,
+  periodLabel,
+  shiftAnchor,
+  timeOf,
+  upcomingEvents,
+  weekDaysISO,
+  weekStartISO,
+  type ViewMode,
+} from "@/lib/calendar-views";
 import { useMailStore } from "@/lib/store";
 import { useEscapeLayer } from "@/desktop/escape";
 import {
@@ -37,15 +58,31 @@ import {
   TextArea,
   TextInput,
 } from "@/desktop/ui";
+import { BlurFade } from "@/components/ui/blur-fade";
 import { Avatar } from "@/components/ui/primitives";
 import { addMinutes } from "@/screens/new-event-sheet";
 import { cn } from "@/lib/utils";
 
-type DesktopEvent = CalendarEvent & { description?: string };
-
 const DAY_FMT = new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+const WEEKDAY_FMT = new Intl.DateTimeFormat("fr-FR", { weekday: "short" });
 
 const NARROW_QUERY = "(max-width: 1024px)";
+
+const TIMELINE_HEIGHT = (DAY_END_MIN - DAY_START_MIN) * PX_PER_MIN;
+const HOURS = Array.from(
+  { length: (DAY_END_MIN - DAY_START_MIN) / 60 + 1 },
+  (_, index) => DAY_START_MIN + index * 60,
+);
+const HOUR_LINES = "repeating-linear-gradient(to bottom, var(--line) 0 1px, transparent 1px 60px)";
+
+const VIEW_TABS: { id: ViewMode; label: string }[] = [
+  { id: "month", label: "Mois" },
+  { id: "week", label: "Semaine" },
+  { id: "day", label: "Jour" },
+  { id: "list", label: "Liste" },
+];
+
+const TONE_LABELS = ["Ton 1", "Ton 2", "Ton 3", "Ton 4", "Ton 5"];
 
 function useNarrowViewport() {
   const [narrow, setNarrow] = useState(() =>
@@ -64,89 +101,944 @@ function useNarrowViewport() {
   return narrow;
 }
 
-const TONE_PILL = [
-  "bg-accent-soft text-accent-ink",
-  "bg-sky-500/12 text-sky-700 dark:text-sky-300",
-  "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
-  "bg-amber-500/14 text-amber-700 dark:text-amber-300",
-  "bg-rose-500/12 text-rose-700 dark:text-rose-300",
-];
+const descriptionOf = (event: CalendarEvent | null) => event?.description;
 
-const TONE_DOT = ["bg-accent", "bg-sky-500", "bg-emerald-500", "bg-amber-500", "bg-rose-500"];
-
-const toneOf = (tone: number) => tone % TONE_PILL.length;
-const descriptionOf = (event: CalendarEvent) => (event as DesktopEvent).description;
 const longDate = (iso: string) =>
   capitalizeFirst(DAY_FMT.format(new Date(`${iso}T12:00:00`)).replace(/[\u202f\u00a0]/g, " "));
 
-function EventPill({ event, onOpen }: { event: CalendarEvent; onOpen?: () => void }) {
-  const body = (
-    <>
-      <span className="shrink-0 text-[10px] tabular-nums opacity-70">{event.start}</span>
-      <span className="truncate">{event.title}</span>
-      {event.fromMail || event.mailId ? <Mail className="size-2.5 shrink-0" strokeWidth={2.8} /> : null}
-    </>
-  );
-  const className = cn(
-    "flex h-6 w-full items-center gap-1 rounded-md px-1.5 text-left text-[11.5px] font-bold",
-    TONE_PILL[toneOf(event.tone)],
-  );
+const shortWeekday = (iso: string) => WEEKDAY_FMT.format(new Date(`${iso}T12:00:00`)).replace(".", "");
 
-  if (!onOpen) return <span className={className}>{body}</span>;
+const isWeekend = (iso: string) => [5, 6].includes((new Date(`${iso}T12:00:00`).getDay() + 6) % 7);
 
+const monthCells = (year: number, month: number) => {
+  const offset = monthGrid(year, month).findIndex((cell) => cell !== null);
+  const start = addDaysISO(isoDay(year, month, 1), -offset);
+  return Array.from({ length: 42 }, (_, index) => addDaysISO(start, index));
+};
+
+function EventPill({
+  event,
+  tone,
+  conflict,
+  onOpen,
+}: {
+  event: CalendarEvent;
+  tone: number;
+  conflict: boolean;
+  onOpen: () => void;
+}) {
   return (
-    <button type="button" title={event.title} onClick={onOpen} className={cn("focus-ring", className)}>
-      {body}
+    <button
+      type="button"
+      title={`${event.title} · ${event.start}–${event.end}`}
+      onClick={(clickEvent) => {
+        clickEvent.stopPropagation();
+        onOpen();
+      }}
+      className={cn(
+        "focus-ring flex h-5 w-full items-center gap-1 overflow-hidden rounded-[10px] px-1.5 text-left text-[10.5px] font-bold whitespace-nowrap",
+        TONE_PILL[tone],
+      )}
+    >
+      <span className={cn("size-[5px] shrink-0 rounded-full", TONE_DOT[tone])} />
+      <span className="shrink-0 text-[9.5px] tabular-nums opacity-70">{event.start}</span>
+      <span className="truncate">{event.title}</span>
+      {event.fromMail || event.mailId ? <Mail className="ml-auto size-2.5 shrink-0 opacity-90" strokeWidth={2.8} /> : null}
+      {conflict ? (
+        <AlertTriangle className="size-2.5 shrink-0 text-amber-600 dark:text-amber-300" strokeWidth={2.8} />
+      ) : null}
     </button>
   );
 }
 
-export function DesktopCalendar({ onNewEvent }: { onNewEvent: () => void }) {
-  const { events, mails, selectedDate, setSelectedDate, openMessage } = useMailStore();
-  const [view, setView] = useState({ year: CURRENT_YEAR, month: CURRENT_MONTH });
+function MonthView({
+  anchor,
+  selectedDate,
+  byDay,
+  conflicts,
+  calendars,
+  onPick,
+  onOpen,
+  onCreateAt,
+}: {
+  anchor: string;
+  selectedDate: string;
+  byDay: Map<string, CalendarEvent[]>;
+  conflicts: Set<string>;
+  calendars: CalendarDef[];
+  onPick: (date: string) => void;
+  onOpen: (event: CalendarEvent) => void;
+  onCreateAt: (date: string) => void;
+}) {
+  const year = Number(anchor.slice(0, 4));
+  const month = Number(anchor.slice(5, 7)) - 1;
+  const cells = monthCells(year, month);
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="grid shrink-0 grid-cols-7 border-b border-line">
+        {WEEKDAYS.map((weekday, index) => (
+          <span
+            key={index}
+            className="grid h-7 place-items-center text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase"
+          >
+            {weekday}
+          </span>
+        ))}
+      </div>
+
+      <div data-testid="month-grid" className="grid min-h-0 flex-1 auto-rows-fr grid-cols-7">
+        {cells.map((iso, index) => {
+          const list = byDay.get(iso) ?? [];
+          const shown = list.slice(0, 3);
+          const hidden = list.length - shown.length;
+          const inMonth = iso.slice(0, 7) === anchor.slice(0, 7);
+          const today = iso === TODAY_ISO;
+          const selected = iso === selectedDate;
+
+          return (
+            <div
+              key={iso}
+              role="button"
+              tabIndex={0}
+              data-date={iso}
+              aria-current={selected ? "date" : undefined}
+              aria-label={`${longDate(iso)} — ${
+                list.length === 0 ? "aucun événement" : `${list.length} événement${list.length > 1 ? "s" : ""}`
+              }`}
+              onClick={() => onPick(iso)}
+              onKeyDown={(keyEvent) => {
+                if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
+                keyEvent.preventDefault();
+                onPick(iso);
+              }}
+              className={cn(
+                "group focus-ring relative flex min-h-[84px] min-w-0 flex-col gap-1 overflow-hidden border-b border-line p-1.5 text-left transition-colors",
+                index % 7 === 6 ? "border-r-0" : "border-r",
+                inMonth ? (isWeekend(iso) ? "bg-surface-2/60" : "bg-surface") : "bg-surface-2/40 opacity-45",
+                selected && "bg-accent-soft ring-1 ring-accent-ring",
+              )}
+            >
+              <div className="flex shrink-0 items-center gap-1">
+                <span
+                  className={cn(
+                    "grid size-6 shrink-0 place-items-center rounded-full text-[12.5px] font-extrabold tabular-nums",
+                    today
+                      ? "bg-accent text-accent-contrast shadow-[0_6px_16px_-10px_var(--accent)]"
+                      : selected
+                        ? "bg-accent-soft text-accent-ink ring-1 ring-accent-ring"
+                        : inMonth
+                          ? "text-ink"
+                          : "text-ink-muted",
+                  )}
+                >
+                  {Number(iso.slice(8))}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Ajouter un rendez-vous le ${iso}`}
+                  onClick={(clickEvent) => {
+                    clickEvent.stopPropagation();
+                    onCreateAt(iso);
+                  }}
+                  className="focus-ring ml-auto grid size-[18px] shrink-0 place-items-center rounded-full bg-accent-soft text-accent-ink opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                >
+                  <Plus className="size-3" strokeWidth={3} />
+                </button>
+              </div>
+
+              <div className="flex min-h-0 flex-col gap-0.5 overflow-hidden">
+                {shown.map((event) => (
+                  <EventPill
+                    key={event.id}
+                    event={event}
+                    tone={toneOfEvent(event, calendars)}
+                    conflict={conflicts.has(event.id)}
+                    onOpen={() => onOpen(event)}
+                  />
+                ))}
+                {hidden > 0 ? (
+                  <span className="px-1 text-[10.5px] font-bold text-ink-muted">+{hidden} autres</span>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function Timeline({
+  days,
+  byDay,
+  conflicts,
+  calendars,
+  single,
+  onOpen,
+  onCreateAt,
+}: {
+  days: string[];
+  byDay: Map<string, CalendarEvent[]>;
+  conflicts: Set<string>;
+  calendars: CalendarDef[];
+  single: boolean;
+  onOpen: (event: CalendarEvent) => void;
+  onCreateAt: (date: string, start: string) => void;
+}) {
+  const now = new Date();
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const nowTop = Math.max(0, Math.min(TIMELINE_HEIGHT, (nowMinutes - DAY_START_MIN) * PX_PER_MIN));
+
+  const slotOf = (element: HTMLElement, clientY: number) => {
+    const rect = element.getBoundingClientRect();
+    const minutes = DAY_START_MIN + Math.round((clientY - rect.top) / 30) * 30;
+    return timeOf(Math.max(DAY_START_MIN, Math.min(DAY_END_MIN - 30, minutes)));
+  };
+
+  return (
+    <div data-testid={single ? undefined : "week-grid"} className="flex items-start">
+      <div className="relative w-[58px] shrink-0" style={{ height: TIMELINE_HEIGHT }}>
+        {HOURS.map((minutes) => (
+          <span
+            key={minutes}
+            className="absolute right-2 -translate-y-1/2 bg-canvas px-0.5 text-[10.5px] font-bold text-ink-muted tabular-nums"
+            style={{ top: (minutes - DAY_START_MIN) * PX_PER_MIN }}
+          >
+            {timeOf(minutes)}
+          </span>
+        ))}
+      </div>
+
+      <div
+        className="grid min-w-0 flex-1"
+        style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0, 1fr))` }}
+      >
+        {days.map((day) => {
+          const list = byDay.get(day) ?? [];
+          const layout = layoutDay(list);
+          const today = day === TODAY_ISO;
+
+          return (
+            <div
+              key={day}
+              onClick={(clickEvent) => {
+                if (clickEvent.target !== clickEvent.currentTarget) return;
+                onCreateAt(day, slotOf(clickEvent.currentTarget, clickEvent.clientY));
+              }}
+              className={cn(
+                "relative cursor-crosshair border-l border-line first:border-l-0",
+                isWeekend(day) && "bg-surface-2/50",
+                today && "bg-accent-soft/40",
+              )}
+              style={{ height: TIMELINE_HEIGHT, backgroundImage: HOUR_LINES }}
+            >
+              {today ? (
+                <div
+                  className="pointer-events-none absolute inset-x-0 z-[5] h-0.5 bg-accent"
+                  style={{ top: nowTop }}
+                >
+                  <span className="absolute -top-2.5 right-1 rounded-[7px] bg-accent px-1.5 py-px text-[9.5px] font-extrabold text-accent-contrast tabular-nums">
+                    {timeOf(nowMinutes)}
+                  </span>
+                </div>
+              ) : null}
+
+              {list.map((event) => {
+                const geometry = blockGeometry(event);
+                const slot = layout.get(event.id) ?? { col: 0, cols: 1 };
+                const width = 100 / slot.cols;
+
+                return (
+                  <button
+                    key={event.id}
+                    type="button"
+                    title={`${event.title} · ${event.start}–${event.end}`}
+                    onClick={(clickEvent) => {
+                      clickEvent.stopPropagation();
+                      onOpen(event);
+                    }}
+                    style={{
+                      top: geometry.top,
+                      height: geometry.height,
+                      left: `calc(${slot.col * width}% + 1px)`,
+                      width: `calc(${width}% - 2px)`,
+                    }}
+                    className={cn(
+                      "absolute overflow-hidden rounded-[13px] border-0 text-left leading-tight transition-[filter] hover:brightness-[0.97]",
+                      single ? "rounded-2xl px-3 py-1.5 text-[12.5px]" : "px-2 py-1 text-[11px]",
+                      TONE_PILL[toneOfEvent(event, calendars)],
+                      slot.cols > 1 && "ring-2 ring-surface",
+                    )}
+                  >
+                    <span className="block truncate font-extrabold tracking-[-0.015em]">{event.title}</span>
+                    {geometry.height >= 34 ? (
+                      <span className="block truncate text-[10px] font-bold tabular-nums opacity-80">
+                        {event.start}–{event.end}
+                        {event.fromMail ? " · mail" : ""}
+                      </span>
+                    ) : null}
+                    {conflicts.has(event.id) ? (
+                      <AlertTriangle
+                        className="absolute top-1 right-1 size-2.5 text-amber-600 dark:text-amber-300"
+                        strokeWidth={3}
+                      />
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function WeekView({
+  anchor,
+  selectedDate,
+  byDay,
+  conflicts,
+  calendars,
+  onPick,
+  onOpen,
+  onCreateAt,
+}: {
+  anchor: string;
+  selectedDate: string;
+  byDay: Map<string, CalendarEvent[]>;
+  conflicts: Set<string>;
+  calendars: CalendarDef[];
+  onPick: (date: string) => void;
+  onOpen: (event: CalendarEvent) => void;
+  onCreateAt: (date: string, start: string) => void;
+}) {
+  const days = weekDaysISO(anchor);
+
+  return (
+    <div data-testid="week-view" className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 border-b border-line">
+        <div className="w-[58px] shrink-0" />
+        <div className="grid min-w-0 flex-1 grid-cols-7">
+          {days.map((day) => {
+            const count = (byDay.get(day) ?? []).length;
+            const today = day === TODAY_ISO;
+            const selected = day === selectedDate;
+
+            return (
+              <button
+                key={day}
+                type="button"
+                onClick={() => onPick(day)}
+                aria-label={longDate(day)}
+                className="focus-ring flex flex-col items-center gap-0.5 border-l border-line px-1 py-2 transition-colors first:border-l-0 hover:bg-surface-2"
+              >
+                <span
+                  className={cn(
+                    "text-[10px] font-bold tracking-[0.14em] uppercase",
+                    today ? "text-accent-ink" : "text-ink-muted",
+                  )}
+                >
+                  {shortWeekday(day)}
+                </span>
+                <span
+                  className={cn(
+                    "grid size-[30px] place-items-center rounded-full text-[14px] font-extrabold tracking-[-0.02em] tabular-nums",
+                    today
+                      ? "bg-accent text-accent-contrast shadow-[0_8px_18px_-10px_var(--accent)]"
+                      : selected
+                        ? "text-accent-ink ring-1 ring-accent-ring"
+                        : "text-ink",
+                  )}
+                >
+                  {Number(day.slice(8))}
+                </span>
+                <span className="text-[9.5px] font-bold text-ink-muted tabular-nums">{count || "—"}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <Timeline
+          days={days}
+          byDay={byDay}
+          conflicts={conflicts}
+          calendars={calendars}
+          single={false}
+          onOpen={onOpen}
+          onCreateAt={onCreateAt}
+        />
+      </div>
+    </div>
+  );
+}
+
+function DayView({
+  selectedDate,
+  byDay,
+  conflicts,
+  calendars,
+  onOpen,
+  onCreateAt,
+}: {
+  selectedDate: string;
+  byDay: Map<string, CalendarEvent[]>;
+  conflicts: Set<string>;
+  calendars: CalendarDef[];
+  onOpen: (event: CalendarEvent) => void;
+  onCreateAt: (date: string, start: string) => void;
+}) {
+  const count = (byDay.get(selectedDate) ?? []).length;
+
+  return (
+    <div data-testid="day-view" className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-end gap-3 border-b border-line px-5 py-3">
+        <div className="min-w-0">
+          <SectionLabel>{selectedDate === TODAY_ISO ? "Aujourd'hui" : "Journée sélectionnée"}</SectionLabel>
+          <p className="mt-1 truncate text-[19px] leading-tight font-extrabold tracking-[-0.035em] text-ink">
+            {longDate(selectedDate)}
+          </p>
+        </div>
+        <span className="ml-auto pb-1 text-[11.5px] font-semibold text-ink-muted tabular-nums">
+          {count} rendez-vous
+        </span>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <Timeline
+          days={[selectedDate]}
+          byDay={byDay}
+          conflicts={conflicts}
+          calendars={calendars}
+          single
+          onOpen={onOpen}
+          onCreateAt={onCreateAt}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ListView({
+  events,
+  conflicts,
+  calendars,
+  onOpen,
+}: {
+  events: CalendarEvent[];
+  conflicts: Set<string>;
+  calendars: CalendarDef[];
+  onOpen: (event: CalendarEvent) => void;
+}) {
+  const upcoming = upcomingEvents(events, TODAY_ISO);
+  const groups: { date: string; list: CalendarEvent[] }[] = [];
+  for (const event of upcoming) {
+    const last = groups[groups.length - 1];
+    if (last && last.date === event.date) last.list.push(event);
+    else groups.push({ date: event.date, list: [event] });
+  }
+
+  return (
+    <div data-testid="list-view" className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-end gap-3 border-b border-line px-5 py-3">
+        <div>
+          <SectionLabel>Liste</SectionLabel>
+          <p className="mt-1 text-[19px] leading-tight font-extrabold tracking-[-0.035em] text-ink">À venir</p>
+        </div>
+        <span className="ml-auto pb-1 text-[11.5px] font-semibold text-ink-muted tabular-nums">
+          {upcoming.length} rendez-vous
+        </span>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-1 pb-6">
+        {groups.length === 0 ? (
+          <EmptyState
+            icon={<CalendarDays className="size-5" strokeWidth={2.2} />}
+            title="Rien à venir"
+            hint="Aucun rendez-vous ne correspond à la période et aux filtres."
+          />
+        ) : null}
+
+        {groups.map((group) => (
+          <div key={group.date} className="pt-3.5">
+            <div className="flex items-center gap-2 px-1 pb-1.5">
+              <span className="text-[11px] font-extrabold tracking-[0.1em] text-ink-muted uppercase">
+                {longDate(group.date)}
+              </span>
+              <span className="rounded-[7px] bg-accent-soft px-1.5 py-px text-[10px] font-extrabold text-accent-ink tabular-nums">
+                {group.list.length}
+              </span>
+            </div>
+
+            {group.list.map((event) => {
+              const tone = toneOfEvent(event, calendars);
+              const meta = [
+                event.location,
+                event.attendees?.length
+                  ? `${event.attendees.length} invité${event.attendees.length > 1 ? "s" : ""}`
+                  : null,
+                event.calendar,
+              ].filter(Boolean);
+
+              return (
+                <button
+                  key={event.id}
+                  type="button"
+                  onClick={() => onOpen(event)}
+                  className="focus-ring mb-1.5 flex w-full items-center gap-3 rounded-[18px] border border-line bg-surface px-3.5 py-2.5 text-left transition-colors hover:border-accent-ring hover:bg-surface-2/40"
+                >
+                  <span className="flex min-w-[92px] shrink-0 items-baseline gap-1 text-[11.5px] font-extrabold text-ink tabular-nums">
+                    {event.start}
+                    <em className="text-[10.5px] font-bold text-ink-muted not-italic">→ {event.end}</em>
+                  </span>
+                  <span className={cn("size-2 shrink-0 rounded-full", TONE_DOT[tone])} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13.5px] font-extrabold tracking-[-0.025em] text-ink">
+                      {event.title}
+                    </span>
+                    <span className="block truncate text-[11px] font-semibold text-ink-muted">
+                      {meta.join(" · ")}
+                    </span>
+                  </span>
+                  <span className="flex shrink-0 gap-1">
+                    {event.fromMail || event.mailId ? (
+                      <Badge tone="accent">
+                        <Mail className="size-2.5" strokeWidth={2.8} />
+                        mail
+                      </Badge>
+                    ) : null}
+                    {conflicts.has(event.id) ? <Badge tone="amber">Conflit</Badge> : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MiniMonth({
+  anchor,
+  selectedDate,
+  byDay,
+  calendars,
+  onPick,
+  onShift,
+}: {
+  anchor: string;
+  selectedDate: string;
+  byDay: Map<string, CalendarEvent[]>;
+  calendars: CalendarDef[];
+  onPick: (date: string) => void;
+  onShift: (delta: number) => void;
+}) {
+  const year = Number(anchor.slice(0, 4));
+  const month = Number(anchor.slice(5, 7)) - 1;
+  const cells = miniMonthCells(year, month);
+
+  return (
+    <section data-testid="mini-month" className="shrink-0 rounded-[20px] border border-line bg-surface p-2.5">
+      <div className="flex items-center gap-1">
+        <SectionLabel>
+          {capitalizeFirst(new Intl.DateTimeFormat("fr-FR", { month: "long" }).format(new Date(year, month, 1, 12)))}{" "}
+          {year}
+        </SectionLabel>
+        <div className="ml-auto flex items-center gap-0.5">
+          <DIconButton label="Mois précédent" className="size-6" onClick={() => onShift(-1)}>
+            <ChevronLeft className="size-3.5" strokeWidth={2.4} />
+          </DIconButton>
+          <DIconButton label="Mois suivant" className="size-6" onClick={() => onShift(1)}>
+            <ChevronRight className="size-3.5" strokeWidth={2.4} />
+          </DIconButton>
+        </div>
+      </div>
+
+      <div className="mt-1.5 grid grid-cols-7 gap-px">
+        {WEEKDAYS.map((weekday, index) => (
+          <span key={index} className="grid h-5 place-items-center text-[9.5px] font-bold text-ink-muted">
+            {weekday}
+          </span>
+        ))}
+
+        {cells.map((day, index) => {
+          if (day === null) return <span key={`empty-${index}`} className="h-7" />;
+          const iso = isoDay(year, month, day);
+          const list = byDay.get(iso) ?? [];
+          const tones = Array.from(new Set(list.map((event) => toneOfEvent(event, calendars)))).slice(0, 3);
+          const today = iso === TODAY_ISO;
+          const selected = iso === selectedDate;
+
+          return (
+            <button
+              key={iso}
+              type="button"
+              onClick={() => onPick(iso)}
+              aria-label={longDate(iso)}
+              className={cn(
+                "focus-ring relative grid h-7 place-items-center rounded-full text-[11px] font-bold tabular-nums transition-colors",
+                today
+                  ? "bg-accent text-accent-contrast"
+                  : selected
+                    ? "text-accent-ink ring-1 ring-accent-ring"
+                    : "text-ink hover:bg-surface-2",
+              )}
+            >
+              {day}
+              {tones.length > 0 ? (
+                <span className="absolute bottom-0.5 left-1/2 flex -translate-x-1/2 gap-0.5">
+                  {tones.map((tone) => (
+                    <i
+                      key={tone}
+                      className={cn(
+                        "block size-[3px] rounded-full",
+                        today ? "bg-accent-contrast/80" : TONE_DOT[tone],
+                      )}
+                    />
+                  ))}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function RailCheck({
+  label,
+  checked,
+  count,
+  tone,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  count: number;
+  tone?: number;
+  onChange: () => void;
+}) {
+  return (
+    <label className="flex h-8 cursor-pointer items-center gap-2 rounded-[10px] px-1.5 text-[12px] font-semibold text-ink-soft transition-colors hover:bg-surface-2">
+      <input
+        type="checkbox"
+        aria-label={label}
+        checked={checked}
+        onChange={onChange}
+        className="size-[15px] shrink-0 accent-accent"
+      />
+      {tone === undefined ? null : <span className={cn("size-2 shrink-0 rounded-full", TONE_DOT[tone])} />}
+      <span className="truncate">{label}</span>
+      <span className="ml-auto text-[10.5px] font-bold text-ink-muted tabular-nums">{count}</span>
+    </label>
+  );
+}
+
+function DayPanel({
+  selectedDate,
+  dayEvents,
+  detail,
+  conflicts,
+  calendars,
+  overlaps,
+  hasFilters,
+  onSelect,
+  onBack,
+  onEdit,
+  onDelete,
+  onOpenMail,
+}: {
+  selectedDate: string;
+  dayEvents: CalendarEvent[];
+  detail: CalendarEvent | null;
+  conflicts: Set<string>;
+  calendars: CalendarDef[];
+  overlaps: CalendarEvent[];
+  hasFilters: boolean;
+  onSelect: (event: CalendarEvent) => void;
+  onBack: () => void;
+  onEdit: (event: CalendarEvent) => void;
+  onDelete: (event: CalendarEvent) => void;
+  onOpenMail?: () => void;
+}) {
+  const tone = detail ? toneOfEvent(detail, calendars) : 0;
+
+  return (
+    <div className="flex min-h-0 flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <SectionLabel>Journée</SectionLabel>
+        <span className="ml-auto text-[11px] font-bold text-ink-muted tabular-nums">
+          {dayEvents.length} événement{dayEvents.length > 1 ? "s" : ""}
+        </span>
+      </div>
+
+      <p
+        data-testid="day-heading"
+        className="truncate text-[19px] leading-tight font-extrabold tracking-[-0.035em] text-ink"
+      >
+        {longDate(selectedDate)}
+      </p>
+
+      {detail ? (
+        <div data-testid="event-detail" className="flex flex-col gap-2.5">
+          <DButton variant="ghost" size="sm" className="self-start rounded-full" onClick={onBack}>
+            <ArrowLeft className="size-3.5" strokeWidth={2.4} />
+            Retour à la journée
+          </DButton>
+
+          <div className="rounded-[26px] border border-line bg-surface p-5">
+            <div className="flex items-center gap-1.5">
+              <span className={cn("size-2 shrink-0 rounded-full", TONE_DOT[tone])} />
+              <SectionLabel>{detail.calendar ?? "Agenda"}</SectionLabel>
+            </div>
+
+            <p className="mt-1.5 text-[18px] leading-tight font-extrabold tracking-[-0.035em] text-ink">
+              {detail.title}
+            </p>
+
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {detail.fromMail || detail.mailId ? (
+                <Badge tone="accent">
+                  <Mail className="size-2.5" strokeWidth={2.6} />
+                  mail
+                </Badge>
+              ) : null}
+              {conflicts.has(detail.id) ? <Badge tone="amber">Conflit</Badge> : null}
+            </div>
+
+            <p className="mt-4 flex items-center gap-2 text-[13px] font-bold text-ink tabular-nums">
+              <Clock className="size-4 shrink-0" strokeWidth={2.2} />
+              {detail.start} → {detail.end}
+            </p>
+
+            {detail.location ? (
+              <p className="mt-2 flex items-center gap-2 text-[11.5px] font-semibold text-ink-muted">
+                <MapPin className="size-3.5 shrink-0" strokeWidth={2.2} />
+                <span className="truncate">{detail.location}</span>
+              </p>
+            ) : null}
+
+            {descriptionOf(detail) ? (
+              <p className="mt-4 text-[12.5px] leading-relaxed font-medium text-ink-soft">
+                {descriptionOf(detail)}
+              </p>
+            ) : null}
+
+            {detail.attendees?.length ? (
+              <div className="mt-4">
+                <SectionLabel>Participants</SectionLabel>
+                <div className="mt-2 flex flex-col gap-1.5">
+                  {detail.attendees.map((person, index) => (
+                    <span key={person} className="flex items-center gap-2 text-[11.5px] font-semibold text-ink-soft">
+                      <Avatar name={person} tone={index} size={22} rounded="rounded-full" />
+                      <span className="truncate">{person}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {overlaps.length > 0 ? (
+              <div
+                role="alert"
+                className="mt-4 flex items-start gap-2 rounded-[16px] border border-amber-500/40 bg-amber-500/12 px-3 py-2 text-[11.5px] font-bold text-amber-700 dark:text-amber-300"
+              >
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" strokeWidth={2.2} />
+                <p>Chevauchement : {overlaps.map((event) => event.title).join(", ")}.</p>
+              </div>
+            ) : null}
+
+            {onOpenMail ? (
+              <DButton variant="soft" size="md" className="mt-4" onClick={onOpenMail}>
+                <Inbox className="size-4" strokeWidth={2.2} />
+                Voir le mail
+              </DButton>
+            ) : null}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <DButton variant="soft" size="md" className="flex-1" onClick={() => onEdit(detail)}>
+              <Pencil className="size-3.5" strokeWidth={2.2} />
+              Modifier
+            </DButton>
+            <DButton variant="danger" size="md" className="flex-1" onClick={() => onDelete(detail)}>
+              <Trash2 className="size-3.5" strokeWidth={2.2} />
+              Supprimer
+            </DButton>
+          </div>
+        </div>
+      ) : dayEvents.length === 0 ? (
+        <EmptyState
+          icon={<CalendarDays className="size-5" strokeWidth={2.2} />}
+          title={hasFilters ? "Aucun rendez-vous" : "Journée libre"}
+          hint={
+            hasFilters
+              ? "Aucun événement ne correspond aux filtres."
+              : "Aucun rendez-vous ce jour-là. Ajoutez-en un d'un clic."
+          }
+          className="py-6"
+        />
+      ) : (
+        <div className="flex flex-col gap-2">
+          {dayEvents.map((event, index) => {
+            const eventTone = toneOfEvent(event, calendars);
+            return (
+              <BlurFade key={event.id} delay={0.05 * index}>
+                <button
+                  type="button"
+                  data-testid="day-event"
+                  onClick={() => onSelect(event)}
+                  className="focus-ring block w-full rounded-[18px] border border-line bg-surface px-3 py-2.5 text-left transition-colors hover:border-accent-ring hover:bg-surface-2/40"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <span className={cn("size-2 shrink-0 rounded-full", TONE_DOT[eventTone])} />
+                    <span className="text-[11.5px] font-bold text-ink tabular-nums">
+                      {event.start} → {event.end}
+                    </span>
+                    {event.fromMail || event.mailId ? (
+                      <Badge tone="accent">
+                        <Mail className="size-2.5" strokeWidth={2.6} />
+                        mail
+                      </Badge>
+                    ) : null}
+                    {conflicts.has(event.id) ? <Badge tone="amber">Conflit</Badge> : null}
+                  </span>
+
+                  <span className="mt-1 block text-[13.5px] leading-snug font-extrabold tracking-[-0.03em] text-ink">
+                    {event.title}
+                  </span>
+
+                  {event.location ? (
+                    <span className="mt-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted">
+                      <MapPin className="size-3.5 shrink-0" strokeWidth={2.2} />
+                      <span className="truncate">{event.location}</span>
+                    </span>
+                  ) : null}
+
+                  {event.attendees?.length ? (
+                    <span className="mt-1.5 flex items-center gap-1.5">
+                      <span className="flex shrink-0 -space-x-1.5">
+                        {event.attendees.slice(0, 3).map((person, personIndex) => (
+                          <Avatar
+                            key={person}
+                            name={person}
+                            tone={personIndex}
+                            size={18}
+                            rounded="rounded-full"
+                            className="ring-2 ring-surface"
+                          />
+                        ))}
+                      </span>
+                      {event.attendees.length > 3 ? (
+                        <span className="text-[10.5px] font-bold text-ink-muted">
+                          +{event.attendees.length - 3}
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : null}
+                </button>
+              </BlurFade>
+            );
+          })}
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+export function DesktopCalendar({
+  onNewEvent,
+  onEditEvent,
+}: {
+  onNewEvent: (date?: string) => void;
+  onEditEvent: (event: CalendarEvent) => void;
+}) {
+  const { events, mails, selectedDate, setSelectedDate, setEvents, openMessage, notify } = useMailStore();
+  const [calendars] = useCalendars();
+  const [mode, setMode] = useState<ViewMode>("month");
+  const [anchor, setAnchor] = useState(selectedDate);
   const [direction, setDirection] = useState(0);
+  const [hiddenCalendars, setHiddenCalendars] = useState<Set<string>>(() => new Set());
+  const [fromMail, setFromMail] = useState(false);
+  const [conflictsOnly, setConflictsOnly] = useState(false);
+  const [attendeesOnly, setAttendeesOnly] = useState(false);
+  const [query, setQuery] = useState("");
   const [detailId, setDetailId] = useState<string | null>(null);
   const narrow = useNarrowViewport();
 
-  const cells = monthGrid(view.year, view.month);
-  const offset = cells.findIndex((cell) => cell !== null);
-  const monthKey = `${view.year}-${String(view.month + 1).padStart(2, "0")}`;
+  const calendarList = useMemo(() => calendarsInUse(events, calendars), [events, calendars]);
+  const conflicts = useMemo(() => conflictingIds(events), [events]);
+
+  const activeCalendars = useMemo(() => {
+    const names = new Set(
+      calendarList.filter((def) => !hiddenCalendars.has(def.name)).map((def) => def.name),
+    );
+    if (events.some((event) => !event.calendar)) names.add("");
+    return names;
+  }, [calendarList, hiddenCalendars, events]);
+
+  const visible = useMemo(
+    () =>
+      filterEvents(
+        events,
+        { calendars: activeCalendars, fromMail, conflictsOnly, attendeesOnly, query },
+        conflicts,
+      ),
+    [events, activeCalendars, fromMail, conflictsOnly, attendeesOnly, query, conflicts],
+  );
 
   const byDay = useMemo(() => {
     const map = new Map<string, CalendarEvent[]>();
-    for (const event of events) {
+    for (const event of visible) {
       const list = map.get(event.date);
       if (list) list.push(event);
       else map.set(event.date, [event]);
     }
-    for (const list of map.values()) list.sort((a, b) => a.start.localeCompare(b.start));
+    for (const list of map.values()) list.sort((a, b) => minutesOf(a.start) - minutesOf(b.start));
     return map;
-  }, [events]);
+  }, [visible]);
 
-  const conflicts = useMemo(() => conflictingIds(events), [events]);
-  const monthCount = events.filter((event) => event.date.startsWith(monthKey)).length;
   const dayEvents = byDay.get(selectedDate) ?? [];
   const detail = detailId ? (events.find((event) => event.id === detailId) ?? null) : null;
+  const mail = detail?.mailId ? mails.find((entry) => entry.id === detail.mailId) : undefined;
 
-  const dateAt = (index: number) => {
-    const date = new Date(view.year, view.month, 1 - offset + index);
-    return {
-      iso: isoDay(date.getFullYear(), date.getMonth(), date.getDate()),
-      day: date.getDate(),
-      inMonth: date.getMonth() === view.month,
-    };
+  const inPeriod = (iso: string) => {
+    if (mode === "month") return iso.slice(0, 7) === anchor.slice(0, 7);
+    if (mode === "week") {
+      const start = weekStartISO(anchor);
+      return iso >= start && iso <= addDaysISO(start, 6);
+    }
+    if (mode === "day") return iso === selectedDate;
+    return iso >= TODAY_ISO;
   };
 
+  const periodEvents = visible.filter((event) => inPeriod(event.date));
+  const hasFilters =
+    Boolean(query.trim()) || fromMail || conflictsOnly || attendeesOnly || hiddenCalendars.size > 0;
+
+  const periodKey =
+    mode === "month"
+      ? anchor.slice(0, 7)
+      : mode === "week"
+        ? weekStartISO(anchor)
+        : mode === "day"
+          ? anchor
+          : anchor.slice(0, 7);
+
   const syncView = (date: string) => {
-    const [year, month] = date.split("-").map(Number);
-    setView((current) =>
-      current.year === year && current.month === month - 1 ? current : { year, month: month - 1 },
-    );
+    if (mode === "day" || mode === "list") return;
+    setAnchor(date);
   };
 
   const pick = (date: string) => {
-    syncView(date);
     setSelectedDate(date);
+    syncView(date);
     setDetailId(null);
   };
 
@@ -156,24 +1048,65 @@ export function DesktopCalendar({ onNewEvent }: { onNewEvent: () => void }) {
     setDetailId(event.id);
   };
 
-  const shiftMonth = (delta: number) => {
+  const createAt = (date: string) => {
+    setSelectedDate(date);
+    onNewEvent(date);
+  };
+
+  const createSlot = (date: string, start: string) => {
+    setSelectedDate(date);
+    onNewEvent(`${date}T${start}`);
+  };
+
+  const shift = (delta: number) => {
     setDirection(delta);
-    const next = new Date(view.year, view.month + delta, 1);
-    const year = next.getFullYear();
-    const month = next.getMonth();
-    setView({ year, month });
-    setSelectedDate(isoDay(year, month, Math.min(Number(selectedDate.slice(8, 10)), daysInMonth(year, month))));
+    const next = shiftAnchor(mode, anchor, delta);
+    setAnchor(next);
     setDetailId(null);
+    if (mode === "month") {
+      const year = Number(next.slice(0, 4));
+      const month = Number(next.slice(5, 7)) - 1;
+      setSelectedDate(isoDay(year, month, Math.min(Number(selectedDate.slice(8, 10)), daysInMonth(year, month))));
+    } else if (mode === "week") {
+      setSelectedDate(addDaysISO(selectedDate, delta * 7));
+    } else if (mode === "day") {
+      setSelectedDate(next);
+    }
   };
 
   const goToday = () => {
-    setView({ year: CURRENT_YEAR, month: CURRENT_MONTH });
+    setAnchor(TODAY_ISO);
     setSelectedDate(TODAY_ISO);
     setDetailId(null);
   };
 
-  const mail = detail?.mailId ? mails.find((entry) => entry.id === detail.mailId) : undefined;
-  const dayLabel = `${dayEvents.length} événement${dayEvents.length > 1 ? "s" : ""}`;
+  const changeMode = (next: ViewMode) => {
+    if (next === mode) return;
+    setMode(next);
+    setDetailId(null);
+    if (next === "list") setAnchor(selectedDate);
+  };
+
+  const toggleCalendar = (name: string) => {
+    setHiddenCalendars((current) => {
+      const next = new Set(current);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const removeEvent = (target: CalendarEvent) => {
+    setEvents((current) => current.filter((event) => event.id !== target.id));
+    notify("Rendez-vous supprimé");
+    setDetailId(null);
+  };
+
+  const overlaps = detail
+    ? overlappingEvents(events, detail.date, detail.start, detail.end).filter(
+        (event) => event.id !== detail.id,
+      )
+    : [];
 
   return (
     <div
@@ -185,123 +1118,120 @@ export function DesktopCalendar({ onNewEvent }: { onNewEvent: () => void }) {
           data-testid="calendar-header"
           className={cn(
             "flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-line",
-            narrow ? "px-4 py-3" : "px-6 py-3.5",
+            narrow ? "px-4 py-3" : "px-5 py-3",
           )}
         >
-          <PaneTitle hint={narrow ? undefined : `${monthCount} événement${monthCount > 1 ? "s" : ""}`}>
+          <PaneTitle hint={`${visible.length} sur ${events.length} événement${events.length > 1 ? "s" : ""}`}>
             Agenda
           </PaneTitle>
 
-          <div
-            className={cn(
-              "ml-auto flex min-w-0 flex-wrap items-center justify-end",
-              narrow ? "gap-2" : "gap-3",
-            )}
-          >
-            <div className="flex min-w-0 items-center gap-1">
-              <DIconButton label="Mois précédent" onClick={() => shiftMonth(-1)}>
-                <ChevronLeft className="size-4" strokeWidth={2.2} />
-              </DIconButton>
-              <span
+          <div role="tablist" aria-label="Vue de l'agenda" className="flex shrink-0 items-center gap-0.5 rounded-[15px] border border-line bg-surface-2 p-[3px]">
+            {VIEW_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={mode === tab.id}
+                data-testid={`view-${tab.id}`}
+                onClick={() => changeMode(tab.id)}
                 className={cn(
-                  "min-w-0 truncate text-center leading-none font-extrabold tracking-[-0.035em] text-ink tabular-nums",
-                  narrow ? "text-[17px]" : "min-w-[188px] text-[22px]",
+                  "focus-ring h-8 shrink-0 rounded-xl px-3 text-[12px] font-bold transition-colors",
+                  mode === tab.id
+                    ? "bg-accent text-accent-contrast shadow-[0_6px_16px_-9px_var(--accent)]"
+                    : "text-ink-muted hover:text-ink",
                 )}
               >
-                {monthLabel(view.month)} {view.year}
-              </span>
-              <DIconButton label="Mois suivant" onClick={() => shiftMonth(1)}>
-                <ChevronRight className="size-4" strokeWidth={2.2} />
-              </DIconButton>
-            </div>
-            <DButton variant="ghost" size="md" onClick={goToday}>
-              Aujourd'hui
-            </DButton>
-            <DButton variant="primary" size="md" onClick={onNewEvent}>
-              <Plus className="size-4" strokeWidth={2.4} />
-              Nouveau rendez-vous
-            </DButton>
+                {tab.label}
+              </button>
+            ))}
           </div>
-        </header>
 
-        <div className="grid shrink-0 grid-cols-7 border-b border-line">
-          {WEEKDAYS.map((weekday, index) => (
+          <div className="flex min-w-0 items-center gap-0.5">
+            <DIconButton label="Période précédente" onClick={() => shift(-1)}>
+              <ChevronLeft className="size-4" strokeWidth={2.4} />
+            </DIconButton>
             <span
-              key={index}
-              className="flex h-7 items-center justify-center text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase"
+              data-testid="period-label"
+              className={cn(
+                "min-w-0 truncate text-center leading-none font-extrabold tracking-[-0.035em] text-ink tabular-nums",
+                narrow ? "text-[15px]" : "min-w-[150px] text-[17px]",
+              )}
             >
-              {weekday}
+              {periodLabel(mode, anchor)}
             </span>
-          ))}
-        </div>
+            <DIconButton label="Période suivante" onClick={() => shift(1)}>
+              <ChevronRight className="size-4" strokeWidth={2.4} />
+            </DIconButton>
+          </div>
+
+          <DButton variant="ghost" size="md" onClick={goToday}>
+            Aujourd'hui
+          </DButton>
+
+          <TextInput
+            type="search"
+            aria-label="Rechercher"
+            placeholder="Rechercher…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            className="ml-auto h-9 min-w-[110px] max-w-[260px] flex-1 rounded-full"
+          />
+
+          <DButton variant="primary" size="md" onClick={() => onNewEvent()}>
+            <Plus className="size-4" strokeWidth={2.4} />
+            Nouveau rendez-vous
+          </DButton>
+        </header>
 
         <div data-testid="grid-viewport" className="relative min-h-0 flex-1 overflow-auto">
           <AnimatePresence mode="wait" initial={false}>
             <motion.div
-              key={monthKey}
+              key={`${mode}:${periodKey}`}
               initial={{ opacity: 0, x: direction * 48 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: direction * -48 }}
               transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-              data-testid="month-grid"
-              className="grid h-full min-h-0 grid-cols-7 auto-rows-fr"
+              className="h-full min-h-0"
             >
-          {cells.map((_, index) => {
-            const cell = dateAt(index);
-            const list = byDay.get(cell.iso) ?? [];
-            const visible = list.slice(0, 3);
-            const hidden = cell.inMonth ? list.length - visible.length : 0;
-            const isToday = cell.iso === TODAY_ISO;
-            const isSelected = cell.iso === selectedDate;
-
-            return (
-              <div
-                key={cell.iso}
-                className={cn(
-                  "flex min-h-[84px] flex-col gap-1 overflow-hidden border-b border-line p-2",
-                  (index + 1) % 7 === 0 ? "border-r-0" : "border-r",
-                  cell.inMonth ? "bg-surface" : "bg-surface-2/40 opacity-45",
-                  cell.inMonth && index % 7 >= 5 && "bg-surface-2/60",
-                  isSelected && "bg-accent-soft ring-1 ring-accent-ring",
-                )}
-              >
-                <button
-                  type="button"
-                  onClick={() => pick(cell.iso)}
-                  aria-current={isSelected ? "date" : undefined}
-                  aria-label={`${longDate(cell.iso)} — ${
-                    list.length === 0 ? "aucun événement" : `${list.length} événement${list.length > 1 ? "s" : ""}`
-                  }`}
-                  className={cn(
-                    "focus-ring grid size-6 shrink-0 place-items-center self-start rounded-full text-[13px] font-bold tabular-nums transition-colors",
-                    isToday
-                      ? "bg-accent text-accent-contrast shadow-[0_6px_16px_-10px_var(--accent)]"
-                      : isSelected
-                        ? "text-accent-ink hover:bg-accent-ring/40"
-                        : cell.inMonth
-                          ? "text-ink hover:bg-surface-2"
-                          : "text-ink-muted",
-                  )}
-                >
-                  {cell.day}
-                </button>
-
-                <div className="flex min-h-0 flex-col gap-1 overflow-hidden">
-                  {visible.map((event) => (
-                    <EventPill
-                      key={event.id}
-                      event={event}
-                      onOpen={cell.inMonth ? () => openEvent(event) : undefined}
-                    />
-                  ))}
-
-                  {hidden > 0 ? (
-                    <span className="px-1 text-[11px] font-bold text-ink-muted">+{hidden} autres</span>
-                  ) : null}
-                </div>
-              </div>
-            );
-          })}
+              {mode === "month" ? (
+                <MonthView
+                  anchor={anchor}
+                  selectedDate={selectedDate}
+                  byDay={byDay}
+                  conflicts={conflicts}
+                  calendars={calendars}
+                  onPick={pick}
+                  onOpen={openEvent}
+                  onCreateAt={createAt}
+                />
+              ) : mode === "week" ? (
+                <WeekView
+                  anchor={anchor}
+                  selectedDate={selectedDate}
+                  byDay={byDay}
+                  conflicts={conflicts}
+                  calendars={calendars}
+                  onPick={pick}
+                  onOpen={openEvent}
+                  onCreateAt={createSlot}
+                />
+              ) : mode === "day" ? (
+                <DayView
+                  selectedDate={selectedDate}
+                  byDay={byDay}
+                  conflicts={conflicts}
+                  calendars={calendars}
+                  onOpen={openEvent}
+                  onCreateAt={createSlot}
+                />
+              ) : (
+                <ListView
+                  events={visible}
+                  conflicts={conflicts}
+                  calendars={calendars}
+                  onOpen={openEvent}
+                />
+              )}
             </motion.div>
           </AnimatePresence>
         </div>
@@ -314,155 +1244,74 @@ export function DesktopCalendar({ onNewEvent }: { onNewEvent: () => void }) {
           narrow ? "w-full border-t" : "min-w-[320px] w-[32%] max-w-[440px] border-l",
         )}
       >
-        <div className="shrink-0 border-b border-line px-6 py-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <SectionLabel>Journée</SectionLabel>
-            <span className="ml-auto truncate text-[11.5px] font-semibold text-ink-muted">{dayLabel}</span>
-          </div>
-          <p className="mt-2 truncate text-[22px] leading-tight font-extrabold tracking-[-0.035em] text-ink">
-            {longDate(selectedDate)}
-          </p>
-        </div>
-
-        <div className={cn("min-h-0 px-5 pt-4", narrow ? "pb-6" : "flex-1 overflow-y-auto pb-[96px]")}>
-          {detail ? (
-            <div className="space-y-3">
-              <DButton variant="ghost" size="sm" onClick={() => setDetailId(null)}>
-                <ChevronLeft className="size-3.5" strokeWidth={2.4} />
-                Retour à la journée
-              </DButton>
-
-              <div className="rounded-[26px] border border-line bg-surface p-5">
-                <SectionLabel>{detail.calendar ?? "Agenda"}</SectionLabel>
-                <p className="mt-1.5 text-[18px] leading-tight font-extrabold tracking-[-0.035em] text-ink">
-                  {detail.title}
-                </p>
-
-                <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                  {detail.fromMail || detail.mailId ? (
-                    <Badge tone="accent">
-                      <Mail className="size-2.5" strokeWidth={2.6} />
-                      mail
-                    </Badge>
-                  ) : null}
-                  {conflicts.has(detail.id) ? <Badge tone="amber">Conflit</Badge> : null}
-                </div>
-
-                <p className="mt-4 flex items-center gap-2 text-[13px] font-bold text-ink tabular-nums">
-                  <Clock className="size-4 shrink-0" strokeWidth={2.2} />
-                  {detail.start} → {detail.end}
-                </p>
-
-                {detail.location ? (
-                  <p className="mt-2 flex items-center gap-2 text-[11.5px] font-semibold text-ink-muted">
-                    <MapPin className="size-3.5 shrink-0" strokeWidth={2.2} />
-                    {detail.location}
-                  </p>
-                ) : null}
-
-                {descriptionOf(detail) ? (
-                  <p className="mt-4 text-[12.5px] leading-relaxed font-medium text-ink-soft">
-                    {descriptionOf(detail)}
-                  </p>
-                ) : null}
-
-                {detail.attendees?.length ? (
-                  <div className="mt-4">
-                    <SectionLabel>Participants</SectionLabel>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {detail.attendees.map((person, index) => (
-                        <span
-                          key={person}
-                          className="flex items-center gap-1.5 rounded-full border border-line bg-surface-2 py-0.5 pr-2.5 pl-0.5 text-[11.5px] font-semibold text-ink-soft"
-                        >
-                          <Avatar name={person} tone={index} size={22} rounded="rounded-full" />
-                          {person}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-
-                {mail ? (
-                  <DButton variant="soft" size="md" className="mt-4" onClick={() => openMessage(mail)}>
-                    <Mail className="size-4" strokeWidth={2.2} />
-                    Voir le mail
-                  </DButton>
-                ) : null}
-              </div>
-            </div>
-          ) : dayEvents.length === 0 ? (
-            <EmptyState
-              icon={<CalendarDays className="size-5" strokeWidth={2.2} />}
-              title="Journée libre"
-              hint="Aucun rendez-vous ce jour-là. Ajoutez-en un d'un clic."
+        <div className={cn("flex min-h-0 flex-col gap-3.5 px-4 pt-4", narrow ? "pb-6" : "flex-1 overflow-y-auto pb-6")}>
+          {mode === "month" ? null : (
+            <MiniMonth
+              anchor={anchor}
+              selectedDate={selectedDate}
+              byDay={byDay}
+              calendars={calendars}
+              onPick={pick}
+              onShift={(delta) => setAnchor(shiftAnchor("month", anchor, delta))}
             />
-          ) : (
-            <div className="space-y-3">
-              {dayEvents.map((event) => {
-                const preview = descriptionOf(event);
-                return (
-                  <button
-                    key={event.id}
-                    type="button"
-                    onClick={() => setDetailId(event.id)}
-                    className="focus-ring block w-full rounded-[18px] border border-line bg-surface p-4 text-left transition-colors hover:border-accent-ring hover:bg-surface-2/40"
-                  >
-                    <span className="flex items-center gap-2">
-                      <span className={cn("size-2 shrink-0 rounded-full", TONE_DOT[toneOf(event.tone)])} />
-                      <span className="text-[13px] font-bold text-ink tabular-nums">
-                        {event.start} → {event.end}
-                      </span>
-                      {event.fromMail || event.mailId ? (
-                        <Badge tone="accent">
-                          <Mail className="size-2.5" strokeWidth={2.6} />
-                          mail
-                        </Badge>
-                      ) : null}
-                      {conflicts.has(event.id) ? <Badge tone="amber">Conflit</Badge> : null}
-                    </span>
-
-                    <span className="mt-2 block text-[15px] leading-snug font-extrabold tracking-[-0.03em] text-ink">
-                      {event.title}
-                    </span>
-
-                    {event.location ? (
-                      <span className="mt-2 flex items-center gap-1.5 text-[11.5px] font-semibold text-ink-muted">
-                        <MapPin className="size-3.5 shrink-0" strokeWidth={2.2} />
-                        <span className="truncate">{event.location}</span>
-                      </span>
-                    ) : null}
-
-                    {event.attendees?.length ? (
-                      <span className="mt-2 flex items-center gap-2">
-                        <span className="flex shrink-0 -space-x-1.5">
-                          {event.attendees.map((person, index) => (
-                            <Avatar
-                              key={person}
-                              name={person}
-                              tone={index}
-                              size={22}
-                              rounded="rounded-full"
-                              className="ring-2 ring-surface"
-                            />
-                          ))}
-                        </span>
-                        <span className="truncate text-[11.5px] font-semibold text-ink-muted">
-                          {event.attendees.join(", ")}
-                        </span>
-                      </span>
-                    ) : null}
-
-                    {preview ? (
-                      <span className="mt-2 line-clamp-2 text-[12.5px] leading-relaxed font-medium text-ink-soft">
-                        {preview}
-                      </span>
-                    ) : null}
-                  </button>
-                );
-              })}
-            </div>
           )}
+
+          <section className="flex flex-col gap-1">
+            <SectionLabel>Mes calendriers</SectionLabel>
+            <div data-testid="calendar-filters" className="mt-0.5 flex flex-col gap-px">
+              {calendarList.map((def) => (
+                <RailCheck
+                  key={def.id}
+                  label={def.name}
+                  tone={def.tone}
+                  checked={!hiddenCalendars.has(def.name)}
+                  count={periodEvents.filter((event) => event.calendar === def.name).length}
+                  onChange={() => toggleCalendar(def.name)}
+                />
+              ))}
+            </div>
+          </section>
+
+          <section className="flex flex-col gap-1">
+            <SectionLabel>Filtres</SectionLabel>
+            <div className="mt-0.5 flex flex-col gap-px">
+              <RailCheck
+                label="Depuis un mail"
+                checked={fromMail}
+                count={periodEvents.filter((event) => event.fromMail).length}
+                onChange={() => setFromMail((current) => !current)}
+              />
+              <RailCheck
+                label="Conflits"
+                checked={conflictsOnly}
+                count={periodEvents.filter((event) => conflicts.has(event.id)).length}
+                onChange={() => setConflictsOnly((current) => !current)}
+              />
+              <RailCheck
+                label="Avec invités"
+                checked={attendeesOnly}
+                count={periodEvents.filter((event) => event.attendees?.length).length}
+                onChange={() => setAttendeesOnly((current) => !current)}
+              />
+            </div>
+          </section>
+
+          <div className="h-px shrink-0 bg-line" />
+
+          <DayPanel
+            selectedDate={selectedDate}
+            dayEvents={dayEvents}
+            detail={detail}
+            conflicts={conflicts}
+            calendars={calendars}
+            overlaps={overlaps}
+            hasFilters={hasFilters}
+            onSelect={openEvent}
+            onBack={() => setDetailId(null)}
+            onEdit={onEditEvent}
+            onDelete={removeEvent}
+            onOpenMail={mail ? () => openMessage(mail) : undefined}
+          />
         </div>
       </aside>
     </div>
@@ -472,30 +1321,59 @@ export function DesktopCalendar({ onNewEvent }: { onNewEvent: () => void }) {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">{label}</span>
-      <div className="mt-1.5">{children}</div>
+      <span className="mb-1.5 block text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+        {label}
+      </span>
+      {children}
     </label>
   );
 }
 
-export function NewEventDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function NewEventDialog({
+  open,
+  event,
+  initialDate,
+  onClose,
+}: {
+  open: boolean;
+  event: CalendarEvent | null;
+  initialDate?: string;
+  onClose: () => void;
+}) {
   if (!open) return null;
-  return <NewEventForm onClose={onClose} />;
+  return <NewEventForm event={event} initialDate={initialDate} onClose={onClose} />;
 }
 
-function NewEventForm({ onClose }: { onClose: () => void }) {
+function NewEventForm({
+  event,
+  initialDate,
+  onClose,
+}: {
+  event: CalendarEvent | null;
+  initialDate?: string;
+  onClose: () => void;
+}) {
   const { events, selectedDate, setEvents, setSelectedDate, notify } = useMailStore();
-  const [title, setTitle] = useState("");
-  const [date, setDate] = useState(selectedDate);
-  const [start, setStart] = useState("14:00");
-  const [end, setEnd] = useState("15:00");
-  const [people, setPeople] = useState("");
-  const [description, setDescription] = useState("");
+  const [calendars] = useCalendars();
+  const editing = event !== null;
+
+  const [initDate, initStart] = (initialDate ?? "").split("T");
+  const [title, setTitle] = useState(event?.title ?? "");
+  const [date, setDate] = useState(event?.date ?? (initDate || undefined) ?? selectedDate);
+  const [start, setStart] = useState(event?.start ?? (initStart || undefined) ?? "14:00");
+  const [end, setEnd] = useState(event?.end ?? (initStart ? addMinutes(initStart, 60) : "15:00"));
+  const [calendar, setCalendar] = useState(event?.calendar ?? calendars[0]?.name ?? "Pro");
+  const [tone, setTone] = useState(event?.tone === undefined ? "" : String(event.tone));
+  const [location, setLocation] = useState(event?.location ?? "");
+  const [people, setPeople] = useState((event?.attendees ?? []).join(", "));
+  const [description, setDescription] = useState(descriptionOf(event) ?? "");
 
   useEscapeLayer(true, onClose);
 
   const invalid = !title.trim() || end <= start;
-  const clashes = invalid || !date ? [] : overlappingEvents(events, date, start, end);
+  const clashes =
+    invalid || !date ? [] : overlappingEvents(events.filter((entry) => entry.id !== event?.id), date, start, end);
+  const resolvedTone = tone === "" ? toneOfEvent({ calendar }, calendars) : Number(tone);
 
   const submit = () => {
     if (invalid) return;
@@ -503,43 +1381,65 @@ function NewEventForm({ onClose }: { onClose: () => void }) {
       .split(",")
       .map((person) => person.trim())
       .filter(Boolean);
-    const event: DesktopEvent = {
-      id: `evt-${Date.now()}`,
+    const next: CalendarEvent = {
+      ...(event ?? {}),
+      id: event?.id ?? `evt-${Date.now()}`,
       date,
       start,
       end,
       title: title.trim(),
-      tone: 0,
+      tone: tone === "" ? undefined : Number(tone),
+      location: location.trim() || undefined,
       attendees: attendees.length > 0 ? attendees : undefined,
+      calendar,
       description: description.trim() || undefined,
-      calendar: "Pro",
     };
-    setEvents((current) => [...current, event]);
+
+    if (event) {
+      setEvents((current) => current.map((entry) => (entry.id === event.id ? next : entry)));
+      notify("Rendez-vous mis à jour");
+    } else {
+      setEvents((current) => [...current, next]);
+      notify("Rendez-vous créé");
+    }
     setSelectedDate(date);
-    notify("Rendez-vous créé");
+    onClose();
+  };
+
+  const remove = () => {
+    if (!event) return;
+    setEvents((current) => current.filter((entry) => entry.id !== event.id));
+    notify("Rendez-vous supprimé");
     onClose();
   };
 
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center p-6">
-      <button
+    <div className="absolute inset-0 z-40 flex items-center justify-center p-4">
+      <motion.button
         type="button"
         aria-label="Fermer"
         onClick={onClose}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.16 }}
         className="absolute inset-0 cursor-default bg-ink/25 backdrop-blur-[2px]"
       />
 
-      <div
+      <motion.div
+        data-testid="event-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label="Nouveau rendez-vous"
-        className="relative w-full max-w-[560px] overflow-hidden rounded-[26px] border border-line bg-surface shadow-[0_40px_90px_-40px_var(--accent)]"
+        aria-label={editing ? "Modifier le rendez-vous" : "Nouveau rendez-vous"}
+        initial={{ opacity: 0, y: 12, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+        className="relative flex max-h-[calc(100%-16px)] w-full max-w-[560px] flex-col overflow-hidden rounded-[26px] border border-line bg-surface shadow-[0_40px_90px_-40px_var(--accent),0_20px_50px_-30px_color-mix(in_oklab,var(--ink)_40%,transparent)]"
       >
-        <div className="flex items-center gap-2 border-b border-line px-5 py-4">
+        <div className="flex shrink-0 items-center gap-2 border-b border-line px-5 py-3.5">
           <div>
             <SectionLabel>Agenda</SectionLabel>
             <h2 className="text-[19px] leading-tight font-extrabold tracking-[-0.035em] text-ink">
-              Nouveau rendez-vous
+              {editing ? "Modifier le rendez-vous" : "Nouveau rendez-vous"}
             </h2>
           </div>
           <DIconButton label="Fermer" className="ml-auto" onClick={onClose}>
@@ -547,48 +1447,124 @@ function NewEventForm({ onClose }: { onClose: () => void }) {
           </DIconButton>
         </div>
 
-        <div className="max-h-[62vh] space-y-3.5 overflow-y-auto px-5 py-4">
+        <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-5 py-4">
           <Field label="Titre">
             <TextInput
               autoFocus
+              data-testid="event-title-input"
               value={title}
-              onChange={(event) => setTitle(event.target.value)}
+              onChange={(inputEvent) => setTitle(inputEvent.target.value)}
               placeholder="Revue de design, déjeuner, visio…"
             />
           </Field>
 
-          <div className="grid grid-cols-[1.4fr_1fr_1fr] gap-2.5">
+          <div className="grid grid-cols-[1.35fr_1fr_1fr] gap-2.5">
             <Field label="Date">
-              <TextInput type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+              <TextInput
+                type="date"
+                data-testid="event-date-input"
+                value={date}
+                onChange={(inputEvent) => setDate(inputEvent.target.value)}
+              />
             </Field>
             <Field label="Début">
               <TextInput
                 type="time"
+                data-testid="event-start-input"
                 value={start}
-                onChange={(event) => {
-                  setStart(event.target.value);
-                  setEnd(addMinutes(event.target.value, 60));
+                onChange={(inputEvent) => {
+                  setStart(inputEvent.target.value);
+                  setEnd(addMinutes(inputEvent.target.value, 60));
                 }}
               />
             </Field>
             <Field label="Fin">
-              <TextInput type="time" value={end} onChange={(event) => setEnd(event.target.value)} />
+              <TextInput
+                type="time"
+                data-testid="event-end-input"
+                value={end}
+                onChange={(inputEvent) => setEnd(inputEvent.target.value)}
+              />
             </Field>
           </div>
 
+          <div className="grid grid-cols-2 gap-2.5">
+            <Field label="Calendrier">
+              <div className="relative">
+                <span
+                  className={cn(
+                    "pointer-events-none absolute top-1/2 left-3 size-2 -translate-y-1/2 rounded-full",
+                    TONE_DOT[toneOfEvent({ calendar }, calendars)],
+                  )}
+                />
+                <select
+                  aria-label="Calendrier"
+                  data-testid="event-calendar-input"
+                  value={calendar}
+                  onChange={(inputEvent) => setCalendar(inputEvent.target.value)}
+                  className="focus-ring h-10 w-full appearance-none rounded-xl border border-line bg-surface pr-7 pl-7 text-[12.5px] font-bold text-ink"
+                >
+                  {calendars.map((def) => (
+                    <option key={def.id} value={def.name}>
+                      {def.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDownGlyph />
+              </div>
+            </Field>
+
+            <Field label="Couleur">
+              <div className="relative">
+                <span
+                  className={cn(
+                    "pointer-events-none absolute top-1/2 left-3 size-2 -translate-y-1/2 rounded-full",
+                    TONE_DOT[resolvedTone],
+                  )}
+                />
+                <select
+                  aria-label="Couleur"
+                  data-testid="event-tone-input"
+                  value={tone}
+                  onChange={(inputEvent) => setTone(inputEvent.target.value)}
+                  className="focus-ring h-10 w-full appearance-none rounded-xl border border-line bg-surface pr-7 pl-7 text-[12.5px] font-bold text-ink"
+                >
+                  <option value="">Couleur du calendrier</option>
+                  {TONE_LABELS.map((label, index) => (
+                    <option key={label} value={index}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDownGlyph />
+              </div>
+            </Field>
+          </div>
+
+          <Field label="Lieu">
+            <TextInput
+              data-testid="event-location-input"
+              value={location}
+              onChange={(inputEvent) => setLocation(inputEvent.target.value)}
+              placeholder="Lieu ou lien visio"
+            />
+          </Field>
+
           <Field label="Participants">
             <TextInput
+              data-testid="event-attendees-input"
               value={people}
-              onChange={(event) => setPeople(event.target.value)}
-              placeholder="Invités (noms ou e-mails)"
+              onChange={(inputEvent) => setPeople(inputEvent.target.value)}
+              placeholder="Invités (noms ou e-mails), séparés par une virgule"
             />
           </Field>
 
           <Field label="Description">
             <TextArea
-              rows={3}
+              rows={2}
+              data-testid="event-description-input"
               value={description}
-              onChange={(event) => setDescription(event.target.value)}
+              onChange={(inputEvent) => setDescription(inputEvent.target.value)}
               placeholder="Ordre du jour, lieu, lien visio…"
             />
           </Field>
@@ -596,30 +1572,42 @@ function NewEventForm({ onClose }: { onClose: () => void }) {
           {clashes.length > 0 ? (
             <div
               role="alert"
-              className="flex items-start gap-2 rounded-[16px] border border-amber-500/40 bg-amber-500/12 px-3 py-2 text-[11.5px] font-semibold text-amber-700 dark:text-amber-300"
+              className="flex items-start gap-2 rounded-[16px] border border-amber-500/40 bg-amber-500/12 px-3 py-2 text-[11.5px] font-bold text-amber-700 dark:text-amber-300"
             >
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" strokeWidth={2.2} />
-              <p>
-                Chevauchement sur ce créneau : {clashes.map((event) => event.title).join(", ")}.
-              </p>
+              <p>Chevauchement sur ce créneau : {clashes.map((entry) => entry.title).join(", ")}.</p>
             </div>
           ) : null}
         </div>
 
-        <div className="flex items-center gap-2 border-t border-line bg-surface-2/60 px-5 py-3">
+        <div className="flex shrink-0 items-center gap-2 border-t border-line bg-surface-2/60 px-5 py-3">
           <p className="text-[11px] font-bold text-ink-muted tabular-nums">
             {start} → {end}
           </p>
           <div className="ml-auto flex items-center gap-2">
+            {editing ? (
+              <DButton variant="danger" size="sm" onClick={remove}>
+                <Trash2 className="size-3.5" strokeWidth={2.2} />
+                Supprimer
+              </DButton>
+            ) : null}
             <DButton variant="ghost" size="sm" onClick={onClose}>
               Annuler
             </DButton>
             <DButton variant="primary" size="md" disabled={invalid} onClick={submit}>
-              Créer le rendez-vous
+              {editing ? "Enregistrer" : "Créer le rendez-vous"}
             </DButton>
           </div>
         </div>
-      </div>
+      </motion.div>
     </div>
+  );
+}
+
+function ChevronDownGlyph() {
+  return (
+    <span className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-ink-muted">
+      <ChevronDown className="size-3.5" strokeWidth={2.4} />
+    </span>
   );
 }

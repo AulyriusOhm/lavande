@@ -78,7 +78,7 @@ export function NewEventSheet({
       end,
       title: title.trim(),
       location: location.trim() || undefined,
-      tone: 0,
+      tone: undefined,
       calendar,
     });
     onClose();

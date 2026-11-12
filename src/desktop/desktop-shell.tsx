@@ -10,6 +10,7 @@ import { DesktopInbox } from "@/desktop/inbox";
 import { DesktopSearch } from "@/desktop/search";
 import { DesktopCompose } from "@/desktop/compose";
 import { DesktopCalendar, NewEventDialog } from "@/desktop/calendar";
+import type { CalendarEvent } from "@/lib/calendar";
 import { DesktopPlanning, NewTaskDialog } from "@/desktop/planning";
 import { DesktopSettings } from "@/desktop/settings";
 import { PgpScreen } from "@/screens/pgp-screen";
@@ -47,6 +48,8 @@ function DesktopMain() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [newEventOpen, setNewEventOpen] = useState(false);
+  const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
+  const [pendingInit, setPendingInit] = useState<string | undefined>(undefined);
   const [pgpOpen, setPgpOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const mailNav = useRef<MailNavigation | null>(null);
@@ -77,6 +80,12 @@ function DesktopMain() {
 
   const toggleHelp = useCallback(() => setHelpOpen((current) => !current), []);
 
+  const openNewEvent = useCallback((init?: string) => {
+    setEditingEvent(null);
+    setPendingInit(init);
+    setNewEventOpen(true);
+  }, []);
+
   const overlayOpen =
     searchOpen ||
     newTaskOpen ||
@@ -95,7 +104,7 @@ function DesktopMain() {
       calendarActive: view === "calendar",
       compose: openComposer,
       newTask: () => setNewTaskOpen(true),
-      newEvent: () => setNewEventOpen(true),
+      newEvent: () => openNewEvent(),
       search: () => setSearchOpen(true),
       toggleHelp,
       mail: {
@@ -114,7 +123,7 @@ function DesktopMain() {
         forwardSelected: () => mailNav.current?.forwardSelected(),
       },
     }),
-    [changeView, calendarEnabled, planningEnabled, view, overlayOpen, openComposer, toggleHelp],
+    [changeView, calendarEnabled, planningEnabled, view, overlayOpen, openComposer, toggleHelp, openNewEvent],
   );
   const shortcuts = useMemo(() => appShortcuts(shortcutActions), [shortcutActions]);
   const helpShortcuts = useMemo(
@@ -168,7 +177,15 @@ function DesktopMain() {
                 onOpenPgp={() => changeView("settings")}
               />
             )}
-            {view === "calendar" && <DesktopCalendar onNewEvent={() => setNewEventOpen(true)} />}
+            {view === "calendar" && (
+              <DesktopCalendar
+                onNewEvent={openNewEvent}
+                onEditEvent={(event) => {
+                  setEditingEvent(event);
+                  setNewEventOpen(true);
+                }}
+              />
+            )}
             {view === "planning" && (
               <DesktopPlanning onNewTask={() => setNewTaskOpen(true)} onOpenSync={() => changeView("settings")} />
             )}
@@ -182,14 +199,23 @@ function DesktopMain() {
         onChange={changeView}
         onCompose={openComposer}
         onNewTask={() => setNewTaskOpen(true)}
-        onNewEvent={() => setNewEventOpen(true)}
+        onNewEvent={() => openNewEvent()}
         onSearch={() => setSearchOpen(true)}
       />
 
       <DesktopCompose />
       <DesktopSearch open={searchOpen} onClose={() => setSearchOpen(false)} />
       <NewTaskDialog open={newTaskOpen} onClose={() => setNewTaskOpen(false)} />
-      <NewEventDialog open={newEventOpen} onClose={() => setNewEventOpen(false)} />
+      <NewEventDialog
+        open={newEventOpen}
+        event={editingEvent}
+        initialDate={pendingInit}
+        onClose={() => {
+          setNewEventOpen(false);
+          setEditingEvent(null);
+          setPendingInit(undefined);
+        }}
+      />
       <Notice notice={notices[0] ?? null} onClose={dismissNotice} />
       <AccountRemoveDialog variant="dialog" />
       <McpApprovalHost />

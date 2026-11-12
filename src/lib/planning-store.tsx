@@ -192,6 +192,7 @@ const EVENT_FIELDS = [
   "end",
   "title",
   "location",
+  "description",
   "tone",
   "fromMail",
   "mailId",
@@ -207,9 +208,10 @@ function projectEvent(doc: Doc): CalendarEvent {
     start: text(raw.start),
     end: text(raw.end),
     title: text(raw.title),
-    tone: typeof raw.tone === "number" ? raw.tone : 0,
+    tone: typeof raw.tone === "number" ? raw.tone : undefined,
   };
   if (typeof raw.location === "string") event.location = raw.location;
+  if (typeof raw.description === "string") event.description = raw.description;
   if (raw.fromMail === true) event.fromMail = true;
   if (typeof raw.mailId === "string") event.mailId = raw.mailId;
   if (Array.isArray(raw.attendees)) event.attendees = raw.attendees.filter((a): a is string => typeof a === "string");
