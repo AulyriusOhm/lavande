@@ -29,7 +29,7 @@ Décisions actées avec Roman le 12/11/2026 :
 - #15 correction LLM sans perte d'images (jetons ⟦img-n⟧ + repli) · #16 historique cité repliable lecture seule (champ `quoted` séparé) · #17 signature avant l'historique (`sendInputOf` : message → signature → citation).
 
 **Restent à faire** :
-- #3 anti-spam (phase de recherche d'abord) · #6 graphisme PC planif (agenda livré) · #7 rangement des réglages (plan à valider) · #11 calendriers externes (OAuth Google à fournir) · #14 parapluie sécurité (audit autonome ; Keystore Android + trousseau système + signature paquets avec Roman).
+- #3 anti-spam (phase de recherche d'abord) · #6 graphisme PC planif (agenda livré) · #7 rangement des réglages (plan à valider) · #11 calendriers externes (OAuth Google à fournir) · #14 parapluie sécurité (audit autonome ; Keystore Android + trousseau système + signature paquets avec Roman) · #18 barre flottante PC (plus visible + flou gaussien autour).
 - Hors todo : auto-updater (hébergement endpoint, sauvegarde clé, 1ʳᵉ release, AppImage, test E2E) · Android insets sur appareil physique + CI.
 - Suivis mineurs : `htmlToText` avale les URL `<https://…>` dans les aperçus texte ; relecture locale des images inline CID dans Envoyés ; scénario live IMAP du gate PGP ; 2 chaînes démo cosmétiques sous verrou.
 
@@ -119,6 +119,13 @@ Audit visuel de lisibilité sur toute l'app (PC + mobile) : contrastes insuffisa
 libellés tronqués, débordements, textes qui se chevauchent au redimensionnement — puis corriger. S'appuyer sur
 `DESIGN.md` comme référence (tailles, couleurs). Complémentaire de #4 (agenda au resize) et #6 (refonte graphique PC).
 
+### #18 — Améliorer l'UI de la barre flottante PC (dock)
+La barre flottante de navigation PC (`DesktopDock`, `src/desktop/dock.tsx` : onglets Boîte / Agenda / Planification /
+Réglages + recherche + FAB) manque de visibilité. La rendre **plus visible** (contraste, bordure, ombre/portée) et
+ajouter un **flou gaussien autour** d'elle (halo / backdrop étendu) pour la détacher nettement du contenu derrière.
+Aujourd'hui simple classe `glass` (`src/index.css` : `backdrop-filter: blur(20px) saturate(180%)`, fond surface 72 %).
+S'aligner sur `DESIGN.md` ; complémentaire de #13 (lisibilité).
+
 ## Rédaction & réponse
 
 ### #15 ✓ — La correction automatique via LLM ne doit pas perdre les images
@@ -147,7 +154,7 @@ entre le nouveau message et la citation. Dépend de la structure de citation de 
 1. Correctifs rapides + verrou distribution : **#4, #5, #10, #9**
 2. Clavier + rendu HTML : **#1, #2**
 3. Gros morceaux : **#3, #8, #11, #12**
-4. Refonte graphique + réglages (allers-retours maquette) : **#6, #7, #13**
+4. Refonte graphique + réglages (allers-retours maquette) : **#6, #7, #13, #18**
 5. Rédaction & réponse : **#15, #16, #17** — livrés ✓
 6. Parapluie sécurité en dernier : **#14**
 
