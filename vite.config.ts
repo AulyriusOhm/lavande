@@ -50,6 +50,7 @@ const alias =
 
 export default defineConfig({
   base: process.env.VITE_BASE ?? "/",
+  publicDir: process.env.VITE_DISTRIBUTION === "1" ? false : "public",
   plugins: [react(), tailwindcss()],
   resolve: {
     alias,
