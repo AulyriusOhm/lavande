@@ -108,11 +108,16 @@ function projectSuggestion(doc: Doc): MailSuggestion | null {
     dueTone: oneOf(DUE_TONES, raw.dueTone, "none"),
     tone: typeof raw.tone === "number" ? raw.tone : 0,
     description: text(raw.description),
+    kind: raw.kind === "event" ? "event" : "task",
   };
   if (raw.ai === true) suggestion.ai = true;
   if (typeof raw.timestamp === "number" && Number.isFinite(raw.timestamp)) {
     suggestion.timestamp = raw.timestamp;
   }
+  if (typeof raw.date === "string") suggestion.date = raw.date;
+  if (typeof raw.start === "string") suggestion.start = raw.start;
+  if (typeof raw.end === "string") suggestion.end = raw.end;
+  if (typeof raw.location === "string") suggestion.location = raw.location;
   return suggestion;
 }
 
@@ -143,7 +148,11 @@ function taskFields(task: Task): Record<string, unknown> {
 
 function suggestionDocId(suggestion: MailSuggestion): string {
   if (suggestion.id.startsWith(SUGGESTION_PREFIX)) return suggestion.id;
-  return suggestionId(`${suggestion.account}:${suggestion.mailId}`, suggestion.proposal);
+  const mailKey = `${suggestion.account}:${suggestion.mailId}`;
+  return suggestionId(
+    suggestion.kind === "event" ? `${mailKey}:${suggestion.date ?? ""}:${suggestion.start ?? ""}` : mailKey,
+    suggestion.proposal,
+  );
 }
 
 function suggestionFields(
@@ -164,6 +173,11 @@ function suggestionFields(
     dueTone: suggestion.dueTone,
     tone: suggestion.tone,
     description: suggestion.description,
+    ...(suggestion.kind === undefined ? {} : { kind: suggestion.kind }),
+    ...(suggestion.date === undefined ? {} : { date: suggestion.date }),
+    ...(suggestion.start === undefined ? {} : { start: suggestion.start }),
+    ...(suggestion.end === undefined ? {} : { end: suggestion.end }),
+    ...(suggestion.location === undefined ? {} : { location: suggestion.location }),
     ...(suggestion.timestamp === undefined ? {} : { timestamp: suggestion.timestamp }),
   };
 }

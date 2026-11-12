@@ -241,6 +241,32 @@ describe("suggestions · fenêtre temporelle", () => {
     const ovh = result.current.suggestions.find((entry) => entry.proposal === "Envoyer la facture au comptable");
     expect(ovh?.account).toBe("pro");
     expect(ovh?.ai).toBeUndefined();
+    expect(ovh?.kind).toBe("task");
+  });
+
+  it("persiste un rendez-vous avec son type et ses champs d'agenda", () => {
+    const storage = createMemoryStorage();
+    const first = mount(storage);
+    const rendezVous: MailSuggestion = {
+      ...suggestion("rdv"),
+      kind: "event",
+      date: "2026-01-13",
+      start: "10:00",
+      end: "10:30",
+      location: "Visio",
+    };
+
+    act(() => {
+      first.result.current.proposeSuggestion(rendezVous);
+    });
+
+    const expected = { kind: "event", date: "2026-01-13", start: "10:00", end: "10:30", location: "Visio" };
+    const byProposal = (list: MailSuggestion[]) => list.find((entry) => entry.proposal === rendezVous.proposal);
+    expect(byProposal(first.result.current.suggestions)).toMatchObject(expected);
+    first.unmount();
+
+    const second = mount(storage);
+    expect(byProposal(second.result.current.suggestions)).toMatchObject(expected);
   });
 
   it("persiste le flag IA et l'identifiant de compte réel", () => {

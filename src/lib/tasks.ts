@@ -136,6 +136,8 @@ export const TASKS: Task[] = import.meta.env.VITE_DISTRIBUTION === "1" ? [] : [
   },
 ];
 
+export type SuggestionKind = "task" | "event";
+
 export type MailSuggestion = {
   id: string;
   mailId: string;
@@ -148,6 +150,13 @@ export type MailSuggestion = {
   dueTone: Task["dueTone"];
   tone: number;
   description: string;
+  /** Nature de la proposition : tâche à faire, ou rendez-vous à l'agenda. */
+  kind?: SuggestionKind;
+  /** Rendez-vous : jour AAAA-MM-JJ, heures HH:MM, lieu facultatif. */
+  date?: string;
+  start?: string;
+  end?: string;
+  location?: string;
   /** Suggestion produite par l'IA (résumé LLM ou extraction de tâches). */
   ai?: boolean;
   /** Horodatage (ms) du mail source : base du filtre de fenêtre des suggestions IA. */

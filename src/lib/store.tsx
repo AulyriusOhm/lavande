@@ -23,8 +23,8 @@ import { threadOf } from "@/lib/threads";
 import type { Thread } from "@/lib/threads";
 import type { MailSuggestion, Task } from "@/lib/tasks";
 import { dueToneFor, formatDueDate } from "@/lib/tasks";
-import { currentPeriod, generateSummary, recentMails, suggestTasks } from "@/lib/summary";
-import type { SummaryMailInput, SummaryResult, SummaryTask } from "@/lib/summary";
+import { currentPeriod, generateSummary, recentMails, suggestEvents, suggestTasks } from "@/lib/summary";
+import type { SummaryEvent, SummaryMailInput, SummaryResult, SummaryTask } from "@/lib/summary";
 import { llmReady } from "@/lib/llm";
 import { TODAY_ISO } from "@/lib/calendar";
 import type { CalendarEvent } from "@/lib/calendar";
@@ -77,6 +77,33 @@ function summarySuggestion(task: SummaryTask, mail: Mail | undefined, period: st
     tone: mail?.tone ?? 0,
     description: day ? `${period} · échéance ${formatDueDate(day)}` : period,
   };
+  if (typeof mail?.timestamp === "number") suggestion.timestamp = mail.timestamp;
+  return suggestion;
+}
+
+/** Un rendez-vous extrait devient une suggestion d'AGENDA en attente, jamais un événement. */
+function eventSuggestion(event: SummaryEvent, mail: Mail | undefined, label: string): MailSuggestion {
+  const day = ISO_DAY.test(event.date) ? event.date : "";
+  const hours = event.start ? (event.end ? `${event.start}–${event.end}` : event.start) : "";
+  const when = [day ? formatDueDate(day) : "", hours].filter(Boolean).join(" ");
+  const suggestion: MailSuggestion = {
+    id: `event:${event.mailId ?? "sans-mail"}:${event.date}:${normalize(event.title)}`,
+    kind: "event",
+    mailId: event.mailId ?? "",
+    account: mail?.account ?? "",
+    ai: true,
+    from: event.from || mail?.name || "Résumé",
+    subject: mail?.subject ?? "",
+    proposal: event.title,
+    due: day ? formatDueDate(day) : "",
+    dueTone: day ? dueToneFor(day) : "none",
+    tone: mail?.tone ?? 0,
+    description: [label, when, event.location].filter(Boolean).join(" · "),
+    date: event.date,
+    start: event.start,
+    end: event.end,
+  };
+  if (event.location) suggestion.location = event.location;
   if (typeof mail?.timestamp === "number") suggestion.timestamp = mail.timestamp;
   return suggestion;
 }
@@ -217,6 +244,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const summaryRunning = useRef(false);
   const taskRun = useRef<string | null>(null);
   const taskRunning = useRef(false);
+  const eventRun = useRef<string | null>(null);
+  const eventRunning = useRef(false);
   const composeBus = useRef<ComposeBus | null>(null);
   const composeStateRef = useRef<ComposeState>({ draft: null, title: "Nouveau message", detached: false });
   const lastPostedCompose = useRef("");
@@ -1652,6 +1681,68 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     refreshTaskSuggestionsRef.current = refreshTaskSuggestions;
   }, [refreshTaskSuggestions]);
 
+  /**
+   * Dédup par mail + intitulé + jour : un même rendez-vous ne devient jamais
+   * deux suggestions, ni ne double un événement déjà présent à l'agenda.
+   */
+  const proposeEvents = useCallback(
+    (proposed: SummaryEvent[], byId: Map<string, Mail>, label: string) => {
+      const key = (mailId: string, title: string, date: string) => `${mailId}:${normalize(title)}:${date}`;
+      const known = new Set([
+        ...planning.suggestions.map((entry) => key(entry.mailId, entry.proposal, entry.date ?? "")),
+        ...planning.events.map((entry) => key(entry.mailId ?? "", entry.title, entry.date)),
+      ]);
+      for (const event of proposed) {
+        const dedup = key(event.mailId ?? "", event.title, event.date);
+        if (known.has(dedup)) continue;
+        known.add(dedup);
+        const mail = event.mailId ? byId.get(event.mailId) : undefined;
+        planning.proposeSuggestion(eventSuggestion(event, mail, label));
+      }
+    },
+    [planning],
+  );
+
+  /**
+   * Propose des rendez-vous extraits des mails de la fenêtre. Même signature de
+   * cache que les tâches (fenêtre + mails) : un seul appel par contenu, jamais
+   * en démo, et aucune création automatique d'événement.
+   */
+  const refreshEventSuggestions = useCallback(async () => {
+    const config = prefs.aiTasks;
+    if (!config.enabled || !config.events || !prefs.calendarEnabled) {
+      eventRun.current = null;
+      return;
+    }
+    if (mode !== "api" || !llmReady(prefs.llm) || eventRunning.current) return;
+    const recent = recentMails(summaryInputs(aiMails), config.windowHours);
+    if (recent.length === 0) return;
+    const signature = `${config.windowHours}:${recent.map((mail) => mail.id).join(",")}`;
+    if (eventRun.current === signature) return;
+    eventRunning.current = true;
+    try {
+      const proposed = await suggestEvents({ windowHours: config.windowHours }, prefs.llm, recent);
+      eventRun.current = signature;
+      if (proposed.length === 0) return;
+      proposeEvents(proposed, inboxIndex, "Rendez-vous IA");
+    } finally {
+      eventRunning.current = false;
+    }
+  }, [
+    aiMails,
+    inboxIndex,
+    mode,
+    prefs.aiTasks,
+    prefs.calendarEnabled,
+    prefs.llm,
+    proposeEvents,
+    summaryInputs,
+  ]);
+
+  const refreshEventSuggestionsRef = useRef(refreshEventSuggestions);
+  useEffect(() => {
+    refreshEventSuggestionsRef.current = refreshEventSuggestions;
+  }, [refreshEventSuggestions]);
 
   useEffect(() => {
     summaryRun.current = null;
@@ -1677,6 +1768,19 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (phase !== "ready" || isComposeWindow()) return;
     void refreshTaskSuggestionsRef.current();
+  }, [inboxMails.length, phase]);
+
+  useEffect(() => {
+    eventRun.current = null;
+    if (phase !== "ready" || isComposeWindow()) return;
+    void refreshEventSuggestionsRef.current();
+    const timer = window.setInterval(() => void refreshEventSuggestionsRef.current(), SUMMARY_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [mode, phase, prefs.aiTasks, prefs.calendarEnabled]);
+
+  useEffect(() => {
+    if (phase !== "ready" || isComposeWindow()) return;
+    void refreshEventSuggestionsRef.current();
   }, [inboxMails.length, phase]);
 
   const resolvedOpenMail = useMemo(

@@ -124,18 +124,19 @@ describe("préférences · suggestions de réponse IA", () => {
 
 describe("préférences · suggestions de tâches IA", () => {
   it("démarre activé sur une fenêtre de 48 h, sans compte exclu", () => {
-    expect(mount().result.current.aiTasks).toEqual({ enabled: true, windowHours: 48, excludedAccounts: [] });
+    expect(mount().result.current.aiTasks).toEqual({ enabled: true, windowHours: 48, excludedAccounts: [], events: false });
   });
 
   it("relit une configuration complète", () => {
     window.localStorage.setItem(
       "lavande.prefs",
-      JSON.stringify({ aiTasks: { enabled: false, windowHours: 6, excludedAccounts: ["pro"] } }),
+      JSON.stringify({ aiTasks: { enabled: false, windowHours: 6, excludedAccounts: ["pro"], events: true } }),
     );
     expect(mount().result.current.aiTasks).toEqual({
       enabled: false,
       windowHours: 6,
       excludedAccounts: ["pro"],
+      events: true,
     });
   });
 
@@ -152,7 +153,7 @@ describe("préférences · suggestions de tâches IA", () => {
 
   it("ignore les valeurs invalides et borne la fenêtre à 1-168 h", () => {
     window.localStorage.setItem("lavande.prefs", JSON.stringify({ aiTasks: { enabled: "oui", windowHours: 0 } }));
-    expect(mount().result.current.aiTasks).toEqual({ enabled: true, windowHours: 48, excludedAccounts: [] });
+    expect(mount().result.current.aiTasks).toEqual({ enabled: true, windowHours: 48, excludedAccounts: [], events: false });
 
     window.localStorage.setItem("lavande.prefs", JSON.stringify({ aiTasks: { windowHours: 900 } }));
     expect(mount().result.current.aiTasks.windowHours).toBe(168);
@@ -168,9 +169,9 @@ describe("préférences · suggestions de tâches IA", () => {
     act(() => result.current.setAiTasks({ enabled: false }));
     act(() => result.current.setAiTasks({ excludedAccounts: ["pro"] }));
 
-    expect(result.current.aiTasks).toEqual({ enabled: false, windowHours: 12, excludedAccounts: ["pro"] });
+    expect(result.current.aiTasks).toEqual({ enabled: false, windowHours: 12, excludedAccounts: ["pro"], events: false });
     expect(result.current.summary).toEqual(DEFAULT_SUMMARY);
-    expect(stored().aiTasks).toMatchObject({ enabled: false, windowHours: 12, excludedAccounts: ["pro"] });
+    expect(stored().aiTasks).toMatchObject({ enabled: false, windowHours: 12, excludedAccounts: ["pro"], events: false });
   });
 });
 
@@ -244,7 +245,7 @@ describe("préférences · synchronisation", () => {
     });
     expect(stored().sync).toMatchObject({ enabled: false, mails: false });
     expect(result.current.summary).toEqual(DEFAULT_SUMMARY);
-    expect(result.current.aiTasks).toEqual({ enabled: true, windowHours: 48, excludedAccounts: [] });
+    expect(result.current.aiTasks).toEqual({ enabled: true, windowHours: 48, excludedAccounts: [], events: false });
     expect(result.current.calendarEnabled).toBe(true);
     expect(result.current.pgpEncrypt).toBe(true);
   });

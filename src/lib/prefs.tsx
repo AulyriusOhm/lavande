@@ -190,7 +190,7 @@ const asAccountIds = (value: unknown): string[] =>
 
 const asAiTasks = (value: unknown): AiTasksConfig => {
   if (!value || typeof value !== "object") return { ...DEFAULT_AI_TASKS };
-  const { enabled, windowHours, excludedAccounts } = value as Record<string, unknown>;
+  const { enabled, windowHours, excludedAccounts, events } = value as Record<string, unknown>;
   return {
     enabled: asBoolean(enabled, DEFAULT_AI_TASKS.enabled),
     windowHours:
@@ -198,6 +198,7 @@ const asAiTasks = (value: unknown): AiTasksConfig => {
         ? Math.min(168, Math.round(windowHours))
         : DEFAULT_AI_TASKS.windowHours,
     excludedAccounts: asAccountIds(excludedAccounts),
+    events: asBoolean(events, DEFAULT_AI_TASKS.events),
   };
 };
 

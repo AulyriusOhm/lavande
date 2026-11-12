@@ -1464,6 +1464,13 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                     checked={aiTasks.enabled}
                     onChange={(value) => setAiTasks({ enabled: value })}
                   />
+                  <ToggleRow
+                    icon={<CalendarDays className="size-4" />}
+                    label="Suggestions de rendez-vous IA"
+                    hint="Extraire aussi des RDV (titre, date, heure, lieu) des mêmes mails · à valider dans l'agenda"
+                    checked={aiTasks.events}
+                    onChange={(value) => setAiTasks({ events: value })}
+                  />
                 </Surface>
 
                 <Surface className="mt-3 p-4">

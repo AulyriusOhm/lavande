@@ -149,4 +149,18 @@ describe("Réglages · suggestions de tâches IA", () => {
     await waitFor(() => expect(stored().aiTasks).toMatchObject({ excludedAccounts: [] }));
     expect(screen.getAllByText("Analysé par l'IA")).toHaveLength(3);
   });
+
+  it("active puis désactive les suggestions de rendez-vous IA", async () => {
+    stubFetch(() => response({}));
+    mount();
+
+    const toggle = screen.getByRole("switch", { name: /Suggestions de rendez-vous IA/ });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(stored().aiTasks).toMatchObject({ events: true }));
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(stored().aiTasks).toMatchObject({ events: false }));
+  });
 });
