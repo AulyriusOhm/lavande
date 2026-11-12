@@ -32,7 +32,7 @@ import {
   monthGrid,
   overlappingEvents,
 } from "@/lib/calendar";
-import { TONE_DOT, TONE_PILL, calendarsInUse, icsUrlOf, isCaldavCalendar, toneOfEvent, useCalendars, type CalendarDef } from "@/lib/calendars";
+import { TONE_DOT, TONE_PILL, calendarsInUse, icsUrlOf, isCaldavCalendar, isGoogleCalendar, toneOfEvent, useCalendars, type CalendarDef } from "@/lib/calendars";
 import {
   dueExternalSubscriptions,
   externalCalendarEvents,
@@ -167,10 +167,11 @@ const timeRange = (event: CalendarEvent) => {
   return event.end ? `${event.start} → ${event.end}` : event.start;
 };
 
-/** Étiquette d'une source relue à son serveur : ICS ou CalDAV, toujours en lecture seule. */
-function externalBadge(event: CalendarEvent): { tone: "sky" | "green"; label: string } {
-  const caldav = externalEventKind(event) === "caldav";
-  return caldav ? { tone: "green", label: "CalDAV" } : { tone: "sky", label: "ICS" };
+/** Étiquette d'une source relue à son serveur : ICS, CalDAV ou Google, toujours en lecture seule. */
+function externalBadge(event: CalendarEvent): { tone: "sky" | "green" | "amber"; label: string } {
+  const kind = externalEventKind(event);
+  if (kind === "google") return { tone: "amber", label: "Google" };
+  return kind === "caldav" ? { tone: "green", label: "CalDAV" } : { tone: "sky", label: "ICS" };
 }
 
 /** Une famille de sources externes : compte des événements et relecture à la demande. */
@@ -1235,9 +1236,14 @@ export function DesktopCalendar({
     () => externalEvents.filter((event) => externalEventKind(event) === "caldav"),
     [externalEvents],
   );
+  const googleEvents = useMemo(
+    () => externalEvents.filter((event) => externalEventKind(event) === "google"),
+    [externalEvents],
+  );
   const allEvents = useMemo(() => [...events, ...externalEvents], [events, externalEvents]);
   const icsSubscriptions = useMemo(() => calendars.filter((def) => icsUrlOf(def)), [calendars]);
   const caldavSubscriptions = useMemo(() => calendars.filter(isCaldavCalendar), [calendars]);
+  const googleSubscriptions = useMemo(() => calendars.filter(isGoogleCalendar), [calendars]);
 
   const refreshExternal = useCallback(
     async (targets: CalendarDef[]) => {
@@ -1611,6 +1617,16 @@ export function DesktopCalendar({
               count={caldavEvents.length}
               syncing={externalSyncing}
               onRefresh={() => void refreshExternal(caldavSubscriptions)}
+            />
+          ) : null}
+
+          {googleSubscriptions.length > 0 ? (
+            <ExternalRefreshRow
+              label="Agendas Google"
+              refreshLabel="Actualiser les agendas Google"
+              count={googleEvents.length}
+              syncing={externalSyncing}
+              onRefresh={() => void refreshExternal(googleSubscriptions)}
             />
           ) : null}
 

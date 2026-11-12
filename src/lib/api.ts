@@ -269,6 +269,20 @@ export type CaldavSource = {
   calendar_href?: string;
 };
 
+/** Un calendrier du compte Google connecté : le démon le relit avec son refresh token. */
+export type GoogleCalendar = {
+  id: string;
+  summary: string;
+  description?: string | null;
+};
+
+/** Fenêtre demandée à Google, en RFC 3339 ; absente, c'est Google qui la choisit. */
+export type GoogleEventsInput = {
+  calendar_id: string;
+  time_min?: string;
+  time_max?: string;
+};
+
 /** Les identifiants ne voyagent qu'une fois, à la création de la source. */
 export type CaldavSourceInput = {
   url: string;
@@ -554,6 +568,20 @@ export const mailApi = {
   caldavSourceEvents: (id: string) =>
     request<ExternalEvent[]>(`/calendars/caldav/sources/${encodeURIComponent(id)}/events`, {
       method: "POST",
+      timeout: LONG_TIMEOUT,
+    }),
+
+  /** Le compte doit être connecté en OAuth2 Google : aucun identifiant ne passe ici. */
+  googleCalendars: (accountId: string) =>
+    request<GoogleCalendar[]>(`/calendars/google/${encodeURIComponent(accountId)}/calendars`, {
+      timeout: LONG_TIMEOUT,
+    }),
+
+  /** Lecture seule : le refresh token du compte reste au démon. */
+  googleEvents: (accountId: string, input: GoogleEventsInput) =>
+    request<ExternalEvent[]>(`/calendars/google/${encodeURIComponent(accountId)}/events`, {
+      method: "POST",
+      body: input,
       timeout: LONG_TIMEOUT,
     }),
 

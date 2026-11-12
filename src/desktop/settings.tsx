@@ -29,7 +29,7 @@ import {
   Upload,
 } from "lucide-react";
 import { errorText, mailApi } from "@/lib/api";
-import type { ApiFolder, CaldavSource } from "@/lib/api";
+import type { ApiAccount, ApiFolder, CaldavSource, GoogleCalendar } from "@/lib/api";
 import type { Account } from "@/lib/accounts";
 import type { CalendarEvent } from "@/lib/calendar";
 import {
@@ -58,17 +58,21 @@ import {
   caldavSourceIdOf,
   calendarId,
   TONE_DOT,
+  googleRefOf,
   isCaldavCalendar,
   isExternalCalendar,
+  isGoogleCalendar,
   isIcsCalendar,
   icsUrlOf,
   useCalendars,
   type CalendarDef,
 } from "@/lib/calendars";
+import { GOOGLE_RECONSENT, googleAccounts, googleConsentMissing } from "@/lib/gcal";
 import {
   calendarUrlError,
   dropIcsCalendar,
   fetchCaldavCalendar,
+  fetchGoogleCalendar,
   fetchIcsCalendar,
   icsNameFromFile,
   icsNameFromUrl,
@@ -356,6 +360,20 @@ function TonePicker({
   );
 }
 
+function sourceTone(def: CalendarDef) {
+  if (isIcsCalendar(def)) return "sky" as const;
+  if (isCaldavCalendar(def)) return "green" as const;
+  if (isGoogleCalendar(def)) return "amber" as const;
+  return "neutral" as const;
+}
+
+function sourceLabel(def: CalendarDef): string {
+  if (isIcsCalendar(def)) return "ICS";
+  if (isCaldavCalendar(def)) return "CalDAV";
+  if (isGoogleCalendar(def)) return "Google";
+  return "local";
+}
+
 function CalendarsSection() {
   const { notify } = useMailStore();
   const [calendars, setCalendars] = useCalendars();
@@ -369,6 +387,12 @@ function CalendarsSection() {
   const [caldavPassword, setCaldavPassword] = useState("");
   const [caldavBusy, setCaldavBusy] = useState(false);
   const [caldavSources, setCaldavSources] = useState<Record<string, CaldavSource>>({});
+  const [googleConnected, setGoogleConnected] = useState<ApiAccount[]>([]);
+  const [googleCalendars, setGoogleCalendars] = useState<Record<string, GoogleCalendar[]>>({});
+  const [googleBusy, setGoogleBusy] = useState<Record<string, boolean>>({});
+  const [googleErrors, setGoogleErrors] = useState<Record<string, string | null>>({});
+  const googleInFlight = useRef(new Set<string>());
+  const googleRequested = useRef(new Set<string>());
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -389,6 +413,49 @@ function CalendarsSection() {
       alive = false;
     };
   }, []);
+
+  /** Les comptes connectés disparaissent sans le démon : la section Google reste alors vide. */
+  useEffect(() => {
+    let alive = true;
+    mailApi
+      .accounts()
+      .then((list) => {
+        if (!alive || !Array.isArray(list)) return;
+        setGoogleConnected(googleAccounts(list));
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /** Lecture des calendriers d'un compte : une seule requête en vol, jamais de boucle. */
+  const loadGoogleCalendars = async (accountId: string) => {
+    if (googleInFlight.current.has(accountId)) return;
+    googleInFlight.current.add(accountId);
+    setGoogleBusy((current) => ({ ...current, [accountId]: true }));
+    try {
+      const list = await mailApi.googleCalendars(accountId);
+      setGoogleCalendars((current) => ({ ...current, [accountId]: Array.isArray(list) ? list : [] }));
+      setGoogleErrors((current) => ({ ...current, [accountId]: null }));
+    } catch (error) {
+      setGoogleErrors((current) => ({
+        ...current,
+        [accountId]: googleConsentMissing(error) ? GOOGLE_RECONSENT : `Google · ${errorText(error)}`,
+      }));
+    } finally {
+      googleInFlight.current.delete(accountId);
+      setGoogleBusy((current) => ({ ...current, [accountId]: false }));
+    }
+  };
+
+  useEffect(() => {
+    for (const account of googleConnected) {
+      if (googleRequested.current.has(account.id)) continue;
+      googleRequested.current.add(account.id);
+      void loadGoogleCalendars(account.id);
+    }
+  }, [googleConnected]);
 
   const addCalendar = () => {
     const name = draftName.trim();
@@ -526,6 +593,31 @@ function CalendarsSection() {
     }
   };
 
+  const googleSourceAdded = (accountId: string, calendarId: string) =>
+    calendars.some((entry) => {
+      const ref = googleRefOf(entry);
+      return ref?.accountId === accountId && ref.calendarId === calendarId;
+    });
+
+  /** Le calendrier vit côté agenda : seul un cache d'événements le complète. */
+  const addGoogleCalendar = async (account: ApiAccount, calendar: GoogleCalendar) => {
+    const draft = sourceDraft(calendar.summary.trim() || calendar.id);
+    if (!draft) return;
+    const def: CalendarDef = {
+      ...draft,
+      source: { kind: "google", accountId: account.id, calendarId: calendar.id },
+    };
+    setCalendars([...calendars, def]);
+    setSourceError(null);
+    notify(`Calendrier Google ajouté · ${def.name}`);
+    try {
+      setIcs(setIcsCalendarEvents(ics, def.id, await fetchGoogleCalendar(def)));
+    } catch (error) {
+      const message = googleConsentMissing(error) ? GOOGLE_RECONSENT : errorText(error);
+      setSourceError(`Source ajoutée, événements non lus · ${message}`);
+    }
+  };
+
   const startRename = (id: string, name: string) => {
     setRemoving(null);
     setRenaming(id);
@@ -551,9 +643,14 @@ function CalendarsSection() {
     setCalendars(calendars.map((entry) => (entry.id === id ? { ...entry, tone } : entry)));
   };
 
-  /** L'URL montrée dans la liste : celle de l'abonnement, ou celle que le démon rend pour la source. */
-  const sourceUrlOf = (def: CalendarDef) => {
+  /** Ce qui situe une source dans la liste : URL, fichier importé ou compte Google. */
+  const sourceLabelOf = (def: CalendarDef) => {
     if (isIcsCalendar(def)) return icsUrlOf(def) ?? "fichier importé";
+    const ref = googleRefOf(def);
+    if (ref) {
+      const email = googleConnected.find((account) => account.id === ref.accountId)?.email;
+      return `${email ?? ref.accountId} · ${ref.calendarId}`;
+    }
     const sourceId = caldavSourceIdOf(def);
     return sourceId ? caldavSources[sourceId]?.url : undefined;
   };
@@ -701,10 +798,80 @@ function CalendarsSection() {
         </DButton>
       </div>
 
+      {googleConnected.length > 0 ? (
+        <div className="border-b border-line bg-surface-2/40">
+          {googleConnected.map((account) => {
+            const list = googleCalendars[account.id] ?? [];
+            const error = googleErrors[account.id];
+            const busy = googleBusy[account.id] === true;
+            return (
+              <div key={account.id} className="grid gap-1.5 px-3.5 py-2.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                    Compte Google
+                  </span>
+                  <span className="truncate text-[11.5px] font-bold text-ink">
+                    {account.label} · {account.email}
+                  </span>
+                  <DButton
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto"
+                    aria-label={`Actualiser les calendriers Google de ${account.email}`}
+                    disabled={busy}
+                    onClick={() => void loadGoogleCalendars(account.id)}
+                  >
+                    <RefreshCw className={cn("size-3.5", busy && "animate-spin")} strokeWidth={2.4} />
+                    Actualiser
+                  </DButton>
+                </div>
+                {error ? (
+                  <p role="alert" className="text-[11px] font-bold text-rose-700 dark:text-rose-300">
+                    {error}
+                  </p>
+                ) : null}
+                {!error && list.length === 0 ? (
+                  <p className="text-[10.5px] font-semibold text-ink-muted">
+                    {busy ? "Lecture des calendriers…" : "Aucun calendrier sur ce compte."}
+                  </p>
+                ) : null}
+                {list.length > 0 ? (
+                  <ul className="grid gap-1">
+                    {list.map((calendar) => (
+                      <li key={calendar.id} className="flex flex-wrap items-center gap-2">
+                        <span className="truncate text-[11.5px] font-semibold text-ink">
+                          {calendar.summary || calendar.id}
+                        </span>
+                        <span className="truncate text-[10.5px] font-medium text-ink-muted">{calendar.id}</span>
+                        {googleSourceAdded(account.id, calendar.id) ? (
+                          <span className="ml-auto text-[10.5px] font-semibold text-ink-muted">Dans l'agenda</span>
+                        ) : (
+                          <DButton
+                            variant="soft"
+                            size="sm"
+                            className="ml-auto"
+                            aria-label={`Ajouter le calendrier Google ${calendar.summary || calendar.id}`}
+                            onClick={() => void addGoogleCalendar(account, calendar)}
+                          >
+                            <Plus className="size-3.5" strokeWidth={3} />
+                            Ajouter
+                          </DButton>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
       <p className="border-b border-line/70 px-3.5 py-2 text-[10.5px] leading-relaxed font-semibold text-ink-muted">
-        Le nom et le ton saisis ci-dessus s'appliquent aussi aux sources externes ; sans nom, l'URL ou le fichier fait
-        foi. Les identifiants CalDAV partent une seule fois au démon, qui les garde dans son coffre : ils ne sont jamais
-        enregistrés ici. Lecture seule : rien n'est renvoyé au serveur.
+        Le nom et le ton saisis ci-dessus s'appliquent aussi aux sources externes ; sans nom, l'URL, le fichier ou le
+        calendrier fait foi. Les identifiants CalDAV partent une seule fois au démon, qui les garde dans son coffre : ils
+        ne sont jamais enregistrés ici. Un agenda Google se lit avec le jeton du compte connecté, aucun identifiant ne
+        passe par ici. Lecture seule : rien n'est renvoyé au serveur.
       </p>
 
       {sourceError ? (
@@ -748,16 +915,12 @@ function CalendarsSection() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <span className="truncate text-[12px] font-bold text-ink">{entry.name}</span>
-                      <Badge
-                        tone={isIcsCalendar(entry) ? "sky" : isCaldavCalendar(entry) ? "green" : "neutral"}
-                      >
-                        {isIcsCalendar(entry) ? "ICS" : isCaldavCalendar(entry) ? "CalDAV" : "local"}
-                      </Badge>
+                      <Badge tone={sourceTone(entry)}>{sourceLabel(entry)}</Badge>
                     </div>
-                    {isIcsCalendar(entry) || isCaldavCalendar(entry) ? (
+                    {isExternalCalendar(entry) ? (
                       <span className="mt-0.5 flex items-center gap-1 text-[10.5px] font-semibold text-ink-muted">
                         <Link2 className="size-3 shrink-0" strokeWidth={2.2} />
-                        <span className="truncate">{sourceUrlOf(entry) ?? "URL inconnue"}</span>
+                        <span className="truncate">{sourceLabelOf(entry) ?? "URL inconnue"}</span>
                         <span className="shrink-0 tabular-nums">
                           · {(ics.events[entry.id] ?? []).length} événement
                           {(ics.events[entry.id] ?? []).length > 1 ? "s" : ""}
@@ -811,8 +974,8 @@ function CalendarsSection() {
       )}
 
       <p className="border-t border-line/70 px-3.5 py-2 text-[10.5px] leading-relaxed font-semibold text-ink-muted">
-        Enregistrés sur cet appareil : l'agenda les affiche aussitôt. Supprimer une source ICS ou CalDAV retire ses
-        événements de l'agenda ; une source CalDAV part aussi du démon.
+        Enregistrés sur cet appareil : l'agenda les affiche aussitôt. Supprimer une source ICS, CalDAV ou Google retire
+        ses événements de l'agenda ; une source CalDAV part aussi du démon.
       </p>
     </Surface>
   );

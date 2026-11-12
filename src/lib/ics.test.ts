@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExternalEvent } from "@/lib/api";
 import { DEFAULT_CALENDARS, icsUrlOf, isIcsCalendar, loadCalendars, saveCalendars, type CalendarDef } from "@/lib/calendars";
+import { GOOGLE_REFRESH_MS } from "@/lib/gcal";
 import {
   EMPTY_ICS_STATE,
   ICS_MAX_EVENTS,
@@ -10,6 +11,7 @@ import {
   dropIcsCalendar,
   dueExternalSubscriptions,
   externalCalendarEvents,
+  externalEventKind,
   fetchIcsCalendar,
   icsEventId,
   icsNameFromFile,
@@ -315,5 +317,38 @@ describe("ics · validation des entrées", () => {
     expect(icsNameFromUrl("pas une url")).toBe("Calendrier ICS");
     expect(icsNameFromFile("vacances.ics")).toBe("vacances");
     expect(icsNameFromFile(".ics")).toBe("Calendrier ICS");
+  });
+});
+
+describe("ics · sources Google", () => {
+  const agenda: CalendarDef = {
+    id: "agenda",
+    name: "Agenda",
+    tone: 2,
+    source: { kind: "google", accountId: "gmail", calendarId: "primary" },
+  };
+
+  it("préfixe les identifiants par google et ne les confond pas avec les autres familles", () => {
+    expect(toCalendarEvents([external()], agenda, "google")[0].id).toBe("google:agenda:abc-123");
+    expect(externalEventKind({ id: "google:agenda:abc" })).toBe("google");
+    expect(externalEventKind({ id: "caldav:agenda:abc" })).toBe("caldav");
+    expect(externalEventKind({ id: "ics:agenda:abc" })).toBe("ics");
+  });
+
+  it("relit un agenda Google à l'âge d'un calendrier distant", () => {
+    const now = 1_700_000_000_000;
+
+    expect(dueExternalSubscriptions([agenda], {}, now)).toEqual([agenda]);
+    expect(dueExternalSubscriptions([agenda], { agenda: now - GOOGLE_REFRESH_MS + 1000 }, now)).toEqual([]);
+    expect(dueExternalSubscriptions([agenda], { agenda: now - GOOGLE_REFRESH_MS }, now)).toEqual([agenda]);
+  });
+
+  it("garde les événements Google dans les sources externes", () => {
+    const state = setIcsCalendarEvents(EMPTY_ICS_STATE, "agenda", toCalendarEvents([external()], agenda, "google"));
+
+    expect(externalCalendarEvents(state, [agenda])).toHaveLength(1);
+    expect(externalCalendarEvents(state, [...DEFAULT_CALENDARS, agenda]).map((event) => event.calendar)).toEqual([
+      "Agenda",
+    ]);
   });
 });

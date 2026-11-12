@@ -10,11 +10,14 @@ import { mailApi, type ExternalEvent } from "@/lib/api";
 import type { CalendarEvent } from "@/lib/calendar";
 import {
   caldavSourceIdOf,
+  googleRefOf,
   icsUrlOf,
   isCaldavCalendar,
   isExternalCalendar,
+  isGoogleCalendar,
   type CalendarDef,
 } from "@/lib/calendars";
+import { GOOGLE_REFRESH_MS, googleWindow } from "@/lib/gcal";
 
 export const ICS_STORAGE_KEY = "lavande.ics.v1";
 
@@ -27,7 +30,7 @@ export const CALDAV_REFRESH_MS = 15 * 60 * 1000;
 /** Plafond de stockage local par calendrier : un fichier énorme ne remplit pas le localStorage. */
 export const ICS_MAX_EVENTS = 2000;
 
-export type ExternalKind = "ics" | "caldav";
+export type ExternalKind = "ics" | "caldav" | "google";
 
 export type IcsEvents = Record<string, CalendarEvent[]>;
 
@@ -53,6 +56,7 @@ export function icsEventId(calendarId: string, event: ExternalEvent, index: numb
 
 /** La famille d'un événement externe, portée par son identifiant : ni édition ni suppression. */
 export function externalEventKind(event: { id: string }): ExternalKind {
+  if (event.id.startsWith("google:")) return "google";
   return event.id.startsWith("caldav:") ? "caldav" : "ics";
 }
 
@@ -120,11 +124,16 @@ export function dueExternalSubscriptions(
   now = Date.now(),
 ): CalendarDef[] {
   return calendars.filter((def) => {
-    const caldav = isCaldavCalendar(def);
-    if (!caldav && !icsUrlOf(def)) return false;
-    const ttl = caldav ? CALDAV_REFRESH_MS : ICS_REFRESH_MS;
-    return now - (synced[def.id] ?? 0) >= ttl;
+    const ttl = externalTtl(def);
+    return ttl !== null && now - (synced[def.id] ?? 0) >= ttl;
   });
+}
+
+/** Délai de relecture d'une source ; `null` pour un calendrier qui n'en a pas. */
+function externalTtl(def: CalendarDef): number | null {
+  if (isGoogleCalendar(def)) return GOOGLE_REFRESH_MS;
+  if (isCaldavCalendar(def)) return CALDAV_REFRESH_MS;
+  return icsUrlOf(def) ? ICS_REFRESH_MS : null;
 }
 
 export async function fetchIcsCalendar(def: CalendarDef): Promise<CalendarEvent[]> {
@@ -141,7 +150,19 @@ export async function fetchCaldavCalendar(def: CalendarDef): Promise<CalendarEve
 }
 
 export async function fetchExternalCalendar(def: CalendarDef): Promise<CalendarEvent[]> {
+  if (isGoogleCalendar(def)) return fetchGoogleCalendar(def);
   return isCaldavCalendar(def) ? fetchCaldavCalendar(def) : fetchIcsCalendar(def);
+}
+
+/** Le démon relit l'agenda du compte avec son refresh token, sur une fenêtre bornée. */
+export async function fetchGoogleCalendar(def: CalendarDef): Promise<CalendarEvent[]> {
+  const ref = googleRefOf(def);
+  if (!ref) throw new Error("source Google sans calendrier");
+  const events = await mailApi.googleEvents(ref.accountId, {
+    calendar_id: ref.calendarId,
+    ...googleWindow(),
+  });
+  return toCalendarEvents(events, def, "google");
 }
 
 export async function importIcsContent(def: CalendarDef, content: string): Promise<CalendarEvent[]> {

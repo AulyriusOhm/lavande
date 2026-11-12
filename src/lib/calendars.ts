@@ -5,7 +5,9 @@ export type CalendarSource =
   | { kind: "local" }
   | { kind: "ics"; url?: string }
   /** `sourceId` désigne la source rangée par le démon : ses identifiants n'existent pas ici. */
-  | { kind: "caldav"; sourceId: string };
+  | { kind: "caldav"; sourceId: string }
+  /** Un calendrier d'un compte Google connecté, relu par le démon avec son refresh token. */
+  | { kind: "google"; accountId: string; calendarId: string };
 
 /** `source` absent : calendrier local, comme avant l'arrivée des sources ICS. */
 export type CalendarDef = { id: string; name: string; tone: number; source?: CalendarSource };
@@ -16,6 +18,16 @@ export function isIcsCalendar(def: CalendarDef): boolean {
 
 export function isCaldavCalendar(def: CalendarDef): boolean {
   return def.source?.kind === "caldav";
+}
+
+export function isGoogleCalendar(def: CalendarDef): boolean {
+  return def.source?.kind === "google";
+}
+
+/** Le compte et le calendrier Google visés par une source : jamais de jeton ici. */
+export function googleRefOf(def: CalendarDef): { accountId: string; calendarId: string } | undefined {
+  if (def.source?.kind !== "google") return undefined;
+  return { accountId: def.source.accountId, calendarId: def.source.calendarId };
 }
 
 /** L'URL de l'abonnement ; un import fichier n'en a pas. */
@@ -29,7 +41,7 @@ export function caldavSourceIdOf(def: CalendarDef): string | undefined {
 
 /** Un calendrier relu à sa source : jamais éditable dans l'agenda. */
 export function isExternalCalendar(def: CalendarDef): boolean {
-  return isIcsCalendar(def) || isCaldavCalendar(def);
+  return isIcsCalendar(def) || isCaldavCalendar(def) || isGoogleCalendar(def);
 }
 
 export const TONE_PILL = [
@@ -52,8 +64,19 @@ const STORAGE_KEY = "lavande.calendars.v1";
 
 function parseSource(raw: unknown): CalendarSource | undefined {
   if (!raw || typeof raw !== "object") return undefined;
-  const { kind, url, sourceId } = raw as { kind?: unknown; url?: unknown; sourceId?: unknown };
+  const { kind, url, sourceId, accountId, calendarId: googleId } = raw as {
+    kind?: unknown;
+    url?: unknown;
+    sourceId?: unknown;
+    accountId?: unknown;
+    calendarId?: unknown;
+  };
   if (kind === "local") return { kind: "local" };
+  if (kind === "google") {
+    return typeof accountId === "string" && accountId.trim() && typeof googleId === "string" && googleId.trim()
+      ? { kind: "google", accountId: accountId.trim(), calendarId: googleId.trim() }
+      : undefined;
+  }
   if (kind === "caldav") {
     return typeof sourceId === "string" && sourceId.trim()
       ? { kind: "caldav", sourceId: sourceId.trim() }

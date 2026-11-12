@@ -4,6 +4,9 @@ import {
   TONE_DOT,
   TONE_PILL,
   calendarsInUse,
+  googleRefOf,
+  isExternalCalendar,
+  isGoogleCalendar,
   loadCalendars,
   saveCalendars,
   toneOfEvent,
@@ -93,5 +96,44 @@ describe("calendars · calendriers utilisés", () => {
 
     expect(calendarsInUse(events, DEFAULT_CALENDARS)).toEqual(DEFAULT_CALENDARS);
     expect(calendarsInUse(events, DEFAULT_CALENDARS)).toEqual(calendarsInUse(events, DEFAULT_CALENDARS));
+  });
+});
+
+describe("calendars · sources Google", () => {
+  const agenda: CalendarDef = {
+    id: "agenda",
+    name: "Agenda",
+    tone: 2,
+    source: { kind: "google", accountId: "gmail", calendarId: "primary" },
+  };
+
+  it("expose le compte et le calendrier visés, sans jeton", () => {
+    expect(isGoogleCalendar(agenda)).toBe(true);
+    expect(googleRefOf(agenda)).toEqual({ accountId: "gmail", calendarId: "primary" });
+    expect(isExternalCalendar(agenda)).toBe(true);
+  });
+
+  it("laisse les autres sources intactes", () => {
+    expect(isGoogleCalendar(DEFAULT_CALENDARS[0])).toBe(false);
+    expect(googleRefOf(DEFAULT_CALENDARS[0])).toBeUndefined();
+    expect(isExternalCalendar(DEFAULT_CALENDARS[0])).toBe(false);
+    expect(googleRefOf({ id: "t", name: "T", tone: 1, source: { kind: "ics", url: "https://x.tld/c.ics" } })).toBeUndefined();
+  });
+
+  it("fait un aller-retour sur une source Google", () => {
+    const list: CalendarDef[] = [...DEFAULT_CALENDARS, agenda];
+
+    saveCalendars(list);
+
+    expect(loadCalendars()).toEqual(list);
+  });
+
+  it("retombe sur un calendrier local quand la source Google est incomplète", () => {
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify([{ id: "agenda", name: "Agenda", tone: 2, source: { kind: "google", accountId: "" } }]),
+    );
+
+    expect(loadCalendars()).toEqual([{ id: "agenda", name: "Agenda", tone: 2 }]);
   });
 });
