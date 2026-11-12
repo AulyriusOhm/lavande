@@ -5,6 +5,7 @@ import path from "node:path";
 const genDir = path.join("src-tauri", "gen", "android");
 const appDir = path.join(genDir, "app", "src", "main");
 const resValuesDir = path.join(appDir, "res", "values");
+const resXmlDir = path.join(appDir, "res", "xml");
 
 if (!existsSync(genDir)) {
   console.log("projet Android absent : lance d'abord npm run android:init");
@@ -119,16 +120,80 @@ function patchThemes(source) {
   );
 }
 
+const MANIFEST_ATTRS = [
+  ["android:networkSecurityConfig", "@xml/network_security_config"],
+  ["android:allowBackup", "false"],
+  ["android:fullBackupContent", "false"],
+  ["android:dataExtractionRules", "@xml/data_extraction_rules"],
+];
+
 function patchManifest(source) {
   const pattern = /<application\b[^>]*>/;
   if (!pattern.test(source)) throw new Error("balise <application> introuvable dans AndroidManifest.xml");
   return source.replace(pattern, (tag) => {
-    if (tag.includes('android:usesCleartextTraffic="true"')) return tag;
-    if (tag.includes("android:usesCleartextTraffic")) {
-      return tag.replace(/android:usesCleartextTraffic="[^"]*"/, 'android:usesCleartextTraffic="true"');
+    let next = tag.replace(/\s*android:usesCleartextTraffic="[^"]*"/, "");
+    for (const [name, value] of MANIFEST_ATTRS.slice().reverse()) {
+      const attr = `${name}="${value}"`;
+      next = next.includes(`${name}="`)
+        ? next.replace(new RegExp(`${name}="[^"]*"`), attr)
+        : next.replace("<application", `<application\n        ${attr}`);
     }
-    return tag.replace("<application", '<application\n        android:usesCleartextTraffic="true"');
+    return next;
   });
+}
+
+const LOOPBACK_HOSTS = ["127.0.0.1", "localhost"];
+
+const syncHosts = (process.env.LAVANDE_SYNC_HOSTS ?? "")
+  .split(",")
+  .map((host) => host.trim())
+  .filter(Boolean);
+
+for (const host of syncHosts) {
+  if (!/^[A-Za-z0-9.-]+$/.test(host)) {
+    throw new Error(`LAVANDE_SYNC_HOSTS : hôte invalide « ${host} » (nom ou IP, sans schéma ni port)`);
+  }
+}
+
+const cleartextHosts = [...new Set([...LOOPBACK_HOSTS, ...syncHosts])];
+
+function networkSecurityConfig(hosts) {
+  const domains = hosts.map((host) => `        <domain includeSubdomains="false">${host}</domain>`).join("\n");
+  return `<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+${domains}
+    </domain-config>
+</network-security-config>
+`;
+}
+
+const BACKUP_EXCLUDES = [
+  "secrets.enc",
+  "secrets.key",
+  "daemon-token",
+  "mail.db",
+  "mail.db-wal",
+  "mail.db-shm",
+  "app_webview",
+];
+
+function dataExtractionRules() {
+  const block = (tag) => [
+    `    <${tag}>`,
+    ...["root", "file"].flatMap((domain) =>
+      BACKUP_EXCLUDES.map((name) => `        <exclude domain="${domain}" path="${name}" />`),
+    ),
+    `    </${tag}>`,
+  ].join("\n");
+  return `<?xml version="1.0" encoding="utf-8"?>
+<!-- Secrets (clés, jeton du démon, base mail, localStorage WebView) : jamais copiés hors de l'appareil. -->
+<data-extraction-rules>
+${block("cloud-backup")}
+${block("device-transfer")}
+</data-extraction-rules>
+`;
 }
 
 const ADAPTIVE_ICON = `<?xml version="1.0" encoding="utf-8"?>
@@ -183,10 +248,20 @@ for (const file of mainActivities) {
 }
 
 await patchFile(path.join(resValuesDir, "colors.xml"), patchColors, "res/values/colors.xml");
+await writeStatic(
+  path.join(resXmlDir, "network_security_config.xml"),
+  networkSecurityConfig(cleartextHosts),
+  `res/xml/network_security_config.xml (cleartext : ${cleartextHosts.join(", ")})`,
+);
+await writeStatic(
+  path.join(resXmlDir, "data_extraction_rules.xml"),
+  dataExtractionRules(),
+  "res/xml/data_extraction_rules.xml",
+);
 await patchFile(
   path.join(appDir, "AndroidManifest.xml"),
   patchManifest,
-  "AndroidManifest.xml (cleartext pour le serveur de synchro LAN)",
+  "AndroidManifest.xml (sauvegarde fermée, cleartext restreint au LAN)",
 );
 await patchFile(path.join(resValuesDir, "themes.xml"), patchThemes, "res/values/themes.xml");
 await patchFile(

@@ -124,10 +124,28 @@ de fichiers et autoriser l'installation depuis cette source. `-r` réinstalle en
 
 ## Signature
 
-L'APK est signé en release avec `~/.android/lavande-release.jks` (alias `lavande`, mot de passe `lavande`),
-crée automatiquement par `scripts/build-android-release.sh` s'il manque. Conséquence pratique : la clé
-diffère de la clé debug d'Android — une app installée depuis un build debug doit être **désinstallée** avant
-d'installer un build release. Les mises à jour release s'installent ensuite par-dessus sans perte de données.
+L'APK est signé en release avec `~/.android/lavande-release.jks` (alias `lavande`), créé par
+`scripts/build-android-release.sh` s'il manque. Le mot de passe **n'a pas de défaut** : le script refuse de
+signer quand `LAVANDE_KEYSTORE_PASSWORD` est absent, vide, ou vaut `lavande` (l'ancien défaut, public).
+
+```bash
+export LAVANDE_KEYSTORE_PASSWORD="$(openssl rand -base64 24)"
+npm run android:build
+```
+
+Le secret voyage par l'environnement — `--ks-pass env:LAVANDE_KEYSTORE_PASSWORD` pour `apksigner`,
+`-storepass:env LAVANDE_KEYSTORE_PASSWORD` pour `keytool` — et non par la ligne de commande, sinon il
+reste lisible dans `ps`. Le `.jks` est créé en `0600`.
+
+**Sauvegarde hors ligne du `.jks` et de son mot de passe** : c'est la seule chose à conserver. Perdu, plus
+une seule mise à jour n'est possible sur les appareils déjà installés — Android refuse une mise à jour
+signée par une autre clé, il faut désinstaller (et perdre les données locales). Le chemin du keystore ne
+change pas : un `.jks` existant avec l'ancien mot de passe reste utilisable, il suffit d'exporter le bon
+`LAVANDE_KEYSTORE_PASSWORD`.
+
+Conséquence pratique : la clé diffère de la clé debug d'Android — une app installée depuis un build debug
+doit être **désinstallée** avant d'installer un build release. Les mises à jour release s'installent ensuite
+par-dessus sans perte de données.
 
 ## `scripts/patch-android.mjs`
 
@@ -140,6 +158,38 @@ est **idempotent** et rejoué après `init` puis avant chaque build (les deux co
 | `res/values/colors.xml` | `lavande_canvas` `#fbfaff`, `ic_launcher_background` `#8b7cf6` | fond de fenêtre et fond de l'icône adaptative |
 | `res/values/themes.xml` et `res/values-night/themes.xml` | `android:windowBackground` = `@color/lavande_canvas` | évite le flash blanc au lancement (thème `Theme.Material3.DayNight.NoActionBar`) |
 | `res/mipmap-anydpi-v26/ic_launcher.xml` et `ic_launcher_round.xml` | icône adaptative : fond couleur + `@mipmap/ic_launcher_foreground` | icône ronde / adaptative cohérente avec le monogramme |
+| `AndroidManifest.xml` | retire `android:usesCleartextTraffic`, pose `android:networkSecurityConfig`, `android:allowBackup="false"`, `android:fullBackupContent="false"`, `android:dataExtractionRules` | cleartext borné, sauvegarde fermée (voir ci-dessous) |
+| `res/xml/network_security_config.xml` | `cleartextTrafficPermitted="false"` en `base-config`, `true` seulement pour `127.0.0.1`, `localhost` et les hôtes de `LAVANDE_SYNC_HOSTS` | le démon mail local parle HTTP ; tout le reste doit être HTTPS |
+| `res/xml/data_extraction_rules.xml` | exclut `secrets.enc`, `secrets.key`, `daemon-token`, `mail.db` (+ `-wal`, `-shm`) et `app_webview` de `cloud-backup` et `device-transfer` | les secrets ne quittent pas l'appareil par une sauvegarde, même quand `allowBackup="false"` est ignoré (transfert d'appareil à appareil) |
+
+### Ce que le manifeste refuse (sauvegarde, trafic en clair)
+
+| Réglage | Effet |
+| --- | --- |
+| `android:allowBackup="false"` + `android:fullBackupContent="false"` | aucune sauvegarde automatique (cloud ou `adb backup`) jusqu'à Android 11 ; `allowBackup="false"` ne suffit pas à bloquer le transfert d'appareil à appareil (Android 12+), d'où la règle suivante |
+| `android:dataExtractionRules` | en plus des quatre secrets listés, exclut `app_webview`, qui contient le `localStorage` de la WebView (jeton de synchro, enveloppes de clés E2EE) : le trousseau local ne suit pas l'utilisateur d'un téléphone à l'autre, il se re-crée par la paire de clés |
+| `networkSecurityConfig` au lieu de `usesCleartextTraffic="true"` | le HTTP en clair n'est permis que pour les hôtes listés ; ailleurs (IMAP/SMTP n'étant pas concernés, voir la limite ci-dessous) c'est HTTPS ou échec `ERR_CLEARTEXT_NOT_PERMITTED` |
+
+**Limite connue — le serveur de synchro est saisi à l'exécution** (`Réglages → Synchronisation → URL du
+serveur`, clé `lavande.sync.serverUrl`). Android ne sait autoriser le cleartext que par nom d'hôte ou IP
+explicite : aucune règle ne couvre « n'importe quelle adresse du LAN », et un `domain-config` ne se recompose
+pas à chaud. La liste est donc figée au moment du patch, via une variable de build :
+
+```bash
+LAVANDE_SYNC_HOSTS="192.168.1.42" npm run android:build   # ou "192.168.1.42,nas.lan"
+```
+
+Sans cette variable, seule la boucle locale est autorisée en HTTP : un serveur de synchro local en `http://`
+(port 8787) est bloqué par la WebView, et la synchro échoue alors qu'elle marchait. Deux sorties : relancer le
+build avec l'hôte en clair, ou servir le serveur en HTTPS (le protocole est déjà chiffré de bout en bout,
+voir `SYNC.md`, donc le TLS ne protège que les métadonnées). Le refus est explicite côté WebView, jamais
+silencieux. `LAVANDE_SYNC_HOSTS` valide ses entrées (nom ou IP, sans schéma ni port) et échoue sinon. En
+debug, `devUrl` vaut `http://localhost:1420` (`tauri.conf.json`), donc déjà autorisé ; un serveur de dev
+pointé sur une IP du LAN demande lui aussi `LAVANDE_SYNC_HOSTS`.
+
+Le cleartext de la config réseau ne s'applique qu'à la pile réseau Java/WebView. Le démon embarqué
+(`crates/mail-api`) sort par des sockets Rust : IMAP/SMTP en clair, souvent le seul mode proposé par un
+serveur mail local, ne sont pas bridés par ce fichier.
 
 Détails du pont d'insets : il ne s'occupe que du **bas** (barre de navigation + clavier). Le haut n'est pas
 mesuré : `.native-shell` réserve une marge fixe de 44 px (`--native-top`), parce qu'une hauteur de barre de statut ou
@@ -213,7 +263,7 @@ Les tâches et suggestions se synchronisent entre appareils via le serveur `serv
 | Point | Réglage |
 | --- | --- |
 | Origine WebView autorisée côté serveur | `http://tauri.localhost`, `https://tauri.localhost`, `tauri://localhost` sont dans les origines CORS par défaut (`server/src/config.rs`) |
-| HTTP en clair vers le serveur LAN | `scripts/patch-android.mjs` pose `android:usesCleartextTraffic="true"` dans `AndroidManifest.xml` ; sans ça, Android bloque `http://192.168.x.x:8787` |
+| HTTP en clair vers le serveur LAN | `scripts/patch-android.mjs` pose un `networkSecurityConfig` (`res/xml/network_security_config.xml`) : HTTP permis pour `127.0.0.1` (démon local) et pour les hôtes de `LAVANDE_SYNC_HOSTS`, refusé partout ailleurs. Sans l'hôte déclaré au build, Android bloque `http://192.168.x.x:8787` |
 | URL du serveur | champ **Réglages → Synchronisation → URL du serveur** : `127.0.0.1` n'a pas de sens sur un téléphone, il faut l'adresse LAN de la machine qui héberge le serveur. La dernière URL saisie est mémorisée |
 
 Le jeton, les enveloppes de clés et les documents chiffrés restent dans le `localStorage` de la WebView :
