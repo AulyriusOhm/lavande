@@ -31,6 +31,7 @@ import { ConnectScreen } from "@/screens/connect-screen";
 import { useShortcuts } from "@/lib/shortcuts";
 import { appShortcuts, type MailNavigation } from "@/lib/app-shortcuts";
 import { ShortcutsOverlay } from "@/components/shortcuts-overlay";
+import { useExternalLinks } from "@/lib/open-external";
 
 const InboxScreen = memo(InboxView);
 const CalendarScreen = memo(CalendarView);
@@ -45,6 +46,7 @@ const OVERLAY_STATE = { lavandeOverlay: true };
 export default function App() {
   const layout = shellLayout();
 
+  useExternalLinks();
 
   return (
     <MotionConfig reducedMotion="user">
