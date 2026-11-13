@@ -49,6 +49,7 @@ const BADGE_TONE = {
 export function CalendarScreen({
   events,
   externalEvents = [],
+  sourceCount = 0,
   onNewEvent,
   onAcceptSuggestion,
   onDismissSuggestion,
@@ -59,6 +60,7 @@ export function CalendarScreen({
 }: {
   events: CalendarEvent[];
   externalEvents?: CalendarEvent[];
+  sourceCount?: number;
   onNewEvent?: (date: string) => void;
   onAcceptSuggestion?: (draft: EventDraft) => void;
   onDismissSuggestion?: (suggestion: MailSuggestion) => void;
@@ -68,6 +70,13 @@ export function CalendarScreen({
   suggestions?: MailSuggestion[];
 }) {
   const { accounts, mails, openMessage } = useMailStore();
+  const footerSources =
+    sourceCount === 0
+      ? "Aucune source externe"
+      : `${sourceCount} source${sourceCount > 1 ? "s" : ""} externe${sourceCount > 1 ? "s" : ""}`;
+  const footerAccounts =
+    accounts.length === 0 ? "Aucun compte" : `${accounts.length} compte${accounts.length > 1 ? "s" : ""}`;
+  const footerLabel = `${footerSources} · ${footerAccounts}`;
   const [view, setView] = useState({ year: CURRENT_YEAR, month: CURRENT_MONTH });
   const [selected, setSelected] = useState(TODAY_ISO);
 
@@ -372,7 +381,7 @@ export function CalendarScreen({
         </ShimmerButton>
         <p className="mt-2 flex items-center justify-center gap-1 text-[10.5px] font-medium text-ink-muted">
           <Clock className="size-3" />
-          Fusion CalDAV · 3 comptes synchronisés
+          {footerLabel}
         </p>
       </div>
     </div>

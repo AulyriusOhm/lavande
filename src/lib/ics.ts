@@ -384,6 +384,58 @@ export function useIcsState(): [IcsState, (next: IcsState) => void] {
   return [state, setIcsState];
 }
 
+/** Relecture des sources dues : PC et mobile tournent la même boucle. */
+export type ExternalCalendarRefresh = {
+  ics: IcsState;
+  setIcs: (next: IcsState) => void;
+  syncing: boolean;
+  refresh: (targets: CalendarDef[]) => Promise<void>;
+};
+
+export function useExternalCalendarRefresh(
+  calendars: CalendarDef[],
+  notify: (message: string) => void,
+): ExternalCalendarRefresh {
+  const [ics, setIcs] = useIcsState();
+  const [syncing, setSyncing] = useState(false);
+  const current = useRef(ics);
+  current.current = ics;
+  const inFlight = useRef(new Set<string>());
+
+  const refresh = useCallback(
+    async (targets: CalendarDef[]) => {
+      const queue = targets.filter((def) => !inFlight.current.has(def.id));
+      if (queue.length === 0) return;
+      for (const def of queue) inFlight.current.add(def.id);
+      setSyncing(true);
+      let next = current.current;
+      const failures: string[] = [];
+      for (const def of queue) {
+        try {
+          next = setIcsCalendarEvents(next, def.id, await fetchExternalCalendar(def));
+        } catch (error) {
+          next = markIcsSynced(next, def.id);
+          failures.push(`${def.name} · ${errorText(error)}`);
+        } finally {
+          inFlight.current.delete(def.id);
+        }
+      }
+      current.current = next;
+      setIcs(next);
+      setSyncing(false);
+      if (failures.length > 0) notify(`Calendrier externe · ${failures.join(" ; ")}`);
+    },
+    [notify, setIcs],
+  );
+
+  useEffect(() => {
+    const due = dueExternalSubscriptions(calendars, current.current.synced);
+    if (due.length > 0) void refresh(due);
+  }, [calendars, refresh]);
+
+  return { ics, setIcs, syncing, refresh };
+}
+
 /** Gestion des sources partagée par les réglages PC et mobile : une seule implémentation. */
 export type CalendarSourcesManager = {
   calendars: CalendarDef[];

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion, type Variants } from "motion/react";
 import {
   AlertTriangle,
@@ -35,16 +35,13 @@ import {
   caldavWriteFailure,
   createCaldavEvent,
   deleteCaldavEvent,
-  dueExternalSubscriptions,
+  externalBadge,
   externalCalendarEvents,
   externalEventKind,
-  fetchExternalCalendar,
-  markIcsSynced,
-  setIcsCalendarEvents,
   updateCaldavEvent,
-  useIcsState,
+  useExternalCalendarRefresh,
 } from "@/lib/ics";
-import { errorText } from "@/lib/api";
+
 import {
   DAY_END_MIN,
   DAY_START_MIN,
@@ -168,13 +165,6 @@ const timeRange = (event: CalendarEvent) => {
   if (!event.start) return "Journée entière";
   return event.end ? `${event.start} → ${event.end}` : event.start;
 };
-
-/** Étiquette d'une source relue à son serveur : ICS, CalDAV ou Google. */
-function externalBadge(event: CalendarEvent): { tone: "sky" | "green" | "amber"; label: string } {
-  const kind = externalEventKind(event);
-  if (kind === "google") return { tone: "amber", label: "Google" };
-  return kind === "caldav" ? { tone: "green", label: "CalDAV" } : { tone: "sky", label: "ICS" };
-}
 
 /** Une famille de sources externes : compte des événements et relecture à la demande. */
 function ExternalRefreshRow({
@@ -1153,11 +1143,12 @@ export function DesktopCalendar({
     notify,
   } = useMailStore();
   const [calendars] = useCalendars();
-  const [ics, setIcs] = useIcsState();
-  const [externalSyncing, setExternalSyncing] = useState(false);
-  const externalRef = useRef(ics);
-  externalRef.current = ics;
-  const externalInFlight = useRef(new Set<string>());
+  const {
+    ics,
+    syncing: externalSyncing,
+    refresh: refreshExternal,
+  } = useExternalCalendarRefresh(calendars, notify);
+
   const [mode, setMode] = useState<ViewMode>("month");
   const [anchor, setAnchor] = useState(selectedDate);
   const [direction, setDirection] = useState(0);
@@ -1188,37 +1179,6 @@ export function DesktopCalendar({
   const icsSubscriptions = useMemo(() => calendars.filter((def) => icsUrlOf(def)), [calendars]);
   const caldavSubscriptions = useMemo(() => calendars.filter(isCaldavCalendar), [calendars]);
   const googleSubscriptions = useMemo(() => calendars.filter(isGoogleCalendar), [calendars]);
-
-  const refreshExternal = useCallback(
-    async (targets: CalendarDef[]) => {
-      const queue = targets.filter((def) => !externalInFlight.current.has(def.id));
-      if (queue.length === 0) return;
-      for (const def of queue) externalInFlight.current.add(def.id);
-      setExternalSyncing(true);
-      let next = externalRef.current;
-      const failures: string[] = [];
-      for (const def of queue) {
-        try {
-          next = setIcsCalendarEvents(next, def.id, await fetchExternalCalendar(def));
-        } catch (error) {
-          next = markIcsSynced(next, def.id);
-          failures.push(`${def.name} · ${errorText(error)}`);
-        } finally {
-          externalInFlight.current.delete(def.id);
-        }
-      }
-      externalRef.current = next;
-      setIcs(next);
-      setExternalSyncing(false);
-      if (failures.length > 0) notify(`Calendrier externe · ${failures.join(" ; ")}`);
-    },
-    [notify, setIcs],
-  );
-
-  useEffect(() => {
-    const due = dueExternalSubscriptions(calendars, externalRef.current.synced);
-    if (due.length > 0) void refreshExternal(due);
-  }, [calendars, refreshExternal]);
 
   const calendarList = useMemo(() => calendarsInUse(allEvents, calendars), [allEvents, calendars]);
   const conflicts = useMemo(() => conflictingIds(allEvents), [allEvents]);

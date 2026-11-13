@@ -25,8 +25,8 @@ import { PgpScreen } from "@/screens/pgp-screen";
 import { DotPattern, MeshGlow } from "@/components/ui/backdrops";
 import { Notice } from "@/components/ui/notice";
 import type { CalendarEvent } from "@/lib/calendar";
-import { useCalendars } from "@/lib/calendars";
-import { externalCalendarEvents, useIcsState } from "@/lib/ics";
+import { useCalendars, isExternalCalendar } from "@/lib/calendars";
+import { externalCalendarEvents, useExternalCalendarRefresh } from "@/lib/ics";
 import { shellLayout } from "@/lib/native";
 import { AccountRemoveDialog, BackendBanner, BackendLoading } from "@/components/backend-status";
 import { ConnectScreen } from "@/screens/connect-screen";
@@ -336,8 +336,9 @@ function PhoneApp({ native }: { native?: boolean }) {
   const availableMailIds = useMemo(() => new Set(mails.map((mail) => mail.id)), [mails]);
 
   const [calendars] = useCalendars();
-  const [ics] = useIcsState();
+  const { ics } = useExternalCalendarRefresh(calendars, notify);
   const externalEvents = useMemo(() => externalCalendarEvents(ics, calendars), [ics, calendars]);
+  const sourceCount = useMemo(() => calendars.filter(isExternalCalendar).length, [calendars]);
 
   const shortcutActions = useMemo(
     () => ({
@@ -452,6 +453,7 @@ function PhoneApp({ native }: { native?: boolean }) {
                 <CalendarScreen
                   events={events}
                   externalEvents={externalEvents}
+                  sourceCount={sourceCount}
                   availableMailIds={availableMailIds}
                   suggestions={suggestions}
                   onNewEvent={openEventDraft}

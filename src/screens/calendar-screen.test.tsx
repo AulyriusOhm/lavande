@@ -50,12 +50,14 @@ function mount({
   onDismissSuggestion,
   events = [] as CalendarEvent[],
   externalEvents = [] as CalendarEvent[],
+  sourceCount = 0,
 }: {
   suggestions?: MailSuggestion[];
   onAcceptSuggestion?: (draft: Record<string, string | undefined>) => void;
   onDismissSuggestion?: (suggestion: MailSuggestion) => void;
   events?: CalendarEvent[];
   externalEvents?: CalendarEvent[];
+  sourceCount?: number;
 } = {}) {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <PrefsProvider>
@@ -72,6 +74,7 @@ function mount({
       <CalendarScreen
         events={events}
         externalEvents={externalEvents}
+        sourceCount={sourceCount}
         suggestions={suggestions}
         onNewEvent={() => {}}
         onAcceptSuggestion={onAcceptSuggestion}
@@ -237,5 +240,25 @@ describe("Agenda mobile · sources externes", () => {
 
     expect(screen.queryByText("Réunion Google")).toBeNull();
     expect(screen.queryByText("Agenda Gmail")).toBeNull();
+  });
+});
+
+describe("Agenda mobile · pied de page des sources", () => {
+  it("n'annonce aucune source externe sans abonnement", () => {
+    mount({ events: [EVENT] });
+
+    expect(screen.getByText("Aucune source externe · 3 comptes")).toBeTruthy();
+  });
+
+  it("accorde une source au singulier", () => {
+    mount({ sourceCount: 1 });
+
+    expect(screen.getByText("1 source externe · 3 comptes")).toBeTruthy();
+  });
+
+  it("accorde plusieurs sources au pluriel", () => {
+    mount({ sourceCount: 2 });
+
+    expect(screen.getByText("2 sources externes · 3 comptes")).toBeTruthy();
   });
 });
