@@ -655,7 +655,11 @@ export const mailApi = {
     request<ApiOAuthStatus>(`/oauth/status?session=${encodeURIComponent(session)}`),
 
   oauthComplete: (session: string) =>
-    request<ApiOAuthStatus>("/oauth/complete", { method: "POST", body: { session } }),
+    request<ApiOAuthStatus>("/oauth/complete", {
+      method: "POST",
+      body: { session },
+      timeout: LONG_TIMEOUT,
+    }),
 
   /** `EventSource` ne porte pas d'en-tête : dans la coquille, le jeton passe en query. */
   eventsUrl: async () => {

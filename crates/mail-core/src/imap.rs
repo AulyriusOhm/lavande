@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_imap::error::Error;
 use async_imap::imap_proto::types::NameAttribute;
@@ -19,6 +20,7 @@ use rustls::pki_types::ServerName;
 use rustls::RootCertStore;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
+use tokio::time::timeout;
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
 
@@ -45,6 +47,10 @@ pub struct SyncReport {
 
 const BODY_BATCH: usize = 500;
 
+/// Un serveur qui ne répond pas ne doit pas retenir la requête indéfiniment.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Opens a TLS connection and authenticates against the webpki roots.
 pub async fn connect(cfg: &AccountConfig) -> Result<ImapSession, MailError> {
     connect_with(cfg, &TlsOptions::default()).await
@@ -56,8 +62,14 @@ pub async fn connect_with(
     cfg: &AccountConfig,
     tls_options: &TlsOptions,
 ) -> Result<ImapSession, MailError> {
-    let tcp = TcpStream::connect((cfg.imap.host.as_str(), cfg.imap.port))
+    let tcp = timeout(CONNECT_TIMEOUT, TcpStream::connect((cfg.imap.host.as_str(), cfg.imap.port)))
         .await
+        .map_err(|_| {
+            MailError::Imap(format!(
+                "délai dépassé en contactant {}:{}",
+                cfg.imap.host, cfg.imap.port
+            ))
+        })?
         .map_err(|error| {
             MailError::Imap(format!(
                 "cannot reach {}:{}: {error}",
@@ -996,10 +1008,13 @@ async fn tls_handshake(
         .peer_addr()
         .map(|address| address.to_string())
         .unwrap_or_else(|_| "adresse inconnue".to_string());
-    TlsConnector::from(Arc::new(config))
-        .connect(server_name, tcp)
-        .await
-        .map_err(|error| MailError::Tls(format!("{host} ({peer}) : {error}")))
+    timeout(
+        HANDSHAKE_TIMEOUT,
+        TlsConnector::from(Arc::new(config)).connect(server_name, tcp),
+    )
+    .await
+    .map_err(|_| MailError::Tls(format!("{host} ({peer}) : délai dépassé")))?
+    .map_err(|error| MailError::Tls(format!("{host} ({peer}) : {error}")))
 }
 
 async fn read_greeting<T: AsyncRead + AsyncWrite + Unpin + Debug + Send>(

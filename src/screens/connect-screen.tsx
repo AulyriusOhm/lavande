@@ -56,7 +56,7 @@ async function waitForOAuth(session: string) {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const status = await mailApi.oauthStatus(session);
     if (status.status === "code_received") {
-      await mailApi.oauthComplete(session);
+      await mailApi.oauthComplete(session).catch(() => undefined);
       await new Promise((resolve) => setTimeout(resolve, 1500));
       continue;
     }
