@@ -119,6 +119,20 @@ describe("Planification desktop · origine des suggestions", () => {
 });
 
 describe("Planification desktop · mail d'origine d'une suggestion", () => {
+  it("ouvre le mail source directement depuis la carte", () => {
+    mount(seededStorage([suggestionDoc("s-carte", "perso", true, "", "1")]));
+
+    fireEvent.click(within(cardOf("Action s-carte")).getByRole("button", { name: /Voir le mail d'origine/ }));
+
+    expect(screen.getByTestId("open-mail").textContent).toBe("1");
+  });
+
+  it("n'affiche pas de lien sur la carte quand le mail source est introuvable", () => {
+    mount(seededStorage([suggestionDoc("s-orphelin", "perso", true)]));
+
+    expect(within(cardOf("Action s-orphelin")).queryByRole("button", { name: /Voir le mail d'origine/ })).toBeNull();
+  });
+
   it("ouvre le mail source depuis le détail d'une suggestion", async () => {
     mount(seededStorage([suggestionDoc("s-mail", "perso", true, "", "1")]));
 

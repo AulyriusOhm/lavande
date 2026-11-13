@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
 import { Check, EyeOff, Mail, Plus, Sparkles, Trash2, X } from "lucide-react";
 import type { Mail as MailType } from "@/lib/mail";
@@ -48,13 +48,12 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
 
   const openTasks = tasks.filter((task) => task.state !== "done").length;
   const taskSuggestions = suggestions.filter((suggestion) => suggestion.kind !== "event");
+  const mailIndex = useMemo(() => new Map(mails.map((mail) => [mail.id, mail])), [mails]);
   const selectedTask = selection?.kind === "task" ? tasks.find((task) => task.id === selection.id) : undefined;
   const selectedSuggestion = selection?.kind === "suggestion" ? selection.suggestion : undefined;
-  const linkedMail = selectedTask?.mailId
-    ? (mails.find((mail) => mail.id === selectedTask.mailId) ?? null)
-    : null;
+  const linkedMail = selectedTask?.mailId ? (mailIndex.get(selectedTask.mailId) ?? null) : null;
   const suggestionMail = selectedSuggestion?.mailId
-    ? (mails.find((mail) => mail.id === selectedSuggestion.mailId) ?? null)
+    ? (mailIndex.get(selectedSuggestion.mailId) ?? null)
     : null;
 
   useEscapeLayer(Boolean(selection), () => setSelection(null));
@@ -173,6 +172,15 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
                   <Plus className="size-3.5" strokeWidth={3} />
                   Ajouter
                 </DButton>
+                {mailIndex.has(suggestion.mailId) ? (
+                  <DIconButton
+                    label={`Voir le mail d'origine : ${suggestion.subject}`}
+                    className="size-8"
+                    onClick={() => openMessage(suggestion.mailId)}
+                  >
+                    <Mail className="size-3.5" />
+                  </DIconButton>
+                ) : null}
                 <DIconButton
                   label="Masquer la suggestion"
                   className="size-8"

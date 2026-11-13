@@ -47,6 +47,19 @@ describe("Boîte de réception · résumé périodique", () => {
     expect(within(card).getByLabelText("Régénérer le résumé")).toBeTruthy();
   });
 
+  it("affiche les pièces jointes des mails résumés", async () => {
+    stubBackend();
+    mount(<DesktopInbox onOpenSearch={() => {}} />);
+
+    const card = await screen.findByTestId("morning-summary");
+
+    await waitFor(() => expect(within(card).getByTestId("summary-attachments")).toBeTruthy());
+    const chips = within(card).getByTestId("summary-attachments");
+    expect(chips.textContent).toContain("inbox-v3.fig");
+    expect(chips.textContent).toContain("4,2 Mo");
+    expect(chips.querySelectorAll("span[title]").length).toBeGreaterThan(0);
+  });
+
   it("retombe sur les compteurs quand les résumés sont désactivés", async () => {
     window.localStorage.setItem("lavande.prefs", JSON.stringify({ summary: { enabled: false } }));
     stubBackend();

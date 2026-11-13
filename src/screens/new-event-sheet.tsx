@@ -22,6 +22,18 @@ const CALENDARS = ["Perso", "Pro", "Gmail"];
 
 const DATE_FMT = new Intl.DateTimeFormat("fr-FR", { weekday: "short", day: "numeric", month: "long" });
 
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** Créneau prérempli par une suggestion issue d'un mail. */
+export type NewEventDraft = {
+  title?: string;
+  date?: string;
+  start?: string;
+  end?: string;
+  location?: string;
+};
+
 export function addMinutes(time: string, minutes: number) {
   const [hours, mins] = time.split(":").map((part) => Number.parseInt(part, 10));
   const total = (hours * 60 + mins + minutes) % (24 * 60);
@@ -42,17 +54,29 @@ export function NewEventSheet({
   onCreate,
   initialDate = TODAY_ISO,
   events = [],
+  draft,
 }: {
   onClose: () => void;
   onCreate: (event: CalendarEvent) => void;
   initialDate?: string;
   events?: CalendarEvent[];
+  draft?: NewEventDraft;
 }) {
-  const [title, setTitle] = useState("");
-  const [date, setDate] = useState(initialDate);
-  const [start, setStart] = useState("10:00");
-  const [duration, setDuration] = useState(DURATIONS[1]);
-  const [location, setLocation] = useState("");
+  const draftDate = draft?.date && ISO_DAY.test(draft.date) ? draft.date : null;
+  const draftStart = draft?.start && CLOCK.test(draft.start) ? draft.start : "";
+  const draftEnd = draft?.end && CLOCK.test(draft.end) ? draft.end : "";
+  const draftMinutes =
+    draftStart && draftEnd && totalMinutes(draftEnd, 0) > totalMinutes(draftStart, 0)
+      ? totalMinutes(draftEnd, 0) - totalMinutes(draftStart, 0)
+      : null;
+  const [title, setTitle] = useState(draft?.title ?? "");
+  const [date, setDate] = useState(draftDate ?? initialDate);
+  const [start, setStart] = useState(draftStart || "10:00");
+  const [duration, setDuration] = useState(
+    DURATIONS.find((entry) => entry.minutes === draftMinutes) ??
+      (draftMinutes ? { label: `${draftMinutes} min`, minutes: draftMinutes } : DURATIONS[1]),
+  );
+  const [location, setLocation] = useState(draft?.location ?? "");
   const [calendar, setCalendar] = useState(CALENDARS[0]);
   const [confirmed, setConfirmed] = useState(false);
 

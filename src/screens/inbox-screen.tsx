@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { animate, motion, useMotionValue, useSpring, useTransform } from "motion/react";
-import { Archive, ChevronDown, ChevronUp, Inbox, Loader2, PenLine, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2, type LucideIcon } from "lucide-react";
+import { Archive, ChevronDown, ChevronUp, Inbox, Loader2, Paperclip, PenLine, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2, type LucideIcon } from "lucide-react";
 import type { FolderId, Mail } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
 import { threadsInFolder } from "@/lib/threads";
@@ -22,6 +22,8 @@ import { useFolderTree } from "@/components/folder-tree";
 type Filter = "all" | "unread" | "starred" | "encrypted";
 
 const INTRO_HOLD_MS = 2000;
+
+const SUMMARY_FILE_CHIPS = 4;
 
 export function InboxScreen({
   mails,
@@ -86,6 +88,7 @@ export function InboxScreen({
     folderStats,
     summary,
     summaryLoading,
+    summaryMails,
     refreshSummary,
     openMail,
     closeMessage,
@@ -155,6 +158,11 @@ export function InboxScreen({
   const starredCount = threads.filter((thread) => thread.starred).length;
   const encryptedCount = threads.filter((thread) => thread.encrypted > 0).length;
   const attachmentThreads = threads.filter((thread) => thread.attachments > 0).length;
+  const summaryFiles = summaryMails.flatMap((mail) => mail.attachments ?? []);
+
+  useLayoutEffect(() => {
+    if (cardRef.current) setSizes((current) => ({ ...current, card: cardRef.current?.offsetHeight ?? current.card }));
+  }, [summary, summaryFiles.length]);
   const current = accountById(account);
 
   const visible = threads.filter((thread) => {
@@ -423,6 +431,26 @@ export function InboxScreen({
                       : "dans ta boîte de réception. Camille veut un retour sur les maquettes v3 avant vendredi."}
                   </p>
                 )}
+                {summaryFiles.length > 0 ? (
+                  <div data-testid="summary-attachments-mobile" className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {summaryFiles.slice(0, SUMMARY_FILE_CHIPS).map((file, index) => (
+                      <span
+                        key={`${file.name}-${index}`}
+                        title={`${file.name} · ${file.size}`}
+                        className="inline-flex max-w-[190px] items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-[10.5px] font-bold text-ink-soft"
+                      >
+                        <Paperclip className="size-2.5 shrink-0 text-accent-ink" strokeWidth={2.6} />
+                        <span className="truncate">{file.name}</span>
+                        <span className="shrink-0 font-semibold text-ink-muted">{file.size}</span>
+                      </span>
+                    ))}
+                    {summaryFiles.length > SUMMARY_FILE_CHIPS ? (
+                      <span className="rounded-full bg-surface px-2 py-0.5 text-[10.5px] font-bold text-ink-muted tabular-nums">
+                        +{summaryFiles.length - SUMMARY_FILE_CHIPS}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="mt-3 flex gap-1.5">
                   <span className="rounded-full bg-surface px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
                     {attachmentThreads} conversation{attachmentThreads > 1 ? "s" : ""} avec pièce

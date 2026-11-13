@@ -23,7 +23,17 @@ import { threadOf } from "@/lib/threads";
 import type { Thread } from "@/lib/threads";
 import type { MailSuggestion, Task } from "@/lib/tasks";
 import { dueToneFor, formatDueDate } from "@/lib/tasks";
-import { currentPeriod, generateSummary, recentMails, suggestEvents, suggestTasks } from "@/lib/summary";
+import {
+  currentPeriod,
+  generateSummary,
+  readSummaryCache,
+  recentMails,
+  summaryScope,
+  summarySignature,
+  suggestEvents,
+  suggestTasks,
+  writeSummaryCache,
+} from "@/lib/summary";
 import type { SummaryEvent, SummaryMailInput, SummaryResult, SummaryTask } from "@/lib/summary";
 import { llmReady } from "@/lib/llm";
 import { TODAY_ISO } from "@/lib/calendar";
@@ -66,6 +76,15 @@ export type BackendPhase = "loading" | "ready" | "offline" | "empty";
 const PAGE_SIZE = 50;
 const SUMMARY_TICK_MS = 5 * 60_000;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Stockage du cache de résumé : absent (SSR, stockage bloqué) = pas de cache. */
+function summaryStorage(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
 
 /** Une tâche proposée par le résumé devient une suggestion EN ATTENTE, jamais une tâche. */
 function summarySuggestion(task: SummaryTask, mail: Mail | undefined, period: string): MailSuggestion {
@@ -137,6 +156,8 @@ export type MailStoreValue = {
   suggestions: MailSuggestion[];
   summary: SummaryResult | null;
   summaryLoading: boolean;
+  /** Mails analysés par le résumé en cours, retrouvés dans la liste vivante. */
+  summaryMails: Mail[];
   refreshSummary: (force?: boolean) => Promise<void>;
   events: CalendarEvent[];
   selectedDate: string;
@@ -168,7 +189,7 @@ export type MailStoreValue = {
   emptyTrash: () => void;
   addSuggestion: (suggestion: MailSuggestion) => void;
   dismissSuggestion: (suggestion: MailSuggestion) => void;
-  openMessage: (mail: Mail) => void;
+  openMessage: (mail: Mail | string) => void;
   closeMessage: () => void;
   startBlankDraft: () => void;
   resumeDraft: (mail: Mail) => void;
@@ -333,6 +354,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   notifyPrefs.current = prefs.notifications;
   const notifyAccounts = useRef(accounts);
   notifyAccounts.current = accounts;
+  const liveMails = useRef(mails);
+  liveMails.current = mails;
 
   useEffect(() => {
     if (mode !== "api" || !mailSyncOn || typeof EventSource === "undefined" || isComposeWindow()) return;
@@ -830,7 +853,12 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const openMessage = useCallback(
-    (mail: Mail) => {
+    (target: Mail | string) => {
+      const mail = typeof target === "string" ? liveMails.current.find((entry) => entry.id === target) : target;
+      if (!mail) {
+        if (typeof target === "string") notify("Mail d'origine introuvable");
+        return;
+      }
       if (mail.folder === "drafts") {
         resumeDraftRef.current(mail);
         return;
@@ -1564,6 +1592,16 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     [inboxMails],
   );
 
+  /** Mails réellement analysés par le résumé affiché : base de l'aperçu des pièces jointes. */
+  const summaryMails = useMemo(() => {
+    if (!summary || summary.mailIds.length === 0) return [];
+    const byId = new Map(mails.map((mail) => [mail.id, mail]));
+    return summary.mailIds.flatMap((id) => {
+      const mail = byId.get(id);
+      return mail ? [mail] : [];
+    });
+  }, [mails, summary]);
+
   /** Comptes coupés des suggestions : leurs mails ne sont ni analysés ni proposés. */
   const excludedAccounts = useMemo(
     () => new Set(prefs.aiTasks.excludedAccounts),
@@ -1628,8 +1666,10 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
 
   /**
-   * Recalcule le résumé de la plage courante. Le LLM n'est sollicité que si la
-   * plage a changé ou sur demande explicite (force) ; en démo, jamais de réseau.
+   * Recalcule le résumé de la plage courante pour la boîte sélectionnée. Le
+   * modèle n'est sollicité qu'une fois par portée, plage et jeu de mails : le
+   * résultat est conservé sur le poste, et seul « Régénérer » force un nouveau
+   * passage. En démo, jamais de réseau.
    */
   const refreshSummary = useCallback(
     async (force = false) => {
@@ -1640,11 +1680,24 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       if (summaryRunning.current) return;
       const now = new Date();
       const period = currentPeriod(prefs.summary, now);
-      if (!force && summaryRun.current === period.id) return;
+      const scope = summaryScope(account && account !== ALL_ACCOUNTS ? account : null);
+      const scoped =
+        scope === ALL_ACCOUNTS ? inboxMails : inboxMails.filter((mail) => mail.account === scope);
+      const inputs = summaryInputs(scoped);
+      const signature = summarySignature(inputs);
+      const runKey = `${scope}:${period.id}:${signature}`;
+      if (!force && summaryRun.current === runKey) return;
+      if (!force) {
+        const cached = readSummaryCache(summaryStorage(), scope, period.id, signature);
+        if (cached) {
+          summaryRun.current = runKey;
+          setSummary(cached);
+          return;
+        }
+      }
       summaryRunning.current = true;
       setSummaryLoading(true);
       try {
-        const inputs = summaryInputs(inboxMails);
         const result = await generateSummary(
           mode === "demo" ? { ...prefs.summary, llmConsent: false } : prefs.summary,
           prefs.llm,
@@ -1652,7 +1705,10 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           now,
         );
         setSummary(result);
-        if (result.mailCount > 0) summaryRun.current = result.period.id;
+        if (result.mailCount > 0) summaryRun.current = runKey;
+        if (result.source === "llm") {
+          writeSummaryCache(summaryStorage(), scope, result.period.id, signature, result);
+        }
         proposeTasks(
           result.tasks.filter((task) => {
             const mail = task.mailId ? inboxIndex.get(task.mailId) : undefined;
@@ -1668,7 +1724,18 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         setSummaryLoading(false);
       }
     },
-    [excludedAccounts, inboxIndex, inboxMails, mode, notify, prefs.llm, prefs.summary, proposeTasks, summaryInputs],
+    [
+      account,
+      excludedAccounts,
+      inboxIndex,
+      inboxMails,
+      mode,
+      notify,
+      prefs.llm,
+      prefs.summary,
+      proposeTasks,
+      summaryInputs,
+    ],
   );
 
   /**
@@ -1772,12 +1839,12 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   }, [refreshEventSuggestions]);
 
   useEffect(() => {
-    summaryRun.current = null;
     if (phase !== "ready" || isComposeWindow()) return;
+    summaryRun.current = null;
     void refreshSummaryRef.current();
     const timer = window.setInterval(() => void refreshSummaryRef.current(), SUMMARY_TICK_MS);
     return () => window.clearInterval(timer);
-  }, [mode, phase, prefs.summary]);
+  }, [account, mode, phase, prefs.summary]);
 
   useEffect(() => {
     if (phase !== "ready" || isComposeWindow()) return;
@@ -1843,6 +1910,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       suggestions,
       summary,
       summaryLoading,
+      summaryMails,
       refreshSummary,
       events,
       selectedDate,
@@ -1927,6 +1995,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       suggestions,
       summary,
       summaryLoading,
+      summaryMails,
       refreshSummary,
       events,
       selectedDate,

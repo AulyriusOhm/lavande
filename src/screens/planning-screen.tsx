@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useMotionValue, useSpring, useTransform } from "motion/react";
 import { Check, ChevronRight, EyeOff, ListChecks, Mail, Plus, Sparkles } from "lucide-react";
 import type { MailSuggestion, Task, TaskState } from "@/lib/tasks";
@@ -51,7 +51,8 @@ export function PlanningScreen({
   onOpenSync?: () => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
-  const { accounts } = useMailStore();
+  const { accounts, mails, openMessage } = useMailStore();
+  const mailIndex = useMemo(() => new Map(mails.map((mail) => [mail.id, mail])), [mails]);
   const [localMoving, setLocalMoving] = useState<Task | null>(null);
   const [headerH, setHeaderH] = useState(0);
   const [edges, setEdges] = useState({ left: false, right: false });
@@ -334,6 +335,19 @@ export function PlanningScreen({
                         >
                           {suggestion.due}
                         </span>
+                      ) : null}
+                      {mailIndex.has(suggestion.mailId) ? (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openMessage(suggestion.mailId);
+                          }}
+                          aria-label={`Voir le mail d'origine : ${suggestion.subject}`}
+                          className="focus-ring grid min-h-11 min-w-11 shrink-0 place-items-center rounded-full text-accent-ink transition-colors hover:bg-surface active:bg-surface"
+                        >
+                          <Mail className="size-3.5" strokeWidth={2.4} />
+                        </button>
                       ) : null}
                     </div>
                   </SwipeAction>

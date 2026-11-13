@@ -99,6 +99,22 @@ describe("Réglages mobile · section IA accessible sur Android", () => {
     expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/chat/completions"))).toBe(true);
   });
 
+  it("exclut une boîte des suggestions IA depuis la section IA", async () => {
+    stubFetch();
+    vi.stubEnv("VITE_PLATFORM", "android");
+    mount();
+
+    expect(screen.getByText("Suggestions par compte")).toBeTruthy();
+    const studio = screen.getByRole("switch", { name: /^Studio/ });
+    expect(studio.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(studio);
+    await waitFor(() => expect(stored().aiTasks).toMatchObject({ excludedAccounts: ["pro"] }));
+
+    fireEvent.click(screen.getByRole("switch", { name: /^Studio/ }));
+    await waitFor(() => expect(stored().aiTasks).toMatchObject({ excludedAccounts: [] }));
+  });
+
   it("bascule les options IA et les persiste", async () => {
     stubFetch();
     vi.stubEnv("VITE_PLATFORM", "android");

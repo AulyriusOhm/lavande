@@ -67,6 +67,8 @@ import {
 
 type Filter = "all" | "unread" | "starred" | "encrypted" | "attachments";
 
+const SUMMARY_FILE_CHIPS = 4;
+
 const FILTERS: { id: Filter; label: string }[] = [
   { id: "all", label: "Tous" },
   { id: "unread", label: "Non lus" },
@@ -226,6 +228,7 @@ function MorningSummary({
   encrypted,
   demo,
   summary,
+  files,
   loading,
   onToggle,
   onOpen,
@@ -237,6 +240,7 @@ function MorningSummary({
   encrypted: number;
   demo: boolean;
   summary: SummaryResult | null;
+  files: MailAttachment[];
   loading: boolean;
   onToggle: () => void;
   onOpen: (id: string) => void;
@@ -315,6 +319,27 @@ function MorningSummary({
             {demo ? " Camille attend un retour sur la v3 avant vendredi." : ""}
           </p>
         )}
+
+        {files.length > 0 ? (
+          <div data-testid="summary-attachments" className="mt-2 flex flex-wrap items-center gap-1.5">
+            {files.slice(0, SUMMARY_FILE_CHIPS).map((file, index) => (
+              <span
+                key={`${file.name}-${index}`}
+                title={`${file.name} · ${file.size}`}
+                className="inline-flex max-w-[220px] items-center gap-1 rounded-full border border-accent-ring/50 bg-surface/80 px-2 py-0.5 text-[10.5px] font-bold text-ink-soft"
+              >
+                <Paperclip className="size-2.5 shrink-0 text-accent-ink" strokeWidth={2.6} />
+                <span className="truncate">{file.name}</span>
+                <span className="shrink-0 font-semibold text-ink-muted">{file.size}</span>
+              </span>
+            ))}
+            {files.length > SUMMARY_FILE_CHIPS ? (
+              <span className="rounded-full bg-surface/80 px-2 py-0.5 text-[10.5px] font-bold text-ink-muted tabular-nums">
+                +{files.length - SUMMARY_FILE_CHIPS}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {demo ? (
@@ -527,6 +552,7 @@ export function DesktopInbox({
     accountUnread,
     summary,
     summaryLoading,
+    summaryMails,
     refreshSummary,
     bodyFetching,
     hiddenFolderOptions,
@@ -588,6 +614,7 @@ export function DesktopInbox({
   const visible = threads.filter(FILTER_MATCH[filter]);
   const unreadThreads = threads.filter((thread) => thread.unread > 0).length;
   const attachmentThreads = threads.filter((thread) => thread.attachments > 0).length;
+  const summaryFiles = summaryMails.flatMap((mail) => mail.attachments ?? []);
   const encryptedThreads = threads.filter((thread) => thread.encrypted > 0).length;
 
   useEffect(() => {
@@ -1082,6 +1109,7 @@ export function DesktopInbox({
                 encrypted={encryptedThreads}
                 demo={mode === "demo"}
                 summary={summary}
+                files={summaryFiles}
                 loading={summaryLoading}
                 onToggle={() => setSummaryOpen(!summaryOpen)}
                 onOpen={openById}

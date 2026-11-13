@@ -1,3 +1,4 @@
+import { ALL_ACCOUNTS } from "@/lib/accounts";
 import { llmChat, llmReady, type LlmConfig } from "@/lib/llm";
 
 /**
@@ -113,6 +114,8 @@ export type SummaryResult = {
   mailCount: number;
   generatedAt: number;
   source: "llm" | "fallback";
+  /** Ids des mails analysés : l'affichage retrouve leurs pièces jointes sur le poste. */
+  mailIds: string[];
 };
 
 const MAX_MAILS = 40;
@@ -365,6 +368,131 @@ export function parseEventOutput(raw: string): SummaryEvent[] {
   return events;
 }
 
+const PERIOD_IDS: SummaryPeriodId[] = ["morning", "midday", "evening"];
+
+export const SUMMARY_CACHE_KEY = "lavande.summary.cache.v1";
+
+/** Portée du résumé : le compte sélectionné, sinon « all » (tous les comptes). */
+export function summaryScope(account: string | null | undefined): string {
+  return typeof account === "string" && account !== "" ? account : ALL_ACCOUNTS;
+}
+
+function fingerprint(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+/** Empreinte du jeu de mails analysé : ids et horodatages, ordre indifférent. */
+export function summarySignature(mails: SummaryMailInput[]): string {
+  const items = mails.map((mail) => `${mail.id}@${mail.timestamp ?? 0}`).sort();
+  return `${items.length}-${fingerprint(items.join("|"))}`;
+}
+
+const MAX_CACHE_ENTRIES = 8;
+
+function cacheKey(scope: string, period: SummaryPeriodId, signature: string): string {
+  return `${scope}:${period}:${signature}`;
+}
+
+function generatedAtOf(entry: unknown): number {
+  if (!entry || typeof entry !== "object") return 0;
+  const result = (entry as Record<string, unknown>).result;
+  if (!result || typeof result !== "object") return 0;
+  const generatedAt = (result as Record<string, unknown>).generatedAt;
+  return typeof generatedAt === "number" && Number.isFinite(generatedAt) ? generatedAt : 0;
+}
+
+function storedResult(value: unknown): SummaryResult | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const period = raw.period as Record<string, unknown> | null;
+  if (!period || typeof period !== "object") return null;
+  const id = PERIOD_IDS.find((entry) => entry === period.id);
+  if (!id || typeof period.label !== "string" || typeof raw.text !== "string") return null;
+  const tasks: SummaryTask[] = [];
+  if (Array.isArray(raw.tasks)) {
+    for (const entry of raw.tasks) {
+      if (!entry || typeof entry !== "object") continue;
+      const item = entry as Record<string, unknown>;
+      if (typeof item.title !== "string") continue;
+      tasks.push({
+        title: item.title,
+        due: typeof item.due === "string" ? item.due : "aucune",
+        from: typeof item.from === "string" ? item.from : "",
+        ...(typeof item.mailId === "string" ? { mailId: item.mailId } : {}),
+      });
+    }
+  }
+  return {
+    period: { id, label: period.label },
+    text: raw.text,
+    tasks,
+    mailCount: typeof raw.mailCount === "number" && Number.isFinite(raw.mailCount) ? raw.mailCount : 0,
+    generatedAt: typeof raw.generatedAt === "number" && Number.isFinite(raw.generatedAt) ? raw.generatedAt : 0,
+    source: raw.source === "llm" ? "llm" : "fallback",
+    mailIds: Array.isArray(raw.mailIds)
+      ? raw.mailIds.filter((entry): entry is string => typeof entry === "string")
+      : [],
+  };
+}
+
+/**
+ * Résultat conservé pour une portée, une plage et un jeu de mails identiques :
+ * un rendu ou un rafraîchissement automatique ne relance pas le modèle.
+ */
+export function readSummaryCache(
+  storage: Storage | null | undefined,
+  scope: string,
+  period: SummaryPeriodId,
+  signature: string,
+): SummaryResult | null {
+  try {
+    const raw = storage?.getItem(SUMMARY_CACHE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    const entry = (parsed as Record<string, unknown>)[cacheKey(scope, period, signature)];
+    if (!entry || typeof entry !== "object") return null;
+    const stored = entry as Record<string, unknown>;
+    if (stored.signature !== signature) return null;
+    return storedResult(stored.result);
+  } catch {
+    return null;
+  }
+}
+
+export function writeSummaryCache(
+  storage: Storage | null | undefined,
+  scope: string,
+  period: SummaryPeriodId,
+  signature: string,
+  result: SummaryResult,
+): void {
+  try {
+    const raw = storage?.getItem(SUMMARY_CACHE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    const stored: Record<string, unknown> =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? { ...(parsed as Record<string, unknown>) }
+        : {};
+    const entries: Record<string, unknown> = { ...stored, [cacheKey(scope, period, signature)]: { signature, result } };
+    const keys = Object.keys(entries);
+    if (keys.length > MAX_CACHE_ENTRIES) {
+      keys
+        .sort((left, right) => generatedAtOf(entries[left]) - generatedAtOf(entries[right]))
+        .slice(0, keys.length - MAX_CACHE_ENTRIES)
+        .forEach((key) => delete entries[key]);
+    }
+    storage?.setItem(SUMMARY_CACHE_KEY, JSON.stringify(entries));
+  } catch {
+    // stockage plein ou indisponible : le résumé reste simplement en mémoire
+  }
+}
+
 export function fallbackSummary(mails: SummaryMailInput[], period: SummaryPeriod): SummaryResult {
   const senders = [...new Set(mails.map((mail) => mail.from).filter(Boolean))];
   const text =
@@ -372,7 +500,15 @@ export function fallbackSummary(mails: SummaryMailInput[], period: SummaryPeriod
       ? "Aucun nouveau mail sur la période."
       : `${mails.length} mail${mails.length > 1 ? "s" : ""} sur la période` +
         (senders.length > 0 ? `, de ${senders.slice(0, 3).join(", ")}${senders.length > 3 ? "…" : ""}.` : ".");
-  return { period, text, tasks: [], mailCount: mails.length, generatedAt: Date.now(), source: "fallback" };
+  return {
+    period,
+    text,
+    tasks: [],
+    mailCount: mails.length,
+    generatedAt: Date.now(),
+    source: "fallback",
+    mailIds: mails.map((mail) => mail.id),
+  };
 }
 
 export async function generateSummary(
@@ -397,7 +533,15 @@ export async function generateSummary(
     const raw = await llmChat(llm, system, user, signal);
     const { text, tasks } = parseSummaryOutput(raw);
     if (!text) return fallbackSummary(recent, period);
-    return { period, text, tasks, mailCount: recent.length, generatedAt: Date.now(), source: "llm" };
+    return {
+      period,
+      text,
+      tasks,
+      mailCount: recent.length,
+      generatedAt: Date.now(),
+      source: "llm",
+      mailIds: recent.map((mail) => mail.id),
+    };
   } catch {
     return fallbackSummary(recent, period);
   }

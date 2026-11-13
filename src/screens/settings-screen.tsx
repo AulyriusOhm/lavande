@@ -736,6 +736,44 @@ export function SettingsScreen({
               n'est créée sans validation.
             </p>
           </BlurFade>
+
+          <SectionTitle
+            hint={`${accounts.length - aiTasks.excludedAccounts.filter((id) => accounts.some((item) => item.id === id)).length} sur ${accounts.length}`}
+          >
+            Suggestions par compte
+          </SectionTitle>
+          <BlurFade delay={0.16}>
+            <Card className="mx-5 divide-y divide-line/80 overflow-hidden">
+              {accounts.map((item) => {
+                const excluded = aiTasks.excludedAccounts.includes(item.id);
+                return (
+                  <ToggleRow
+                    key={item.id}
+                    icon={<Sparkles className="size-4" />}
+                    label={item.label}
+                    hint={
+                      excluded
+                        ? "Exclu · ses mails ne produisent ni tâche ni rendez-vous suggérés"
+                        : "Analysé par l'IA"
+                    }
+                    checked={!excluded}
+                    onChange={(value) =>
+                      setAiTasks({
+                        excludedAccounts: value
+                          ? aiTasks.excludedAccounts.filter((id) => id !== item.id)
+                          : [...aiTasks.excludedAccounts, item.id],
+                      })
+                    }
+                  />
+                );
+              })}
+              {accounts.length === 0 ? (
+                <p className="px-3.5 py-3 text-[12px] font-medium text-ink-muted">
+                  Aucun compte : ajoute une boîte pour l'exclure des suggestions.
+                </p>
+              ) : null}
+            </Card>
+          </BlurFade>
         </>
       ) : null}
 
