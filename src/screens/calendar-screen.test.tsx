@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { CalendarScreen } from "@/screens/calendar-screen";
 import { TODAY_ISO, type CalendarEvent } from "@/lib/calendar";
+import { agendaCalendars, loadCalendars } from "@/lib/calendars";
+import { externalCalendarEvents, loadIcsState } from "@/lib/ics";
 import { MAIL_SUGGESTIONS, type MailSuggestion } from "@/lib/tasks";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
@@ -47,11 +49,13 @@ function mount({
   onAcceptSuggestion,
   onDismissSuggestion,
   events = [] as CalendarEvent[],
+  externalEvents = [] as CalendarEvent[],
 }: {
   suggestions?: MailSuggestion[];
   onAcceptSuggestion?: (draft: Record<string, string | undefined>) => void;
   onDismissSuggestion?: (suggestion: MailSuggestion) => void;
   events?: CalendarEvent[];
+  externalEvents?: CalendarEvent[];
 } = {}) {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <PrefsProvider>
@@ -67,6 +71,7 @@ function mount({
       <MailProbe />
       <CalendarScreen
         events={events}
+        externalEvents={externalEvents}
         suggestions={suggestions}
         onNewEvent={() => {}}
         onAcceptSuggestion={onAcceptSuggestion}
@@ -156,5 +161,81 @@ describe("Agenda mobile · suggestions de rendez-vous", () => {
     fireEvent.click(screen.getByRole("button", { name: "Ignorer la suggestion" }));
 
     expect(onDismissSuggestion).toHaveBeenCalledWith(MEETING);
+  });
+});
+
+const CALENDARS_KEY = "lavande.calendars.v1";
+const ICS_KEY = "lavande.ics.v1";
+const PREFS_KEY = "lavande.prefs";
+
+/** Une source ICS active, un événement Google coupé par le périmètre du compte. */
+function seedExternalSources() {
+  window.localStorage.setItem(
+    CALENDARS_KEY,
+    JSON.stringify([
+      { id: "pro", name: "Pro", tone: 0 },
+      { id: "exemple-tld", name: "exemple.tld", tone: 1, source: { kind: "ics", url: "https://exemple.tld/cal.ics" } },
+      { id: "gmail", name: "Agenda Gmail", tone: 3, source: { kind: "google", accountId: "perso", calendarId: "agenda" } },
+    ]),
+  );
+  window.localStorage.setItem(
+    ICS_KEY,
+    JSON.stringify({
+      events: {
+        "exemple-tld": [
+          { id: "ics:exemple-tld:b1", date: TODAY_ISO, start: "11:00", end: "12:00", title: "Réunion externe", external: true },
+          { id: "ics:exemple-tld:b2", date: TODAY_ISO, start: "", end: "", title: "Journée off", external: true },
+        ],
+        gmail: [
+          { id: "google:gmail:g1", date: TODAY_ISO, start: "15:00", end: "16:00", title: "Réunion Google", external: true },
+        ],
+      },
+      synced: { "exemple-tld": Date.now(), gmail: Date.now() },
+    }),
+  );
+  window.localStorage.setItem(
+    PREFS_KEY,
+    JSON.stringify({ perimeters: { perso: { mails: true, calendar: false, contacts: false } } }),
+  );
+  return externalCalendarEvents(loadIcsState(), agendaCalendars(loadCalendars()));
+}
+
+describe("Agenda mobile · sources externes", () => {
+  it("ajoute l'événement externe au fil du jour avec son badge ICS", () => {
+    mount({ events: [EVENT], externalEvents: seedExternalSources() });
+
+    expect(screen.getByText("Réunion externe")).toBeTruthy();
+    expect(screen.getByText("3 événements")).toBeTruthy();
+    const badges = screen.getAllByTestId("external-badge");
+    expect(badges.map((badge) => badge.textContent)).toEqual(["ICS", "ICS"]);
+  });
+
+  it("compte l'événement externe dans la grille du mois", () => {
+    mount({ events: [], externalEvents: seedExternalSources() });
+
+    const cell = screen.getByRole("button", { pressed: true });
+    expect(cell.getAttribute("aria-label")).toContain("2 événements");
+  });
+
+  it("écrit « Journée entière » pour un événement sans heure", () => {
+    mount({ externalEvents: seedExternalSources() });
+
+    expect(screen.getByText("Journée entière")).toBeTruthy();
+    expect(screen.getByText("Réunion externe")).toBeTruthy();
+  });
+
+  it("reste en lecture seule : ni édition ni suppression", () => {
+    mount({ externalEvents: seedExternalSources() });
+
+    const title = screen.getByText("Réunion externe");
+    expect(title.closest("[role='button']")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Supprimer|Modifier|Éditer|Modifier l'événement/ })).toBeNull();
+  });
+
+  it("n'affiche pas une source coupée par le périmètre du compte", () => {
+    mount({ externalEvents: seedExternalSources() });
+
+    expect(screen.queryByText("Réunion Google")).toBeNull();
+    expect(screen.queryByText("Agenda Gmail")).toBeNull();
   });
 });

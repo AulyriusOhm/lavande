@@ -14,6 +14,7 @@ import {
   monthGrid,
   monthLabel,
 } from "@/lib/calendar";
+import { externalBadge } from "@/lib/ics";
 import { TONES } from "@/lib/mail";
 import { draftFromSuggestion, type EventDraft, type MailSuggestion } from "@/lib/tasks";
 import { sourceAccountLabel } from "@/lib/accounts";
@@ -38,8 +39,16 @@ const FULL_FMT = new Intl.DateTimeFormat("fr-FR", {
 const fullDate = (iso: string) =>
   capitalizeFirst(FULL_FMT.format(new Date(`${iso}T12:00:00`)).replace(/[\u202f\u00a0]/g, " "));
 
+/** Les tons d'une source relue à son serveur, alignés sur ceux de l'agenda PC. */
+const BADGE_TONE = {
+  sky: "bg-sky-500/12 text-sky-700 dark:text-sky-300",
+  green: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
+  amber: "bg-amber-500/14 text-amber-700 dark:text-amber-300",
+};
+
 export function CalendarScreen({
-  events: allEvents,
+  events,
+  externalEvents = [],
   onNewEvent,
   onAcceptSuggestion,
   onDismissSuggestion,
@@ -49,6 +58,7 @@ export function CalendarScreen({
   suggestions = [],
 }: {
   events: CalendarEvent[];
+  externalEvents?: CalendarEvent[];
   onNewEvent?: (date: string) => void;
   onAcceptSuggestion?: (draft: EventDraft) => void;
   onDismissSuggestion?: (suggestion: MailSuggestion) => void;
@@ -68,11 +78,15 @@ export function CalendarScreen({
     onSelectedDateChange?.(date);
   };
 
+  /** Une seule source de vérité : les événements locaux et les sources relues à leur serveur. */
+  const allEvents = [...events, ...externalEvents];
   const cells = monthGrid(view.year, view.month);
   const counts = new Map<string, number>();
   for (const event of allEvents) counts.set(event.date, (counts.get(event.date) ?? 0) + 1);
   const conflicts = conflictingIds(allEvents);
-  const events = allEvents.filter((event) => event.date === selected).sort((a, b) => a.start.localeCompare(b.start));
+  const dayEvents = allEvents
+    .filter((event) => event.date === selected)
+    .sort((a, b) => a.start.localeCompare(b.start));
   const label = capitalizeFirst(DATE_FMT.format(new Date(`${selected}T12:00:00`)).replace(/[\u202f\u00a0]/g, " "));
   const shortLabel = SHORT_FMT.format(new Date(`${selected}T12:00:00`)).replace(/[\u202f\u00a0]/g, " ");
 
@@ -201,13 +215,14 @@ export function CalendarScreen({
       <div className="mt-6 flex items-baseline justify-between px-5">
         <h2 className="text-[13px] font-bold text-ink">{label}</h2>
         <span className="text-[11px] font-medium text-ink-muted">
-          {events.length} événement{events.length > 1 ? "s" : ""}
+          {dayEvents.length} événement{dayEvents.length > 1 ? "s" : ""}
         </span>
       </div>
 
       <div className="mt-3 space-y-2 px-4">
-        {events.map((event, index) => {
+        {dayEvents.map((event, index) => {
           const conflict = conflicts.has(event.id);
+          const badge = event.external ? externalBadge(event) : null;
           const openable =
             onOpenMail && event.mailId && (!availableMailIds || availableMailIds.has(event.mailId))
               ? () => onOpenMail(event)
@@ -216,8 +231,12 @@ export function CalendarScreen({
             <BlurFade key={event.id} delay={0.05 * index} yOffset={10}>
               <div className="flex gap-3">
                 <div className="w-11 shrink-0 pt-1 text-right">
-                  <p className="text-[11.5px] font-bold whitespace-nowrap text-ink">{event.start}</p>
-                  <p className="text-[10px] font-medium whitespace-nowrap text-ink-muted">{event.end}</p>
+                  {event.start && (
+                    <p className="text-[11.5px] font-bold whitespace-nowrap text-ink">{event.start}</p>
+                  )}
+                  {event.start && event.end && (
+                    <p className="text-[10px] font-medium whitespace-nowrap text-ink-muted">{event.end}</p>
+                  )}
                 </div>
                 <div
                   role={openable ? "button" : undefined}
@@ -262,6 +281,22 @@ export function CalendarScreen({
                     </p>
                   )}
                   <div className="mt-2 flex items-center gap-1.5">
+                    {badge && (
+                      <span
+                        data-testid="external-badge"
+                        className={cn(
+                          "rounded-full px-2 py-0.5 text-[9.5px] font-bold",
+                          BADGE_TONE[badge.tone],
+                        )}
+                      >
+                        {badge.label}
+                      </span>
+                    )}
+                    {!event.start && (
+                      <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[9.5px] font-bold text-ink-soft">
+                        Journée entière
+                      </span>
+                    )}
                     {event.calendar && (
                       <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[9.5px] font-bold text-ink-soft">
                         {event.calendar}
@@ -294,7 +329,7 @@ export function CalendarScreen({
           );
         })}
 
-        {events.length === 0 && (
+        {dayEvents.length === 0 && (
           <p className="px-5 py-10 text-center text-[12.5px] font-medium text-ink-muted">
             Journée libre — rien de prévu.
           </p>

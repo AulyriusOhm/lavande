@@ -81,6 +81,13 @@ export function externalEventKind(event: { id: string }): ExternalKind {
   return event.id.startsWith("caldav:") ? "caldav" : "ics";
 }
 
+/** Étiquette d'une source relue à son serveur : ICS, CalDAV ou Google. */
+export function externalBadge(event: { id: string }): { tone: "sky" | "green" | "amber"; label: string } {
+  const kind = externalEventKind(event);
+  if (kind === "google") return { tone: "amber", label: "Google" };
+  return kind === "caldav" ? { tone: "green", label: "CalDAV" } : { tone: "sky", label: "ICS" };
+}
+
 export function toCalendarEvents(
   external: WrittenExternalEvent[],
   calendar: CalendarDef,
