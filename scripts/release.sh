@@ -93,6 +93,9 @@ for path in ("package.json", "package-lock.json"):
     with open(path, "w") as handle:
         handle.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 PY
+  sed -i "s/\"version\": \"$OLD_VERSION\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
+  grep -q "\"version\": \"$VERSION\"" src-tauri/tauri.conf.json ||
+    die "src-tauri/tauri.conf.json : version $VERSION absente après bump"
   old_pattern="${OLD_VERSION//./\\.}"
   sed -i "s/$old_pattern/$VERSION/g" site-vitrine/index.html
   grep -q "$VERSION" site-vitrine/index.html ||
@@ -142,7 +145,7 @@ shopt -u nullglob
 [ ${#appimage_signatures[@]} -gt 0 ] || die "aucune signature .AppImage.tar.gz.asc pour $VERSION dans $UPDATER_DIR"
 [ ${#rpm_packages[@]} -eq 1 ] || die "attendu un RPM $VERSION dans $UPDATER_DIR"
 for signature in "${deb_signatures[@]}" "${appimage_signatures[@]}"; do
-  gpg --batch --verify "$signature"
+  gpg --batch --verify "$signature" "${signature%.asc}"
 done
 # rpm -K de l'hôte n'est pas fiable (wrappers partiels) : vérification dans le conteneur.
 public_key="$(mktemp)"
@@ -152,6 +155,7 @@ docker run --rm -v "$PWD/$UPDATER_DIR":/up:ro -v "$public_key":/key.asc:ro lavan
 rm -f "$public_key"
 
 echo "== étape 8 : staging public ($STAGING_DIR)"
+rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
 cp artifacts/updater/latest.json artifacts/updater/*"$VERSION"* "$STAGING_DIR/"
 cp artifacts/apk/Lavande.apk "$STAGING_DIR/"
