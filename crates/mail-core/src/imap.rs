@@ -992,10 +992,14 @@ async fn tls_handshake(
         .with_no_client_auth();
     let server_name = ServerName::try_from(host.to_string())
         .map_err(|_| MailError::Tls(format!("invalid imap hostname: {host}")))?;
+    let peer = tcp
+        .peer_addr()
+        .map(|address| address.to_string())
+        .unwrap_or_else(|_| "adresse inconnue".to_string());
     TlsConnector::from(Arc::new(config))
         .connect(server_name, tcp)
         .await
-        .map_err(|error| MailError::Tls(error.to_string()))
+        .map_err(|error| MailError::Tls(format!("{host} ({peer}) : {error}")))
 }
 
 async fn read_greeting<T: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
