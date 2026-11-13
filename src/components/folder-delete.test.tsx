@@ -98,7 +98,7 @@ function mountSheet() {
 }
 
 function mountSettings() {
-  return render(
+  const view = render(
     <SettingsScreen
       mails={[]}
       account="a1"
@@ -108,6 +108,8 @@ function mountSettings() {
     />,
     { wrapper },
   );
+  fireEvent.click(screen.getByRole("button", { name: /^Comptes/ }));
+  return view;
 }
 
 beforeEach(() => {

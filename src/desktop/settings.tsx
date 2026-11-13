@@ -131,14 +131,8 @@ const SECTION_GROUPS = [
     label: "Apparence",
     sections: [
       { id: "apparence", label: "Apparence" },
-      { id: "clavier", label: "Raccourcis clavier" },
       { id: "modules", label: "Modules" },
     ],
-  },
-  {
-    id: "notifications",
-    label: "Notifications",
-    sections: [{ id: "notifications", label: "Notifications" }],
   },
   {
     id: "synchronisation",
@@ -146,6 +140,7 @@ const SECTION_GROUPS = [
     sections: [
       { id: "synchronisation", label: "Synchronisation" },
       { id: "calendriers", label: "Calendriers" },
+      { id: "notifications", label: "Notifications" },
     ],
   },
   {
@@ -167,6 +162,7 @@ const SECTION_GROUPS = [
     id: "application",
     label: "Application",
     sections: [
+      { id: "clavier", label: "Raccourcis clavier" },
       { id: "mise-a-jour", label: "Mise à jour" },
       { id: "apropos", label: "À propos" },
     ],
@@ -1516,12 +1512,6 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                 </div>
               </Block>
 
-              <Block id="clavier" label="Raccourcis clavier" hint={mod === "meta" ? "⌘ sur Mac" : "Ctrl sur cet appareil"}>
-                <Surface className="px-1 py-1">
-                  <ShortcutList shortcuts={shortcutList} mod={mod} />
-                </Surface>
-              </Block>
-
               <Block id="modules" label="Modules">
                 <Surface className="divide-y divide-line overflow-hidden">
                   <ToggleRow
@@ -1539,6 +1529,14 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                     onChange={setPlanningEnabled}
                   />
                 </Surface>
+              </Block>
+
+              <Block id="synchronisation" label="Synchronisation" hint="chiffré de bout en bout">
+                <SyncSettings variant="desktop" />
+              </Block>
+
+              <Block id="calendriers" label="Calendriers">
+                <CalendarsSection />
               </Block>
 
               <Block
@@ -1639,14 +1637,6 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                     />
                   ) : null}
                 </Surface>
-              </Block>
-
-              <Block id="synchronisation" label="Synchronisation" hint="chiffré de bout en bout">
-                <SyncSettings variant="desktop" />
-              </Block>
-
-              <Block id="calendriers" label="Calendriers">
-                <CalendarsSection />
               </Block>
 
               <Block
@@ -2378,6 +2368,12 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                   </Surface>
                 </Block>
               )}
+
+              <Block id="clavier" label="Raccourcis clavier" hint={mod === "meta" ? "⌘ sur Mac" : "Ctrl sur cet appareil"}>
+                <Surface className="px-1 py-1">
+                  <ShortcutList shortcuts={shortcutList} mod={mod} />
+                </Surface>
+              </Block>
 
               <Block
                 id="mise-a-jour"

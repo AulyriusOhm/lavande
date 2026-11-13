@@ -32,7 +32,7 @@ function stubFetch() {
 }
 
 function mount() {
-  return render(
+  const view = render(
     <PrefsProvider>
       <ThemeProvider>
         <PlanningProvider storage={createMemoryStorage()}>
@@ -49,6 +49,8 @@ function mount() {
       </ThemeProvider>
     </PrefsProvider>,
   );
+  fireEvent.click(screen.getByRole("button", { name: /^IA/ }));
+  return view;
 }
 
 const stored = () => JSON.parse(window.localStorage.getItem("lavande.prefs") ?? "{}") as Record<string, unknown>;

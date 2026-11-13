@@ -9,22 +9,32 @@ import { createMemoryStorage } from "@/lib/sync/storage";
 
 vi.stubEnv("VITE_MAIL_BACKEND", "local");
 
-const GROUPS = ["Comptes", "Apparence", "Notifications", "Synchronisation", "Sécurité", "IA", "MCP", "Application"];
+const GROUPS = ["Comptes", "Apparence", "Synchronisation", "Sécurité", "IA", "MCP", "Application"];
+
+const GROUP_SECTIONS: Record<string, string[]> = {
+  Comptes: ["Comptes", "Signatures"],
+  Apparence: ["Apparence", "Modules"],
+  Synchronisation: ["Synchronisation", "Calendriers", "Notifications"],
+  Sécurité: ["Sécurité & PGP"],
+  IA: ["Intelligence artificielle", "Résumés", "Suggestions de tâches"],
+  MCP: ["Serveurs MCP"],
+  Application: ["Raccourcis clavier", "Mise à jour", "À propos"],
+};
 
 const SECTIONS = [
   { label: "Comptes", anchor: "reglages-comptes" },
   { label: "Signatures", anchor: "reglages-signatures" },
   { label: "Apparence", anchor: "reglages-apparence" },
-  { label: "Raccourcis clavier", anchor: "reglages-clavier" },
   { label: "Modules", anchor: "reglages-modules" },
-  { label: "Notifications", anchor: "reglages-notifications" },
   { label: "Synchronisation", anchor: "reglages-synchronisation" },
   { label: "Calendriers", anchor: "reglages-calendriers" },
+  { label: "Notifications", anchor: "reglages-notifications" },
   { label: "Sécurité & PGP", anchor: "reglages-securite" },
   { label: "Intelligence artificielle", anchor: "reglages-ia" },
   { label: "Résumés", anchor: "reglages-resumes" },
   { label: "Suggestions de tâches", anchor: "reglages-taches-ia" },
   { label: "Serveurs MCP", anchor: "reglages-assistant" },
+  { label: "Raccourcis clavier", anchor: "reglages-clavier" },
   { label: "Mise à jour", anchor: "reglages-mise-a-jour" },
   { label: "À propos", anchor: "reglages-apropos" },
 ];
@@ -60,7 +70,7 @@ function renderSettings() {
 const nav = () => screen.getByRole("navigation", { name: "Sections des réglages" });
 
 describe("Réglages · sommaire groupé", () => {
-  it("range les sections en huit groupes nommés", () => {
+  it("range les sections en sept groupes nommés, dans l'ordre acté", () => {
     renderSettings();
 
     const groups = within(nav()).getAllByRole("group");
@@ -68,6 +78,22 @@ describe("Réglages · sommaire groupé", () => {
     groups.forEach((group, index) => {
       expect(within(group).getByText(GROUPS[index], { selector: "p" })).toBeTruthy();
     });
+  });
+
+  it("rattache chaque section à son groupe", () => {
+    renderSettings();
+
+    const groups = within(nav()).getAllByRole("group");
+    const mapping = Object.fromEntries(
+      groups.map((group) => [
+        group.getAttribute("aria-label"),
+        within(group)
+          .getAllByRole("button")
+          .map((button) => button.textContent),
+      ]),
+    );
+
+    expect(mapping).toEqual(GROUP_SECTIONS);
   });
 
   it("garde toutes les sous-sections, dans l'ordre des groupes", () => {

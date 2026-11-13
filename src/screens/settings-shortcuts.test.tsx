@@ -10,7 +10,7 @@ import { createMemoryStorage } from "@/lib/sync/storage";
 vi.stubEnv("VITE_MAIL_BACKEND", "demo");
 
 function mount() {
-  return render(
+  const view = render(
     <PrefsProvider>
       <ThemeProvider>
         <PlanningProvider storage={createMemoryStorage()}>
@@ -27,6 +27,8 @@ function mount() {
       </ThemeProvider>
     </PrefsProvider>,
   );
+  fireEvent.click(screen.getByRole("button", { name: /^Application/ }));
+  return view;
 }
 
 beforeEach(() => {

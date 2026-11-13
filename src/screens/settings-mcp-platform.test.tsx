@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { SettingsScreen } from "@/screens/settings-screen";
 import { MailStoreProvider } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
@@ -38,8 +38,10 @@ function mount() {
 }
 
 describe("Réglages mobile · gate MCP par plateforme", () => {
-  it("sans flag : l'entrée MCP reste proposée", () => {
+  it("sans flag : l'entrée MCP ouvre les serveurs et l'assistant", () => {
     mount();
+
+    fireEvent.click(screen.getByRole("button", { name: /^MCP/ }));
 
     expect(screen.getByText("Serveurs MCP")).toBeTruthy();
     expect(screen.getByText("Assistant")).toBeTruthy();
@@ -49,7 +51,9 @@ describe("Réglages mobile · gate MCP par plateforme", () => {
     vi.stubEnv("VITE_PLATFORM", "android");
     mount();
 
+    expect(screen.queryByRole("button", { name: /^MCP/ })).toBeNull();
     expect(screen.queryByText("Serveurs MCP")).toBeNull();
     expect(screen.queryByText("Assistant")).toBeNull();
+    expect(screen.getByRole("button", { name: /^IA/ })).toBeTruthy();
   });
 });
