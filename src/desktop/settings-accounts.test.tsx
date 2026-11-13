@@ -120,6 +120,15 @@ describe("Réglages · comptes", () => {
     expect((await screen.findAllByText("Bureau")).length).toBeGreaterThan(0);
     expect(screen.queryByLabelText("Renommer Perso")).toBeNull();
   });
+
+  it("laisse la rangée d'actions se replier dans la carte étroite", async () => {
+    stubFetch();
+    mount();
+
+    const actions = (await screen.findByLabelText("Renommer Perso")).parentElement;
+    expect(actions?.className).toContain("flex-wrap");
+    expect(actions?.parentElement?.className).toContain("min-w-0");
+  });
 });
 
 describe("Réglages · dossiers synchronisés", () => {

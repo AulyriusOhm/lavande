@@ -1013,7 +1013,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                 <BlurFade delay={0.04}>
                   <div className="grid gap-3 md:grid-cols-2">
                     {accounts.map((item, index) => (
-                      <Surface key={item.id} className="p-3.5">
+                      <Surface key={item.id} className="min-w-0 p-3.5">
                         <div className="flex items-center gap-2.5">
                           <span
                             className="grid size-9 shrink-0 place-items-center rounded-[12px] text-[12px] font-black"
@@ -1073,7 +1073,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                               </DButton>
                             </div>
                           ) : (
-                            <div className="mt-2 flex justify-end gap-1.5">
+                            <div className="mt-2 flex flex-wrap justify-end gap-1.5">
                               <DButton
                                 variant="ghost"
                                 size="sm"
