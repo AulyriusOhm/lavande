@@ -61,7 +61,8 @@ describe("étiquette de compte de la ligne de mail", () => {
     expect(label.className).toContain("text-[10.5px]");
     expect(label.className).toContain("tracking-[0.08em]");
     expect(label.className).toContain("max-w-[64px]");
-    expect(label.className).toContain("truncate");
+    expect(label.className).toContain("text-clip");
+    expect(label.className).not.toContain("truncate");
     expect(label.className).toContain("-ml-1");
     expect(label.getAttribute("title")).toBe(ACCOUNT.label);
   });

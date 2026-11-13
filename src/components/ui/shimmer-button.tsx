@@ -1,4 +1,5 @@
 import { useReducedMotion } from "motion/react";
+import { isNativeShell } from "@/lib/native";
 import { cn } from "@/lib/utils";
 
 type ShimmerButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -20,6 +21,7 @@ export function ShimmerButton({
   ...props
 }: ShimmerButtonProps) {
   const reduce = useReducedMotion();
+  const still = reduce || isNativeShell();
 
   return (
     <button
@@ -33,7 +35,7 @@ export function ShimmerButton({
         className,
       )}
     >
-      {reduce ? null : (
+      {still ? null : (
         <span className="pointer-events-none absolute inset-0 overflow-hidden rounded-full [clip-path:inset(0_round_999px)]">
           <span
             className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/35 to-transparent"

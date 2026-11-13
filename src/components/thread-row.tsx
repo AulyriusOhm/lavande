@@ -177,7 +177,7 @@ export function ThreadRow({
               data-account-chip={account.id}
               title={account.label}
               className={cn(
-                "-ml-1 inline-block max-w-[64px] truncate rounded-full px-1.5 py-[3px] leading-none font-extrabold uppercase",
+                "-ml-1 inline-block max-w-[64px] overflow-hidden text-clip whitespace-nowrap rounded-full px-1.5 py-[3px] leading-none font-extrabold uppercase",
                 accountChipFont(account.label),
               )}
               style={{

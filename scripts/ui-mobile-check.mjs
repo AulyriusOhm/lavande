@@ -103,6 +103,7 @@ const measure = () =>
       letterSpacing: style.letterSpacing,
       marginLeft: style.marginLeft,
       maxWidth: style.maxWidth,
+      textOverflow: style.textOverflow,
       truncated: chip.scrollWidth > chip.clientWidth + 1,
     };
   });
@@ -112,13 +113,13 @@ const fabProbe = () => {
   if (!fab) return null;
   const box = fab.getBoundingClientRect();
   const style = getComputedStyle(fab);
-  const clipLayer = fab.querySelector("span[class*='clip-path']");
-  const shimmer = fab.querySelector("span[style*='shimmer-sweep']");
+  const animated = Array.from(fab.querySelectorAll("*")).filter(
+    (el) => getComputedStyle(el).animationName !== "none",
+  ).length;
   return {
     buttonClipPath: style.clipPath,
     boxShadow: style.boxShadow,
-    clipLayerPath: clipLayer ? getComputedStyle(clipLayer).clipPath : null,
-    shimmerAnimation: shimmer ? getComputedStyle(shimmer).animationName : null,
+    animatedDescendants: animated,
     box: { x: box.x, y: box.y, width: box.width, height: box.height },
   };
 };
@@ -165,7 +166,7 @@ try {
 
   console.log(`\n${chips.length} étiquettes de compte mesurées (viewport 412x915)\n`);
   for (const chip of chips) {
-    const clear = chip.textColumnLeft !== null && chip.chipRight <= chip.textColumnLeft;
+    const clear = chip.textColumnLeft !== null && chip.chipRight <= chip.textColumnLeft && chip.textOverflow === "clip";
     if (!clear) failed = true;
     console.log(
       [
@@ -178,6 +179,7 @@ try {
         `tracking=${chip.letterSpacing}`,
         `max-width=${chip.maxWidth}`,
         `marge-gauche=${chip.marginLeft}`,
+        `text-overflow=${chip.textOverflow}`,
         `tronquée=${chip.truncated}`,
         `title="${chip.title}"`,
       ].join(" | "),
@@ -201,18 +203,14 @@ try {
     failed = true;
   } else {
     console.log(
-      `\nFAB: couche-clip=${fab.clipLayerPath} | clip-bouton=${fab.buttonClipPath} | shimmer=${fab.shimmerAnimation} | halo=${fab.boxShadow} | ${Math.round(fab.box.width)}x${Math.round(fab.box.height)}`,
+      `\nFAB: animations-descendantes=${fab.animatedDescendants} | clip-bouton=${fab.buttonClipPath} | halo=${fab.boxShadow} | ${Math.round(fab.box.width)}x${Math.round(fab.box.height)}`,
     );
-    if (!fab.clipLayerPath?.includes("999px")) {
-      console.log("FAIL: la couche du shimmer n'est pas fermée sur le cercle");
+    if (fab.animatedDescendants !== 0) {
+      console.log("FAIL: une animation subsiste dans le FAB (clip arrondi WebView → halo carré)");
       failed = true;
     }
-    if (fab.buttonClipPath !== "none" || fab.boxShadow === "none") {
-      console.log("FAIL: le halo du FAB est rogné par le clip-path");
-      failed = true;
-    }
-    if (fab.shimmerAnimation !== "shimmer-sweep") {
-      console.log("FAIL: le balayage du shimmer a disparu");
+    if (fab.boxShadow === "none") {
+      console.log("FAIL: le halo du FAB a disparu");
       failed = true;
     }
   }
