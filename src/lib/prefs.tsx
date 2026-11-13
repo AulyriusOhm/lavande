@@ -32,6 +32,27 @@ export type SyncPrefs = {
 
 export const DEFAULT_SYNC: SyncPrefs = { enabled: true, mails: true, calendar: true, kanban: true };
 
+/** Notifications système : maître, un interrupteur par compte, rappels d'agenda. */
+export type NotificationPrefs = {
+  enabled: boolean;
+  /** Un compte absent est notifié : seul `false` coupe ses notifications. */
+  accounts: Record<string, boolean>;
+  calendar: boolean;
+  /** Délai du rappel avant le début d'un rendez-vous, en minutes. */
+  calendarMinutes: number;
+};
+
+export const DEFAULT_NOTIFICATIONS: NotificationPrefs = {
+  enabled: true,
+  accounts: {},
+  calendar: true,
+  calendarMinutes: 10,
+};
+
+/** Délais de rappel proposés avant un rendez-vous, en minutes. */
+export const CALENDAR_LEAD_MINUTES = [0, 5, 10, 15, 30] as const;
+
+
 
 export type Prefs = {
   swipeLeft: SwipeActionId;
@@ -58,6 +79,8 @@ export type Prefs = {
   sync: SyncPrefs;
   /** Dossiers personnalisés masqués de la liste, par compte (chemins IMAP). */
   hiddenFolders: Record<string, string[]>;
+  /** Notifications système : nouveaux mails et rappels d'agenda. */
+  notifications: NotificationPrefs;
 };
 
 const DEFAULTS: Prefs = {
@@ -79,6 +102,7 @@ const DEFAULTS: Prefs = {
   aiTasks: DEFAULT_AI_TASKS,
   sync: DEFAULT_SYNC,
   hiddenFolders: {},
+  notifications: DEFAULT_NOTIFICATIONS,
 };
 
 type PrefsContextValue = Prefs & {
@@ -97,6 +121,8 @@ type PrefsContextValue = Prefs & {
   setAiTasks: (patch: Partial<AiTasksConfig>) => void;
   setSync: (patch: Partial<SyncPrefs>) => void;
   setFolderHidden: (accountId: string, path: string, hidden: boolean) => void;
+  setNotifications: (patch: Partial<NotificationPrefs>) => void;
+  setAccountNotification: (accountId: string, value: boolean) => void;
 };
 
 const PrefsContext = createContext<PrefsContextValue | null>(null);
@@ -213,6 +239,29 @@ export const asSync = (value: unknown): SyncPrefs => {
   };
 };
 
+export const asNotifications = (value: unknown): NotificationPrefs => {
+  if (!value || typeof value !== "object") return { ...DEFAULT_NOTIFICATIONS, accounts: {} };
+  const { enabled, accounts, calendar, calendarMinutes } = value as Record<string, unknown>;
+  return {
+    enabled: asBoolean(enabled, DEFAULT_NOTIFICATIONS.enabled),
+    accounts: asFlags(accounts),
+    calendar: asBoolean(calendar, DEFAULT_NOTIFICATIONS.calendar),
+    calendarMinutes:
+      typeof calendarMinutes === "number" && Number.isFinite(calendarMinutes) && calendarMinutes >= 0
+        ? Math.min(120, Math.round(calendarMinutes))
+        : DEFAULT_NOTIFICATIONS.calendarMinutes,
+  };
+};
+
+/** Un compte ne reçoit de notification que si le maître et son propre interrupteur sont ouverts. */
+export function notificationsForAccount(
+  notifications: NotificationPrefs,
+  accountId: string | null | undefined,
+): boolean {
+  if (!notifications.enabled) return false;
+  return accountId ? notifications.accounts[accountId] !== false : true;
+}
+
 export const asHiddenFolders = (value: unknown): Record<string, string[]> => {
   if (!value || typeof value !== "object") return {};
   const out: Record<string, string[]> = {};
@@ -297,6 +346,7 @@ function read(): Prefs {
     aiTasks: asAiTasks(stored.aiTasks),
     sync: asSync(stored.sync),
     hiddenFolders: asHiddenFolders(stored.hiddenFolders),
+    notifications: asNotifications(stored.notifications),
   };
 }
 
@@ -398,6 +448,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
   );
 
   const setFolderHidden = useCallback(
+
     (accountId: string, path: string, hidden: boolean) =>
       setPrefs((current) => {
         const own = current.hiddenFolders[accountId] ?? [];
@@ -413,6 +464,25 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       }),
     [],
   );
+
+  const setNotifications = useCallback(
+    (patch: Partial<NotificationPrefs>) =>
+      setPrefs((current) => ({ ...current, notifications: { ...current.notifications, ...patch } })),
+    [],
+  );
+
+  const setAccountNotification = useCallback(
+    (accountId: string, value: boolean) =>
+      setPrefs((current) => ({
+        ...current,
+        notifications: {
+          ...current.notifications,
+          accounts: { ...current.notifications.accounts, [accountId]: value },
+        },
+      })),
+    [],
+  );
+
 
   const value = useMemo<PrefsContextValue>(
     () => ({
@@ -432,6 +502,8 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setAiTasks,
       setSync,
       setFolderHidden,
+      setNotifications,
+      setAccountNotification,
     }),
     [
       prefs,
@@ -450,6 +522,8 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setAiTasks,
       setSync,
       setFolderHidden,
+      setNotifications,
+      setAccountNotification,
     ],
   );
 

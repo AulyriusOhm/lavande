@@ -4,7 +4,6 @@ use crate::config::{AccountConfig, FolderMapping};
 use crate::error::MailError;
 use crate::imap::{self, SyncReport};
 use crate::model::{Folder, FolderRole};
-use crate::pgp::PgpKeyring;
 use crate::store::Store;
 use crate::tls::TlsOptions;
 
@@ -27,21 +26,10 @@ pub async fn sync_account_with(
     mapping: &FolderMapping,
     tls_options: &TlsOptions,
 ) -> Result<Vec<(String, SyncReport)>, MailError> {
-    sync_account_keys(store, cfg, mapping, tls_options, &PgpKeyring::new()).await
+    sync_account_selected(store, cfg, mapping, tls_options, None).await
 }
 
-/// `sync_account_with` plus the PGP keyring encrypted bodies are decrypted with.
-pub async fn sync_account_keys(
-    store: &Store,
-    cfg: &AccountConfig,
-    mapping: &FolderMapping,
-    tls_options: &TlsOptions,
-    keys: &PgpKeyring,
-) -> Result<Vec<(String, SyncReport)>, MailError> {
-    sync_account_selected(store, cfg, mapping, tls_options, keys, None).await
-}
-
-/// `sync_account_keys` with the folders the account syncs by itself: `None`
+/// `sync_account_with` with the folders the account syncs by itself: `None`
 /// keeps the default (every folder with a known role), `Some(paths)` limits the
 /// automatic pass to those folders, `Some([])` syncs none of them. Folder
 /// discovery and the on-demand per-folder sync are untouched.
@@ -50,7 +38,6 @@ pub async fn sync_account_selected(
     cfg: &AccountConfig,
     mapping: &FolderMapping,
     tls_options: &TlsOptions,
-    keys: &PgpKeyring,
     synced_folders: Option<&[String]>,
 ) -> Result<Vec<(String, SyncReport)>, MailError> {
     cfg.validate()?;
@@ -79,7 +66,7 @@ pub async fn sync_account_selected(
         if !auto_syncs(folder, synced_folders) {
             continue;
         }
-        match imap::sync_folder(&mut session, store, &cfg.id, &folder.path, mapping, keys).await {
+        match imap::sync_folder(&mut session, store, &cfg.id, &folder.path, mapping).await {
             Ok(report) => reports.push((folder.path.clone(), report)),
             Err(error) => {
                 tracing::warn!(account = %cfg.id, folder = %folder.path, %error, "dossier non synchronisé");
@@ -117,6 +104,7 @@ mod tests {
             uidnext: 1,
             last_sync_at: None,
             modseq: None,
+            delimiter: None,
         }
     }
 

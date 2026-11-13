@@ -5,13 +5,17 @@ import {
   CalendarDays,
   ChevronDown,
   ChevronRight,
+  Clock,
+  FolderTree,
   KeyRound,
   Keyboard,
   ListChecks,
+  Lock,
   Moon,
   Palette,
   PenLine,
   Plus,
+  Sparkles,
   Sun,
   SunMoon,
   Trash2,
@@ -19,20 +23,29 @@ import {
   Users,
 } from "lucide-react";
 import { ACCENT_PRESETS, accentContrast, useTheme, type ThemeMode } from "@/lib/theme";
-import { SWIPE_ACTIONS, mergeFlags, usePrefs } from "@/lib/prefs";
+import { llmProbe, llmReady, type LlmConfig } from "@/lib/llm";
+import { SWIPE_ACTIONS, CALENDAR_LEAD_MINUTES, mergeFlags, usePrefs } from "@/lib/prefs";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
 import { useMailStore } from "@/lib/store";
 import { MCP_SERVERS, mcpCounts } from "@/lib/mcp";
 import type { Mail } from "@/lib/mail";
 import { cn } from "@/lib/utils";
 import { Avatar, Card, SectionTitle, ToggleRow } from "@/components/ui/primitives";
+import { FolderRow } from "@/components/folder-row";
 import { SyncSettings } from "@/components/sync-settings";
 import { ShortcutList } from "@/components/shortcut-list";
 import { detectModKey } from "@/lib/shortcuts";
+import { requestNotifications } from "@/lib/notify";
 import { shortcutCatalog } from "@/lib/app-shortcuts";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { AnimatedGradientText } from "@/components/ui/animated-text";
+
+const LLM_FIELDS: { key: keyof LlmConfig; label: string; aria: string; placeholder: string; password?: boolean }[] = [
+  { key: "endpoint", label: "Endpoint", aria: "Endpoint du modèle", placeholder: "https://api.openai.com/v1" },
+  { key: "model", label: "Modèle", aria: "Nom du modèle", placeholder: "gpt-4o-mini" },
+  { key: "apiKey", label: "Clé API", aria: "Clé API", placeholder: "sk-…", password: true },
+];
 
 const PREVIEW_OPTIONS = [
   { value: "always", label: "Toujours" },
@@ -56,7 +69,8 @@ export function SettingsScreen({
   onOpenMcp: () => void;
 }) {
   const { accent, mode: themeMode, brand, setAccent, setMode: setThemeMode, reset } = useTheme();
-  const { accounts, mode, openConnect, askRemoveAccount } = useMailStore();
+  const { accounts, mode, openConnect, askRemoveAccount, folderOptions, deleteFolder } =
+    useMailStore();
   const {
     swipeLeft,
     swipeRight,
@@ -66,10 +80,22 @@ export function SettingsScreen({
     planningEnabled,
     setCalendarEnabled,
     setPlanningEnabled,
+    notifications,
+    setNotifications,
+    setAccountNotification,
+    llm,
+    setLlm,
+    aiReplyEnabled,
+    setAiReplyEnabled,
+    summary,
+    setSummary,
+    aiTasks,
+    setAiTasks,
   } = usePrefs();
-  const [notifications, setNotifications] = useState(true);
-  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [preview, setPreview] = useState<PreviewMode>("unlocked");
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [probing, setProbing] = useState(false);
+  const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(null);
   const enabled = mergeFlags(
     Object.fromEntries(MCP_SERVERS.map((server) => [server.id, server.status === "connected"])),
     mcpEnabled,
@@ -77,6 +103,24 @@ export function SettingsScreen({
   const mcp = mcpCounts((server) => enabled[server.id]);
   const mod = detectModKey();
   const shortcuts = shortcutCatalog();
+  const customFolders = folderOptions.filter((entry) => entry.id === "other");
+
+  const updateLlm = (key: keyof LlmConfig, value: string) => {
+    setProbe(null);
+    setLlm({ ...llm, [key]: value });
+  };
+
+  const runProbe = async () => {
+    setProbing(true);
+    setProbe(null);
+    try {
+      setProbe({ ok: true, text: await llmProbe(llm) });
+    } catch (failure) {
+      setProbe({ ok: false, text: failure instanceof Error ? failure.message : "échec inconnu" });
+    } finally {
+      setProbing(false);
+    }
+  };
 
   const unreadFor = (id: string) =>
     mails.filter(
@@ -186,6 +230,42 @@ export function SettingsScreen({
         </Card>
       </BlurFade>
 
+      {customFolders.length > 0 ? (
+        <>
+          <SectionTitle hint="compte sélectionné">Dossiers</SectionTitle>
+          <BlurFade delay={0.1}>
+            <Card className="mx-5 divide-y divide-line/80 overflow-hidden">
+              {customFolders.map((entry) => (
+                <div key={entry.path} className="px-1.5 py-1">
+                  <FolderRow
+                    label={entry.label}
+                    variant="mobile"
+                    onDelete={() => void deleteFolder(entry.path, entry.label)}
+                  >
+                    <div className="flex min-h-11 items-center gap-3 px-2">
+                      <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-surface-2 text-ink-soft">
+                        <FolderTree className="size-4" />
+                      </span>
+                      <span className="min-w-0 flex-1 leading-tight">
+                        <span className="block truncate text-[12.5px] font-bold text-ink">
+                          {entry.label}
+                        </span>
+                        <span className="block truncate text-[11.5px] font-medium text-ink-muted">
+                          {entry.path}
+                        </span>
+                      </span>
+                    </div>
+                  </FolderRow>
+                </div>
+              ))}
+            </Card>
+            <p className="mt-2 px-5 text-[12px] leading-relaxed font-medium text-ink-muted">
+              Supprimer un dossier l'efface sur le serveur IMAP, avec les messages qu'il contient.
+            </p>
+          </BlurFade>
+        </>
+      ) : null}
+
       <SectionTitle hint="personnalisable">Couleur d'accent</SectionTitle>
       <BlurFade delay={0.12}>
         <Card className="mx-5 p-4">
@@ -285,23 +365,18 @@ export function SettingsScreen({
         </p>
       </BlurFade>
 
-      <SectionTitle>Sécurité</SectionTitle>
-      <BlurFade delay={0.16}>
+      <SectionTitle hint={notifications.enabled ? "actives" : "coupées"}>Notifications</SectionTitle>
+      <BlurFade delay={0.155}>
         <Card className="mx-5 divide-y divide-line/80 overflow-hidden">
-          <Row
-            icon={<KeyRound className="size-4" />}
-            label="Gérer mes clés PGP"
-            hint="Générer, importer, exporter et supprimer"
-            onClick={onOpenPgp}
-          >
-            <ChevronRight className="size-4 text-ink-muted" />
-          </Row>
           <ToggleRow
             icon={<Bell className="size-4" />}
             label="Notifications"
-            hint="Push instantanée"
-            checked={notifications}
-            onChange={setNotifications}
+            hint="Nouveaux mails et rappels, tant que l'app tourne"
+            checked={notifications.enabled}
+            onChange={(value) => {
+              setNotifications({ enabled: value });
+              if (value) void requestNotifications();
+            }}
           />
           <div className="px-3.5 py-3">
             <div className="flex items-center gap-3">
@@ -316,7 +391,7 @@ export function SettingsScreen({
             <div
               role="radiogroup"
               aria-label="Aperçu du texte des notifications"
-              className={cn("mt-2.5 flex gap-1.5", !notifications && "opacity-55")}
+              className={cn("mt-2.5 flex gap-1.5", !notifications.enabled && "opacity-55")}
             >
               {PREVIEW_OPTIONS.map((option) => {
                 const selected = preview === option.value;
@@ -325,7 +400,7 @@ export function SettingsScreen({
                     key={option.value}
                     type="button"
                     role="radio"
-                    disabled={!notifications}
+                    disabled={!notifications.enabled}
                     aria-checked={selected}
                     onClick={() => setPreview(option.value)}
                     className={cn(
@@ -344,6 +419,96 @@ export function SettingsScreen({
               Les messages chiffrés ne sont jamais inclus en clair dans la notification push.
             </p>
           </div>
+        </Card>
+
+        <Card className="mx-5 mt-3 divide-y divide-line/80 overflow-hidden">
+          <ToggleRow
+            icon={<CalendarDays className="size-4" />}
+            label="Rappels d'agenda"
+            hint="Un rendez-vous du calendrier commence bientôt"
+            checked={notifications.calendar}
+            onChange={(value) => setNotifications({ calendar: value })}
+          />
+          <div className="px-3.5 py-3">
+            <div className="flex items-center gap-3">
+              <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-surface-2 text-ink-soft">
+                <Clock className="size-4" />
+              </span>
+              <div className="min-w-0 flex-1 leading-tight">
+                <p className="text-[12.5px] font-bold text-ink">Délai du rappel</p>
+                <p className="text-[12px] font-medium text-ink-muted">Avant le début du rendez-vous</p>
+              </div>
+            </div>
+            <div
+              role="radiogroup"
+              aria-label="Délai du rappel calendrier"
+              className={cn("mt-2.5 flex gap-1.5", !notifications.calendar && "opacity-55")}
+            >
+              {CALENDAR_LEAD_MINUTES.map((minutes) => {
+                const selected = notifications.calendarMinutes === minutes;
+                return (
+                  <button
+                    key={minutes}
+                    type="button"
+                    role="radio"
+                    disabled={!notifications.calendar}
+                    aria-checked={selected}
+                    onClick={() => setNotifications({ calendarMinutes: minutes })}
+                    className={cn(
+                      "focus-ring min-h-11 flex-1 rounded-xl px-1 text-[11.5px] font-bold transition-colors disabled:cursor-not-allowed",
+                      selected
+                        ? "bg-accent text-accent-contrast"
+                        : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
+                    )}
+                  >
+                    {minutes === 0 ? "À l'heure" : `${minutes} min`}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </Card>
+
+        <p className="mt-2 px-5 text-[12px] leading-relaxed font-medium text-ink-muted">
+          Un compte absent de la liste suit l'interrupteur général. App fermée, aucune notification n'est
+          envoyée.
+        </p>
+      </BlurFade>
+
+      <SectionTitle hint={`${accounts.length} compte${accounts.length > 1 ? "s" : ""}`}>
+        Notifications par compte
+      </SectionTitle>
+      <BlurFade delay={0.158}>
+        <Card className="mx-5 divide-y divide-line/80 overflow-hidden">
+          {accounts.map((item) => (
+            <ToggleRow
+              key={item.id}
+              icon={<Bell className="size-4" />}
+              label={item.label}
+              hint={item.email}
+              checked={notifications.accounts[item.id] !== false}
+              onChange={(value) => setAccountNotification(item.id, value)}
+            />
+          ))}
+          {accounts.length === 0 ? (
+            <p className="px-3.5 py-3 text-[12px] font-medium text-ink-muted">
+              Aucun compte : ajoute une boîte pour régler ses notifications.
+            </p>
+          ) : null}
+        </Card>
+      </BlurFade>
+
+      <SectionTitle>Sécurité</SectionTitle>
+      <BlurFade delay={0.16}>
+        <Card className="mx-5 divide-y divide-line/80 overflow-hidden">
+          <Row
+            icon={<KeyRound className="size-4" />}
+            label="Gérer mes clés PGP"
+            hint="Générer, importer, exporter et supprimer"
+            onClick={onOpenPgp}
+          >
+            <ChevronRight className="size-4 text-ink-muted" />
+          </Row>
         </Card>
       </BlurFade>
 
@@ -428,6 +593,105 @@ export function SettingsScreen({
         </Card>
       </BlurFade>
 
+      <SectionTitle hint={llmReady(llm) ? "modèle configuré" : "local"}>
+        Intelligence artificielle
+      </SectionTitle>
+      <BlurFade delay={0.178}>
+        <Card className="mx-5 space-y-3 p-3.5">
+          <p className="text-[12px] leading-relaxed font-medium text-ink-muted">
+            Branche un modèle compatible OpenAI pour les suggestions de réponse, la réécriture et les
+            résumés. Sans configuration, Lavande propose des réponses locales.
+          </p>
+          {LLM_FIELDS.map((field) => (
+            <label key={field.key} className="block">
+              <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                {field.label}
+              </span>
+              <input
+                aria-label={field.aria}
+                type={field.password ? "password" : "text"}
+                autoComplete="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                placeholder={field.placeholder}
+                value={llm[field.key]}
+                onChange={(event) => updateLlm(field.key, event.target.value)}
+                className="focus-ring mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
+              />
+            </label>
+          ))}
+          <button
+            type="button"
+            disabled={!llmReady(llm) || probing}
+            onClick={() => void runProbe()}
+            className="focus-ring min-h-11 w-full rounded-full bg-accent px-4 text-[12.5px] font-bold text-accent-contrast transition-opacity disabled:opacity-40"
+          >
+            {probing ? "Test en cours…" : "Tester la connexion"}
+          </button>
+          {probe ? (
+            <p
+              className={cn(
+                "rounded-2xl px-3 py-2 text-[12px] leading-relaxed font-semibold break-words",
+                probe.ok
+                  ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                  : "bg-rose-500/10 text-rose-600 dark:text-rose-300",
+              )}
+            >
+              {probe.ok ? `Réponse du modèle · ${probe.text}` : `Échec · ${probe.text}`}
+            </p>
+          ) : null}
+          <p className="text-[11.5px] leading-relaxed font-medium text-ink-muted">
+            {llmReady(llm)
+              ? "IA active · les propositions utilisent le modèle configuré."
+              : "IA inactive · propositions locales uniquement."}
+          </p>
+        </Card>
+      </BlurFade>
+
+      <BlurFade delay={0.182}>
+        <Card className="mx-5 mt-3 divide-y divide-line/80 overflow-hidden">
+          <ToggleRow
+            icon={<Sparkles className="size-4" />}
+            label="Suggestions de réponse IA"
+            hint="Le modèle lit la conversation du fil · désactivable, repli sur les réponses locales"
+            checked={aiReplyEnabled}
+            onChange={setAiReplyEnabled}
+          />
+          <ToggleRow
+            icon={<Sparkles className="size-4" />}
+            label="Résumés périodiques"
+            hint="Un résumé de la boîte de réception matin, midi et soir"
+            checked={summary.enabled}
+            onChange={(value) => setSummary({ enabled: value })}
+          />
+          <ToggleRow
+            icon={<Lock className="size-4" />}
+            label="Autoriser l'analyse de mes mails par le LLM"
+            hint="Sans accord, le résumé reste local (compteurs et expéditeurs)"
+            checked={summary.llmConsent}
+            onChange={(value) => setSummary({ llmConsent: value })}
+          />
+          <ToggleRow
+            icon={<ListChecks className="size-4" />}
+            label="Suggestions de tâches IA"
+            hint="Extraire des tâches actionnables des mails récents · tout reste à valider"
+            checked={aiTasks.enabled}
+            onChange={(value) => setAiTasks({ enabled: value })}
+          />
+          <ToggleRow
+            icon={<CalendarDays className="size-4" />}
+            label="Suggestions de rendez-vous IA"
+            hint="Extraire aussi des rendez-vous des mêmes mails · à valider dans l'agenda"
+            checked={aiTasks.events}
+            onChange={(value) => setAiTasks({ events: value })}
+          />
+        </Card>
+        <p className="mt-2 px-5 text-[12px] leading-relaxed font-medium text-ink-muted">
+          Le modèle reçoit uniquement les expéditeurs, objets et premières lignes des mails ; aucune tâche
+          n'est créée sans validation.
+        </p>
+      </BlurFade>
+
       {import.meta.env.VITE_PLATFORM === "android" ? null : (
         <>
           <SectionTitle>Assistant</SectionTitle>
@@ -482,7 +746,7 @@ export function SettingsScreen({
       <BlurFade delay={0.25}>
         <div className="mt-6 px-5 text-center">
           <p className="text-[11px] font-semibold text-ink-muted">
-            <AnimatedGradientText>{brand}</AnimatedGradientText> · v0.2.0
+            <AnimatedGradientText>{brand}</AnimatedGradientText> · v0.2.2
             {import.meta.env.VITE_DISTRIBUTION === "1" ? null : " · design preview"}
           </p>
           <button

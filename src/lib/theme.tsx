@@ -1,4 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { shellLayout } from "@/lib/native";
+import { isTauriShell } from "@/lib/open-external";
 
 export const ACCENT_PRESETS = [
   { name: "Lavande", value: "#8b7cf6" },
@@ -27,13 +29,10 @@ const TAG_SURFACES = {
 const THEME_COLOR = { light: "#fbfaff", dark: "#0e0c13" };
 
 export type ThemeMode = "light" | "dark" | "auto";
-const DAY_START_HOUR = 7;
-const NIGHT_START_HOUR = 19;
-const AUTO_TICK_MS = 60_000;
+const DARK_QUERY = "(prefers-color-scheme: dark)";
 
-export function isNightTime(date = new Date()) {
-  const hour = date.getHours();
-  return hour < DAY_START_HOUR || hour >= NIGHT_START_HOUR;
+function systemPrefersDark(): boolean {
+  return typeof window.matchMedia === "function" && window.matchMedia(DARK_QUERY).matches;
 }
 
 type ThemeContextValue = {
@@ -116,16 +115,36 @@ function storedMode(): ThemeMode {
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [accent, setAccentState] = useState(() => readStored().accent ?? DEFAULT_ACCENT);
   const [mode, setModeState] = useState<ThemeMode>(storedMode);
-  const [night, setNight] = useState(() => isNightTime());
+  const [systemDark, setSystemDark] = useState(systemPrefersDark);
 
   useEffect(() => {
     if (mode !== "auto") return;
-    setNight(isNightTime());
-    const timer = window.setInterval(() => setNight(isNightTime()), AUTO_TICK_MS);
-    return () => window.clearInterval(timer);
+    if (isTauriShell() && shellLayout() === "desktop") {
+      let disposed = false;
+      let unlisten: (() => void) | undefined;
+      void import("@tauri-apps/api/window")
+        .then(async ({ getCurrentWindow }) => {
+          const win = getCurrentWindow();
+          const current = await win.theme();
+          if (disposed) return;
+          if (current) setSystemDark(current === "dark");
+          unlisten = await win.onThemeChanged(({ payload }) => setSystemDark(payload === "dark"));
+          if (disposed) unlisten();
+        })
+        .catch(() => {});
+      return () => {
+        disposed = true;
+        unlisten?.();
+      };
+    }
+    const query = typeof window.matchMedia === "function" ? window.matchMedia(DARK_QUERY) : null;
+    const sync = () => setSystemDark(query?.matches ?? false);
+    sync();
+    query?.addEventListener("change", sync);
+    return () => query?.removeEventListener("change", sync);
   }, [mode]);
 
-  const dark = mode === "auto" ? night : mode === "dark";
+  const dark = mode === "auto" ? systemDark : mode === "dark";
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ accent, mode }));

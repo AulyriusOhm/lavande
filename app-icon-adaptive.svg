@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="lavande" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1024" y2="1024">
+      <stop offset="0" stop-color="#cfc0ff"/>
+      <stop offset="0.5" stop-color="#8b7cf6"/>
+      <stop offset="1" stop-color="#5a45cb"/>
+    </linearGradient>
+    <radialGradient id="reflet" gradientUnits="userSpaceOnUse" cx="256" cy="160" r="760">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#lavande)"/>
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#reflet)"/>
+</svg>

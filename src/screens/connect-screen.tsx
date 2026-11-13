@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, CheckCircle2, FolderTree, Loader2, PlugZap, Radar, Server, Sparkles } from "lucide-react";
+import { ArrowLeft, CheckCircle2, ChevronRight, Loader2, PlugZap, Radar, Server, Sparkles } from "lucide-react";
 import { ApiError, errorText, mailApi } from "@/lib/api";
-import type { DiscoverySource, Encryption } from "@/lib/api";
+import type { ApiFolder, DiscoverySource, Encryption, NewAccount } from "@/lib/api";
 import { accountSlug } from "@/lib/mail-backend";
+import { descendantPaths } from "@/lib/folder-tree";
 import { isTauriShell, openExternal } from "@/lib/open-external";
 import { OAuthGuide } from "@/components/oauth-guide";
+import { useFolderTree, type FolderTreeRow } from "@/components/folder-tree";
 import { useMailStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
-import { IconButton, ToggleRow } from "@/components/ui/primitives";
+import { IconButton } from "@/components/ui/primitives";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
@@ -73,6 +75,9 @@ const ORIGIN_LABEL: Record<DiscoverySource, string> = {
   guess: "détection par sondage",
 };
 
+const failureText = (failure: unknown) =>
+  failure instanceof ApiError ? `${failure.kind} · ${failure.message}` : errorText(failure);
+
 export function ConnectScreen({
   onClose,
   variant = "mobile",
@@ -81,7 +86,7 @@ export function ConnectScreen({
   variant?: "mobile" | "desktop";
 }) {
   const desktop = variant === "desktop";
-  const { createAccount, useDemo, phase, refreshMailbox, notify } = useMailStore();
+  const { createAccount, useDemo, phase, refreshMailbox } = useMailStore();
   const [label, setLabel] = useState("");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
@@ -93,7 +98,12 @@ export function ConnectScreen({
   const [smtpPort, setSmtpPort] = useState(String(ENCRYPTIONS[0].smtp));
   const [smtpEncryption, setSmtpEncryption] = useState<Encryption>(ENCRYPTIONS[0].value);
   const [busy, setBusy] = useState(false);
-  const [syncFolders, setSyncFolders] = useState(true);
+  const [step, setStep] = useState<"form" | "folders">("form");
+  const [draft, setDraft] = useState<NewAccount | null>(null);
+  const [folders, setFolders] = useState<ApiFolder[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const rows = useFolderTree(folders);
+
   const [error, setError] = useState<string | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [manualClientIds, setManualClientIds] = useState<Record<OAuthProvider, string>>({
@@ -215,13 +225,6 @@ export function ConnectScreen({
       if (outcome.status === "done") {
         setPendingUrl(null);
         setConnected(true);
-        if (!syncFolders) {
-          await mailApi
-            .setSyncFolders(outcome.account_id ?? accountSlug(address), [])
-            .catch((failure: unknown) =>
-              notify(`Dossiers non enregistrés · ${errorText(failure)}`),
-            );
-        }
         await new Promise((resolve) => setTimeout(resolve, 1200));
         await refreshMailbox();
         onClose?.();
@@ -239,36 +242,65 @@ export function ConnectScreen({
     }
   };
 
-  const submit = (event: React.FormEvent<HTMLFormElement>) => {
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (busy) return;
-    const id = accountSlug(email);
-    setBusy(true);
-    setError(null);
-    createAccount({
-      id,
+    const input: NewAccount = {
+      id: accountSlug(email),
       label: label.trim(),
       email: email.trim(),
       username: username.trim() || email.trim(),
       imap: { host: imapHost.trim(), port: Number(imapPort), encryption: imapEncryption },
       smtp: { host: smtpHost.trim(), port: Number(smtpPort), encryption: smtpEncryption },
       auth: { kind: "password", password },
-    })
-      .then(async () => {
-        if (syncFolders) return;
-        await mailApi
-          .setSyncFolders(id, [])
-          .catch((failure: unknown) => notify(`Dossiers non enregistrés · ${errorText(failure)}`));
-      })
-      .catch((failure: unknown) => {
-        setError(
-          failure instanceof ApiError
-            ? `${failure.kind} · ${failure.message}`
-            : errorText(failure),
-        );
-      })
-      .finally(() => setBusy(false));
+    };
+    setBusy(true);
+    setError(null);
+    try {
+      const found = await mailApi.previewFolders(input);
+      setDraft(input);
+      setFolders(found);
+      setSelected(found.map((folder) => folder.path));
+      setStep("folders");
+    } catch (failure: unknown) {
+      setError(failureText(failure));
+    } finally {
+      setBusy(false);
+    }
   };
+
+  const connect = async () => {
+    if (!draft || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await createAccount({ ...draft, synced_folders: selected });
+    } catch (failure: unknown) {
+      setError(failureText(failure));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleFolder = (row: FolderTreeRow<ApiFolder>) => {
+    const affected = [row.node.path, ...descendantPaths(row.node)].filter((path) =>
+      folders.some((folder) => folder.path === path),
+    );
+    setSelected((current) =>
+      affected.every((path) => current.includes(path))
+        ? current.filter((path) => !affected.includes(path))
+        : [...new Set([...current, ...affected])],
+    );
+  };
+
+  const errorBlock = error ? (
+    <p
+      role="alert"
+      className="mt-4 rounded-2xl border border-rose-200 bg-rose-500/10 px-3.5 py-2.5 text-[11.5px] leading-relaxed font-semibold break-words text-rose-600 dark:border-rose-500/30 dark:text-rose-300"
+    >
+      {error}
+    </p>
+  ) : null;
 
   if (connected) {
     return (
@@ -324,349 +356,418 @@ export function ConnectScreen({
               desktop ? "text-[27px]" : "text-[21px]",
             )}
           >
-            Ajouter un compte
+            {step === "folders" ? "Dossiers à synchroniser" : "Ajouter un compte"}
           </h1>
         </div>
       </header>
 
-      <form
-        onSubmit={submit}
-        className={cn(
-          "relative min-h-0 flex-1 overflow-y-auto no-scrollbar",
-          desktop ? "mx-auto w-full max-w-[780px] px-10 pt-3 pb-12" : "px-5 pt-2 pb-8",
-        )}
-      >
-        <BlurFade yOffset={8}>
-          <p className="text-[11.5px] leading-relaxed font-medium text-ink-muted">
-            {phase === "empty"
-              ? "Aucun compte n'est encore connecté au service mail local. Renseigne ton serveur IMAP et SMTP : la connexion est testée avant l'enregistrement."
-              : "La connexion est testée par le service local avant tout enregistrement. Aucun mot de passe ne transite par l'interface."}
-          </p>
-        </BlurFade>
+      {step === "folders" && draft ? (
+        <div
+          className={cn(
+            "relative min-h-0 flex-1 overflow-y-auto no-scrollbar",
+            desktop ? "mx-auto w-full max-w-[780px] px-10 pt-3 pb-12" : "px-5 pt-2 pb-8",
+          )}
+        >
+          <BlurFade yOffset={8}>
+            <p className="text-[11.5px] leading-relaxed font-medium text-ink-muted">
+              {draft.email} · {folders.length} dossier{folders.length > 1 ? "s" : ""} publié
+              {folders.length > 1 ? "s" : ""} par le serveur. Décoche ceux que tu ne veux pas
+              télécharger : tout reste modifiable ensuite dans les réglages.
+            </p>
+          </BlurFade>
 
-        <BlurFade delay={0.04}>
-          <div className={cn("mt-4", desktop ? "grid grid-cols-2 gap-3" : "space-y-3")}>
-            <div>
-              <label htmlFor="connect-label" className={LABEL}>
-                Libellé
-              </label>
-              <input
-                id="connect-label"
-                className={cn(FIELD, "mt-1.5")}
-                value={label}
-                onChange={(event) => setLabel(event.target.value)}
-                placeholder="Perso, Studio…"
-                autoComplete="off"
-                required
-              />
-            </div>
-            <div>
-              <label htmlFor="connect-email" className={LABEL}>
-                Adresse e-mail
-              </label>
-              <input
-                id="connect-email"
-                type="email"
-                className={cn(FIELD, "mt-1.5")}
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                onBlur={() => {
-                  if (!imapHost.trim() && !smtpHost.trim()) void applyDiscovery();
-                }}
-                placeholder="prenom@domaine.fr"
-                autoComplete="email"
-                required
-              />
-              <div className="mt-1.5 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void applyDiscovery()}
-                  disabled={discovering || !email.includes("@")}
-                  className="focus-ring inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 text-[11px] font-bold text-accent-ink transition-colors hover:border-accent-ring disabled:opacity-50"
-                >
-                  {discovering ? (
-                    <Loader2 className="size-3.5 animate-spin" />
+          <BlurFade delay={0.04}>
+            <div className="mt-4 rounded-2xl border border-line bg-surface p-1.5">
+              {rows.map((row) => (
+                <div key={row.node.path} className="flex items-center">
+                  {row.hasChildren ? (
+                    <button
+                      type="button"
+                      onClick={row.toggle}
+                      aria-expanded={row.expanded}
+                      aria-label={`${row.expanded ? "Replier" : "Déplier"} ${row.node.name}`}
+                      className="focus-ring grid size-7 shrink-0 place-items-center rounded-lg text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+                    >
+                      <ChevronRight
+                        className={cn("size-3.5 transition-transform", row.expanded && "rotate-90")}
+                      />
+                    </button>
                   ) : (
-                    <Radar className="size-3.5" strokeWidth={2.4} />
+                    <span className="size-7 shrink-0" />
                   )}
-                  Détecter les serveurs
-                </button>
-                {discovery ? (
-                  <p
-                    className={cn(
-                      "min-w-0 truncate text-[11px] font-semibold",
-                      discovery.tone === "ok" ? "text-emerald-700 dark:text-emerald-300" : "text-ink-muted",
-                    )}
+                  <div
+                    className="min-w-0 flex-1"
+                    style={row.depth ? { paddingLeft: row.depth * 14 } : undefined}
                   >
-                    {discovery.text}
+                    {row.node.item ? (
+                      <label className="flex min-h-9 cursor-pointer items-center gap-2 rounded-xl px-1.5 text-[12.5px] font-semibold text-ink transition-colors hover:bg-surface-2">
+                        <input
+                          type="checkbox"
+                          className="size-3.5 shrink-0 accent-[var(--accent)]"
+                          checked={selected.includes(row.node.path)}
+                          onChange={() => toggleFolder(row)}
+                          aria-label={`Synchroniser ${row.node.name}`}
+                        />
+                        <span className="min-w-0 flex-1 truncate">{row.node.name}</span>
+                      </label>
+                    ) : (
+                      <span className="block truncate px-1.5 py-1.5 text-[12.5px] font-semibold text-ink-muted">
+                        {row.node.name}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 px-1 text-[11px] font-bold text-ink-muted tabular-nums">
+              {selected.length} dossier{selected.length > 1 ? "s" : ""} à synchroniser
+            </p>
+          </BlurFade>
+
+          {errorBlock}
+
+          <div className={cn("mt-5 flex gap-2", desktop ? "flex-row items-center" : "flex-col")}>
+            <ShimmerButton
+              type="button"
+              onClick={() => void connect()}
+              disabled={busy}
+              shimmerDuration={4}
+              className={desktop ? "w-[260px]" : "w-full"}
+            >
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
+              {busy ? "Connexion en cours…" : "Connecter le compte"}
+            </ShimmerButton>
+            <button
+              type="button"
+              onClick={() => {
+                setStep("form");
+                setError(null);
+              }}
+              disabled={busy}
+              className="focus-ring inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 text-[11.5px] font-bold text-ink-soft transition-colors hover:bg-surface-2 hover:text-ink disabled:opacity-50"
+            >
+              <ArrowLeft className="size-3.5" />
+              Revenir au formulaire
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form
+          onSubmit={submit}
+          className={cn(
+            "relative min-h-0 flex-1 overflow-y-auto no-scrollbar",
+            desktop ? "mx-auto w-full max-w-[780px] px-10 pt-3 pb-12" : "px-5 pt-2 pb-8",
+          )}
+        >
+          <BlurFade yOffset={8}>
+            <p className="text-[11.5px] leading-relaxed font-medium text-ink-muted">
+              {phase === "empty"
+                ? "Aucun compte n'est encore connecté au service mail local. Renseigne ton serveur IMAP et SMTP : la connexion est testée avant l'enregistrement."
+                : "La connexion est testée par le service local avant tout enregistrement. Aucun mot de passe ne transite par l'interface."}
+            </p>
+          </BlurFade>
+
+          <BlurFade delay={0.04}>
+            <div className={cn("mt-4", desktop ? "grid grid-cols-2 gap-3" : "space-y-3")}>
+              <div>
+                <label htmlFor="connect-label" className={LABEL}>
+                  Libellé
+                </label>
+                <input
+                  id="connect-label"
+                  className={cn(FIELD, "mt-1.5")}
+                  value={label}
+                  onChange={(event) => setLabel(event.target.value)}
+                  placeholder="Perso, Studio…"
+                  autoComplete="off"
+                  required
+                />
+              </div>
+              <div>
+                <label htmlFor="connect-email" className={LABEL}>
+                  Adresse e-mail
+                </label>
+                <input
+                  id="connect-email"
+                  type="email"
+                  className={cn(FIELD, "mt-1.5")}
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  onBlur={() => {
+                    if (!imapHost.trim() && !smtpHost.trim()) void applyDiscovery();
+                  }}
+                  placeholder="prenom@domaine.fr"
+                  autoComplete="email"
+                  required
+                />
+                <div className="mt-1.5 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void applyDiscovery()}
+                    disabled={discovering || !email.includes("@")}
+                    className="focus-ring inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 text-[11px] font-bold text-accent-ink transition-colors hover:border-accent-ring disabled:opacity-50"
+                  >
+                    {discovering ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Radar className="size-3.5" strokeWidth={2.4} />
+                    )}
+                    Détecter les serveurs
+                  </button>
+                  {discovery ? (
+                    <p
+                      className={cn(
+                        "min-w-0 truncate text-[11px] font-semibold",
+                        discovery.tone === "ok" ? "text-emerald-700 dark:text-emerald-300" : "text-ink-muted",
+                      )}
+                    >
+                      {discovery.text}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+              <div className={cn("rounded-2xl border border-line bg-surface/60 p-3", desktop && "col-span-2")}>
+                <p className={LABEL}>Connexion par OAuth2</p>
+                <p className="mt-1 text-[11px] leading-relaxed font-medium text-ink-muted">
+                  {manualProviders.length === 0
+                    ? "Le consentement s'ouvre dans ton navigateur : l'identifiant d'application de chaque fournisseur est embarqué dans Lavande. Aucun mot de passe ne transite par l'interface."
+                    : `Le consentement s'ouvre dans ton navigateur. ${embeddedNames ? `${embeddedNames} : identifiant d'application embarqué. ` : ""}${manualNames} : aucun identifiant embarqué, saisis le tien ci-dessous.`}
+                </p>
+                {manualProviders.map((entry) => (
+                  <input
+                    key={entry.value}
+                    className={cn(FIELD, "mt-2 h-9 text-[12px]")}
+                    value={manualClientIds[entry.value]}
+                    onChange={(event) =>
+                      setManualClientIds((current) => ({
+                        ...current,
+                        [entry.value]: event.target.value,
+                      }))
+                    }
+                    placeholder="Application (client) ID"
+                    autoComplete="off"
+                    aria-label={`Identifiant d'application ${entry.label} (client_id)`}
+                  />
+                ))}
+                {manualProviders.length > 0 ? <OAuthGuide redirectUri={redirectUri} /> : null}
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {OAUTH_PROVIDERS.map((entry) => (
+                    <button
+                      key={entry.value}
+                      type="button"
+                      onClick={() => void startOAuth(entry.value)}
+                      disabled={oauthBusy !== null}
+                      className="focus-ring inline-flex min-h-9 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11.5px] font-bold text-ink transition-colors hover:border-accent-ring disabled:opacity-50"
+                    >
+                      {oauthBusy === entry.value ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <PlugZap className="size-3.5" strokeWidth={2.4} />
+                      )}
+                      {entry.label}
+                    </button>
+                  ))}
+                  {oauthBusy ? (
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted">
+                      <CheckCircle2 className="size-3.5" />
+                      en attente du consentement…
+                    </span>
+                  ) : null}
+                </div>
+                {oauthError ? (
+                  <p className="mt-2 text-[11.5px] font-semibold text-rose-700 dark:text-rose-300">{oauthError}</p>
+                ) : null}
+                {pendingUrl ? (
+                  <p className="mt-2 text-[11px] leading-relaxed font-semibold text-ink-muted">
+                    Rien ne s'est ouvert ?{" "}
+                    <button
+                      type="button"
+                      onClick={() => openExternal(pendingUrl)}
+                      className="font-bold text-accent-ink underline underline-offset-2"
+                    >
+                      Ouvrir la page de consentement
+                    </button>
                   </p>
                 ) : null}
               </div>
-            </div>
-            <div className={cn("rounded-2xl border border-line bg-surface/60 p-3", desktop && "col-span-2")}>
-              <p className={LABEL}>Connexion par OAuth2</p>
-              <p className="mt-1 text-[11px] leading-relaxed font-medium text-ink-muted">
-                {manualProviders.length === 0
-                  ? "Le consentement s'ouvre dans ton navigateur : l'identifiant d'application de chaque fournisseur est embarqué dans Lavande. Aucun mot de passe ne transite par l'interface."
-                  : `Le consentement s'ouvre dans ton navigateur. ${embeddedNames ? `${embeddedNames} : identifiant d'application embarqué. ` : ""}${manualNames} : aucun identifiant embarqué, saisis le tien ci-dessous.`}
-              </p>
-              {manualProviders.map((entry) => (
-                <input
-                  key={entry.value}
-                  className={cn(FIELD, "mt-2 h-9 text-[12px]")}
-                  value={manualClientIds[entry.value]}
-                  onChange={(event) =>
-                    setManualClientIds((current) => ({
-                      ...current,
-                      [entry.value]: event.target.value,
-                    }))
-                  }
-                  placeholder="Application (client) ID"
-                  autoComplete="off"
-                  aria-label={`Identifiant d'application ${entry.label} (client_id)`}
-                />
-              ))}
-              {manualProviders.length > 0 ? <OAuthGuide redirectUri={redirectUri} /> : null}
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {OAUTH_PROVIDERS.map((entry) => (
-                  <button
-                    key={entry.value}
-                    type="button"
-                    onClick={() => void startOAuth(entry.value)}
-                    disabled={oauthBusy !== null}
-                    className="focus-ring inline-flex min-h-9 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11.5px] font-bold text-ink transition-colors hover:border-accent-ring disabled:opacity-50"
-                  >
-                    {oauthBusy === entry.value ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <PlugZap className="size-3.5" strokeWidth={2.4} />
-                    )}
-                    {entry.label}
-                  </button>
-                ))}
-                {oauthBusy ? (
-                  <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted">
-                    <CheckCircle2 className="size-3.5" />
-                    en attente du consentement…
-                  </span>
-                ) : null}
-              </div>
-              {oauthError ? (
-                <p className="mt-2 text-[11.5px] font-semibold text-rose-700 dark:text-rose-300">{oauthError}</p>
-              ) : null}
-              {pendingUrl ? (
-                <p className="mt-2 text-[11px] leading-relaxed font-semibold text-ink-muted">
-                  Rien ne s'est ouvert ?{" "}
-                  <button
-                    type="button"
-                    onClick={() => openExternal(pendingUrl)}
-                    className="font-bold text-accent-ink underline underline-offset-2"
-                  >
-                    Ouvrir la page de consentement
-                  </button>
-                </p>
-              ) : null}
-            </div>
-            <div>
-              <label htmlFor="connect-username" className={LABEL}>
-                Identifiant
-              </label>
-              <input
-                id="connect-username"
-                className={cn(FIELD, "mt-1.5")}
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-                placeholder="souvent l'adresse complète"
-                autoComplete="username"
-              />
-            </div>
-            <div>
-              <label htmlFor="connect-password" className={LABEL}>
-                Mot de passe
-              </label>
-              <input
-                id="connect-password"
-                type="password"
-                className={cn(FIELD, "mt-1.5")}
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="••••••••"
-                autoComplete="current-password"
-                required
-              />
-            </div>
-          </div>
-        </BlurFade>
-
-        <div className={cn("mt-5", desktop ? "grid grid-cols-2 gap-3" : "space-y-3")}>
-        <BlurFade delay={0.08}>
-          <fieldset className="rounded-2xl border border-line bg-surface p-3.5">
-            <legend className="flex items-center gap-1.5 px-1 text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
-              <Server className="size-3.5" />
-              Réception IMAP
-            </legend>
-            <div className="mt-2 space-y-3">
               <div>
-                <label htmlFor="connect-imap-host" className={LABEL}>
-                  Hôte IMAP
+                <label htmlFor="connect-username" className={LABEL}>
+                  Identifiant
                 </label>
                 <input
-                  id="connect-imap-host"
+                  id="connect-username"
                   className={cn(FIELD, "mt-1.5")}
-                  value={imapHost}
-                  onChange={(event) => setImapHost(event.target.value)}
-                  placeholder="imap.domaine.fr"
-                  autoComplete="off"
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  placeholder="souvent l'adresse complète"
+                  autoComplete="username"
+                />
+              </div>
+              <div>
+                <label htmlFor="connect-password" className={LABEL}>
+                  Mot de passe
+                </label>
+                <input
+                  id="connect-password"
+                  type="password"
+                  className={cn(FIELD, "mt-1.5")}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="••••••••"
+                  autoComplete="current-password"
                   required
                 />
               </div>
-              <div className="flex gap-2">
-                <div className="w-[104px] shrink-0">
-                  <label htmlFor="connect-imap-port" className={LABEL}>
-                    Port
+            </div>
+          </BlurFade>
+
+          <div className={cn("mt-5", desktop ? "grid grid-cols-2 gap-3" : "space-y-3")}>
+          <BlurFade delay={0.08}>
+            <fieldset className="rounded-2xl border border-line bg-surface p-3.5">
+              <legend className="flex items-center gap-1.5 px-1 text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                <Server className="size-3.5" />
+                Réception IMAP
+              </legend>
+              <div className="mt-2 space-y-3">
+                <div>
+                  <label htmlFor="connect-imap-host" className={LABEL}>
+                    Hôte IMAP
                   </label>
                   <input
-                    id="connect-imap-port"
-                    type="number"
-                    inputMode="numeric"
-                    min={1}
-                    max={65535}
-                    className={cn(FIELD, "mt-1.5 tabular-nums")}
-                    value={imapPort}
-                    onChange={(event) => setImapPort(event.target.value)}
+                    id="connect-imap-host"
+                    className={cn(FIELD, "mt-1.5")}
+                    value={imapHost}
+                    onChange={(event) => setImapHost(event.target.value)}
+                    placeholder="imap.domaine.fr"
+                    autoComplete="off"
                     required
                   />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <label htmlFor="connect-imap-encryption" className={LABEL}>
-                    Chiffrement
-                  </label>
-                  <select
-                    id="connect-imap-encryption"
-                    className={cn(FIELD, "mt-1.5 cursor-pointer")}
-                    value={imapEncryption}
-                    onChange={(event) => changeImapEncryption(event.target.value as Encryption)}
-                  >
-                    {ENCRYPTIONS.map((entry) => (
-                      <option key={entry.value} value={entry.value}>
-                        {entry.label}
-                      </option>
-                    ))}
-                  </select>
+                <div className="flex gap-2">
+                  <div className="w-[104px] shrink-0">
+                    <label htmlFor="connect-imap-port" className={LABEL}>
+                      Port
+                    </label>
+                    <input
+                      id="connect-imap-port"
+                      type="number"
+                      inputMode="numeric"
+                      min={1}
+                      max={65535}
+                      className={cn(FIELD, "mt-1.5 tabular-nums")}
+                      value={imapPort}
+                      onChange={(event) => setImapPort(event.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <label htmlFor="connect-imap-encryption" className={LABEL}>
+                      Chiffrement
+                    </label>
+                    <select
+                      id="connect-imap-encryption"
+                      className={cn(FIELD, "mt-1.5 cursor-pointer")}
+                      value={imapEncryption}
+                      onChange={(event) => changeImapEncryption(event.target.value as Encryption)}
+                    >
+                      {ENCRYPTIONS.map((entry) => (
+                        <option key={entry.value} value={entry.value}>
+                          {entry.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
-            </div>
-          </fieldset>
-        </BlurFade>
+            </fieldset>
+          </BlurFade>
 
-        <BlurFade delay={0.12}>
-          <fieldset className="rounded-2xl border border-line bg-surface p-3.5">
-            <legend className="flex items-center gap-1.5 px-1 text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
-              <PlugZap className="size-3.5" />
-              Envoi SMTP
-            </legend>
-            <div className="mt-2 space-y-3">
-              <div>
-                <label htmlFor="connect-smtp-host" className={LABEL}>
-                  Hôte SMTP
-                </label>
-                <input
-                  id="connect-smtp-host"
-                  className={cn(FIELD, "mt-1.5")}
-                  value={smtpHost}
-                  onChange={(event) => setSmtpHost(event.target.value)}
-                  placeholder="smtp.domaine.fr"
-                  autoComplete="off"
-                  required
-                />
-              </div>
-              <div className="flex gap-2">
-                <div className="w-[104px] shrink-0">
-                  <label htmlFor="connect-smtp-port" className={LABEL}>
-                    Port
+          <BlurFade delay={0.12}>
+            <fieldset className="rounded-2xl border border-line bg-surface p-3.5">
+              <legend className="flex items-center gap-1.5 px-1 text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                <PlugZap className="size-3.5" />
+                Envoi SMTP
+              </legend>
+              <div className="mt-2 space-y-3">
+                <div>
+                  <label htmlFor="connect-smtp-host" className={LABEL}>
+                    Hôte SMTP
                   </label>
                   <input
-                    id="connect-smtp-port"
-                    type="number"
-                    inputMode="numeric"
-                    min={1}
-                    max={65535}
-                    className={cn(FIELD, "mt-1.5 tabular-nums")}
-                    value={smtpPort}
-                    onChange={(event) => setSmtpPort(event.target.value)}
+                    id="connect-smtp-host"
+                    className={cn(FIELD, "mt-1.5")}
+                    value={smtpHost}
+                    onChange={(event) => setSmtpHost(event.target.value)}
+                    placeholder="smtp.domaine.fr"
+                    autoComplete="off"
                     required
                   />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <label htmlFor="connect-smtp-encryption" className={LABEL}>
-                    Chiffrement
-                  </label>
-                  <select
-                    id="connect-smtp-encryption"
-                    className={cn(FIELD, "mt-1.5 cursor-pointer")}
-                    value={smtpEncryption}
-                    onChange={(event) => changeSmtpEncryption(event.target.value as Encryption)}
-                  >
-                    {ENCRYPTIONS.map((entry) => (
-                      <option key={entry.value} value={entry.value}>
-                        {entry.label}
-                      </option>
-                    ))}
-                  </select>
+                <div className="flex gap-2">
+                  <div className="w-[104px] shrink-0">
+                    <label htmlFor="connect-smtp-port" className={LABEL}>
+                      Port
+                    </label>
+                    <input
+                      id="connect-smtp-port"
+                      type="number"
+                      inputMode="numeric"
+                      min={1}
+                      max={65535}
+                      className={cn(FIELD, "mt-1.5 tabular-nums")}
+                      value={smtpPort}
+                      onChange={(event) => setSmtpPort(event.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <label htmlFor="connect-smtp-encryption" className={LABEL}>
+                      Chiffrement
+                    </label>
+                    <select
+                      id="connect-smtp-encryption"
+                      className={cn(FIELD, "mt-1.5 cursor-pointer")}
+                      value={smtpEncryption}
+                      onChange={(event) => changeSmtpEncryption(event.target.value as Encryption)}
+                    >
+                      {ENCRYPTIONS.map((entry) => (
+                        <option key={entry.value} value={entry.value}>
+                          {entry.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
-            </div>
-          </fieldset>
-        </BlurFade>
-        </div>
-
-        <BlurFade delay={0.14}>
-          <div className="mt-3 rounded-2xl border border-line bg-surface">
-            <ToggleRow
-              icon={<FolderTree className="size-4" />}
-              label="Synchroniser les dossiers"
-              hint={
-                syncFolders
-                  ? "Tous les dossiers du compte, affinables ensuite dans les réglages"
-                  : "Le compte se connecte sans rien télécharger"
-              }
-              checked={syncFolders}
-              onChange={setSyncFolders}
-            />
+            </fieldset>
+          </BlurFade>
           </div>
-        </BlurFade>
 
-        {error && (
-          <p
-            role="alert"
-            className="mt-4 rounded-2xl border border-rose-200 bg-rose-500/10 px-3.5 py-2.5 text-[11.5px] leading-relaxed font-semibold break-words text-rose-600 dark:border-rose-500/30 dark:text-rose-300"
-          >
-            {error}
-          </p>
-        )}
+          {errorBlock}
 
-        <div className={cn("mt-5 flex gap-2", desktop ? "flex-row items-center" : "flex-col")}>
-          <ShimmerButton
-            type="submit"
-            disabled={busy}
-            shimmerDuration={4}
-            className={desktop ? "w-[260px]" : "w-full"}
-          >
-            {busy ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
-            {busy ? "Connexion en cours…" : "Tester et connecter"}
-          </ShimmerButton>
-          {import.meta.env.VITE_DISTRIBUTION === "1" ? null : (
-            <button
-              type="button"
-              onClick={useDemo}
-              className="focus-ring inline-flex min-h-11 items-center justify-center gap-2 rounded-full text-[11.5px] font-bold text-ink-soft transition-colors hover:bg-surface-2 hover:text-ink"
+          <div className={cn("mt-5 flex gap-2", desktop ? "flex-row items-center" : "flex-col")}>
+            <ShimmerButton
+              type="submit"
+              disabled={busy}
+              shimmerDuration={4}
+              className={desktop ? "w-[260px]" : "w-full"}
             >
-              <Sparkles className="size-3.5" />
-              Voir la démo avec les données de la maquette
-            </button>
-          )}
-        </div>
-      </form>
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
+              {busy ? "Connexion en cours…" : "Prévisualiser les dossiers"}
+            </ShimmerButton>
+            {import.meta.env.VITE_DISTRIBUTION === "1" ? null : (
+              <button
+                type="button"
+                onClick={useDemo}
+                className="focus-ring inline-flex min-h-11 items-center justify-center gap-2 rounded-full text-[11.5px] font-bold text-ink-soft transition-colors hover:bg-surface-2 hover:text-ink"
+              >
+                <Sparkles className="size-3.5" />
+                Voir la démo avec les données de la maquette
+              </button>
+            )}
+          </div>
+        </form>
+      )}
     </div>
   );
 }

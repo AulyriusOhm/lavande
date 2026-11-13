@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { DesktopInbox } from "@/desktop/inbox";
+import { DesktopSettings } from "@/desktop/settings";
 import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { MailStoreProvider } from "@/lib/store";
@@ -54,7 +55,7 @@ const response = (payload: unknown, status = 200): Response =>
 
 const noContent = (): Response => ({ ok: true, status: 204 }) as unknown as Response;
 
-function stubBackend() {
+function stubBackend(refusal: { error: string } | null = null) {
   const deletes: string[] = [];
   const vanished: string[] = [];
   const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
@@ -63,6 +64,7 @@ function stubBackend() {
     if (method === "DELETE" && /\/api\/accounts\/a1\/folders\//.test(url)) {
       const path = decodeURIComponent(url.split("/folders/")[1]);
       deletes.push(path);
+      if (refusal) return response({ error: refusal.error, kind: "imap" }, 502);
       vanished.push(path);
       return noContent();
     }
@@ -97,18 +99,56 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.stubEnv("VITE_MAIL_BACKEND", "api");
 });
 
-describe("rail des dossiers · suppression", () => {
+async function openFoldersPanel() {
+  fireEvent.click(await screen.findByLabelText("Dossiers synchronisés de Perso"));
+  return screen.findByLabelText("Supprimer le dossier Projets");
+}
+
+describe("réglages · suppression d'un dossier", () => {
   it("supprime un dossier personnalisé après confirmation nominative", async () => {
     const { deletes } = stubBackend();
-    render(<DesktopInbox />, { wrapper });
+    render(<DesktopSettings />, { wrapper });
 
-    fireEvent.click(await screen.findByLabelText("Supprimer le dossier Projets"));
+    fireEvent.click(await openFoldersPanel());
     expect(screen.queryByLabelText("Supprimer le dossier Boîte de réception")).toBeNull();
     fireEvent.click(screen.getByLabelText("Confirmer la suppression du dossier Projets"));
 
     await waitFor(() => expect(deletes).toEqual(["Projets"]));
     await waitFor(() => expect(screen.queryByLabelText("Supprimer le dossier Projets")).toBeNull());
+  });
+
+  it("garde le dossier quand le serveur refuse", async () => {
+    const { deletes } = stubBackend({ error: "serveur IMAP : DELETE refusé" });
+    render(<DesktopSettings />, { wrapper });
+
+    fireEvent.click(await openFoldersPanel());
+    fireEvent.click(screen.getByLabelText("Confirmer la suppression du dossier Projets"));
+
+    await waitFor(() => expect(deletes).toEqual(["Projets"]));
+    await waitFor(() => expect(screen.getByLabelText("Supprimer le dossier Projets")).toBeTruthy());
+  });
+
+  it("renonce quand on annule", async () => {
+    const { deletes } = stubBackend();
+    render(<DesktopSettings />, { wrapper });
+
+    fireEvent.click(await openFoldersPanel());
+    fireEvent.click(screen.getByLabelText("Annuler la suppression du dossier"));
+
+    expect(screen.getByLabelText("Supprimer le dossier Projets")).toBeTruthy();
+    expect(deletes).toEqual([]);
+  });
+});
+
+describe("rail des dossiers · suppression retirée", () => {
+  it("ne propose plus la suppression depuis la boîte de réception", async () => {
+    stubBackend();
+    render(<DesktopInbox />, { wrapper });
+
+    await screen.findByLabelText("Masquer le dossier Projets");
+    expect(screen.queryByLabelText(/Supprimer le dossier/)).toBeNull();
   });
 });

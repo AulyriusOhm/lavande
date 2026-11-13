@@ -12,7 +12,7 @@ contrat des commandes à écrire.
 | Fait | Ne fait pas |
 | --- | --- |
 | Connexion IMAP TLS implicite ou STARTTLS, auth mot de passe ou XOAUTH2 | Pas de pool de connexions, pas de reconnexion automatique : l'appelant ouvre et ferme la session |
-| `LIST` + `STATUS` pour les dossiers, réconciliation par dossier : une passe métadonnées `UID FETCH 1:*`, corps seulement pour les UID nouveaux | Secrets dans le trousseau système / fichier chiffré (0600), plus en clair dans `accounts.json` ; base SQLite non chiffrée au repos |
+| `LIST` + `STATUS` pour les dossiers, réconciliation par dossier : une passe métadonnées `UID FETCH 1:*`, en-têtes seuls pour les UID nouveaux, corps à l'ouverture d'un message (`fetch_body`) | Secrets dans le trousseau système / fichier chiffré (0600), plus en clair dans `accounts.json` ; base SQLite non chiffrée au repos |
 | Envoi SMTP (lettre) avec pièces jointes, texte + HTML ; PGP réel (signature/chiffrement) | Pas de décompression bzip2 des payloads OpenPGP ; voir « PGP & rédaction » |
 | Parsing MIME complet (encodage de transfert, RFC 2047, pièces jointes, aperçu) ; flux OAuth2 navigateur (PKCE) | Pas de `client_id` d'application embarqué (Google/Microsoft) : à enregistrer ou fournir au service |
 | Threading déterministe par `References` / `In-Reply-To` / sujet normalisé ; IDLE sur INBOX + push SSE | Pas de CONDSTORE/QRESYNC : chaque synchro refait une passe métadonnées complète du dossier |
@@ -375,18 +375,21 @@ Comportements à connaître :
   5. Trois ensembles : *disparus* (local − serveur) → `store.delete_messages` ; *flags différents*
      (présents des deux côtés, `Flags` inégaux) → `store.set_flags_batch` ; *nouveaux UID*
      (serveur − local) → téléchargement.
-  6. Les corps ne sont demandés que pour les nouveaux UID, **par lots de 500** (`BODY_BATCH`) :
-     `UID FETCH uid1,…,uidN (UID BODY.PEEK[])`, puis `mime::parse_message`, `store.upsert_message`
-     et `store.relink_replies` sur le `Message-ID`. Un UID que le serveur rend sans corps est ignoré,
-     pas fatal.
+  6. La **métadonnée** des nouveaux UID est demandée **par lots de 500** (`IMPORT_BATCH`) :
+     `UID FETCH uid1,…,uidN (UID BODY.PEEK[HEADER])` (en-têtes seuls, **jamais le corps**), puis
+     `mime::parse_headers` (sujet, expéditeur, destinataires, date, `Message-ID`,
+     `In-Reply-To`/`References`, état PGP ; corps, aperçu, pièces jointes et détail PGP vides),
+     `store.upsert_message` et `store.relink_replies` sur le `Message-ID`. Un UID que le serveur
+     rend sans en-têtes est ignoré, pas fatal.
   7. `store.upsert_folder` avec `uidvalidity`, `uidnext` et `last_sync_at = now()`.
   Coût réseau : `SELECT` + la passe métadonnées (linéaire en nombre de messages du dossier) +
-  ⌈nouveaux / 500⌉ requêtes de corps ; un dossier inchangé ne coûte que la passe métadonnées, sans
+  ⌈nouveaux / 500⌉ requêtes d'en-têtes ; un dossier inchangé ne coûte que la passe métadonnées, sans
   un octet de corps. `SyncReport` ne compte que les lignes réellement touchées.
 - Le `role` stocké est conservé s'il n'est pas `Other`, sinon déduit de `FolderMapping`, sinon
   `Other`.
-- `fetch_body` = `UID FETCH <uid> (BODY.PEEK[])` puis `store.set_body` (ne touche ni les drapeaux ni
-  le reste).
+- `fetch_body` = `UID FETCH <uid> (BODY.PEEK[])` puis `store.set_body` : le corps, l'aperçu, les
+  pièces jointes et l'état PGP sont réécrits ensemble (ni les drapeaux ni le reste ne bougent).
+  C'est le seul chemin qui télécharge un corps ; la synchro ne le fait jamais.
 - `set_flags` ne pousse que `\Seen` (inversé depuis `unread`) et `\Flagged` ; `\Answered` est lu
   mais **jamais écrit**. Deux `UID STORE` séparés : `+FLAGS` puis `-FLAGS`.
 - `move_message` : `UID MOVE` si la capacité `MOVE` est annoncée, sinon `UID COPY` +
@@ -502,8 +505,7 @@ impl Store {
         &self, account_id: &str, folder_path: &str, updates: &[(u32, Flags)],
     ) -> Result<usize, MailError>;
     pub fn set_body(
-        &self, account_id: &str, folder_path: &str, uid: u32,
-        text: Option<&str>, html: Option<&str>, pgp_detail: Option<&PgpDetail>,
+        &self, account_id: &str, folder_path: &str, uid: u32, parsed: &ParsedMessage,
     ) -> Result<(), MailError>;
     pub fn delete_message(
         &self, account_id: &str, folder_path: &str, uid: u32,
@@ -931,12 +933,12 @@ jointes vidées, aperçu vide, `pgp` toujours `encrypted`. Sites gatés :
 
 | Chemin | Ce qu'il faisait |
 | --- | --- |
-| `POST /api/accounts/{id}/sync` (dossier et compte) | corps déchiffrés à l'ingestion (`import_bodies`) |
+| `POST /api/accounts/{id}/sync` (dossier et compte) | la synchro ne lit que les en-têtes : plus de déchiffrement à l'ingestion |
 | `GET /api/accounts/{id}/folders/{path}/messages/{uid}?fetch_body=true` | `imap::fetch_body` réécrivait le corps déchiffré |
 | `GET …/messages/{uid}/attachments/{index}` | `imap::fetch_attachment` ouvrait le message pour la pièce jointe |
 | `GET …/messages/{uid}/html-images` | `imap::fetch_html_with_images` ouvrait le message (sans clé : 404, pas de HTML) |
-| `POST /api/accounts/{id}/move` | la réconciliation de la destination réimporte le corps déchiffré |
-| `POST /api/accounts/{id}/send` (copie « Envoyés »), `POST …/drafts` | `imap::append_sent`/`append_draft` analysent les octets déposés |
+| `POST /api/accounts/{id}/move` | la réconciliation de la destination réimporte les en-têtes du message déplacé |
+| `POST /api/accounts/{id}/send` (copie « Envoyés »), `POST …/drafts` | `imap::append_sent`/`append_draft` réconcilient « Envoyés »/« Brouillons » (en-têtes seuls) |
 | veille IDLE (`events::sync_and_publish`) | même réconciliation que la synchro |
 
 Fermer l'interrupteur **efface aussi ce qui était déjà déchiffré** : la route appelle
@@ -1131,9 +1133,10 @@ Variables lues par `scripts/mail-test-server.sh` : `LAVANDE_MAIL_TEST_DIR`, `…
 - **Un seul dossier par appel de `sync_folder`.** `sync_account` se limite à `Inbox` + `Sent` ; les
   autres dossiers (Archive, Trash, Spam, dossiers personnels) ne sont synchronisés que si on les
   demande un par un. `move_message` en réconcilie un second (la destination).
-- **Corps complet à chaque nouveau message.** Les nouveaux UID sont téléchargés en entier
-  (`BODY.PEEK[]`, lots de 500) : simple et correct, mais coûteux sur une grosse boîte. Optimisation
-  prévue : métadonnées d'abord, corps à la demande (`fetch_body` le permet déjà).
+- **Aperçu et pièces jointes vides avant la première ouverture.** La synchro ne télécharge que les
+  en-têtes : `preview` reste vide et `attachments` vide tant qu'`fetch_body` n'a pas relu le message
+  (l'endpoint `?fetch_body=true` le fait à l'ouverture). Un message sans corps texte ni HTML
+  (pièces jointes seules) est donc relu à chaque ouverture.
 - **Pas de pool, pas de PGP réel, pas de flux navigateur OAuth2, pas de recherche serveur.** Voir
   la vue d'ensemble. Le trousseau système existe (desktop Linux) ; Android utilise le fichier
   chiffré en attendant un Keystore matériel.

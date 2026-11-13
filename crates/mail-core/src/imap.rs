@@ -45,11 +45,34 @@ pub struct SyncReport {
     pub uidnext: u32,
 }
 
-const BODY_BATCH: usize = 500;
+const IMPORT_BATCH: usize = 500;
 
 /// Un serveur qui ne répond pas ne doit pas retenir la requête indéfiniment.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// SASL PLAIN responder: empty authzid, authcid then password.
+struct PlainAuthenticator {
+    username: String,
+    password: String,
+}
+
+impl PlainAuthenticator {
+    fn new(username: impl Into<String>, password: impl Into<String>) -> Self {
+        Self {
+            username: username.into(),
+            password: password.into(),
+        }
+    }
+}
+
+impl async_imap::Authenticator for PlainAuthenticator {
+    type Response = Vec<u8>;
+
+    fn process(&mut self, _challenge: &[u8]) -> Self::Response {
+        format!("\0{}\0{}", self.username, self.password).into_bytes()
+    }
+}
 
 /// Opens a TLS connection and authenticates against the webpki roots.
 pub async fn connect(cfg: &AccountConfig) -> Result<ImapSession, MailError> {
@@ -100,10 +123,20 @@ pub async fn connect_with(
     };
 
     match &cfg.auth {
-        AuthConfig::Password { password } => client
-            .login(&cfg.username, password)
-            .await
-            .map_err(|(error, _)| MailError::Auth(error.to_string())),
+        AuthConfig::Password { password } => {
+            let plain = client
+                .authenticate("PLAIN", PlainAuthenticator::new(&cfg.username, password))
+                .await;
+            let client = match plain {
+                Ok(session) => return Ok(session),
+                Err((Error::Bad(_), client)) => client,
+                Err((error, _)) => return Err(MailError::Auth(error.to_string())),
+            };
+            client
+                .login(&cfg.username, password)
+                .await
+                .map_err(|(error, _)| MailError::Auth(error.to_string()))
+        }
         AuthConfig::OAuth2 {
             client_id,
             client_secret,
@@ -173,6 +206,7 @@ pub async fn list_folders(
             .map(|attribute| attribute_label(attribute).to_string())
             .collect();
         let label = config::leaf_name(&path).to_string();
+        let delimiter = name.delimiter().map(str::to_string);
         let status = session
             .status(&path, "(UIDVALIDITY UIDNEXT)")
             .await
@@ -186,6 +220,7 @@ pub async fn list_folders(
             uidnext: uidnext_of(&status, account_id)?,
             last_sync_at: None,
             modseq: None,
+            delimiter,
         });
     }
     Ok(folders)
@@ -200,9 +235,8 @@ pub async fn sync_folder(
     account_id: &str,
     folder_path: &str,
     mapping: &FolderMapping,
-    keys: &PgpKeyring,
 ) -> Result<SyncReport, MailError> {
-    reconcile(session, store, account_id, folder_path, Some(mapping), keys).await
+    reconcile(session, store, account_id, folder_path, Some(mapping)).await
 }
 
 /// Brings one folder in step with the server. When the store holds the
@@ -210,15 +244,15 @@ pub async fn sync_folder(
 /// new messages and the flag changes; anything the server refuses, and any
 /// mailbox whose counts do not add up (a message vanished), falls back to the
 /// full pass: one metadata pass decides what vanished, what changed flags and
-/// what is new, then bodies are pulled for the new uids only, in batches.
-/// `mapping` only names the role of a folder the store has never seen.
+/// what is new, then the metadata of the new uids is imported in batches — no
+/// body is ever downloaded here, `fetch_body` pulls one when a message is
+/// opened. `mapping` only names the role of a folder the store has never seen.
 async fn reconcile(
     session: &mut ImapSession,
     store: &Store,
     account_id: &str,
     folder_path: &str,
     mapping: Option<&FolderMapping>,
-    keys: &PgpKeyring,
 ) -> Result<SyncReport, MailError> {
     let condstore = condstore_ready(session).await;
     let (mailbox, condstore) = select_folder(session, folder_path, condstore).await?;
@@ -244,7 +278,7 @@ async fn reconcile(
         resumable_modseq(stored.as_ref(), uidvalidity_changed),
         mailbox.highest_modseq,
     ) {
-        match incremental(session, store, &target, &mailbox, baseline, keys).await {
+        match incremental(session, store, &target, &mailbox, baseline).await {
             Ok(Some(report)) => {
                 tracing::debug!(
                     account = account_id,
@@ -305,8 +339,8 @@ async fn reconcile(
         ..SyncReport::default()
     };
 
-    for batch in new_uids.chunks(BODY_BATCH) {
-        report.inserted += import_bodies(session, store, &target, batch, &server, keys).await?;
+    for batch in new_uids.chunks(IMPORT_BATCH) {
+        report.inserted += import_metadata(session, store, &target, batch, &server).await?;
     }
 
     record_sync(
@@ -346,6 +380,7 @@ fn record_sync(
         uidnext,
         last_sync_at: Some(Utc::now()),
         modseq,
+        delimiter: stored.and_then(|folder| folder.delimiter.clone()),
     })
 }
 
@@ -439,7 +474,7 @@ fn resumable_modseq(stored: Option<&Folder>, uidvalidity_changed: bool) -> Optio
 }
 
 /// One `CHANGEDSINCE` pass: the server answers the messages it touched since
-/// `baseline` only, so the flag updates, the bodies of the new uids and the
+/// `baseline` only, so the flag updates, the metadata of the new uids and the
 /// `None` the caller turns into a full pass are all decided by `diff_since`.
 async fn incremental(
     session: &mut ImapSession,
@@ -447,7 +482,6 @@ async fn incremental(
     target: &Target<'_>,
     mailbox: &async_imap::types::Mailbox,
     baseline: u64,
-    keys: &PgpKeyring,
 ) -> Result<Option<SyncReport>, MailError> {
     let touched = changes_since(session, baseline).await?;
     let local = store.flags_in_folder(target.account_id, target.folder_path)?;
@@ -464,14 +498,14 @@ async fn incremental(
         uidnext: uidnext_of(mailbox, target.account_id)?,
         ..SyncReport::default()
     };
-    for batch in plan.new_uids.chunks(BODY_BATCH) {
-        report.inserted += import_bodies(session, store, target, batch, &touched, keys).await?;
+    for batch in plan.new_uids.chunks(IMPORT_BATCH) {
+        report.inserted += import_metadata(session, store, target, batch, &touched).await?;
     }
     Ok(Some(report))
 }
 
 /// The writes a `CHANGEDSINCE` pass has to make: the uids the store has never
-/// seen (their bodies are pulled) and the known uids whose flags moved.
+/// seen (their metadata is imported) and the known uids whose flags moved.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct IncrementalPlan {
     new_uids: Vec<u32>,
@@ -506,7 +540,7 @@ fn diff_since(
 
 /// `UID FETCH 1:* (UID FLAGS RFC822.SIZE) (CHANGEDSINCE <modseq>)`: the touched
 /// messages only, in the shape `server_state` returns. The data items are the
-/// ones of the full pass, so `import_bodies` reads the same map either way.
+/// ones of the full pass, so `import_metadata` reads the same map either way.
 async fn changes_since(
     session: &mut ImapSession,
     baseline: u64,
@@ -560,15 +594,16 @@ struct Target<'a> {
     uidvalidity: u32,
 }
 
-/// Reads and stores the bodies of `uids` only. A uid the server answers
-/// without a body is skipped, not fatal.
-async fn import_bodies(
+/// Reads and stores the metadata of `uids` only: `BODY.PEEK[HEADER]`, never the
+/// body. The body, the preview and the attachments arrive with `fetch_body`
+/// when the message is opened. A uid the server answers without headers is
+/// skipped, not fatal.
+async fn import_metadata(
     session: &mut ImapSession,
     store: &Store,
     target: &Target<'_>,
     uids: &[u32],
     server: &HashMap<u32, (Flags, u32)>,
-    keys: &PgpKeyring,
 ) -> Result<usize, MailError> {
     let account_id = target.account_id;
     let folder_path = target.folder_path;
@@ -578,7 +613,7 @@ async fn import_bodies(
         .collect::<Vec<_>>()
         .join(",");
     let fetches: Vec<Fetch> = session
-        .uid_fetch(selector, "(UID BODY.PEEK[])")
+        .uid_fetch(selector, "(UID BODY.PEEK[HEADER])")
         .await
         .map_err(imap_error)?
         .try_collect()
@@ -587,13 +622,13 @@ async fn import_bodies(
 
     let mut inserted = 0;
     for fetch in fetches {
-        let (Some(uid), Some(raw)) = (fetch.uid, fetch.body()) else {
+        let (Some(uid), Some(raw)) = (fetch.uid, fetch.header()) else {
             continue;
         };
         let Some((flags, size)) = server.get(&uid) else {
             continue;
         };
-        let parsed = match mime::parse_message_with_keys(raw, keys) {
+        let parsed = match mime::parse_headers(raw) {
             Ok(parsed) => parsed,
             Err(error) => {
                 tracing::warn!(account = account_id, folder = folder_path, uid, %error, "message illisible, ignoré");
@@ -638,7 +673,8 @@ async fn import_bodies(
     Ok(inserted)
 }
 
-/// Re-reads one message body and stores it.
+/// Re-reads one message and stores its body, its preview, its attachments and
+/// its PGP state in one write.
 pub async fn fetch_body(
     session: &mut ImapSession,
     store: &Store,
@@ -649,14 +685,7 @@ pub async fn fetch_body(
 ) -> Result<(), MailError> {
     let raw = raw_message(session, folder_path, uid).await?;
     let parsed = mime::parse_message_with_keys(&raw, keys)?;
-    store.set_body(
-        account_id,
-        folder_path,
-        uid,
-        parsed.body_text.as_deref(),
-        parsed.body_html.as_deref(),
-        parsed.pgp_detail.as_ref(),
-    )
+    store.set_body(account_id, folder_path, uid, &parsed)
 }
 
 /// Re-reads one attachment. The bytes are never stored: they come from the
@@ -783,7 +812,6 @@ pub async fn move_message(
     from_path: &str,
     uid: u32,
     to_path: &str,
-    keys: &PgpKeyring,
 ) -> Result<(), MailError> {
     session.select(from_path).await.map_err(imap_error)?;
     let capabilities = session.capabilities().await.map_err(imap_error)?;
@@ -804,7 +832,7 @@ pub async fn move_message(
         expunge(session, &uid.to_string(), ExpungeMode::Strict).await?;
     }
     store.delete_messages(account_id, from_path, &[uid])?;
-    reconcile(session, store, account_id, to_path, None, keys).await?;
+    reconcile(session, store, account_id, to_path, None).await?;
     Ok(())
 }
 
@@ -818,7 +846,6 @@ pub async fn append_sent(
     folder_path: &str,
     raw: &[u8],
     message_id: Option<&str>,
-    keys: &PgpKeyring,
 ) -> Result<(), MailError> {
     session.select(folder_path).await.map_err(imap_error)?;
     if let Some(id) = message_id {
@@ -834,7 +861,7 @@ pub async fn append_sent(
         .append(folder_path, Some("(\\Seen)"), None, raw)
         .await
         .map_err(imap_error)?;
-    reconcile(session, store, account_id, folder_path, None, keys).await?;
+    reconcile(session, store, account_id, folder_path, None).await?;
     Ok(())
 }
 
@@ -847,14 +874,13 @@ pub async fn append_draft(
     account_id: &str,
     folder_path: &str,
     raw: &[u8],
-    keys: &PgpKeyring,
 ) -> Result<(), MailError> {
     session.select(folder_path).await.map_err(imap_error)?;
     session
         .append(folder_path, Some("(\\Draft \\Seen)"), None, raw)
         .await
         .map_err(imap_error)?;
-    reconcile(session, store, account_id, folder_path, None, keys).await?;
+    reconcile(session, store, account_id, folder_path, None).await?;
     Ok(())
 }
 
@@ -1104,6 +1130,7 @@ fn imap_error(error: async_imap::error::Error) -> MailError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_imap::Authenticator;
 
     fn unread() -> Flags {
         Flags {
@@ -1129,6 +1156,12 @@ mod tests {
         uids.iter()
             .map(|(uid, flags)| (*uid, (*flags, 10)))
             .collect()
+    }
+
+    #[test]
+    fn plain_payload_is_authzid_authcid_password() {
+        let mut auth = PlainAuthenticator::new("user@example.org", "p^ss");
+        assert_eq!(auth.process(&[]), b"\0user@example.org\0p^ss".to_vec());
     }
 
     #[test]
@@ -1227,6 +1260,7 @@ mod tests {
             uidnext: 10,
             last_sync_at: None,
             modseq: Some(9),
+            delimiter: None,
         };
         assert_eq!(resumable_modseq(None, false), None);
         assert_eq!(resumable_modseq(Some(&folder), true), None);

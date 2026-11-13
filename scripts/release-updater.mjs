@@ -7,8 +7,9 @@
  *   node scripts/release-updater.mjs --notes "…" --url-base https://exemple/updates
  *
  * Le script ne touche pas au code : il lit la version de `src-tauri/tauri.conf.json`,
- * récupère le RPM et l'AppImage déjà construits dans `src-tauri/target/release/bundle/`,
- * les signe avec la clé privée (`.tauri/lavande-updater.key`) et écrit `latest.json`.
+ * récupère le DEB, le RPM et l'AppImage déjà construits dans
+ * `src-tauri/target/release/bundle/`, les signe avec la clé privée
+ * (`.tauri/lavande-updater.key`) et écrit `latest.json`.
  *
  * Si `LAVANDE_GPG_KEY_ID` est défini, les paquets publiés reçoivent en plus la
  * signature GPG des postes cibles (`scripts/sign-artifacts.sh`, avant minisign :
@@ -16,8 +17,9 @@
  * `--require-gpg` transforme cet avertissement en échec.
  *
  * L'updater Tauri télécharge le paquet correspondant à l'installation qui tourne :
- * `linux-x86_64-rpm` pour un paquet RPM, `linux-x86_64-appimage` pour un AppImage,
- * et `linux-x86_64` en dernier recours.
+ * `linux-x86_64-deb` pour un paquet DEB, `linux-x86_64-rpm` pour un paquet RPM,
+ * `linux-x86_64-appimage` pour un AppImage, et `linux-x86_64` en dernier recours.
+ * Le DEB est publié brut : l'updater attend le `.deb`, pas une archive.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -43,7 +45,7 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
     [
       "usage : node scripts/release-updater.mjs [options]",
       "",
-      "  --build           lance `tauri build --bundles rpm,appimage` (VITE_DISTRIBUTION=1) avant de publier",
+      "  --build           lance `tauri build --bundles deb,rpm,appimage` (VITE_DISTRIBUTION=1) avant de publier",
       "  --notes <texte>   notes de version (défaut : dernier commit git)",
       "  --url-base <url>  dossier public des artefacts (défaut : dossier de l'endpoint)",
       "  --key <chemin>    clé privée (défaut : .tauri/lavande-updater.key)",
@@ -95,8 +97,8 @@ const notes =
   })();
 
 if (process.argv.includes("--build")) {
-  console.log("release-updater : build rpm + appimage (verrou distribution)");
-  run("npx", ["tauri", "build", "--bundles", "rpm,appimage"], {
+  console.log("release-updater : build deb + rpm + appimage (verrou distribution)");
+  run("npx", ["tauri", "build", "--bundles", "deb,rpm,appimage"], {
     env: { ...process.env, VITE_DISTRIBUTION: "1" },
   });
 } else if (process.env.VITE_DISTRIBUTION !== "1") {
@@ -118,10 +120,11 @@ const newest = (directory, extension) => {
 
 const appimage = newest(path.join(BUNDLE, "appimage"), ".AppImage");
 const rpm = newest(path.join(BUNDLE, "rpm"), ".rpm");
-if (!appimage && !rpm) {
+const deb = newest(path.join(BUNDLE, "deb"), ".deb");
+if (!appimage && !rpm && !deb) {
   fail(
     `aucun artefact ${version} dans ${path.relative(ROOT, BUNDLE)} : lancez ` +
-      "`VITE_DISTRIBUTION=1 npx tauri build --bundles rpm,appimage`",
+      "`VITE_DISTRIBUTION=1 npx tauri build --bundles deb,rpm,appimage`",
   );
 }
 
@@ -150,6 +153,11 @@ const bundles = {};
 if (rpm) {
   fs.copyFileSync(path.join(BUNDLE, "rpm", rpm), path.join(outDir, rpm));
   bundles["linux-x86_64-rpm"] = rpm;
+}
+
+if (deb) {
+  fs.copyFileSync(path.join(BUNDLE, "deb", deb), path.join(outDir, deb));
+  bundles["linux-x86_64-deb"] = deb;
 }
 
 if (appimage) {

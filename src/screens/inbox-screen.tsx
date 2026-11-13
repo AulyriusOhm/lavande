@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { animate, motion, useMotionValue, useSpring, useTransform } from "motion/react";
-import { Archive, ChevronDown, ChevronUp, Inbox, Loader2, PenLine, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2 } from "lucide-react";
+import { Archive, ChevronDown, ChevronUp, Inbox, Loader2, PenLine, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2, type LucideIcon } from "lucide-react";
 import type { FolderId, Mail } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
 import { threadsInFolder } from "@/lib/threads";
@@ -17,6 +17,7 @@ import { MeshGlow } from "@/components/ui/backdrops";
 import { ThreadRow } from "@/components/thread-row";
 import { EmptyTrashButton } from "@/components/empty-trash";
 import { FolderRow, HiddenFoldersRail } from "@/components/folder-row";
+import { useFolderTree } from "@/components/folder-tree";
 
 type Filter = "all" | "unread" | "starred" | "encrypted";
 
@@ -727,6 +728,95 @@ const FOLDER_ICONS = {
   other: Inbox,
 } as const;
 
+function SheetFolderRow({
+  icon: Icon,
+  label,
+  total,
+  unread = 0,
+  active = false,
+  depth = 0,
+  expanded,
+  onToggle,
+  onSelect,
+  onHide,
+}: {
+  icon: LucideIcon;
+  label: string;
+  total?: number;
+  unread?: number;
+  active?: boolean;
+  depth?: number;
+  expanded?: boolean;
+  onToggle?: () => void;
+  onSelect?: () => void;
+  onHide?: () => void;
+}) {
+  const row = onSelect ? (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        "flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors",
+        active ? "bg-accent-soft ring-1 ring-accent-ring/60" : "hover:bg-surface-2",
+      )}
+    >
+      <span
+        className={cn(
+          "grid size-8 shrink-0 place-items-center rounded-xl",
+          active ? "bg-surface text-accent-ink" : "bg-surface-2 text-ink-soft",
+        )}
+      >
+        <Icon className="size-4" />
+      </span>
+      <span className="min-w-0 flex-1 truncate text-[13px] font-bold text-ink">{label}</span>
+      {total === undefined ? null : (
+        <span className="shrink-0 text-[10.5px] font-semibold text-ink-muted">{total}</span>
+      )}
+      {unread > 0 && (
+        <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-[10.5px] font-bold text-accent-contrast">
+          {unread}
+        </span>
+      )}
+    </button>
+  ) : (
+    <span className="block truncate rounded-2xl px-3 py-2.5 text-[13px] font-bold text-ink-muted">
+      {label}
+    </span>
+  );
+
+  return (
+    <div
+      className="flex items-center"
+      style={depth ? { paddingLeft: depth * 18 } : undefined}
+    >
+      {onToggle ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          aria-label={`${expanded ? "Replier" : "Déplier"} ${label}`}
+          className="focus-ring grid size-8 shrink-0 place-items-center rounded-lg text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+        >
+          <ChevronDown
+            className={cn("size-3.5 transition-transform", !expanded && "-rotate-90")}
+          />
+        </button>
+      ) : depth ? (
+        <span className="size-8 shrink-0" />
+      ) : null}
+      <div className="min-w-0 flex-1">
+        {onHide ? (
+          <FolderRow label={label} variant="mobile" onHide={onHide}>
+            {row}
+          </FolderRow>
+        ) : (
+          row
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function MailboxSheet({
   folder,
   onSelect,
@@ -742,12 +832,15 @@ export function MailboxSheet({
     folderPath,
     emptyTrash,
     folderStats,
-    deleteFolder,
     hiddenFolderOptions,
     hideFolder,
     unhideFolder,
   } = useMailStore();
   const trashCount = folderStats("trash").total;
+  const roles = folderOptions.filter((entry) => entry.id !== "other");
+  const custom = useMemo(() => folderOptions.filter((entry) => entry.id === "other"), [folderOptions]);
+  const customRows = useFolderTree(custom);
+
 
   return (
     <div className="flex h-full flex-col">
@@ -760,58 +853,53 @@ export function MailboxSheet({
       </div>
 
       <div className="flex-1 space-y-1 overflow-y-auto no-scrollbar px-3 pb-4">
-        {folderOptions.map((entry) => {
-          const Icon = FOLDER_ICONS[entry.id];
+        {roles.map((entry) => {
           const stats = folderStats(entry.id, entry.path);
-          const isActive = entry.id === folder && (entry.id !== "other" || entry.path === folderPath);
-          const row = (
-            <button
-              type="button"
-              onClick={() => {
-                onSelect(entry.id, entry.id === "other" ? entry.path : null);
+          return (
+            <SheetFolderRow
+              key={`${entry.id}:${entry.path}`}
+              icon={FOLDER_ICONS[entry.id]}
+              label={entry.label}
+              total={stats.total}
+              unread={stats.unread}
+              active={entry.id === folder}
+              onSelect={() => {
+                onSelect(entry.id, null);
                 onClose();
               }}
-              className={cn(
-                "flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors",
-                isActive ? "bg-accent-soft ring-1 ring-accent-ring/60" : "hover:bg-surface-2",
-              )}
-            >
-              <span
-                className={cn(
-                  "grid size-8 shrink-0 place-items-center rounded-xl",
-                  isActive ? "bg-surface text-accent-ink" : "bg-surface-2 text-ink-soft",
-                )}
-              >
-                <Icon className="size-4" />
-              </span>
-              <span className="min-w-0 flex-1 truncate text-[13px] font-bold text-ink">{entry.label}</span>
-              <span className="shrink-0 text-[10.5px] font-semibold text-ink-muted">{stats.total}</span>
-              {stats.unread > 0 && (
-                <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-[10.5px] font-bold text-accent-contrast">
-                  {stats.unread}
-                </span>
-              )}
-            </button>
-          );
-          return (
-            <div key={`${entry.id}:${entry.path}`}>
-              {entry.id === "other" ? (
-                <FolderRow
-                  label={entry.label}
-                  variant="mobile"
-                  onDelete={() => void deleteFolder(entry.path, entry.label)}
-                  onHide={
-                    account === ALL_ACCOUNTS ? undefined : () => hideFolder(entry.path)
-                  }
-                >
-                  {row}
-                </FolderRow>
-              ) : (
-                row
-              )}
-            </div>
+            />
           );
         })}
+
+        {customRows.map((row) => {
+          const entry = row.node.item;
+          const stats = entry ? folderStats("other", entry.path) : null;
+          return (
+            <SheetFolderRow
+              key={row.node.path}
+              icon={FOLDER_ICONS.other}
+              label={entry?.label ?? row.node.name}
+              total={stats?.total}
+              unread={stats?.unread ?? 0}
+              active={entry !== null && row.node.path === folderPath && folder === "other"}
+              depth={row.depth}
+              expanded={row.expanded}
+              onToggle={row.hasChildren ? row.toggle : undefined}
+              onSelect={
+                entry
+                  ? () => {
+                      onSelect("other", entry.path);
+                      onClose();
+                    }
+                  : undefined
+              }
+              onHide={
+                entry && account !== ALL_ACCOUNTS ? () => hideFolder(entry.path) : undefined
+              }
+            />
+          );
+        })}
+
 
         <HiddenFoldersRail count={hiddenFolderOptions.length} variant="mobile">
           {hiddenFolderOptions.map((entry) => (

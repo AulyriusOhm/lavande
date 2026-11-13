@@ -183,6 +183,7 @@ pub async fn start(state: &AppState, request: StartRequest) -> Result<StartRespo
             refresh_token: String::new(),
             token_endpoint: provider.token_endpoint.clone(),
         },
+        synced_folders: None,
     };
 
     let auth_url = authorize_url(&provider, &redirect_uri, &oauth_state, &challenge)?;

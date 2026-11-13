@@ -157,7 +157,7 @@ est **idempotent** et rejoué après `init` puis avant chaque build (les deux co
 | `app/src/main/java/mail/lavande/app/MainActivity.kt` | `enableEdgeToEdge()`, listener `WindowInsetsCompat` sur `android.R.id.content`, recherche récursive de la WebView, injection de `--safe-bottom` et `--ime-bottom` en px CSS | `env(safe-area-inset-*)` vaut **0** dans la WebView Android |
 | `res/values/colors.xml` | `lavande_canvas` `#fbfaff`, `ic_launcher_background` `#8b7cf6` | fond de fenêtre et fond de l'icône adaptative |
 | `res/values/themes.xml` et `res/values-night/themes.xml` | `android:windowBackground` = `@color/lavande_canvas` | évite le flash blanc au lancement (thème `Theme.Material3.DayNight.NoActionBar`) |
-| `res/mipmap-anydpi-v26/ic_launcher.xml` et `ic_launcher_round.xml` | icône adaptative : fond couleur + `@mipmap/ic_launcher_foreground` | icône ronde / adaptative cohérente avec le monogramme |
+| `res/mipmap-anydpi-v26/ic_launcher.xml` et `ic_launcher_round.xml` | icône adaptative : fond couleur + `@mipmap/ic_launcher_foreground` (dégradé plein cadre) | icône ronde / adaptative = carré dégradé violet |
 | `AndroidManifest.xml` | retire `android:usesCleartextTraffic`, pose `android:networkSecurityConfig`, `android:allowBackup="false"`, `android:fullBackupContent="false"`, `android:dataExtractionRules` | cleartext borné, sauvegarde fermée (voir ci-dessous) |
 | `res/xml/network_security_config.xml` | `cleartextTrafficPermitted="false"` en `base-config`, `true` seulement pour `127.0.0.1`, `localhost` et les hôtes de `LAVANDE_SYNC_HOSTS` | le démon mail local parle HTTP ; tout le reste doit être HTTPS |
 | `res/xml/data_extraction_rules.xml` | exclut `secrets.enc`, `secrets.key`, `daemon-token`, `mail.db` (+ `-wal`, `-shm`) et `app_webview` de `cloud-backup` et `device-transfer` | les secrets ne quittent pas l'appareil par une sauvegarde, même quand `allowBackup="false"` est ignoré (transfert d'appareil à appareil) |
@@ -205,7 +205,7 @@ Le listener garde la dernière valeur, réinjecte après `onResume` et sur `addO
 | `NativeShell` (`src/App.tsx`) | `PhoneApp` en plein écran, classe `.native-shell`, sans le `Stage` (cadre téléphone + barre de statut factice) |
 | `src/index.css` | marge haute fixe `--native-top: 44px`, tokens `--safe-bottom` et `--ime-bottom` (défaut `0px`) pour le bas, consommés par `.native-shell` (`bottom: max(--safe-bottom, --ime-bottom)` pour le clavier) |
 | Polices | deux `@font-face` locaux (Plus Jakarta Sans, `src/assets/fonts/`, licence OFL) ; `index.html` ne charge plus Google Fonts |
-| Icône | `app-icon.svg` (monogramme L) → `./node_modules/.bin/tauri icon app-icon.svg` → `src-tauri/icons/`, `bundle.icon` renseigné dans `src-tauri/tauri.conf.json` |
+| Icône | `app-icon.svg` (carré dégradé violet, sans monogramme) + `app-icon-adaptive.svg` (même dégradé, plein cadre, calques de l'icône adaptative) → `./node_modules/.bin/tauri icon icon-manifest.json` → `src-tauri/icons/`, `src-tauri/gen/android/app/src/main/res/mipmap-*`, `bundle.icon` renseigné dans `src-tauri/tauri.conf.json` |
 
 `?app` est ignoré quand `?desktop` est présent : `?desktop&app` reste la maquette PC.
 

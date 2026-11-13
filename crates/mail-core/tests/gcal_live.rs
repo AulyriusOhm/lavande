@@ -40,6 +40,7 @@ async fn a_real_account_lists_its_calendars_and_events() {
             refresh_token: variable("LAVANDE_GCAL_REFRESH_TOKEN"),
             token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
         },
+        synced_folders: None,
     };
     let mut client = GcalClient::new(&account).expect("client Google Calendar");
     let calendars = client.calendars().await.expect("calendriers Google");

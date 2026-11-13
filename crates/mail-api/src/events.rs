@@ -123,23 +123,7 @@ async fn sync_and_publish(
     folder_path: &str,
 ) {
     let mapping = FolderMapping::default();
-    let keys = match state.keyring_for(&config.id).await {
-        Ok(keys) => keys,
-        Err(error) => {
-            tracing::warn!(%error, "trousseau PGP illisible : synchronisation sans déchiffrement");
-            Default::default()
-        }
-    };
-    match imap::sync_folder(
-        session,
-        state.store(),
-        &config.id,
-        folder_path,
-        &mapping,
-        &keys,
-    )
-    .await
-    {
+    match imap::sync_folder(session, state.store(), &config.id, folder_path, &mapping).await {
         Ok(report) => {
             tracing::info!(
                 account = %config.id,

@@ -28,6 +28,7 @@ fn account(encryption: Encryption) -> AccountConfig {
             port: 465,
             encryption,
         },
+        synced_folders: None,
         auth: AuthConfig::Password {
             password: "hunter2".to_string(),
         },

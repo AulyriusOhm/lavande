@@ -88,6 +88,10 @@ pub struct Folder {
     /// `None` when the server never advertised CONDSTORE: the next sync then
     /// runs the full pass.
     pub modseq: Option<u64>,
+    /// Hierarchy delimiter the server announced (`/`, `.`), `None` on a flat
+    /// server: `path` split on it gives the tree.
+    #[serde(default)]
+    pub delimiter: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

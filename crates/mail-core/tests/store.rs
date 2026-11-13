@@ -1,4 +1,5 @@
 use chrono::{TimeZone, Utc};
+use lavande_mail::mime;
 use lavande_mail::model::{Address, AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState};
 use lavande_mail::pgp::PgpDetail;
 use lavande_mail::store::FolderCount;
@@ -24,6 +25,7 @@ fn open() -> Store {
             uidnext: 10,
             last_sync_at: None,
             modseq: None,
+            delimiter: None,
         };
         store.upsert_folder(&folder).expect("folder");
     }
@@ -161,22 +163,29 @@ fn flags_body_and_delete() {
         }
     );
 
-    store
-        .set_body(
-            "perso",
-            "INBOX",
-            1,
-            Some("texte"),
-            Some("<p>html</p>"),
-            None,
-        )
-        .expect("body");
+    let parsed = mime::parse_message(RAW_BODY).expect("parse");
+    store.set_body("perso", "INBOX", 1, &parsed).expect("body");
     let stored = store
         .get_message("perso", "INBOX", 1)
         .expect("get")
         .expect("present");
-    assert_eq!(stored.body_text.as_deref(), Some("texte"));
-    assert_eq!(stored.body_html.as_deref(), Some("<p>html</p>"));
+    assert_eq!(stored.body_text.as_deref(), Some("Le planning avance."));
+    assert!(stored
+        .body_html
+        .as_deref()
+        .is_some_and(|html| html.contains("Le planning avance.")));
+    assert_eq!(stored.preview, "Le planning avance.");
+    assert_eq!(
+        stored.attachments,
+        vec![AttachmentMeta {
+            filename: "a.png".to_string(),
+            mime: "image/png".to_string(),
+            size: 3,
+            inline: false,
+        }]
+    );
+    assert_eq!(stored.pgp, PgpState::None);
+    assert_eq!(stored.pgp_detail, None);
 
     assert!(store.set_flags("perso", "INBOX", 42, &flags).is_err());
 
@@ -431,6 +440,42 @@ fn reads_folders_back() {
     assert!(store.get_folder("perso", "Nope").expect("folder").is_none());
 }
 
+/// The hierarchy delimiter the server announced travels with the folder row, so
+/// the tree can be rebuilt without a round-trip.
+#[test]
+fn keeps_the_hierarchy_delimiter_of_a_folder() {
+    let store = open();
+    let folder = store
+        .get_folder("perso", "INBOX")
+        .expect("folder")
+        .expect("present");
+    assert_eq!(folder.delimiter, None);
+
+    store
+        .upsert_folder(&Folder {
+            delimiter: Some("/".to_string()),
+            ..folder
+        })
+        .expect("upsert");
+    assert_eq!(
+        store
+            .get_folder("perso", "INBOX")
+            .expect("folder")
+            .expect("present")
+            .delimiter,
+        Some("/".to_string())
+    );
+    let listed = store.list_folders("perso").expect("folders");
+    assert_eq!(
+        listed
+            .iter()
+            .find(|folder| folder.path == "INBOX")
+            .expect("INBOX")
+            .delimiter,
+        Some("/".to_string())
+    );
+}
+
 /// The high-water mark an incremental CONDSTORE pass resumes from: absent until
 /// a CONDSTORE server reported one, then carried by every sync.
 #[test]
@@ -622,6 +667,7 @@ fn delete_folder_drops_the_folder_and_its_messages() {
         uidnext: 10,
         last_sync_at: Some(date(10)),
         modseq: Some(90060115205545359),
+        delimiter: None,
     };
     store.upsert_folder(&custom).expect("folder");
     let mut first = message(1, "t1", "Marc", "A", 10);
@@ -974,3 +1020,30 @@ fn closing_bodies_only_touches_encrypted_messages() {
         .expect("message");
     assert_eq!(untouched, clear);
 }
+
+const RAW_BODY: &[u8] = concat!(
+    "From: Marc <marc@mail.fr>\r\n",
+    "To: Roman <roman@lavande.fr>\r\n",
+    "Subject: Planning\r\n",
+    "Date: Tue, 10 Nov 2026 10:00:00 +0000\r\n",
+    "Message-ID: <m1@x>\r\n",
+    "MIME-Version: 1.0\r\n",
+    "Content-Type: multipart/mixed; boundary=\"coupe\"\r\n",
+    "\r\n",
+    "--coupe\r\n",
+    "Content-Type: text/plain; charset=utf-8\r\n",
+    "\r\n",
+    "Le planning avance.\r\n",
+    "--coupe\r\n",
+    "Content-Type: text/html; charset=utf-8\r\n",
+    "\r\n",
+    "<p>Le planning avance.</p>\r\n",
+    "--coupe\r\n",
+    "Content-Type: image/png; name=\"a.png\"\r\n",
+    "Content-Transfer-Encoding: base64\r\n",
+    "Content-Disposition: attachment; filename=\"a.png\"\r\n",
+    "\r\n",
+    "YWFh\r\n",
+    "--coupe--\r\n",
+)
+.as_bytes();

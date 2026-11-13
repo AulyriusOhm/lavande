@@ -26,7 +26,7 @@ import type { Thread } from "@/lib/threads";
 import { cn } from "@/lib/utils";
 import { Avatar, IconButton } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
-import { MailBody } from "@/components/mail-body";
+import { MailBody, MailBodyLoading } from "@/components/mail-body";
 import { PgpNotice, PgpStatusBadge } from "@/components/ui/pgp-badge";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { MeshGlow } from "@/components/ui/backdrops";
@@ -43,6 +43,7 @@ export function MessageScreen({
   onNotSpam,
   onRestore,
   onOpenPgp,
+  bodyLoading = false,
 }: {
   thread: Thread;
   onClose: () => void;
@@ -55,6 +56,7 @@ export function MessageScreen({
   onNotSpam?: (mail: Mail) => void;
   onRestore?: (mail: Mail) => void;
   onOpenPgp?: () => void;
+  bodyLoading?: boolean;
 }) {
   const prefs = usePrefs();
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -416,13 +418,17 @@ export function MessageScreen({
         ) : null}
 
         <BlurFade delay={0.12}>
-          <MailBody
-            className="mt-5"
-            html={mail.html}
-            paragraphs={mail.body}
-            source={mail.source}
-            encrypted={mail.pgp === "encrypted"}
-          />
+          {bodyLoading ? (
+            <MailBodyLoading className="mt-5" />
+          ) : (
+            <MailBody
+              className="mt-5"
+              html={mail.html}
+              paragraphs={mail.body}
+              source={mail.source}
+              encrypted={mail.pgp === "encrypted"}
+            />
+          )}
         </BlurFade>
 
         {mail.attachments?.length ? <BlurFade delay={0.18}>{attachmentList(mail)}</BlurFade> : null}

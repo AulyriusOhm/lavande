@@ -95,6 +95,7 @@ fn folder(path: &str, modseq: Option<u64>) -> lavande_mail::model::Folder {
         uidnext: 9,
         last_sync_at: None,
         modseq,
+        delimiter: None,
     }
 }
 
@@ -221,6 +222,74 @@ async fn failed_connection_stores_nothing() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json(&body), json!([]));
     assert!(!directory.path().join("accounts.json").exists());
+}
+
+#[tokio::test]
+async fn preview_rejects_an_invalid_config() {
+    let (_directory, state) = state().await;
+    let mut plain = account("perso");
+    plain["imap"]["encryption"] = json!("plain");
+    let (status, body) = call(&state, post("/api/accounts/preview", &plain)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json(&body)["kind"], "config");
+}
+
+#[tokio::test]
+async fn preview_lists_the_folders_without_creating_the_account() {
+    let (directory, state) = state().await;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port libre");
+    let port = listener.local_addr().expect("adresse").port();
+    drop(listener);
+
+    let mut refused = account("perso");
+    refused["imap"]["host"] = json!("127.0.0.1");
+    refused["imap"]["port"] = json!(port);
+    let (status, body) = call(&state, post("/api/accounts/preview", &refused)).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(json(&body)["kind"], "imap");
+
+    let (status, body) = call(&state, get("/api/accounts")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json(&body), json!([]), "une prévisualisation ne crée rien");
+    assert!(!directory.path().join("accounts.json").exists());
+}
+
+#[tokio::test]
+async fn a_selection_sent_at_creation_is_kept_for_the_first_sync() {
+    let (_directory, state) = state().await;
+    let config = lavande_mail::config::AccountConfig {
+        id: "perso".to_string(),
+        label: "Perso".to_string(),
+        email: "roman@lavande.mail".to_string(),
+        username: "roman@lavande.mail".to_string(),
+        imap: lavande_mail::config::Endpoint {
+            host: "imap.lavande.mail".to_string(),
+            port: 993,
+            encryption: lavande_mail::config::Encryption::Tls,
+        },
+        smtp: lavande_mail::config::Endpoint {
+            host: "smtp.lavande.mail".to_string(),
+            port: 465,
+            encryption: lavande_mail::config::Encryption::Tls,
+        },
+        auth: lavande_mail::config::AuthConfig::Password {
+            password: "secret-en-clair".to_string(),
+        },
+        synced_folders: Some(vec!["Archive".to_string()]),
+    };
+
+    state
+        .add_account(&config, &[folder("INBOX", None), folder("Archive", None)])
+        .await
+        .expect("compte");
+
+    assert_eq!(
+        state.sync_folders("perso").expect("choix"),
+        Some(vec!["Archive".to_string()])
+    );
+    let (status, body) = call(&state, get("/api/accounts")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json(&body)[0]["synced_folders"], json!(["Archive"]));
 }
 
 #[tokio::test]

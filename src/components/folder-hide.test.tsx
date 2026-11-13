@@ -218,7 +218,7 @@ describe("masquage d'un dossier · UI", () => {
     stubBackend([A1, A2]);
     mountSheet();
 
-    await screen.findByLabelText("Supprimer le dossier Projets");
+    await screen.findByRole("button", { name: /^Projets/ });
     expect(screen.queryByLabelText(/^Masquer le dossier/)).toBeNull();
   });
 

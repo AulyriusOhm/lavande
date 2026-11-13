@@ -37,12 +37,14 @@ export type FolderRecord = {
   path: string;
   name: string;
   role: FolderId;
+  delimiter?: string | null;
 };
 
 export type FolderOption = {
   id: FolderId;
   label: string;
   path: string;
+  delimiter?: string | null;
 };
 
 export function toAccount(account: ApiAccount, index: number): Account {
@@ -68,6 +70,7 @@ export function toFolderRecord(folder: ApiFolder): FolderRecord {
     path: folder.path,
     name: folder.name,
     role: ROLE_TO_FOLDER[folder.role],
+    delimiter: folder.delimiter ?? null,
   };
 }
 
@@ -90,6 +93,7 @@ export function folderOptions(records: FolderRecord[], accountId: string): Folde
       id: record.role,
       path: record.path,
       label: record.role === "other" ? record.name : folderLabel(record.role),
+      delimiter: record.delimiter ?? null,
     });
   }
   return options;
@@ -210,7 +214,7 @@ export function messageToMail(
     email: message.from.email,
     to: message.to.map((address) => address.email).join(", ") || undefined,
     subject: message.subject || "(sans objet)",
-    preview: message.preview || body[0] || "…",
+    preview: message.preview || body[0] || "Aperçu chargé à l'ouverture",
     body,
     html: message.body_html ?? undefined,
     time: shortTime(message.date),

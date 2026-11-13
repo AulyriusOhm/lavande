@@ -84,7 +84,6 @@ async fn sync(
     let config = state.account(&id).await?;
     let selection = state.sync_folders(&id)?;
     let mapping = FolderMapping::default();
-    let keys = state.keyring_for(&id).await?;
     let reports: Vec<FolderReport> = match request.folder_path {
         Some(folder_path) => {
             let mut session = imap::connect_with(&config, state.tls()).await?;
@@ -94,7 +93,6 @@ async fn sync(
                 &config.id,
                 &folder_path,
                 &mapping,
-                &keys,
             )
             .await?;
             logout(session).await;
@@ -105,7 +103,6 @@ async fn sync(
             &config,
             &mapping,
             state.tls(),
-            &keys,
             selection.as_deref(),
         )
         .await?
@@ -286,7 +283,6 @@ async fn move_message(
     ApiJson(request): ApiJson<MoveRequest>,
 ) -> Result<StatusCode, ApiError> {
     let config = state.account(&id).await?;
-    let keys = state.keyring_for(&id).await?;
     let mut session = imap::connect_with(&config, state.tls()).await?;
     imap::move_message(
         &mut session,
@@ -295,7 +291,6 @@ async fn move_message(
         &request.from_path,
         request.uid,
         &request.to_path,
-        &keys,
     )
     .await?;
     logout(session).await;
@@ -355,7 +350,6 @@ async fn send(
 
     // Best effort: the mail is gone, a failing Sent copy or \Answered push
     // must not turn a successful send into an error.
-    let keys = state.keyring_for(&id).await.unwrap_or_default();
     let sent_folder = state
         .store()
         .list_folders(&id)?
@@ -372,7 +366,6 @@ async fn send(
                         &folder.path,
                         &raw,
                         message_id.as_deref(),
-                        &keys,
                     )
                     .await
                     {
@@ -425,17 +418,8 @@ async fn save_draft(
         })?;
     let email = smtp::build_message(&outgoing)?;
     let raw = email.formatted();
-    let keys = state.keyring_for(&id).await.unwrap_or_default();
     let mut session = imap::connect_with(&config, state.tls()).await?;
-    imap::append_draft(
-        &mut session,
-        state.store(),
-        &id,
-        &drafts_folder.path,
-        &raw,
-        &keys,
-    )
-    .await?;
+    imap::append_draft(&mut session, state.store(), &id, &drafts_folder.path, &raw).await?;
     logout(session).await;
     tracing::info!(account = %id, "brouillon enregistré");
     Ok(StatusCode::NO_CONTENT)

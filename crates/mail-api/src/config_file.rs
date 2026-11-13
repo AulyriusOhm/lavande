@@ -74,7 +74,7 @@ impl StoredAccount {
             imap: config.imap.clone(),
             smtp: config.smtp.clone(),
             auth,
-            synced_folders: None,
+            synced_folders: config.synced_folders.clone(),
         }
     }
 
@@ -148,6 +148,7 @@ impl StoredAccount {
             imap: self.imap,
             smtp: self.smtp,
             auth,
+            synced_folders: self.synced_folders,
         })
     }
 }
@@ -173,4 +174,57 @@ pub fn save(path: &Path, accounts: &[StoredAccount]) -> Result<(), ApiError> {
         ApiError::internal("config", format!("sérialisation des comptes : {error}"))
     })?;
     private_file::write_private(path, &bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lavande_mail::config::Encryption;
+
+    fn config() -> AccountConfig {
+        AccountConfig {
+            id: "perso".to_string(),
+            label: "Perso".to_string(),
+            email: "roman@lavande.fr".to_string(),
+            username: "roman@lavande.fr".to_string(),
+            imap: Endpoint {
+                host: "imap.lavande.fr".to_string(),
+                port: 993,
+                encryption: Encryption::Tls,
+            },
+            smtp: Endpoint {
+                host: "smtp.lavande.fr".to_string(),
+                port: 465,
+                encryption: Encryption::Tls,
+            },
+            auth: AuthConfig::Password {
+                password: "hunter2".to_string(),
+            },
+            synced_folders: None,
+        }
+    }
+
+    #[test]
+    fn a_selection_asked_at_creation_is_stored_with_the_account() {
+        let mut asked = config();
+        asked.synced_folders = Some(vec!["Archive".to_string()]);
+        let stored = StoredAccount::from_config(&asked);
+        assert_eq!(stored.synced_folders, Some(vec!["Archive".to_string()]));
+    }
+
+    #[test]
+    fn an_account_asking_for_no_selection_keeps_the_default() {
+        let stored = StoredAccount::from_config(&config());
+        assert_eq!(stored.synced_folders, None);
+    }
+
+    #[test]
+    fn the_stored_selection_comes_back_with_the_config() {
+        let mut stored = StoredAccount::from_config(&config());
+        stored.synced_folders = Some(vec!["Archive".to_string()]);
+        let secrets = stored.take_secrets();
+        let config = stored.into_config(secrets).expect("config");
+        assert_eq!(config.synced_folders, Some(vec!["Archive".to_string()]));
+        assert_eq!(config.id, "perso");
+    }
 }

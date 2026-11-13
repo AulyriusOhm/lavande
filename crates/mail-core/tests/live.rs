@@ -82,6 +82,7 @@ fn account() -> AccountConfig {
         username: env_or("MAIL_TEST_USER", "roman@lavande.test"),
         imap: endpoint("MAIL_TEST_IMAP", "localhost:3993"),
         smtp: endpoint("MAIL_TEST_SMTP", "localhost:3465"),
+        synced_folders: None,
         auth: AuthConfig::Password {
             password: env_or("MAIL_TEST_PASSWORD", "secret"),
         },
@@ -122,7 +123,6 @@ async fn sync(cfg: &AccountConfig, store: &Store, folder: &str) -> imap::SyncRep
             ACCOUNT,
             folder,
             &FolderMapping::default(),
-            &PgpKeyring::new(),
         )
         .await,
     )
@@ -264,7 +264,6 @@ async fn smtp_send_then_sync_parses_message() {
             ACCOUNT,
             INBOX,
             &FolderMapping::default(),
-            &PgpKeyring::new(),
         )
         .await,
     );
@@ -288,7 +287,6 @@ async fn smtp_send_then_sync_parses_message() {
             ACCOUNT,
             INBOX,
             &FolderMapping::default(),
-            &PgpKeyring::new(),
         )
         .await,
     );
@@ -347,13 +345,22 @@ async fn a_pgp_message_comes_back_decrypted_and_verified() {
             ACCOUNT,
             INBOX,
             &FolderMapping::default(),
-            &keyring,
         )
         .await,
     );
 
     let stored = find(&store, INBOX, &subject);
     assert_eq!(stored.pgp, PgpState::Encrypted);
+    assert!(
+        stored.body_text.is_none(),
+        "corps non téléchargé par la synchro"
+    );
+    checked(
+        "fetch sealed body",
+        imap::fetch_body(&mut session, &store, ACCOUNT, INBOX, stored.uid, &keyring).await,
+    );
+
+    let stored = find(&store, INBOX, &subject);
     assert_eq!(stored.body_text.as_deref(), Some("corps chiffre"));
     let detail = stored.pgp_detail.expect("pgp detail");
     assert!(detail.decrypted, "{detail:?}");
@@ -378,7 +385,6 @@ async fn flags_reach_the_server() {
             ACCOUNT,
             INBOX,
             &FolderMapping::default(),
-            &PgpKeyring::new(),
         )
         .await,
     );
@@ -523,23 +529,13 @@ async fn empty_folder_clears_both_sides() {
             ACCOUNT,
             INBOX,
             &FolderMapping::default(),
-            &PgpKeyring::new(),
         )
         .await,
     );
     let uid = find(&store, INBOX, &subject).uid;
     checked(
         "move to Purge",
-        imap::move_message(
-            &mut session,
-            &store,
-            ACCOUNT,
-            INBOX,
-            uid,
-            "Purge",
-            &PgpKeyring::new(),
-        )
-        .await,
+        imap::move_message(&mut session, &store, ACCOUNT, INBOX, uid, "Purge").await,
     );
 
     let removed = checked(
@@ -587,7 +583,6 @@ async fn empty_folder_counts_a_never_synced_folder() {
             ACCOUNT,
             INBOX,
             &FolderMapping::default(),
-            &PgpKeyring::new(),
         )
         .await,
     );
@@ -787,7 +782,6 @@ async fn move_keeps_store_in_step_with_server() {
             ACCOUNT,
             INBOX,
             &FolderMapping::default(),
-            &PgpKeyring::new(),
         )
         .await,
     );
@@ -795,16 +789,7 @@ async fn move_keeps_store_in_step_with_server() {
 
     checked(
         "move to Archive",
-        imap::move_message(
-            &mut session,
-            &store,
-            ACCOUNT,
-            INBOX,
-            uid,
-            "Archive",
-            &PgpKeyring::new(),
-        )
-        .await,
+        imap::move_message(&mut session, &store, ACCOUNT, INBOX, uid, "Archive").await,
     );
     assert!(
         checked("inbox lookup", store.get_message(ACCOUNT, INBOX, uid)).is_none(),

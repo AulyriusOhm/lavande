@@ -42,6 +42,7 @@ fn account() -> AccountConfig {
             port: 3465,
             encryption: Encryption::Tls,
         },
+        synced_folders: None,
         auth: AuthConfig::Password {
             password: "secret".to_string(),
         },

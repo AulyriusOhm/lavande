@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { DesktopSettings } from "@/desktop/settings";
@@ -51,6 +51,27 @@ function mount() {
 
 beforeEach(() => {
   window.localStorage.clear();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.stubEnv("VITE_MAIL_BACKEND", "demo");
+});
+
+describe("Réglages · section IA sous VITE_PLATFORM=android", () => {
+  it("garde la configuration du modèle et les bascules IA", () => {
+    vi.stubEnv("VITE_PLATFORM", "android");
+    stubFetch(() => response({}));
+    mount();
+
+    expect(screen.getAllByText("Intelligence artificielle").length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("Endpoint du modèle")).toBeTruthy();
+    expect(screen.getByLabelText("Nom du modèle")).toBeTruthy();
+    expect(screen.getByLabelText("Clé API")).toBeTruthy();
+    expect(screen.getByText("Tester la connexion")).toBeTruthy();
+    expect(screen.getByRole("switch", { name: /Suggestions de réponse IA/ })).toBeTruthy();
+    expect(screen.getByRole("switch", { name: /Suggestions de tâches IA/ })).toBeTruthy();
+  });
 });
 
 describe("Réglages · section IA", () => {

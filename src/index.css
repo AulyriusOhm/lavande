@@ -187,7 +187,7 @@
 }
 
 @utility safe-bottom {
-  padding-bottom: max(env(safe-area-inset-bottom), 0px);
+  padding-bottom: max(var(--safe-bottom), env(safe-area-inset-bottom), 0px);
 }
 
 @utility focus-ring {

@@ -50,9 +50,10 @@ import { BlurFade } from "@/components/ui/blur-fade";
 import { BorderBeam } from "@/components/ui/border-beam";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
-import { MailBody } from "@/components/mail-body";
+import { MailBody, MailBodyLoading } from "@/components/mail-body";
 import { EmptyTrashButton } from "@/components/empty-trash";
 import { FolderRow, HiddenFoldersRail } from "@/components/folder-row";
+import { useFolderTree } from "@/components/folder-tree";
 import {
   Badge,
   DButton,
@@ -151,20 +152,26 @@ function RailItem({
   label,
   count,
   onClick,
+  depth = 0,
+  expanded,
+  onToggle,
 }: {
   active: boolean;
   icon: React.ReactNode;
   label: string;
   count: number;
-  onClick: () => void;
+  onClick?: () => void;
+  depth?: number;
+  expanded?: boolean;
+  onToggle?: () => void;
 }) {
-  return (
+  const row = onClick ? (
     <button
       type="button"
       onClick={onClick}
       aria-current={active}
       className={cn(
-        "focus-ring flex h-9 w-full items-center gap-2.5 rounded-[11px] px-2.5 text-[12.5px] font-semibold transition-colors duration-200",
+        "focus-ring flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-[11px] px-2.5 text-[12.5px] font-semibold transition-colors duration-200",
         active ? "bg-accent-soft text-accent-ink" : "text-ink-soft hover:bg-surface-2 hover:text-ink",
       )}
     >
@@ -181,6 +188,34 @@ function RailItem({
         </span>
       ) : null}
     </button>
+  ) : (
+    <span className="flex h-9 min-w-0 flex-1 items-center gap-2.5 truncate rounded-[11px] px-2.5 text-[12.5px] font-semibold text-ink-muted">
+      <span className="grid w-4 shrink-0 place-items-center">{icon}</span>
+      <span className="truncate">{label}</span>
+    </span>
+  );
+
+  if (!depth && !onToggle) return row;
+
+  return (
+    <div className="flex items-center" style={depth ? { paddingLeft: depth * 14 } : undefined}>
+      {onToggle ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          aria-label={`${expanded ? "Replier" : "Déplier"} ${label}`}
+          className="focus-ring grid size-5 shrink-0 place-items-center rounded-md text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+        >
+          <ChevronDown
+            className={cn("size-3 transition-transform duration-200", !expanded && "-rotate-90")}
+          />
+        </button>
+      ) : (
+        <span className="size-5 shrink-0" />
+      )}
+      {row}
+    </div>
   );
 }
 
@@ -493,7 +528,7 @@ export function DesktopInbox({
     summary,
     summaryLoading,
     refreshSummary,
-    deleteFolder,
+    bodyFetching,
     hiddenFolderOptions,
     hideFolder,
     unhideFolder,
@@ -538,6 +573,15 @@ export function DesktopInbox({
   };
 
   const threads = threadsInFolder(mails, folder, account);
+  const roleOptions = useMemo(
+    () => folderOptions.filter((entry) => entry.id !== "other"),
+    [folderOptions],
+  );
+  const customOptions = useMemo(
+    () => folderOptions.filter((entry) => entry.id === "other"),
+    [folderOptions],
+  );
+  const customRows = useFolderTree(customOptions);
   const heading =
     folderOptions.find((entry) => entry.id === folder && entry.path === folderPath)?.label ??
     folderLabel(folder);
@@ -573,6 +617,7 @@ export function DesktopInbox({
     pgpState === "expired" ? "amber" : pgpState === "revoked" ? "rose" : "green";
 
   const mail = openMail;
+  const bodyLoading = Boolean(mail && bodyFetching === mail.id);
   const pgpLocked = Boolean(
     mail && mail.pgp === "encrypted" && !mail.bodyFetched && !resolvePgp(prefs, mail.account).enabled,
   );
@@ -817,7 +862,7 @@ export function DesktopInbox({
 
               <SectionLabel className="mt-4 mb-1.5 px-2.5">Dossiers</SectionLabel>
               <div className="space-y-0.5">
-                {folderOptions.map((entry) => {
+                {roleOptions.map((entry) => {
                   const Icon = FOLDER_ICONS[entry.id];
                   const stats = folderStats(entry.id, entry.path);
                   const count =
@@ -826,31 +871,42 @@ export function DesktopInbox({
                       : entry.id === "drafts" || entry.id === "trash"
                         ? stats.total
                         : stats.unread;
-                  const rail = (
+                  return (
                     <RailItem
-                      active={folder === entry.id && (entry.id !== "other" || entry.path === folderPath)}
-                      onClick={() => setFolder(entry.id, entry.id === "other" ? entry.path : null)}
+                      key={`${entry.id}:${entry.path}`}
+                      active={folder === entry.id}
+                      onClick={() => setFolder(entry.id, null)}
                       label={entry.label}
                       count={count}
                       icon={<Icon className="size-4" />}
                     />
                   );
-                  return (
-                    <div key={`${entry.id}:${entry.path}`}>
-                      {entry.id === "other" ? (
-                        <FolderRow
-                          label={entry.label}
-                          onDelete={() => void deleteFolder(entry.path, entry.label)}
-                          onHide={
-                            account === ALL_ACCOUNTS ? undefined : () => hideFolder(entry.path)
-                          }
-                        >
-                          {rail}
-                        </FolderRow>
-                      ) : (
-                        rail
-                      )}
-                    </div>
+                })}
+                {customRows.map((row) => {
+                  const entry = row.node.item;
+                  const label = entry?.label ?? row.node.name;
+                  const rail = (
+                    <RailItem
+                      active={entry !== null && folder === "other" && row.node.path === folderPath}
+                      onClick={entry ? () => setFolder("other", entry.path) : undefined}
+                      label={label}
+                      count={entry ? folderStats("other", entry.path).unread : 0}
+                      icon={<FOLDER_ICONS.other className="size-4" />}
+                      depth={row.depth}
+                      expanded={row.expanded}
+                      onToggle={row.hasChildren ? row.toggle : undefined}
+                    />
+                  );
+                  return entry ? (
+                    <FolderRow
+                      key={row.node.path}
+                      label={label}
+                      onHide={account === ALL_ACCOUNTS ? undefined : () => hideFolder(entry.path)}
+                    >
+                      {rail}
+                    </FolderRow>
+                  ) : (
+                    <div key={row.node.path}>{rail}</div>
                   );
                 })}
                 <HiddenFoldersRail count={hiddenFolderOptions.length}>
@@ -981,7 +1037,7 @@ export function DesktopInbox({
                 >
                   {folderOptions.map((entry) => (
                     <option key={`${entry.id}:${entry.path}`} value={`${entry.id}:${entry.path}`}>
-                      {entry.label}
+                      {entry.id === "other" ? entry.path : entry.label}
                     </option>
                   ))}
                 </select>
@@ -1272,13 +1328,17 @@ export function DesktopInbox({
                     </div>
                   ) : null}
 
-                  <MailBody
-                    className="mt-6 max-w-[80ch] text-[14.5px] leading-[1.78]"
-                    html={mail.html}
-                    paragraphs={mail.body}
-                    source={mail.source}
-                    encrypted={mail.pgp === "encrypted"}
-                  />
+                  {bodyLoading ? (
+                    <MailBodyLoading className="mt-6 max-w-[80ch] text-[14.5px] leading-[1.78]" />
+                  ) : (
+                    <MailBody
+                      className="mt-6 max-w-[80ch] text-[14.5px] leading-[1.78]"
+                      html={mail.html}
+                      paragraphs={mail.body}
+                      source={mail.source}
+                      encrypted={mail.pgp === "encrypted"}
+                    />
+                  )}
 
                   {previous.length > 0 ? (
                     <div className="mt-7 border-t border-line pt-4">

@@ -1,5 +1,5 @@
 import { existsSync, readdirSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const genDir = path.join("src-tauri", "gen", "android");
@@ -142,6 +142,19 @@ function patchManifest(source) {
   });
 }
 
+const REQUIRED_PERMISSIONS = ["android.permission.POST_NOTIFICATIONS"];
+
+function patchPermissions(source) {
+  return REQUIRED_PERMISSIONS.reduce((next, permission) => {
+    if (next.includes(`android:name="${permission}"`)) return next;
+    const line = `<uses-permission android:name="${permission}" />`;
+    if (/<uses-permission\b[^>]*\/>/.test(next)) {
+      return next.replace(/<uses-permission\b[^>]*\/>/, (tag) => `${tag}\n    ${line}`);
+    }
+    return next.replace("<application", `${line}\n\n    <application`);
+  }, source);
+}
+
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost"];
 
 const syncHosts = (process.env.LAVANDE_SYNC_HOSTS ?? "")
@@ -248,6 +261,12 @@ for (const file of mainActivities) {
 }
 
 await patchFile(path.join(resValuesDir, "colors.xml"), patchColors, "res/values/colors.xml");
+// `tauri icon` dépose un ic_launcher_background.xml séparé qui duplique la couleur de colors.xml.
+const strayLauncherBg = path.join(resValuesDir, "ic_launcher_background.xml");
+if (existsSync(strayLauncherBg)) {
+  await rm(strayLauncherBg, { force: true });
+  summary.push("res/values/ic_launcher_background.xml : supprimé (doublon de colors.xml)");
+}
 await writeStatic(
   path.join(resXmlDir, "network_security_config.xml"),
   networkSecurityConfig(cleartextHosts),
@@ -260,8 +279,8 @@ await writeStatic(
 );
 await patchFile(
   path.join(appDir, "AndroidManifest.xml"),
-  patchManifest,
-  "AndroidManifest.xml (sauvegarde fermée, cleartext restreint au LAN)",
+  (source) => patchPermissions(patchManifest(source)),
+  "AndroidManifest.xml (sauvegarde fermée, cleartext restreint au LAN, notifications)",
 );
 await patchFile(path.join(resValuesDir, "themes.xml"), patchThemes, "res/values/themes.xml");
 await patchFile(

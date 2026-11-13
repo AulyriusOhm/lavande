@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
+  Bell,
   Blocks,
   CalendarDays,
   Check,
@@ -80,7 +81,8 @@ import {
   setIcsCalendarEvents,
   useIcsState,
 } from "@/lib/ics";
-import { accountPgp, activeSignature, mergeFlags, usePrefs } from "@/lib/prefs";
+import { accountPgp, activeSignature, CALENDAR_LEAD_MINUTES, mergeFlags, usePrefs } from "@/lib/prefs";
+import { requestNotifications } from "@/lib/notify";
 import { APP_VERSION, phaseLabel, useUpdater } from "@/lib/updater";
 import { llmProbe, llmReady } from "@/lib/llm";
 import type { SummaryConfig } from "@/lib/summary";
@@ -90,6 +92,7 @@ import { detectModKey } from "@/lib/shortcuts";
 import { shortcutCatalog } from "@/lib/app-shortcuts";
 import { cn } from "@/lib/utils";
 import { Avatar, Switch, ToggleRow } from "@/components/ui/primitives";
+import { FolderRow } from "@/components/folder-row";
 import { SignatureEditor } from "@/components/signature-editor";
 import { SyncSettings } from "@/components/sync-settings";
 import { ShortcutList } from "@/components/shortcut-list";
@@ -131,6 +134,11 @@ const SECTION_GROUPS = [
       { id: "clavier", label: "Raccourcis clavier" },
       { id: "modules", label: "Modules" },
     ],
+  },
+  {
+    id: "notifications",
+    label: "Notifications",
+    sections: [{ id: "notifications", label: "Notifications" }],
   },
   {
     id: "synchronisation",
@@ -208,8 +216,10 @@ function AccountFolderPicker({
   onSelection: (next: string[] | null) => void;
   notify: (message: string) => void;
 }) {
+  const { deleteFolder } = useMailStore();
   const [folders, setFolders] = useState<ApiFolder[] | null>(null);
   const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -258,6 +268,20 @@ function AccountFolderPicker({
         ? "1 dossier synchronisé"
         : "aucun dossier synchronisé automatiquement";
 
+  const remove = (folder: ApiFolder) => {
+    if (removing) return;
+    setRemoving(folder.path);
+    deleteFolder(folder.path, folder.name, account.id)
+      .then((done) => {
+        if (!done) return;
+        setFolders((current) => (current ?? []).filter((entry) => entry.path !== folder.path));
+        if (selection !== null && selection.includes(folder.path)) {
+          onSelection(selection.filter((entry) => entry !== folder.path));
+        }
+      })
+      .finally(() => setRemoving(null));
+  };
+
   return (
     <div className="mt-2 rounded-2xl border border-line bg-surface-2/40 pb-1.5">
       <ToggleRow
@@ -272,25 +296,35 @@ function AccountFolderPicker({
           {folders === null ? (
             <p className="px-1.5 py-1.5 text-[11px] font-semibold text-ink-muted">Dossiers…</p>
           ) : (
-            folders.map((folder) => (
-              <label
-                key={folder.path}
-                className="flex cursor-pointer items-center gap-2 rounded-xl px-1.5 py-1 text-[11.5px] font-semibold text-ink-soft hover:bg-surface-2"
-              >
-                <input
-                  type="checkbox"
-                  aria-label={`Synchroniser ${folder.name}`}
-                  className="size-3.5 shrink-0 accent-[var(--accent)]"
-                  checked={checked.includes(folder.path)}
-                  disabled={saving}
-                  onChange={() => togglePath(folder.path)}
-                />
-                <span className="truncate">{folder.name}</span>
-                <span className="ml-auto truncate text-[12px] font-medium text-ink-muted">
-                  {folder.path}
-                </span>
-              </label>
-            ))
+            folders.map((folder) => {
+              const row = (
+                <label className="flex cursor-pointer items-center gap-2 rounded-xl px-1.5 py-1 text-[11.5px] font-semibold text-ink-soft hover:bg-surface-2">
+                  <input
+                    type="checkbox"
+                    aria-label={`Synchroniser ${folder.name}`}
+                    className="size-3.5 shrink-0 accent-[var(--accent)]"
+                    checked={checked.includes(folder.path)}
+                    disabled={saving || removing === folder.path}
+                    onChange={() => togglePath(folder.path)}
+                  />
+                  <span className="truncate">{folder.name}</span>
+                  <span className="ml-auto truncate text-[12px] font-medium text-ink-muted">
+                    {folder.path}
+                  </span>
+                </label>
+              );
+              return folder.role === "other" ? (
+                <FolderRow
+                  key={folder.path}
+                  label={folder.name}
+                  onDelete={() => remove(folder)}
+                >
+                  {row}
+                </FolderRow>
+              ) : (
+                <div key={folder.path}>{row}</div>
+              );
+            })
           )}
         </div>
       ) : null}
@@ -1012,6 +1046,9 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     setSummary,
     aiTasks,
     setAiTasks,
+    notifications,
+    setNotifications,
+    setAccountNotification,
   } = usePrefs();
   const { notify, accounts, mode, openConnect, askRemoveAccount, renameAccount } = useMailStore();
   const [active, setActive] = useState<SectionId>("comptes");
@@ -1019,6 +1056,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   const [openServer, setOpenServer] = useState<string | null>(null);
   const [signatureAccount, setSignatureAccount] = useState<string | null>(null);
   const [pgpAccount, setPgpAccount] = useState<string | null>(null);
+  const [notificationAccount, setNotificationAccount] = useState<string | null>(null);
   const [generateForm, setGenerateForm] = useState(false);
   const [generateName, setGenerateName] = useState("");
   const [generateEmail, setGenerateEmail] = useState("");
@@ -1049,6 +1087,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   const expiringSoon = myKey ? !isExpired(myKey) && isExpired(myKey, new Date(Date.now() + 90 * 864e5)) : false;
   const publicKeys = keys?.filter((key) => !key.has_secret).length ?? 0;
   const analyzedAccounts = accounts.filter((item) => !aiTasks.excludedAccounts.includes(item.id));
+  const notifyingAccounts = accounts.filter((item) => notifications.accounts[item.id] !== false).length;
+  const notificationTarget = accounts.find((item) => item.id === notificationAccount) ?? accounts[0] ?? null;
   const signatureTarget = accounts.find((item) => item.id === signatureAccount) ?? accounts[0] ?? null;
   const signedAccounts = accounts.filter((item) => activeSignature(signatures, item.id)).length;
   const pgpSettings = { pgpEncrypt, pgpSign, pgpAccounts };
@@ -1386,7 +1426,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                       })}
                     </div>
                     <p className="mt-1.5 text-[12.5px] leading-snug font-medium text-ink-muted">
-                      Auto : clair le jour (7h–19h), sombre la nuit.
+                      Auto : suit le thème du système.
                     </p>
 
                     <SectionLabel className="mt-4">Couleur d'accent</SectionLabel>
@@ -1498,6 +1538,106 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                     checked={planningEnabled}
                     onChange={setPlanningEnabled}
                   />
+                </Surface>
+              </Block>
+
+              <Block
+                id="notifications"
+                label="Notifications"
+                hint={notifications.enabled ? "actives" : "coupées"}
+              >
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Surface className="divide-y divide-line overflow-hidden">
+                    <ToggleRow
+                      icon={<Bell className="size-4" />}
+                      label="Notifications"
+                      hint="Nouveaux mails et rappels, tant que l'app tourne"
+                      checked={notifications.enabled}
+                      onChange={(value) => {
+                        setNotifications({ enabled: value });
+                        if (value) void requestNotifications();
+                      }}
+                    />
+                    <ToggleRow
+                      icon={<CalendarDays className="size-4" />}
+                      label="Rappels d'agenda"
+                      hint="Un rendez-vous du calendrier commence bientôt"
+                      checked={notifications.calendar}
+                      onChange={(value) => setNotifications({ calendar: value })}
+                    />
+                  </Surface>
+
+                  <Surface className="p-4">
+                    <SectionLabel>Délai du rappel</SectionLabel>
+                    <div className="mt-2 grid grid-cols-5 gap-1.5">
+                      {CALENDAR_LEAD_MINUTES.map((minutes) => {
+                        const selected = notifications.calendarMinutes === minutes;
+                        return (
+                          <button
+                            key={minutes}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            disabled={!notifications.calendar}
+                            onClick={() => setNotifications({ calendarMinutes: minutes })}
+                            className={cn(
+                              "focus-ring flex h-9 items-center justify-center gap-1 rounded-[12px] text-[11px] font-bold transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-55",
+                              selected
+                                ? "border border-accent-ring bg-accent-soft text-accent-ink"
+                                : "border border-line bg-surface text-ink-soft hover:border-accent-ring hover:text-ink",
+                            )}
+                          >
+                            {minutes === 0 ? "À l'heure" : `${minutes} min`}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="mt-3 text-[10.5px] font-semibold text-ink-muted">
+                      Avant le début du rendez-vous · un seul rappel par événement, et uniquement tant que
+                      l'application tourne.
+                    </p>
+                  </Surface>
+                </div>
+
+                <Surface className="mt-3 overflow-hidden">
+                  <div className="border-b border-line px-3.5 py-2">
+                    <div className="flex items-center gap-1.5">
+                      <SectionLabel>Par compte</SectionLabel>
+                      <span className="text-[12px] font-semibold text-ink-muted">
+                        {notifyingAccounts} sur {accounts.length}
+                      </span>
+                    </div>
+                    {accounts.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {accounts.map((item) => (
+                          <DChip
+                            key={item.id}
+                            active={notificationTarget?.id === item.id}
+                            onClick={() => setNotificationAccount(item.id)}
+                          >
+                            <span className="size-2 rounded-full" style={{ backgroundColor: item.color }} />
+                            {item.label}
+                            {notifications.accounts[item.id] !== false ? (
+                              <Check className="size-3" strokeWidth={3} />
+                            ) : null}
+                          </DChip>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-[11px] font-medium text-ink-muted">
+                        Ajoute un compte pour régler ses notifications.
+                      </p>
+                    )}
+                  </div>
+                  {notificationTarget ? (
+                    <ToggleRow
+                      icon={<Bell className="size-4" />}
+                      label={`Notifier ${notificationTarget.label}`}
+                      hint={`Nouveaux mails de ${notificationTarget.email} · sans effet si l'interrupteur général est coupé`}
+                      checked={notifications.accounts[notificationTarget.id] !== false}
+                      onChange={(value) => setAccountNotification(notificationTarget.id, value)}
+                    />
+                  ) : null}
                 </Surface>
               </Block>
 

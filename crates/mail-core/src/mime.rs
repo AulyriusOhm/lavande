@@ -72,6 +72,18 @@ pub fn parse_message_with_keys(
     Ok(parsed)
 }
 
+/// Parses what a message fetched by its headers alone carries: the envelope and
+/// the PGP state, with the body, the preview, the attachments and the PGP detail
+/// left empty for `fetch_body` to fill in.
+pub fn parse_headers(raw: &[u8]) -> Result<ParsedMessage, MailError> {
+    let mut parsed = parse_message(raw)?;
+    parsed.body_text = None;
+    parsed.body_html = None;
+    parsed.preview.clear();
+    parsed.attachments.clear();
+    Ok(parsed)
+}
+
 /// Replaces the body of `parsed` with the one of the decrypted MIME entity.
 fn clear_body(parsed: &mut ParsedMessage, entity: &[u8]) {
     let Ok(inner) = parse_message(entity) else {
@@ -1460,6 +1472,20 @@ mod tests {
     fn an_index_past_the_last_attachment_is_none() {
         let body = attachment_body(RAW.as_bytes(), 2, &PgpKeyring::default()).expect("lecture");
         assert_eq!(body, None);
+    }
+
+    #[test]
+    fn the_headers_alone_carry_the_envelope_and_no_body() {
+        let headers = RAW.split_once("\r\n\r\n").expect("en-têtes").0;
+        let parsed = parse_headers(headers.as_bytes()).expect("en-tetes");
+        assert_eq!(parsed.subject, "Factures");
+        assert_eq!(parsed.from.email, "camille@studio-lilas.fr");
+        assert_eq!(parsed.body_text, None);
+        assert_eq!(parsed.body_html, None);
+        assert_eq!(parsed.preview, "");
+        assert_eq!(parsed.attachments, Vec::new());
+        assert_eq!(parsed.pgp, PgpState::None);
+        assert_eq!(parsed.pgp_detail, None);
     }
 
     const HTML_RAW: &str = concat!(

@@ -28,7 +28,13 @@ import type { SummaryEvent, SummaryMailInput, SummaryResult, SummaryTask } from 
 import { llmReady } from "@/lib/llm";
 import { TODAY_ISO } from "@/lib/calendar";
 import type { CalendarEvent } from "@/lib/calendar";
-import { activeSignature, isFolderHidden, resolvePgp, usePrefs } from "@/lib/prefs";
+import {
+  activeSignature,
+  isFolderHidden,
+  notificationsForAccount,
+  resolvePgp,
+  usePrefs,
+} from "@/lib/prefs";
 import { suggestionsInWindow, usePlanning } from "@/lib/planning-store";
 import { mailApi, errorText } from "@/lib/api";
 import type { LiveEvent } from "@/lib/api";
@@ -136,6 +142,8 @@ export type MailStoreValue = {
   selectedDate: string;
   openMail: Mail | null;
   openThread: Thread | undefined;
+  /** Message dont le corps est en cours de lecture sur le serveur. */
+  bodyFetching: string | null;
   notices: NoticeData[];
   composeOpen: boolean;
   composeDraft: ComposeDraft | null;
@@ -187,7 +195,7 @@ export type MailStoreValue = {
   askRemoveAccount: (account: Account) => void;
   cancelRemoveAccount: () => void;
   confirmRemoveAccount: () => void;
-  deleteFolder: (path: string, label: string) => Promise<void>;
+  deleteFolder: (path: string, label: string, accountId?: string) => Promise<boolean>;
   /** Dossiers masqués du compte courant, avec leur libellé pour les réafficher. */
   hiddenFolderOptions: FolderOption[];
   hideFolder: (path: string) => void;
@@ -225,6 +233,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const [removeTarget, setRemoveTarget] = useState<Account | null>(null);
   const [selectedDate, setSelectedDate] = useState(TODAY_ISO);
   const [openMail, setOpenMail] = useState<Mail | null>(null);
+  const [bodyFetching, setBodyFetching] = useState<string | null>(null);
   const [searchResults, setSearchResults] = useState<Mail[]>([]);
   const [notices, setNotices] = useState<NoticeData[]>([]);
   const [composeOpen, setComposeOpen] = useState(false);
@@ -320,6 +329,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
   // Le service pousse un événement après chaque détection IDLE : la liste se
   // rafraîchit sans clic, et sans bloquer l'interface.
+  const notifyPrefs = useRef(prefs.notifications);
+  notifyPrefs.current = prefs.notifications;
+  const notifyAccounts = useRef(accounts);
+  notifyAccounts.current = accounts;
+
   useEffect(() => {
     if (mode !== "api" || !mailSyncOn || typeof EventSource === "undefined" || isComposeWindow()) return;
     let source: EventSource | null = null;
@@ -331,9 +345,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         try {
           const payload = JSON.parse((event as MessageEvent<string>).data) as LiveEvent;
           const inserted = payload.report?.inserted ?? 0;
-          if (inserted > 0 && payload.folder_path.toUpperCase() === "INBOX") {
+          if (
+            inserted > 0 &&
+            payload.folder_path.toUpperCase() === "INBOX" &&
+            notificationsForAccount(notifyPrefs.current, payload.account_id)
+          ) {
+            const label = notifyAccounts.current.find((entry) => entry.id === payload.account_id)?.label;
             void notifyNewMail(
-              "Nouveau message",
+              label ? `Nouveau message · ${label}` : "Nouveau message",
               inserted === 1
                 ? "Vous avez reçu un nouveau message."
                 : `${inserted} nouveaux messages dans la boîte de réception.`,
@@ -830,6 +849,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       const source = mail.source;
+      setBodyFetching(mail.id);
       mailApi
         .message(source.accountId, source.folderPath, source.uid)
         .then((message) => {
@@ -845,7 +865,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
               : current,
           );
         })
-        .catch((error: unknown) => notify(`Corps du message indisponible · ${errorText(error)}`));
+        .catch((error: unknown) => notify(`Corps du message indisponible · ${errorText(error)}`))
+        .finally(() => setBodyFetching((current) => (current === mail.id ? null : current)));
     },
     [adjustCounts, flagsFor, folderRecords, mode, notify, pgpPrefs],
   );
@@ -1416,11 +1437,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       try {
-        const result = await mailApi.sync(summary.id, "INBOX");
-        const report = result.reports[0];
+        const result = await mailApi.sync(summary.id);
+        const inserted = result.reports.reduce((total, report) => total + report.inserted, 0);
         notify(
-          report
-            ? `Compte connecté · ${report.inserted} message${report.inserted > 1 ? "s" : ""} dans INBOX`
+          inserted > 0
+            ? `Compte connecté · ${inserted} message${inserted > 1 ? "s" : ""} synchronisé${inserted > 1 ? "s" : ""}`
             : "Compte connecté",
         );
       } catch (error) {
@@ -1474,14 +1495,19 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
    * ensuite. Un refus du serveur laisse le dossier et ses messages en place.
    */
   const deleteFolder = useCallback(
-    async (path: string, label: string) => {
-      if (mode !== "api") return;
-      const ids =
-        account === ALL_ACCOUNTS ? accounts.map((entry) => entry.id) : account ? [account] : [];
+    async (path: string, label: string, accountId?: string) => {
+      if (mode !== "api") return false;
+      const ids = accountId
+        ? [accountId]
+        : account === ALL_ACCOUNTS
+          ? accounts.map((entry) => entry.id)
+          : account
+            ? [account]
+            : [];
       const scope = folderTargets(folderRecords, ids, "other", path);
       if (scope.length === 0) {
         notify(`Dossier « ${label} » introuvable sur ce compte.`);
-        return;
+        return false;
       }
       let failure: string | null = null;
       for (const target of scope) {
@@ -1505,6 +1531,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           ? `Dossier « ${label} » supprimé`
           : `Dossier « ${label} » non supprimé · ${failure}`,
       );
+      return failure === null;
     },
     [account, accounts, folder, folderPath, folderRecords, mode, notify, setFolder],
   );
@@ -1821,6 +1848,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       selectedDate,
       openMail: resolvedOpenMail,
       openThread,
+      bodyFetching,
       notices,
       composeOpen,
       composeDraft,
@@ -1904,6 +1932,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       selectedDate,
       resolvedOpenMail,
       openThread,
+      bodyFetching,
       notices,
       composeOpen,
       composeDraft,

@@ -128,10 +128,24 @@ describe("feuille de repli", () => {
     expect(doc).not.toContain("th,td{");
     expect(doc).not.toContain("border:1px solid var(--line)");
     expect(doc).not.toContain("p,div{margin");
-    expect(doc).not.toContain("table{width:100%");
     expect(doc).not.toContain("h1,h2");
     expect(doc).not.toContain("ul,ol{");
   });
+
+  it("ne contraint la largeur qu'en dessous du point de rupture mobile", () => {
+    const doc = srcDoc(renderBody().container);
+    const mobile = doc.indexOf("@media (max-width:720px)");
+
+    expect(mobile).toBeGreaterThan(-1);
+    expect(doc.indexOf("table{width:100%!important}")).toBeGreaterThan(mobile);
+    expect(doc.indexOf("body *{max-width:100%!important}")).toBeGreaterThan(mobile);
+    expect(doc.indexOf("td,th{white-space:normal!important}")).toBeGreaterThan(mobile);
+    expect(doc.indexOf("img{height:auto!important}")).toBeGreaterThan(mobile);
+    expect(doc.indexOf("box-sizing:border-box!important")).toBeGreaterThan(mobile);
+    expect(doc).not.toContain("overflow-x");
+  });
+
+
 
   it("laisse le mail écrire sa mise en page après la feuille du client", () => {
     const mail =

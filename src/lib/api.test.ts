@@ -148,3 +148,52 @@ describe("mailApi · désynchronisation d'un dossier", () => {
     expect(init.body).toBeUndefined();
   });
 });
+
+describe("mailApi · prévisualisation des dossiers", () => {
+  const input = {
+    id: "a1",
+    label: "Perso",
+    email: "prenom@domaine.fr",
+    username: "prenom@domaine.fr",
+    imap: { host: "imap.domaine.fr", port: 993, encryption: "tls" as const },
+    smtp: { host: "smtp.domaine.fr", port: 465, encryption: "tls" as const },
+    auth: { kind: "password" as const, password: "secret" },
+  };
+
+  it("poste le compte sur /accounts/preview sans rien créer", async () => {
+    const fetchMock = vi.fn(async () =>
+      response([
+        {
+          account_id: "a1",
+          path: "INBOX/Travail",
+          name: "Travail",
+          role: "other",
+          uidvalidity: 1,
+          uidnext: 2,
+          last_sync_at: null,
+          delimiter: "/",
+        },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const folders = await mailApi.previewFolders(input);
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/accounts/preview");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual(input);
+    expect(folders[0].delimiter).toBe("/");
+  });
+
+  it("transmet la sélection de dossiers à la création", async () => {
+    const fetchMock = vi.fn(async () => response({ id: "a1", folders: 1 }, 201));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await mailApi.createAccount({ ...input, synced_folders: ["INBOX"] });
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/accounts");
+    expect(JSON.parse(init.body as string).synced_folders).toEqual(["INBOX"]);
+  });
+});

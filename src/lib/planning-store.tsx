@@ -10,6 +10,7 @@ import {
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { MAIL_SUGGESTIONS, TASKS, TASK_STATES, sortTasks, taskFromSuggestion } from "@/lib/tasks";
 import { EVENTS, type CalendarEvent } from "@/lib/calendar";
+import { useCalendarReminders } from "@/lib/calendar-reminders";
 import { mailMode } from "@/lib/mail-backend";
 import { usePrefs } from "@/lib/prefs";
 import type { MailSuggestion, Subtask, Task, TaskState } from "@/lib/tasks";
@@ -416,6 +417,8 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
   const tasks = useMemo(() => projectTasks(state), [state]);
   const suggestions = useMemo(() => projectSuggestions(state), [state]);
   const events = useMemo(() => projectEvents(state), [state]);
+  useCalendarReminders(events);
+
   const readOnlyIds = useMemo(() => readOnlyIdsOf(state), [state]);
 
   const latest = useRef({ tasks, readOnlyIds });

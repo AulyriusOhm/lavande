@@ -126,7 +126,7 @@ hauteur d'une barre de statut ou d'une encoche change trop d'une marque à l'aut
 les tokens `--safe-bottom` et `--ime-bottom` (défaut `0px`) remplacent `env(safe-area-inset-*)`, que la
 WebView Android laisse à 0 : un pont Kotlin les remplit en px CSS, clavier compris. Les polices sont
 embarquées (Plus Jakarta Sans, deux `@font-face` locaux, licence OFL) — aucune requête Google Fonts — et
-l'icône est un monogramme L dans le dégradé de l'accent par défaut, pas un logo séparé.
+l'icône est un simple carré dégradé violet — aucune lettre, aucun monogramme — pas un logo séparé.
 
 Trois écarts assumés, dictés par l'espace disponible : les actions de ligne passent du geste au
 survol ; le lecteur range ses actions dans une **barre d'outils pleine largeur** (jamais de pastille

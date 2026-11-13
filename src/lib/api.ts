@@ -108,6 +108,8 @@ export type ApiFolder = {
   uidvalidity: number;
   uidnext: number;
   last_sync_at: string | null;
+  /** Délimiteur de hiérarchie IMAP ; `null` quand le serveur n'en publie pas. */
+  delimiter?: string | null;
 };
 
 export type ApiFolderCount = {
@@ -157,6 +159,8 @@ export type NewAccount = {
   imap: ApiEndpoint;
   smtp: ApiEndpoint;
   auth: { kind: "password"; password: string };
+  /** `null`/absent : dossiers à rôle connu ; `[]` : aucun ; liste : ces chemins-là. */
+  synced_folders?: string[] | null;
 };
 
 export type DiscoverySource = "ispdb" | "autoconfig" | "well_known" | "guess";
@@ -470,6 +474,11 @@ export const mailApi = {
 
   createAccount: (input: NewAccount) =>
     request<ApiAccount>("/accounts", { method: "POST", body: input }),
+
+  /** Connexion testée, dossiers listés : rien n'est créé côté démon. */
+  previewFolders: (input: NewAccount) =>
+    request<ApiFolder[]>("/accounts/preview", { method: "POST", body: input, timeout: LONG_TIMEOUT }),
+
 
   renameAccount: (id: string, label: string) =>
     request<ApiAccount | void>(accountPath(id), { method: "PATCH", body: { label } }),

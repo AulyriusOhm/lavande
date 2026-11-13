@@ -135,6 +135,32 @@ describe("bandeau PGP coupé", () => {
   });
 });
 
+describe("corps à la demande", () => {
+  it("montre le chargement tant que le corps n'est pas revenu", () => {
+    render(
+      <PrefsProvider>
+        <MessageScreen
+          thread={THREAD}
+          bodyLoading
+          onClose={() => {}}
+          onToggleStar={() => {}}
+          onReply={() => {}}
+        />
+      </PrefsProvider>,
+    );
+
+    expect(screen.getByText("Chargement du message…")).toBeTruthy();
+    expect(screen.queryByTitle("Contenu du message")).toBeNull();
+  });
+
+  it("affiche le corps une fois chargé", () => {
+    renderScreen();
+
+    expect(screen.queryByText("Chargement du message…")).toBeNull();
+    expect(screen.getByText("Les factures du mois.")).toBeTruthy();
+  });
+});
+
 describe("téléchargement des pièces jointes", () => {
   it("récupère les octets du démon et enregistre le fichier", async () => {
     const blob = new Blob(["hello"], { type: "application/pdf" });

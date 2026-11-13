@@ -149,6 +149,7 @@ function PhoneApp({ native }: { native?: boolean }) {
     dismissSuggestion,
     openMessage,
     closeMessage,
+    bodyFetching,
     resumeDraft,
     openComposer,
     minimizeCompose,
@@ -499,6 +500,7 @@ function PhoneApp({ native }: { native?: boolean }) {
             >
               <MessageScreen
                 thread={openThread}
+                bodyLoading={bodyFetching === openMail.id}
                 onClose={() => closeMessage()}
                 onToggleStar={() => toggleStar(openMail.id)}
                 onReply={replyTo}

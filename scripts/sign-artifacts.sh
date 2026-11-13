@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Signe GPG les paquets de bureau Lavande : RPM (rpmsign, signature dans le
-# paquet) et AppImage (signature détachée `.asc`, plus signature embarquée en
-# option).
+# paquet), DEB et AppImage (signature détachée `.asc`, plus signature embarquée
+# en option pour l'AppImage).
 #
 #   LAVANDE_GPG_KEY_ID=… bash scripts/sign-artifacts.sh artifacts/rpm/*.rpm
 #   LAVANDE_GPG_KEY_ID=… bash scripts/sign-artifacts.sh --dir artifacts/updater
@@ -23,6 +23,7 @@ usage() {
 usage : bash scripts/sign-artifacts.sh [--dir <dossier>]… <fichier>…
 
   *.rpm        rpmsign --addsign, signature dans le paquet (vérifiable : rpm -K)
+  *.deb        signature GPG détachée <fichier>.deb.asc
   *.AppImage   signature GPG détachée <fichier>.asc
   *.tar.gz     signature GPG détachée <fichier>.asc
 
@@ -47,7 +48,7 @@ while [ $# -gt 0 ]; do
       [ -d "$2" ] || die "dossier absent : $2"
       while IFS= read -r -d '' found; do files+=("$found"); done < <(
         find "$2" -maxdepth 1 -type f \
-          \( -name '*.rpm' -o -name '*.AppImage' -o -name '*.tar.gz' \) -print0 | sort -z
+          \( -name '*.rpm' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.tar.gz' \) -print0 | sort -z
       )
       shift 2
       ;;
@@ -139,12 +140,12 @@ for file in "${files[@]}"; do
       gpg "${gpg_args[@]}" --armor --detach-sign --output "$file.asc" "$file"
       echo "signé (gpg) : $file.asc"
       ;;
-    *.tar.gz)
+    *.tar.gz | *.deb)
       gpg "${gpg_args[@]}" --armor --detach-sign --output "$file.asc" "$file"
       echo "signé (gpg) : $file.asc"
       ;;
     *)
-      die "type non signable : $file (attendu .rpm, .AppImage, .tar.gz)"
+      die "type non signable : $file (attendu .rpm, .deb, .AppImage, .tar.gz)"
       ;;
   esac
   signed=$((signed + 1))

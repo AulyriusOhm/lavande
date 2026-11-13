@@ -11,11 +11,11 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::error::MailError;
+use crate::mime::ParsedMessage;
 use crate::model::{AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState, Thread};
-use crate::pgp::PgpDetail;
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const MESSAGE_COLUMNS: &str = "account_id, folder_path, uid, uidvalidity, thread_id, message_id, \
      in_reply_to, references_json, from_json, to_json, cc_json, subject, date, unread, starred, \
      answered, size, pgp, preview, body_text, body_html, pgp_detail";
@@ -122,12 +122,12 @@ impl Store {
     pub fn upsert_folder(&self, folder: &Folder) -> Result<(), MailError> {
         let conn = self.conn()?;
         conn.execute(
-            "INSERT INTO folders (account_id, path, name, role, uidvalidity, uidnext, last_sync_at, modseq) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+            "INSERT INTO folders (account_id, path, name, role, uidvalidity, uidnext, last_sync_at, modseq, delimiter) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
              ON CONFLICT(account_id, path) DO UPDATE SET name = excluded.name, \
              role = excluded.role, uidvalidity = excluded.uidvalidity, \
              uidnext = excluded.uidnext, last_sync_at = excluded.last_sync_at, \
-             modseq = excluded.modseq",
+             modseq = excluded.modseq, delimiter = excluded.delimiter",
             params![
                 folder.account_id,
                 folder.path,
@@ -137,6 +137,7 @@ impl Store {
                 folder.uidnext,
                 folder.last_sync_at.map(format_date),
                 folder.modseq,
+                folder.delimiter,
             ],
         )?;
         Ok(())
@@ -151,8 +152,8 @@ impl Store {
     pub fn list_folders(&self, account_id: &str) -> Result<Vec<Folder>, MailError> {
         let conn = self.conn()?;
         let mut statement = conn.prepare(
-            "SELECT account_id, path, name, role, uidvalidity, uidnext, last_sync_at, modseq \
-             FROM folders WHERE account_id = ?1 ORDER BY path",
+            "SELECT account_id, path, name, role, uidvalidity, uidnext, last_sync_at, modseq, \
+             delimiter FROM folders WHERE account_id = ?1 ORDER BY path",
         )?;
         let rows = statement.query_map(params![account_id], FolderRow::read)?;
         let mut folders = Vec::new();
@@ -258,22 +259,13 @@ impl Store {
             "DELETE FROM attachments WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
             params![message.account_id, message.folder_path, message.uid],
         )?;
-        for (index, attachment) in message.attachments.iter().enumerate() {
-            tx.execute(
-                "INSERT INTO attachments (account_id, folder_path, uid, idx, filename, mime, \
-                 size, inline) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    message.account_id,
-                    message.folder_path,
-                    message.uid,
-                    index as i64,
-                    attachment.filename,
-                    attachment.mime,
-                    attachment.size as i64,
-                    attachment.inline,
-                ],
-            )?;
-        }
+        insert_attachments(
+            &tx,
+            &message.account_id,
+            &message.folder_path,
+            message.uid,
+            &message.attachments,
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -420,29 +412,40 @@ impl Store {
         Ok(updated)
     }
 
+    /// Fills the body of a message back in, once `fetch_body` has read the whole
+    /// message: the body, the preview derived from it, the attachments and the
+    /// PGP state all come from the same parse, so they land in one write.
     pub fn set_body(
         &self,
         account_id: &str,
         folder_path: &str,
         uid: u32,
-        text: Option<&str>,
-        html: Option<&str>,
-        pgp_detail: Option<&PgpDetail>,
+        parsed: &ParsedMessage,
     ) -> Result<(), MailError> {
         let conn = self.conn()?;
-        let updated = conn.execute(
-            "UPDATE messages SET body_text = ?4, body_html = ?5, pgp_detail = ?6 \
-             WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
+        let tx = conn.unchecked_transaction()?;
+        let updated = tx.execute(
+            "UPDATE messages SET body_text = ?4, body_html = ?5, preview = ?6, pgp = ?7, \
+             pgp_detail = ?8 WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
             params![
                 account_id,
                 folder_path,
                 uid,
-                text,
-                html,
-                pgp_detail.map(to_json).transpose()?
+                parsed.body_text,
+                parsed.body_html,
+                parsed.preview,
+                parsed.pgp.as_str(),
+                to_json_option(&parsed.pgp_detail)?,
             ],
         )?;
-        require_one(updated, "message")
+        require_one(updated, "message")?;
+        tx.execute(
+            "DELETE FROM attachments WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
+            params![account_id, folder_path, uid],
+        )?;
+        insert_attachments(&tx, account_id, folder_path, uid, &parsed.attachments)?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn delete_message(
@@ -710,8 +713,8 @@ fn get_folder_on(
     path: &str,
 ) -> Result<Option<Folder>, MailError> {
     conn.query_row(
-        "SELECT account_id, path, name, role, uidvalidity, uidnext, last_sync_at, modseq \
-         FROM folders WHERE account_id = ?1 AND path = ?2",
+        "SELECT account_id, path, name, role, uidvalidity, uidnext, last_sync_at, modseq, \
+         delimiter FROM folders WHERE account_id = ?1 AND path = ?2",
         params![account_id, path],
         FolderRow::read,
     )
@@ -746,6 +749,32 @@ fn messages_in_folder_on(
         message.attachments = attachments.remove(&message.uid).unwrap_or_default();
     }
     Ok(messages)
+}
+
+fn insert_attachments(
+    conn: &Connection,
+    account_id: &str,
+    folder_path: &str,
+    uid: u32,
+    attachments: &[AttachmentMeta],
+) -> Result<(), MailError> {
+    for (index, attachment) in attachments.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO attachments (account_id, folder_path, uid, idx, filename, mime, \
+             size, inline) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                account_id,
+                folder_path,
+                uid,
+                index as i64,
+                attachment.filename,
+                attachment.mime,
+                attachment.size as i64,
+                attachment.inline,
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 fn attachments_of_on(
@@ -818,6 +847,7 @@ struct FolderRow {
     uidnext: u32,
     last_sync_at: Option<String>,
     modseq: Option<u64>,
+    delimiter: Option<String>,
 }
 
 impl FolderRow {
@@ -831,6 +861,7 @@ impl FolderRow {
             uidnext: row.get(5)?,
             last_sync_at: row.get(6)?,
             modseq: row.get(7)?,
+            delimiter: row.get(8)?,
         })
     }
 
@@ -844,6 +875,7 @@ impl FolderRow {
             uidnext: self.uidnext,
             last_sync_at: parse_date(self.last_sync_at.as_deref())?,
             modseq: self.modseq,
+            delimiter: self.delimiter,
         })
     }
 }
@@ -949,6 +981,9 @@ fn add_missing_columns(conn: &Connection) -> Result<(), MailError> {
     }
     if !column_exists(conn, "folders", "modseq")? {
         conn.execute("ALTER TABLE folders ADD COLUMN modseq INTEGER", [])?;
+    }
+    if !column_exists(conn, "folders", "delimiter")? {
+        conn.execute("ALTER TABLE folders ADD COLUMN delimiter TEXT", [])?;
     }
     if !column_exists(conn, "accounts", "pgp")? {
         conn.execute(
@@ -1082,8 +1117,8 @@ mod tests {
         assert_send_sync::<Store>();
     }
 
-    /// A database written before `pgp_detail`, `modseq` and the per-account PGP
-    /// switch: the three columns `add_missing_columns` adds.
+    /// A database written before `pgp_detail`, `modseq`, the per-account PGP
+    /// switch and the folder delimiter: the columns `add_missing_columns` adds.
     fn legacy_database() -> Connection {
         let conn = Connection::open_in_memory().expect("open");
         conn.execute_batch(
@@ -1119,6 +1154,23 @@ mod tests {
             .expect("present");
         assert_eq!(folder.uidvalidity, 7);
         assert_eq!(folder.modseq, None);
+
+        add_missing_columns(&conn).expect("migrate again");
+    }
+
+    /// A database written before the hierarchy delimiter keeps its folders and
+    /// gains the column, empty: a folder without a tree is a flat one.
+    #[test]
+    fn migrate_adds_the_hierarchy_delimiter_to_an_older_database() {
+        let conn = legacy_database();
+        assert!(!column_exists(&conn, "folders", "delimiter").expect("probe"));
+
+        add_missing_columns(&conn).expect("migrate");
+        assert!(column_exists(&conn, "folders", "delimiter").expect("probe"));
+        let folder = get_folder_on(&conn, "perso", "INBOX")
+            .expect("folder")
+            .expect("present");
+        assert_eq!(folder.delimiter, None);
 
         add_missing_columns(&conn).expect("migrate again");
     }

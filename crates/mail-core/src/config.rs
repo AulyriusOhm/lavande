@@ -65,6 +65,10 @@ pub struct AccountConfig {
     pub imap: Endpoint,
     pub smtp: Endpoint,
     pub auth: AuthConfig,
+    /// Folders the account syncs by itself: `None` keeps the default (every
+    /// folder with a known role), `Some(paths)` limits the automatic pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synced_folders: Option<Vec<String>>,
 }
 
 impl AccountConfig {

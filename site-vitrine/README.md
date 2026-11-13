@@ -18,7 +18,7 @@ site-vitrine/
     │                               # apparitions au défilement, année du pied de page
     ├── fonts/plus-jakarta-sans-*.woff2   # Plus Jakarta Sans (OFL, voir OFL.txt)
     ├── fonts/OFL.txt               # licence de la police
-    └── img/favicon.svg             # monogramme L dans le dégradé de l'accent
+    └── img/favicon.svg             # carré dégradé violet, sans lettre
 ```
 
 Aucune requête réseau : polices, icônes (sprite SVG inline), visuels (CSS/SVG) et scripts sont

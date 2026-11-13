@@ -54,9 +54,12 @@ function themeSnapshot(): Theme {
 
 /** Feuille de repli du document mail : la palette de DESIGN.md pour le contenu
  *  que le mail ne style pas lui-même, sans dépendre du CSS de l'app (l'iframe a
- *  son propre document). Aucune règle de mise en page ici : les bordures de
- *  cellules, les marges de paragraphes et la largeur des tables appartiennent au
- *  mail. */
+ *  son propre document). Aucune règle de mise en page au-dessus de 720px : les
+ *  bordures de cellules, les marges de paragraphes et la largeur des tables
+ *  appartiennent au mail. En dessous, la largeur disponible prime sur la
+ *  fidélité (une newsletter en table de 600px déborde sinon du téléphone) :
+ *  tables ramenées à 100%, images et blocs plafonnés, cellules `nowrap`
+ *  autorisées à replier. */
 function mailStyles({ dark, accent }: Theme) {
   const palette = dark ? DARK : LIGHT;
   return `@font-face{font-family:"Plus Jakarta Sans";font-style:normal;font-weight:300 800;font-display:swap;src:url("${jakartaFont}") format("woff2")}
@@ -77,7 +80,14 @@ img{max-width:100%;height:auto}
 a{color:var(--accent-ink);text-decoration:underline;text-underline-offset:2px}
 blockquote{margin:0 0 .85em;padding-left:.9em;border-left:3px solid var(--line);color:var(--ink-muted)}
 code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em}
-pre{white-space:pre-wrap;background:var(--surface-2);padding:.6em;border-radius:.5em}`;
+pre{white-space:pre-wrap;background:var(--surface-2);padding:.6em;border-radius:.5em}
+@media (max-width:720px){
+*,:before,:after{box-sizing:border-box!important}
+body *{max-width:100%!important}
+table{width:100%!important}
+td,th{white-space:normal!important}
+img{height:auto!important}
+}`;
 }
 
 function mailDocument(body: string, theme: Theme) {
@@ -100,9 +110,10 @@ function mailDocument(body: string, theme: Theme) {
  * un simple **repli**, placée dans le `<head>` : le mail garde sa propre mise en
  * page (styles inline, blocs `<style>` réinjectés en tête du body, attributs de
  * table) et notre palette ne sert qu'au contenu non stylé — le rendu fidèle
- * prime, y compris en thème sombre. Les liens sont interceptés côté parent —
- * l'iframe n'exécute aucun script — et remis au navigateur du système, la base
- * `target="_blank"` ne restant qu'un repli.
+ * prime, y compris en thème sombre (sauf sous 720px, où la feuille ramène
+ * tables et images à la largeur de l'écran). Les liens sont interceptés côté
+ * parent — l'iframe n'exécute aucun script — et remis au navigateur du système,
+ * la base `target="_blank"` ne restant qu'un repli.
  * Sans HTML, on retombe sur les paragraphes texte.
  *
  * Les images distantes restent masquées par défaut : le bandeau ne fait que
@@ -261,6 +272,22 @@ export function MailBody({
         className="block w-full border-0 bg-transparent"
         style={{ height: height ?? "65vh" }}
       />
+    </div>
+  );
+}
+
+export function MailBodyLoading({ className }: { className?: string }) {
+  return (
+    <div role="status" aria-live="polite" className={cn("space-y-2.5", className)}>
+      <p className="flex items-center gap-2 text-[12px] font-semibold text-ink-muted">
+        <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden />
+        Chargement du message…
+      </p>
+      <div className="space-y-2.5 pt-1" aria-hidden>
+        {["88%", "72%", "94%", "58%"].map((width) => (
+          <span key={width} style={{ width }} className="block h-3 animate-pulse rounded-full bg-surface-2" />
+        ))}
+      </div>
     </div>
   );
 }

@@ -2,9 +2,11 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { MailboxSheet } from "@/screens/inbox-screen";
+import { SettingsScreen } from "@/screens/settings-screen";
 import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
+import { ThemeProvider } from "@/lib/theme";
 import { createMemoryStorage } from "@/lib/sync/storage";
 import type { ApiAccount, ApiFolder } from "@/lib/api";
 
@@ -80,15 +82,30 @@ function stubBackend(refusal: { error: string } | null = null) {
 
 const wrapper = ({ children }: { children: ReactNode }) => (
   <PrefsProvider>
-    <PlanningProvider storage={createMemoryStorage()}>
-      <MailStoreProvider>{children}</MailStoreProvider>
-    </PlanningProvider>
+    <ThemeProvider>
+      <PlanningProvider storage={createMemoryStorage()}>
+        <MailStoreProvider>{children}</MailStoreProvider>
+      </PlanningProvider>
+    </ThemeProvider>
   </PrefsProvider>
 );
 
 function mountSheet() {
   return render(
     <MailboxSheet folder="inbox" onSelect={() => {}} onClose={() => {}} />,
+    { wrapper },
+  );
+}
+
+function mountSettings() {
+  return render(
+    <SettingsScreen
+      mails={[]}
+      account="a1"
+      onOpenAccounts={() => {}}
+      onOpenPgp={() => {}}
+      onOpenMcp={() => {}}
+    />,
     { wrapper },
   );
 }
@@ -103,18 +120,19 @@ afterEach(() => {
   vi.stubEnv("VITE_MAIL_BACKEND", "api");
 });
 
-describe("suppression d'un dossier · UI", () => {
-  it("n'offre la corbeille que sur les dossiers personnalisés", async () => {
+describe("suppression d'un dossier · réglages mobiles", () => {
+  it("ne propose que les dossiers personnalisés", async () => {
     stubBackend();
-    mountSheet();
+    mountSettings();
 
+    expect(await screen.findByRole("heading", { name: "Dossiers" })).toBeTruthy();
     await screen.findByLabelText("Supprimer le dossier Projets");
     expect(screen.queryByLabelText("Supprimer le dossier Boîte de réception")).toBeNull();
   });
 
   it("écrit le nom du dossier puis supprime après confirmation", async () => {
     const { deletes } = stubBackend();
-    mountSheet();
+    mountSettings();
 
     fireEvent.click(await screen.findByLabelText("Supprimer le dossier Projets"));
     const confirm = screen.getByLabelText("Confirmer la suppression du dossier Projets");
@@ -125,11 +143,12 @@ describe("suppression d'un dossier · UI", () => {
 
     await waitFor(() => expect(deletes).toEqual(["Projets"]));
     await waitFor(() => expect(screen.queryByLabelText("Supprimer le dossier Projets")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Dossiers" })).toBeNull());
   });
 
   it("renonce quand on annule", async () => {
     const { deletes } = stubBackend();
-    mountSheet();
+    mountSettings();
 
     fireEvent.click(await screen.findByLabelText("Supprimer le dossier Projets"));
     fireEvent.click(screen.getByLabelText("Annuler la suppression du dossier"));
@@ -140,13 +159,23 @@ describe("suppression d'un dossier · UI", () => {
 
   it("garde le dossier quand le serveur refuse", async () => {
     const { deletes } = stubBackend({ error: "serveur IMAP : DELETE refusé" });
-    mountSheet();
+    mountSettings();
 
     fireEvent.click(await screen.findByLabelText("Supprimer le dossier Projets"));
     fireEvent.click(screen.getByLabelText("Confirmer la suppression du dossier Projets"));
 
     await waitFor(() => expect(deletes).toEqual(["Projets"]));
     await waitFor(() => expect(screen.getByLabelText("Supprimer le dossier Projets")).toBeTruthy());
+  });
+});
+
+describe("suppression d'un dossier · rail", () => {
+  it("ne propose plus la suppression depuis la liste des dossiers", async () => {
+    stubBackend();
+    mountSheet();
+
+    await screen.findByRole("button", { name: "Masquer le dossier Projets" });
+    expect(screen.queryByLabelText(/Supprimer le dossier/)).toBeNull();
   });
 });
 

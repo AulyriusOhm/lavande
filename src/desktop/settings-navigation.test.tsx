@@ -9,7 +9,7 @@ import { createMemoryStorage } from "@/lib/sync/storage";
 
 vi.stubEnv("VITE_MAIL_BACKEND", "local");
 
-const GROUPS = ["Comptes", "Apparence", "Synchronisation", "Sécurité", "IA", "MCP", "Application"];
+const GROUPS = ["Comptes", "Apparence", "Notifications", "Synchronisation", "Sécurité", "IA", "MCP", "Application"];
 
 const SECTIONS = [
   { label: "Comptes", anchor: "reglages-comptes" },
@@ -17,6 +17,7 @@ const SECTIONS = [
   { label: "Apparence", anchor: "reglages-apparence" },
   { label: "Raccourcis clavier", anchor: "reglages-clavier" },
   { label: "Modules", anchor: "reglages-modules" },
+  { label: "Notifications", anchor: "reglages-notifications" },
   { label: "Synchronisation", anchor: "reglages-synchronisation" },
   { label: "Calendriers", anchor: "reglages-calendriers" },
   { label: "Sécurité & PGP", anchor: "reglages-securite" },
@@ -59,7 +60,7 @@ function renderSettings() {
 const nav = () => screen.getByRole("navigation", { name: "Sections des réglages" });
 
 describe("Réglages · sommaire groupé", () => {
-  it("range les sections en sept groupes nommés", () => {
+  it("range les sections en huit groupes nommés", () => {
     renderSettings();
 
     const groups = within(nav()).getAllByRole("group");

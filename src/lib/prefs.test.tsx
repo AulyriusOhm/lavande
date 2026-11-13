@@ -2,16 +2,20 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
+  DEFAULT_NOTIFICATIONS,
   DEFAULT_SYNC,
   PrefsProvider,
   accountPgp,
   asHiddenFolders,
+  asNotifications,
   asPgpAccounts,
   asSync,
   isFolderHidden,
+  notificationsForAccount,
   resolvePgp,
   usePrefs,
 } from "@/lib/prefs";
+import type { NotificationPrefs } from "@/lib/prefs";
 import { DEFAULT_SUMMARY } from "@/lib/summary";
 
 const mount = () =>
@@ -425,5 +429,73 @@ describe("préférences · dossiers masqués", () => {
     act(() => result.current.setFolderHidden("a1", "Projets", false));
     expect(result.current.hiddenFolders).toEqual({ a2: ["Projets"] });
     expect(stored().hiddenFolders).toEqual({ a2: ["Projets"] });
+  });
+});
+
+describe("préférences · notifications", () => {
+  it("démarre notifiées, tous comptes confondus, avec rappel dix minutes avant", () => {
+    const { result } = mount();
+    expect(result.current.notifications).toEqual(DEFAULT_NOTIFICATIONS);
+    expect(DEFAULT_NOTIFICATIONS).toEqual({
+      enabled: true,
+      accounts: {},
+      calendar: true,
+      calendarMinutes: 10,
+    });
+  });
+
+  it("relit une configuration complète", () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({
+        notifications: { enabled: false, accounts: { a1: false, a2: true }, calendar: false, calendarMinutes: 30 },
+      }),
+    );
+
+    expect(mount().result.current.notifications).toEqual({
+      enabled: false,
+      accounts: { a1: false, a2: true },
+      calendar: false,
+      calendarMinutes: 30,
+    });
+  });
+
+  it("ignore les valeurs invalides et borne le délai", () => {
+    expect(asNotifications(undefined)).toEqual(DEFAULT_NOTIFICATIONS);
+    expect(asNotifications("tout")).toEqual(DEFAULT_NOTIFICATIONS);
+    expect(asNotifications({ enabled: "oui", accounts: { a1: "non", a2: false }, calendar: 1 })).toEqual({
+      enabled: true,
+      accounts: { a2: false },
+      calendar: true,
+      calendarMinutes: 10,
+    });
+    expect(asNotifications({ calendarMinutes: -5 }).calendarMinutes).toBe(10);
+    expect(asNotifications({ calendarMinutes: 12.4 }).calendarMinutes).toBe(12);
+    expect(asNotifications({ calendarMinutes: 999 }).calendarMinutes).toBe(120);
+  });
+
+  it("un compte absent suit l'interrupteur général", () => {
+    const open: NotificationPrefs = { ...DEFAULT_NOTIFICATIONS, accounts: { a1: false } };
+    expect(notificationsForAccount(open, "a1")).toBe(false);
+    expect(notificationsForAccount(open, "a2")).toBe(true);
+    expect(notificationsForAccount(open, null)).toBe(true);
+    expect(notificationsForAccount({ ...open, enabled: false }, "a2")).toBe(false);
+    expect(notificationsForAccount({ ...open, enabled: false }, "a1")).toBe(false);
+  });
+
+  it("coupe puis rétablit les notifications d'un compte et persiste", () => {
+    const { result } = mount();
+
+    act(() => result.current.setAccountNotification("a1", false));
+    expect(result.current.notifications.accounts).toEqual({ a1: false });
+    expect(stored().notifications).toMatchObject({ accounts: { a1: false } });
+
+    act(() => result.current.setAccountNotification("a1", true));
+    expect(result.current.notifications.accounts).toEqual({ a1: true });
+
+    act(() => result.current.setNotifications({ enabled: false, calendarMinutes: 15 }));
+    expect(result.current.notifications.enabled).toBe(false);
+    expect(result.current.notifications.calendarMinutes).toBe(15);
+    expect(stored().notifications).toMatchObject({ enabled: false, calendarMinutes: 15 });
   });
 });
