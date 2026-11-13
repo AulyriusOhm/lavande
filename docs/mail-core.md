@@ -809,8 +809,9 @@ jamais un reset silencieux.
 | POST | `/api/accounts/{id}/purge` | `{ folder_path }` | 200 `{ removed }`, `removed` = nombre de messages **expurgés côté serveur** (dossier vidé des deux côtés) |
 | POST | `/api/accounts/{id}/send` | `SendRequest` | 204 |
 | POST | `/api/oauth/start` | `OAuthStartRequest` | 201 `{ session, auth_url, redirect_uri }` |
-| GET | `/api/oauth/callback?code=…&state=…` | — | page HTML autonome (jamais de jeton) |
-| GET | `/api/oauth/status?session=…` | — | `{ status: pending\|done\|failed, account_id?, error? }` |
+| GET | `/api/oauth/callback?code=…&state=…` | — | page HTML autonome (jamais de jeton) ; enregistre seulement le code, **aucun appel réseau** |
+| POST | `/api/oauth/complete` | `{ session }` | `{ status: pending\|code_received\|done\|failed, account_id?, error? }` : échange le code (au retour au premier plan) |
+| GET | `/api/oauth/status?session=…` | — | `{ status: pending\|code_received\|done\|failed, account_id?, error? }` |
 | GET | `/api/events` | — | flux SSE `event: mail` (`folder-updated`, rapport de synchro) |
 
 `POST /api/accounts` **teste la connexion IMAP et liste les dossiers avant d'écrire quoi que ce soit** :
@@ -865,11 +866,15 @@ le démon (`http://127.0.0.1:8790/api/oauth/callback`, surchargeable par `LAVAND
    pop-ups le refuse), et le plugin Tauri `opener` dans la coquille packagée, où `window.open` ne fait
    rien. Un lien de secours (« Ouvrir la page de consentement ») reste affiché dans la carte pendant
    l'attente du consentement.
-3. Le fournisseur redirige le navigateur vers `redirect_uri` ; le démon échange le code
-   (`grant_type=authorization_code` + `code_verifier`), obtient le `refresh_token`, **teste la
-   connexion IMAP** (XOAUTH2 + `LIST`) puis enregistre le compte comme `POST /api/accounts`.
-   La page renvoyée est autonome (« Compte connecté » ou « Connexion refusée : … »).
-4. `GET /api/oauth/status?session=…` permet au front de suivre l'issue sans voir de jeton.
+3. Le fournisseur redirige le navigateur vers `redirect_uri` ; le démon **n'enregistre que le code**
+   (`status: code_received`) et ne fait aucun appel réseau : le navigateur occupe le premier plan et
+   Android refuse alors les sockets de l'application en arrière-plan (`EPERM`).
+4. Au retour de l'application au premier plan, le front appelle `POST /api/oauth/complete` : le démon
+   échange le code (`grant_type=authorization_code` + `code_verifier`), obtient le `refresh_token`,
+   **teste la connexion IMAP** (XOAUTH2 + `LIST`) puis enregistre le compte comme `POST /api/accounts`.
+   L'échange est idempotent (passage atomique `code_received` → en cours).
+5. `GET /api/oauth/status?session=…` permet au front de suivre l'issue sans voir de jeton ; c'est lui
+   qui déclenche l'étape 4 quand il lit `code_received`.
 
 Sessions en mémoire, TTL 10 minutes, `state` à usage unique.
 

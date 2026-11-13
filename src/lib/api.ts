@@ -170,7 +170,7 @@ export type ApiOAuthStart = {
 };
 
 export type ApiOAuthStatus = {
-  status: "pending" | "done" | "failed";
+  status: "pending" | "code_received" | "done" | "failed";
   account_id?: string;
   error?: string;
 };
@@ -653,6 +653,9 @@ export const mailApi = {
 
   oauthStatus: (session: string) =>
     request<ApiOAuthStatus>(`/oauth/status?session=${encodeURIComponent(session)}`),
+
+  oauthComplete: (session: string) =>
+    request<ApiOAuthStatus>("/oauth/complete", { method: "POST", body: { session } }),
 
   /** `EventSource` ne porte pas d'en-tête : dans la coquille, le jeton passe en query. */
   eventsUrl: async () => {

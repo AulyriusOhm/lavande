@@ -6,6 +6,7 @@ use std::sync::Arc;
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use serde::Deserialize;
 
 use crate::dto::ApiJson;
 use crate::error::ApiError;
@@ -14,10 +15,16 @@ use crate::oauth_flow::{
 };
 use crate::state::AppState;
 
+#[derive(Deserialize)]
+pub struct CompleteRequest {
+    pub session: String,
+}
+
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/oauth/start", post(start))
         .route("/api/oauth/callback", get(callback))
+        .route("/api/oauth/complete", post(complete))
         .route("/api/oauth/status", get(status))
 }
 
@@ -42,4 +49,11 @@ async fn status(
     Query(query): Query<StatusQuery>,
 ) -> Result<Json<StatusResponse>, ApiError> {
     oauth_flow::status(&state, &query.session).map(Json)
+}
+
+async fn complete(
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<CompleteRequest>,
+) -> Result<Json<StatusResponse>, ApiError> {
+    oauth_flow::complete(&state, &request.session).await.map(Json)
 }

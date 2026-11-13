@@ -92,6 +92,8 @@ struct Provider {
 
 enum Outcome {
     Pending,
+    CodeReceived { code: String, redirect_uri: String },
+    Finishing,
     Done(String),
     Failed(String),
 }
@@ -130,12 +132,12 @@ impl Sessions {
 
     fn by_state<F, T>(&self, state: &str, apply: F) -> Option<T>
     where
-        F: FnOnce(&Session) -> Option<T>,
+        F: FnOnce(&mut Session) -> Option<T>,
     {
         let mut sessions = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         sessions.retain(|_, entry| entry.created.elapsed() < SESSION_TTL);
         sessions
-            .values()
+            .values_mut()
             .find(|session| session.state == state)
             .and_then(apply)
     }
@@ -144,6 +146,8 @@ impl Sessions {
         self.with(id, |session| {
             let (status, account_id, error) = match &session.outcome {
                 Outcome::Pending => ("pending", None, None),
+                Outcome::CodeReceived { .. } => ("code_received", None, None),
+                Outcome::Finishing => ("pending", None, None),
                 Outcome::Done(account) => ("done", Some(account.clone()), None),
                 Outcome::Failed(error) => ("failed", None, Some(error.clone())),
             };
@@ -196,8 +200,8 @@ pub async fn start(state: &AppState, request: StartRequest) -> Result<StartRespo
     })
 }
 
-/// Le navigateur arrive ici après consentement. Le jeton reste côté service :
-/// la page affichée ne contient que le résultat.
+/// Le navigateur arrive ici après consentement : seule la réception du code a
+/// lieu, sans aucun appel réseau (l'application peut être en arrière-plan).
 pub async fn callback(state: &AppState, query: CallbackQuery) -> (axum::http::StatusCode, String) {
     let Some(code) = query.code.clone() else {
         if let Some(reason) = &query.error {
@@ -214,14 +218,19 @@ pub async fn callback(state: &AppState, query: CallbackQuery) -> (axum::http::St
             page("Connexion impossible", "Paramètre state manquant.", false),
         );
     };
+
+    let redirect_uri = format!("{}/api/oauth/callback", state.public_url());
     let found = state.sessions().by_state(&oauth_state, |session| {
-        Some((
-            session.provider.clone(),
-            session.verifier.clone(),
-            session.config.clone(),
-        ))
+        if !matches!(session.outcome, Outcome::Pending) {
+            return None;
+        }
+        session.outcome = Outcome::CodeReceived {
+            code: code.clone(),
+            redirect_uri: redirect_uri.clone(),
+        };
+        Some(())
     });
-    let Some((provider, verifier, config)) = found else {
+    if found.is_none() {
         return (
             axum::http::StatusCode::UNAUTHORIZED,
             page(
@@ -230,32 +239,55 @@ pub async fn callback(state: &AppState, query: CallbackQuery) -> (axum::http::St
                 false,
             ),
         );
+    }
+
+    tracing::info!("code de consentement OAuth2 reçu");
+    (
+        axum::http::StatusCode::OK,
+        page(
+            "Consentement enregistré",
+            "Revenez à Lavande : la connexion se termine automatiquement.",
+            true,
+        ),
+    )
+}
+
+/// Échange le code reçu, appelé au retour de l'application au premier plan.
+pub async fn complete(state: &AppState, session: &str) -> Result<StatusResponse, ApiError> {
+    let received = state.sessions().with(session, |entry| {
+        let (code, redirect_uri) = match &entry.outcome {
+            Outcome::CodeReceived { code, redirect_uri } => (code.clone(), redirect_uri.clone()),
+            _ => return None,
+        };
+        let provider = entry.provider.clone();
+        let verifier = entry.verifier.clone();
+        let config = entry.config.clone();
+        entry.outcome = Outcome::Finishing;
+        Some((provider, verifier, config, code, redirect_uri))
+    });
+    let Some((provider, verifier, config, code, redirect_uri)) = received else {
+        return status(state, session);
     };
 
-    let redirect_uri = format!("{}/api/oauth/callback", state.public_url());
-    match finish(state, provider, verifier, config, code, redirect_uri).await {
+    let outcome = match finish(state, provider, verifier, config, code, redirect_uri).await {
         Ok(account_id) => {
-            mark_by_state(state, Some(&oauth_state), Ok(account_id.clone()));
             tracing::info!(account = %account_id, "compte OAuth2 connecté");
-            (
-                axum::http::StatusCode::OK,
-                page(
-                    "Compte connecté",
-                    "Lavande peut maintenant relever cette boîte. Tu peux fermer cet onglet.",
-                    true,
-                ),
-            )
+            Ok(account_id)
         }
         Err(error) => {
             let message = error.message().to_string();
-            mark_by_state(state, Some(&oauth_state), Err(message.clone()));
             tracing::warn!(error = %message, "connexion OAuth2 refusée");
-            (
-                axum::http::StatusCode::OK,
-                page("Connexion refusée", &message, false),
-            )
+            Err(message)
         }
-    }
+    };
+    state.sessions().with(session, |entry| {
+        entry.outcome = match outcome {
+            Ok(account_id) => Outcome::Done(account_id),
+            Err(error) => Outcome::Failed(error),
+        };
+        Some(())
+    });
+    status(state, session)
 }
 
 pub fn status(state: &AppState, session: &str) -> Result<StatusResponse, ApiError> {

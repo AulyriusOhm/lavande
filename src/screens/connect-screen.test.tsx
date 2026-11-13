@@ -5,9 +5,10 @@ const MICROSOFT_ID = "291c5ae6-2601-4cb5-8ae9-c6edbe9c3c1d";
 const GOOGLE_ID = "1234567890-lavande.apps.googleusercontent.com";
 const OTHER_MICROSOFT_ID = "aaaaaaaa-1111-2222-3333-444444444444";
 
-const { oauthStart, oauthStatus, health, openExternal } = vi.hoisted(() => ({
+const { oauthStart, oauthStatus, oauthComplete, health, openExternal } = vi.hoisted(() => ({
   oauthStart: vi.fn(),
   oauthStatus: vi.fn(),
+  oauthComplete: vi.fn(),
   health: vi.fn(),
   openExternal: vi.fn(),
 }));
@@ -19,6 +20,7 @@ vi.mock("@/lib/api", () => ({
     health,
     oauthStart,
     oauthStatus,
+    oauthComplete,
     setSyncFolders: vi.fn(),
   },
 }));
@@ -177,5 +179,18 @@ describe("Écran de connexion · identifiant par fournisseur", () => {
     const sent = await startWith("Google");
 
     expect(sent.client_id).toBe(GOOGLE_ID);
+  });
+
+  it("déclenche l'échange une fois le code reçu", async () => {
+    oauthStatus
+      .mockResolvedValueOnce({ status: "code_received" })
+      .mockResolvedValue({ status: "failed", error: "échange refusé" });
+    oauthComplete.mockResolvedValue({ status: "failed", error: "échange refusé" });
+    renderConnect();
+    fillRequired();
+
+    await startWith("Microsoft");
+
+    await waitFor(() => expect(oauthComplete).toHaveBeenCalledWith("s1"));
   });
 });
