@@ -7,26 +7,35 @@
  * remonte dans le store de planification.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiError,
   errorText,
   mailApi,
+  type ApiAccount,
   type CaldavEventInput,
+  type CaldavSource,
   type ExternalEvent,
+  type GoogleCalendar,
   type WrittenExternalEvent,
 } from "@/lib/api";
 import type { CalendarEvent } from "@/lib/calendar";
 import {
   caldavSourceIdOf,
+  calendarActivated,
+  calendarId,
   googleRefOf,
   icsUrlOf,
   isCaldavCalendar,
   isExternalCalendar,
   isGoogleCalendar,
+  isIcsCalendar,
+  loadCalendars,
+  useCalendarDefinitions,
   type CalendarDef,
 } from "@/lib/calendars";
-import { GOOGLE_REFRESH_MS, googleWindow } from "@/lib/gcal";
+import { GOOGLE_RECONSENT, GOOGLE_REFRESH_MS, googleAccounts, googleConsentMissing, googleWindow } from "@/lib/gcal";
+import { storedPerimeters } from "@/lib/prefs";
 
 export const ICS_STORAGE_KEY = "lavande.ics.v1";
 
@@ -101,8 +110,9 @@ export function toCalendarEvents(
 /** Le nom porté par les événements suit le calendrier : un renommage se voit aussitôt. */
 export function externalCalendarEvents(state: IcsState, calendars: CalendarDef[]): CalendarEvent[] {
   const out: CalendarEvent[] = [];
+  const perimeters = storedPerimeters();
   for (const def of calendars) {
-    if (!isExternalCalendar(def)) continue;
+    if (!isExternalCalendar(def) || !calendarActivated(def, perimeters)) continue;
     for (const event of state.events[def.id] ?? []) out.push({ ...event, calendar: def.name });
   }
   return out;
@@ -155,7 +165,9 @@ export function dueExternalSubscriptions(
   synced: Record<string, number>,
   now = Date.now(),
 ): CalendarDef[] {
+  const perimeters = storedPerimeters();
   return calendars.filter((def) => {
+    if (!calendarActivated(def, perimeters)) return false;
     const ttl = externalTtl(def);
     return ttl !== null && now - (synced[def.id] ?? 0) >= ttl;
   });
@@ -363,4 +375,354 @@ export function useIcsState(): [IcsState, (next: IcsState) => void] {
   }, []);
 
   return [state, setIcsState];
+}
+
+/** Gestion des sources partagée par les réglages PC et mobile : une seule implémentation. */
+export type CalendarSourcesManager = {
+  calendars: CalendarDef[];
+  busy: boolean;
+  refreshing: string | null;
+  error: string | null;
+  googleConnected: ApiAccount[];
+  googleCalendars: Record<string, GoogleCalendar[]>;
+  googleBusy: Record<string, boolean>;
+  googleErrors: Record<string, string | null>;
+  loadGoogleCalendars: (accountId: string) => Promise<void>;
+  googleAttached: (accountId: string, calendarId: string) => boolean;
+  countOf: (id: string) => number;
+  detailOf: (def: CalendarDef) => string | undefined;
+  paused: (def: CalendarDef) => boolean;
+  addLocal: (input: { name: string; tone: number }) => boolean;
+  addCaldav: (input: {
+    url: string;
+    username: string;
+    password: string;
+    name: string;
+    tone: number;
+  }) => Promise<boolean>;
+  subscribeIcs: (input: { url: string; name: string; tone: number }) => Promise<boolean>;
+  importIcsFile: (input: { file: File; name: string; tone: number }) => Promise<boolean>;
+  addGoogle: (
+    account: ApiAccount,
+    calendar: GoogleCalendar,
+    input: { name: string; tone: number },
+  ) => Promise<boolean>;
+  rename: (id: string, name: string) => boolean;
+  setTone: (id: string, tone: number) => void;
+  remove: (id: string) => Promise<boolean>;
+  refresh: (def: CalendarDef) => Promise<boolean>;
+};
+
+export function useCalendarSources(notify: (message: string) => void): CalendarSourcesManager {
+  const [calendars, setCalendars] = useCalendarDefinitions();
+  const [ics, setIcs] = useIcsState();
+  const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [caldavSources, setCaldavSources] = useState<Record<string, CaldavSource>>({});
+  const [googleConnected, setGoogleConnected] = useState<ApiAccount[]>([]);
+  const [googleCalendars, setGoogleCalendars] = useState<Record<string, GoogleCalendar[]>>({});
+  const [googleBusy, setGoogleBusy] = useState<Record<string, boolean>>({});
+  const [googleErrors, setGoogleErrors] = useState<Record<string, string | null>>({});
+  const googleInFlight = useRef(new Set<string>());
+  const googleRequested = useRef(new Set<string>());
+
+  /** Une liste indisponible ne bloque rien : seule l'URL des sources CalDAV manque. */
+  useEffect(() => {
+    let alive = true;
+    mailApi
+      .caldavSources()
+      .then((list) => {
+        if (!alive || !Array.isArray(list)) return;
+        setCaldavSources(Object.fromEntries(list.map((source) => [source.id, source])));
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /** Les comptes connectés disparaissent sans le démon : le bloc Google reste alors vide. */
+  useEffect(() => {
+    let alive = true;
+    mailApi
+      .accounts()
+      .then((list) => {
+        if (!alive || !Array.isArray(list)) return;
+        setGoogleConnected(googleAccounts(list));
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /** Lecture des calendriers d'un compte : une seule requête en vol, jamais de boucle. */
+  const loadGoogleCalendars = useCallback(async (accountId: string) => {
+    if (googleInFlight.current.has(accountId)) return;
+    googleInFlight.current.add(accountId);
+    setGoogleBusy((current) => ({ ...current, [accountId]: true }));
+    try {
+      const list = await mailApi.googleCalendars(accountId);
+      setGoogleCalendars((current) => ({ ...current, [accountId]: Array.isArray(list) ? list : [] }));
+      setGoogleErrors((current) => ({ ...current, [accountId]: null }));
+    } catch (failure) {
+      setGoogleErrors((current) => ({
+        ...current,
+        [accountId]: googleConsentMissing(failure) ? GOOGLE_RECONSENT : `Google · ${errorText(failure)}`,
+      }));
+    } finally {
+      googleInFlight.current.delete(accountId);
+      setGoogleBusy((current) => ({ ...current, [accountId]: false }));
+    }
+  }, []);
+
+  useEffect(() => {
+    for (const account of googleConnected) {
+      if (googleRequested.current.has(account.id)) continue;
+      googleRequested.current.add(account.id);
+      void loadGoogleCalendars(account.id);
+    }
+  }, [googleConnected, loadGoogleCalendars]);
+
+  const fail = (message: string) => {
+    setError(message);
+    return false;
+  };
+
+  /** Le nom saisi décide ; à défaut l'URL, le fichier ou le calendrier fait foi. */
+  const draftFor = (rawName: string, fallback: string, tone: number): CalendarDef | null => {
+    const name = rawName.trim() || fallback;
+    const list = loadCalendars();
+    if (list.some((entry) => entry.name.toLowerCase() === name.toLowerCase())) {
+      setError(`Calendrier déjà présent · ${name}`);
+      return null;
+    }
+    return { id: calendarId(name, list), name, tone };
+  };
+
+  const addLocal = ({ name, tone }: { name: string; tone: number }) => {
+    if (!name.trim()) return fail("Nom du calendrier requis");
+    const def = draftFor(name, name, tone);
+    if (!def) return false;
+    setCalendars([...loadCalendars(), def]);
+    setError(null);
+    notify(`Calendrier ajouté · ${def.name}`);
+    return true;
+  };
+
+  const addCaldav = async (input: {
+    url: string;
+    username: string;
+    password: string;
+    name: string;
+    tone: number;
+  }) => {
+    const url = input.url.trim();
+    const problem = calendarUrlError(url);
+    if (problem) return fail(problem);
+    const username = input.username.trim();
+    if (!username) return fail("Identifiant CalDAV requis");
+    if (!input.password) return fail("Mot de passe CalDAV requis");
+    const draft = draftFor(input.name, icsNameFromUrl(url, "Calendrier CalDAV"), input.tone);
+    if (!draft) return false;
+    setBusy(true);
+    setError(null);
+    try {
+      const source = await mailApi.addCaldavSource({ url, username, password: input.password, name: draft.name });
+      const def: CalendarDef = { ...draft, source: { kind: "caldav", sourceId: source.id } };
+      setCalendars([...loadCalendars(), def]);
+      setCaldavSources((current) => ({ ...current, [source.id]: source }));
+      notify(`Calendrier CalDAV ajouté · ${def.name}`);
+      try {
+        setIcs(setIcsCalendarEvents(loadIcsState(), def.id, await fetchCaldavCalendar(def)));
+      } catch (failure) {
+        setError(`Source ajoutée, événements non lus · ${errorText(failure)}`);
+      }
+      return true;
+    } catch (failure) {
+      const message = errorText(failure);
+      notify(`Ajout CalDAV impossible · ${message}`);
+      return fail(message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const subscribeIcs = async (input: { url: string; name: string; tone: number }) => {
+    const url = input.url.trim();
+    const problem = calendarUrlError(url);
+    if (problem) return fail(problem);
+    const draft = draftFor(input.name, icsNameFromUrl(url), input.tone);
+    if (!draft) return false;
+    const def: CalendarDef = { ...draft, source: { kind: "ics", url } };
+    setBusy(true);
+    setError(null);
+    try {
+      const events = await fetchIcsCalendar(def);
+      setCalendars([...loadCalendars(), def]);
+      setIcs(setIcsCalendarEvents(loadIcsState(), def.id, events));
+      notify(`Calendrier ICS ajouté · ${def.name} · ${events.length} événement${events.length > 1 ? "s" : ""}`);
+      return true;
+    } catch (failure) {
+      const message = errorText(failure);
+      notify(`Import ICS impossible · ${message}`);
+      return fail(message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const importIcsFile = async (input: { file: File; name: string; tone: number }) => {
+    const draft = draftFor(input.name, icsNameFromFile(input.file.name), input.tone);
+    if (!draft) return false;
+    const def: CalendarDef = { ...draft, source: { kind: "ics" } };
+    setBusy(true);
+    setError(null);
+    try {
+      const content = await input.file.text();
+      if (!content.trim()) throw new Error("fichier vide");
+      const events = await importIcsContent(def, content);
+      setCalendars([...loadCalendars(), def]);
+      setIcs(setIcsCalendarEvents(loadIcsState(), def.id, events));
+      notify(`Calendrier ICS ajouté · ${def.name} · ${events.length} événement${events.length > 1 ? "s" : ""}`);
+      return true;
+    } catch (failure) {
+      const message = errorText(failure);
+      notify(`Import ICS impossible · ${message}`);
+      return fail(message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Le calendrier vit côté agenda du compte : seul un cache d'événements le complète. */
+  const addGoogle = async (
+    account: ApiAccount,
+    calendar: GoogleCalendar,
+    input: { name: string; tone: number },
+  ) => {
+    const draft = draftFor(input.name, calendar.summary.trim() || calendar.id, input.tone);
+    if (!draft) return false;
+    const def: CalendarDef = {
+      ...draft,
+      source: { kind: "google", accountId: account.id, calendarId: calendar.id },
+    };
+    setCalendars([...loadCalendars(), def]);
+    setError(null);
+    notify(`Calendrier Google ajouté · ${def.name}`);
+    try {
+      setIcs(setIcsCalendarEvents(loadIcsState(), def.id, await fetchGoogleCalendar(def)));
+    } catch (failure) {
+      const message = googleConsentMissing(failure) ? GOOGLE_RECONSENT : errorText(failure);
+      setError(`Source ajoutée, événements non lus · ${message}`);
+    }
+    return true;
+  };
+
+  const rename = (id: string, rawName: string) => {
+    const name = rawName.trim();
+    if (!name) return fail("Nom du calendrier requis");
+    const list = loadCalendars();
+    if (list.some((entry) => entry.id !== id && entry.name.toLowerCase() === name.toLowerCase())) {
+      return fail(`Calendrier déjà présent · ${name}`);
+    }
+    setCalendars(list.map((entry) => (entry.id === id ? { ...entry, name } : entry)));
+    setError(null);
+    notify(`Calendrier renommé · ${name}`);
+    return true;
+  };
+
+  const setTone = (id: string, tone: number) => {
+    setCalendars(loadCalendars().map((entry) => (entry.id === id ? { ...entry, tone } : entry)));
+  };
+
+  /** Une source CalDAV part aussi du démon : sans lui, elle reviendrait au prochain ajout. */
+  const remove = async (id: string) => {
+    const list = loadCalendars();
+    const target = list.find((entry) => entry.id === id);
+    if (!target) return false;
+    const sourceId = caldavSourceIdOf(target);
+    if (sourceId) {
+      try {
+        await mailApi.removeCaldavSource(sourceId);
+      } catch (failure) {
+        const message = errorText(failure);
+        notify(`Suppression CalDAV impossible · ${message}`);
+        return fail(message);
+      }
+    }
+    setCalendars(list.filter((entry) => entry.id !== id));
+    if (isExternalCalendar(target)) setIcs(dropIcsCalendar(loadIcsState(), id));
+    if (sourceId) {
+      setCaldavSources((current) => {
+        const next = { ...current };
+        delete next[sourceId];
+        return next;
+      });
+    }
+    setError(null);
+    notify(`Calendrier supprimé · ${target.name}`);
+    return true;
+  };
+
+  const refresh = async (def: CalendarDef) => {
+    if (!isExternalCalendar(def)) return fail("Calendrier local : rien à relire");
+    if (isIcsCalendar(def) && !icsUrlOf(def)) return fail("Fichier importé : rien à relire");
+    setRefreshing(def.id);
+    setError(null);
+    try {
+      const events = await fetchExternalCalendar(def);
+      setIcs(setIcsCalendarEvents(loadIcsState(), def.id, events));
+      notify(`Calendrier relu · ${def.name} · ${events.length} événement${events.length > 1 ? "s" : ""}`);
+      return true;
+    } catch (failure) {
+      const message = errorText(failure);
+      notify(`Relecture impossible · ${message}`);
+      return fail(message);
+    } finally {
+      setRefreshing(null);
+    }
+  };
+
+  /** Ce qui situe une source dans la liste : URL, fichier importé ou compte Google. */
+  const detailOf = (def: CalendarDef) => {
+    if (isIcsCalendar(def)) return icsUrlOf(def) ?? "fichier importé";
+    const ref = googleRefOf(def);
+    if (ref) {
+      const email = googleConnected.find((account) => account.id === ref.accountId)?.email;
+      return `${email ?? ref.accountId} · ${ref.calendarId}`;
+    }
+    const sourceId = caldavSourceIdOf(def);
+    return sourceId ? caldavSources[sourceId]?.url : undefined;
+  };
+
+  return {
+    calendars,
+    busy,
+    refreshing,
+    error,
+    googleConnected,
+    googleCalendars,
+    googleBusy,
+    googleErrors,
+    loadGoogleCalendars,
+    googleAttached: (accountId, calendarIdValue) =>
+      calendars.some((entry) => {
+        const ref = googleRefOf(entry);
+        return ref?.accountId === accountId && ref.calendarId === calendarIdValue;
+      }),
+    countOf: (id) => (ics.events[id] ?? []).length,
+    detailOf,
+    paused: (def) => !calendarActivated(def),
+    addLocal,
+    addCaldav,
+    subscribeIcs,
+    importIcsFile,
+    addGoogle,
+    rename,
+    setTone,
+    remove,
+    refresh,
+  };
 }

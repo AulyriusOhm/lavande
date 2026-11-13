@@ -73,6 +73,9 @@ function mount() {
 const storeSyncPrefs = (patch: Record<string, boolean>) =>
   window.localStorage.setItem("lavande.prefs", JSON.stringify({ sync: patch }));
 
+const storePerimeters = (perimeters: Record<string, unknown>) =>
+  window.localStorage.setItem("lavande.prefs", JSON.stringify({ perimeters }));
+
 beforeEach(() => {
   window.localStorage.clear();
   FakeEventSource.opened = 0;
@@ -173,5 +176,45 @@ describe("synchronisation du calendrier · interrupteurs", () => {
     });
 
     expect(result.current.store.events.map((event) => event.id)).toEqual(["new"]);
+  });
+});
+
+describe("synchronisation des mails · périmètre du compte", () => {
+  it("ne relève pas un compte hors périmètre mails", async () => {
+    storePerimeters({ [ACCOUNT]: { mails: false } });
+    const syncs = mockBackend();
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.store.phase).toBe("ready"));
+    expect(syncs).toHaveLength(0);
+
+    act(() => result.current.store.syncFolder());
+
+    await waitFor(() =>
+      expect(result.current.store.notices.at(-1)?.message).toContain("Mails hors périmètre"),
+    );
+    expect(syncs).toHaveLength(0);
+  });
+
+  it("reprend la relève quand les mails du compte reviennent", async () => {
+    storePerimeters({ [ACCOUNT]: { mails: false } });
+    const syncs = mockBackend();
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.store.phase).toBe("ready"));
+    expect(syncs).toHaveLength(0);
+
+    act(() => result.current.prefs.setAccountPerimeter(ACCOUNT, { mails: true }));
+
+    await waitFor(() => expect(syncs).toHaveLength(1));
+  });
+
+  it("laisse les autres comptes relever leurs mails", async () => {
+    storePerimeters({ autre: { mails: false } });
+    const syncs = mockBackend();
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.store.phase).toBe("ready"));
+    await waitFor(() => expect(syncs).toHaveLength(1));
   });
 });

@@ -12,9 +12,9 @@ vi.stubEnv("VITE_MAIL_BACKEND", "demo");
 const GROUPS = ["Comptes", "Apparence", "Synchronisation", "Sécurité & PGP", "IA", "MCP", "Application"];
 
 const GROUP_SECTIONS: Record<string, string[]> = {
-  Comptes: ["Comptes"],
+  Comptes: ["Comptes", "Périmètre de synchronisation"],
   Apparence: ["Couleur d'accent", "Modules", "Apparence"],
-  Synchronisation: ["Synchronisation", "Notifications", "Notifications par compte"],
+  Synchronisation: ["Synchronisation", "Calendriers", "Sources", "Notifications", "Notifications par compte"],
   "Sécurité & PGP": ["Sécurité"],
   IA: ["Intelligence artificielle"],
   MCP: ["Assistant"],

@@ -1,5 +1,17 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, CheckCircle2, ChevronRight, Loader2, PlugZap, Radar, Server, Sparkles } from "lucide-react";
+import {
+  ArrowLeft,
+  CalendarDays,
+  CheckCircle2,
+  ChevronRight,
+  Loader2,
+  Mail as MailIcon,
+  PlugZap,
+  Radar,
+  Server,
+  Sparkles,
+  Users,
+} from "lucide-react";
 import { ApiError, errorText, mailApi } from "@/lib/api";
 import type { ApiFolder, DiscoverySource, Encryption, NewAccount } from "@/lib/api";
 import { accountSlug } from "@/lib/mail-backend";
@@ -8,6 +20,14 @@ import { isTauriShell, openExternal } from "@/lib/open-external";
 import { OAuthGuide } from "@/components/oauth-guide";
 import { useFolderTree, type FolderTreeRow } from "@/components/folder-tree";
 import { useMailStore } from "@/lib/store";
+import {
+  CONTACTS_PENDING,
+  DEFAULT_PERIMETER,
+  perimeterOf,
+  usePrefs,
+  type AccountPerimeter,
+} from "@/lib/prefs";
+import { SwitchTrack, ToggleRow } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
 import { IconButton } from "@/components/ui/primitives";
 import { MeshGlow } from "@/components/ui/backdrops";
@@ -87,6 +107,8 @@ export function ConnectScreen({
 }) {
   const desktop = variant === "desktop";
   const { createAccount, useDemo, phase, refreshMailbox } = useMailStore();
+  const { setAccountPerimeter } = usePrefs();
+  const [perimeter, setPerimeter] = useState<AccountPerimeter>({ ...DEFAULT_PERIMETER });
   const [label, setLabel] = useState("");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
@@ -274,7 +296,8 @@ export function ConnectScreen({
     setBusy(true);
     setError(null);
     try {
-      await createAccount({ ...draft, synced_folders: selected });
+      const accountId = await createAccount({ ...draft, synced_folders: selected });
+      setAccountPerimeter(accountId, perimeterOf({ [accountId]: perimeter }, accountId));
     } catch (failure: unknown) {
       setError(failureText(failure));
     } finally {
@@ -421,6 +444,41 @@ export function ConnectScreen({
             </div>
             <p className="mt-2 px-1 text-[11px] font-bold text-ink-muted tabular-nums">
               {selected.length} dossier{selected.length > 1 ? "s" : ""} à synchroniser
+            </p>
+          </BlurFade>
+
+          <BlurFade delay={0.06}>
+            <p className="mt-5 mb-1.5 text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+              Périmètre de synchronisation
+            </p>
+            <div className="divide-y divide-line/80 overflow-hidden rounded-2xl border border-line bg-surface">
+              <ToggleRow
+                icon={<MailIcon className="size-4" />}
+                label="Mails"
+                hint="Relève la boîte, les dossiers et le fil en direct"
+                checked={perimeter.mails}
+                onChange={(value) => setPerimeter((current) => ({ ...current, mails: value }))}
+              />
+              <ToggleRow
+                icon={<CalendarDays className="size-4" />}
+                label="Agenda"
+                hint="Affiche et relit les calendriers Google du compte"
+                checked={perimeter.calendar}
+                onChange={(value) => setPerimeter((current) => ({ ...current, calendar: value }))}
+              />
+              <div aria-disabled="true" className="flex w-full items-center gap-3 px-3.5 py-3 opacity-60">
+                <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-surface-2 text-ink-soft">
+                  <Users className="size-4" />
+                </span>
+                <span className="min-w-0 flex-1 leading-tight">
+                  <span className="block text-[12.5px] font-bold text-ink">Contacts</span>
+                  <span className="block text-[11px] font-medium text-ink-muted">{CONTACTS_PENDING}</span>
+                </span>
+                <SwitchTrack checked={false} />
+              </div>
+            </div>
+            <p className="mt-2 px-1 text-[11px] leading-relaxed font-medium text-ink-muted">
+              Modifiable à tout moment dans les réglages du compte.
             </p>
           </BlurFade>
 

@@ -352,3 +352,36 @@ describe("ics · sources Google", () => {
     ]);
   });
 });
+
+describe("ics · périmètre de l'agenda par compte", () => {
+  const google: CalendarDef = {
+    id: "gmail-prive",
+    name: "Privé",
+    tone: 1,
+    source: { kind: "google", accountId: "gmail", calendarId: "primary" },
+  };
+
+  const state = setIcsCalendarEvents(
+    EMPTY_ICS_STATE,
+    "gmail-prive",
+    toCalendarEvents([external({ uid: "g1" })], google, "google"),
+  );
+
+  it("n'affiche pas les événements d'un agenda Google coupé", () => {
+    expect(externalCalendarEvents(state, [google]).map((event) => event.id)).toEqual(["google:gmail-prive:g1"]);
+
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ perimeters: { gmail: { calendar: false } } }));
+
+    expect(externalCalendarEvents(state, [google])).toEqual([]);
+    expect(externalCalendarEvents(state, DEFAULT_CALENDARS)).toEqual([]);
+  });
+
+  it("cesse de relire une source Google dont l'agenda est coupé", () => {
+    const now = 1_700_000_000_000;
+    expect(dueExternalSubscriptions([google], {}, now)).toEqual([google]);
+
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ perimeters: { gmail: { calendar: false } } }));
+
+    expect(dueExternalSubscriptions([google], {}, now)).toEqual([]);
+  });
+});

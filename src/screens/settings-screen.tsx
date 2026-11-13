@@ -4,17 +4,21 @@ import {
   Bell,
   Blocks,
   CalendarDays,
+  Check,
   ChevronDown,
   ChevronRight,
   Clock,
   FolderTree,
   KeyRound,
   Keyboard,
+  Link2,
   ListChecks,
   Lock,
+  Mail as MailIcon,
   Moon,
   Palette,
   PenLine,
+  PlugZap,
   Plus,
   RefreshCw,
   Sparkles,
@@ -22,17 +26,35 @@ import {
   SunMoon,
   Trash2,
   Type,
+  Upload,
   Users,
 } from "lucide-react";
 import { ACCENT_PRESETS, accentContrast, useTheme, type ThemeMode } from "@/lib/theme";
 import { llmProbe, llmReady, type LlmConfig } from "@/lib/llm";
-import { SWIPE_ACTIONS, CALENDAR_LEAD_MINUTES, mergeFlags, usePrefs } from "@/lib/prefs";
+import {
+  SWIPE_ACTIONS,
+  CALENDAR_LEAD_MINUTES,
+  CONTACTS_PENDING,
+  mergeFlags,
+  perimeterOf,
+  usePrefs,
+} from "@/lib/prefs";
+import {
+  TONE_DOT,
+  calendarSourceKind,
+  icsUrlOf,
+  isExternalCalendar,
+  isIcsCalendar,
+  type CalendarDef,
+} from "@/lib/calendars";
+import { useCalendarSources } from "@/lib/ics";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
+import type { ApiAccount, GoogleCalendar } from "@/lib/api";
 import { useMailStore } from "@/lib/store";
 import { MCP_SERVERS, mcpCounts } from "@/lib/mcp";
 import type { Mail } from "@/lib/mail";
 import { cn } from "@/lib/utils";
-import { Avatar, Card, SectionTitle, ToggleRow } from "@/components/ui/primitives";
+import { Avatar, Card, SectionTitle, SwitchTrack, ToggleRow } from "@/components/ui/primitives";
 import { FolderRow } from "@/components/folder-row";
 import { SyncSettings } from "@/components/sync-settings";
 import { ShortcutList } from "@/components/shortcut-list";
@@ -105,6 +127,8 @@ export function SettingsScreen({
     setSummary,
     aiTasks,
     setAiTasks,
+    perimeters,
+    setAccountPerimeter,
   } = usePrefs();
   const [openGroup, setOpenGroup] = useState<GroupId | null>(null);
   const [preview, setPreview] = useState<PreviewMode>("unlocked");
@@ -289,6 +313,69 @@ export function SettingsScreen({
                 <ChevronRight className="size-4 text-ink-muted" />
               </Row>
             </Card>
+          </BlurFade>
+
+          <SectionTitle hint="par compte">Périmètre de synchronisation</SectionTitle>
+          <BlurFade delay={0.1}>
+            <div className="mx-5 space-y-3">
+              {accounts.map((item) => (
+                <Card key={item.id} className="overflow-hidden">
+                  <div className="flex items-center gap-2.5 px-3.5 pt-3 pb-1">
+                    <span
+                      className="grid size-8 shrink-0 place-items-center rounded-xl text-[11px] font-black"
+                      style={{ backgroundColor: item.color, color: accentContrast(item.color) }}
+                    >
+                      {item.label[0]}
+                    </span>
+                    <div className="min-w-0 flex-1 leading-tight">
+                      <p className="truncate text-[12.5px] font-bold text-ink">{item.label}</p>
+                      <p className="truncate text-[11.5px] font-medium text-ink-muted">{item.email}</p>
+                    </div>
+                  </div>
+                  <div
+                    role="group"
+                    aria-label={`Périmètre de synchronisation de ${item.label}`}
+                    className="divide-y divide-line/80"
+                  >
+                    <ToggleRow
+                      icon={<MailIcon className="size-4" />}
+                      label="Mails"
+                      hint="Relève la boîte, les dossiers et le fil en direct"
+                      checked={perimeterOf(perimeters, item.id).mails}
+                      onChange={(value) => setAccountPerimeter(item.id, { mails: value })}
+                    />
+                    <ToggleRow
+                      icon={<CalendarDays className="size-4" />}
+                      label="Agenda"
+                      hint="Affiche et relit les calendriers Google du compte"
+                      checked={perimeterOf(perimeters, item.id).calendar}
+                      onChange={(value) => setAccountPerimeter(item.id, { calendar: value })}
+                    />
+                    <div aria-disabled="true" className="flex w-full items-center gap-3 px-3.5 py-3 opacity-60">
+                      <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-surface-2 text-ink-soft">
+                        <Users className="size-4" />
+                      </span>
+                      <span className="min-w-0 flex-1 leading-tight">
+                        <span className="block text-[12.5px] font-bold text-ink">Contacts</span>
+                        <span className="block text-[11px] font-medium text-ink-muted">{CONTACTS_PENDING}</span>
+                      </span>
+                      <SwitchTrack checked={false} />
+                    </div>
+                  </div>
+                </Card>
+              ))}
+              {accounts.length === 0 ? (
+                <Card className="p-3.5">
+                  <p className="text-[12px] font-medium text-ink-muted">
+                    Aucun compte : le périmètre se règle après la connexion d'une boîte.
+                  </p>
+                </Card>
+              ) : null}
+            </div>
+            <p className="mt-2 px-5 text-[12px] leading-relaxed font-medium text-ink-muted">
+              Un agenda coupé garde ses sources CalDAV, ICS et Google rangées : seule la part du compte est mise en
+              pause.
+            </p>
           </BlurFade>
 
           {customFolders.length > 0 ? (
@@ -482,6 +569,8 @@ export function SettingsScreen({
               <SyncSettings variant="mobile" />
             </div>
           </BlurFade>
+
+          <CalendarsSettings />
 
           <SectionTitle hint={notifications.enabled ? "actives" : "coupées"}>Notifications</SectionTitle>
           <BlurFade delay={0.12}>
@@ -891,6 +980,518 @@ export function SettingsScreen({
           </BlurFade>
         </>
       ) : null}
+    </div>
+  );
+}
+
+const MOBILE_FIELD =
+  "focus-ring h-11 w-full rounded-xl border border-line bg-surface px-3 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted";
+
+const MOBILE_LABEL = "text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase";
+
+const SOURCE_ACTION =
+  "focus-ring inline-flex min-h-10 items-center gap-1 rounded-full border border-line bg-surface px-2.5 text-[11.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45";
+
+const ADD_TABS = [
+  { id: "ics", label: "ICS" },
+  { id: "caldav", label: "CalDAV" },
+  { id: "google", label: "Google" },
+] as const;
+
+type AddTab = (typeof ADD_TABS)[number]["id"];
+
+function ToneDots({ label, value, onPick }: { label: string; value: number; onPick: (tone: number) => void }) {
+  return (
+    <div role="group" aria-label={label} className="flex items-center gap-0.5">
+      {TONE_DOT.map((dot, index) => (
+        <button
+          key={dot}
+          type="button"
+          aria-label={`${label} · ton ${index + 1}`}
+          aria-pressed={value === index}
+          onClick={() => onPick(index)}
+          className={cn(
+            "focus-ring grid size-10 place-items-center rounded-full transition-opacity",
+            value === index ? "ring-2 ring-accent-ring" : "opacity-55 hover:opacity-100",
+          )}
+        >
+          <span className={cn("size-4 rounded-full", dot)} />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CalendarsSettings() {
+  const { notify, openConnect } = useMailStore();
+  const sources = useCalendarSources(notify);
+  const [draftName, setDraftName] = useState("");
+  const [draftTone, setDraftTone] = useState(0);
+  const [draftUrl, setDraftUrl] = useState("");
+  const [caldav, setCaldav] = useState({ url: "", username: "", password: "" });
+  const [tab, setTab] = useState<AddTab>("ics");
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [removing, setRemoving] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const count = sources.calendars.length;
+
+  const addLocal = () => {
+    if (sources.addLocal({ name: draftName, tone: draftTone })) setDraftName("");
+  };
+
+  const subscribe = async () => {
+    if (await sources.subscribeIcs({ url: draftUrl, name: draftName, tone: draftTone })) {
+      setDraftName("");
+      setDraftUrl("");
+    }
+  };
+
+  const importFile = async (file: File) => {
+    if (await sources.importIcsFile({ file, name: draftName, tone: draftTone })) setDraftName("");
+  };
+
+  const connectCaldav = async () => {
+    const added = await sources.addCaldav({ ...caldav, name: draftName, tone: draftTone });
+    if (!added) return;
+    setDraftName("");
+    setCaldav({ url: "", username: "", password: "" });
+  };
+
+  const addGoogle = async (account: ApiAccount, calendar: GoogleCalendar) => {
+    if (await sources.addGoogle(account, calendar, { name: draftName, tone: draftTone })) setDraftName("");
+  };
+
+  const commitRename = (id: string) => {
+    if (sources.rename(id, renameValue)) setRenaming(null);
+  };
+
+  const removeSource = async (id: string) => {
+    if (await sources.remove(id)) setRemoving(null);
+  };
+
+  return (
+    <>
+      <SectionTitle hint={`${count} source${count > 1 ? "s" : ""}`}>Calendriers</SectionTitle>
+      <BlurFade delay={0.1}>
+        <Card className="mx-5 overflow-hidden">
+          <div className="grid gap-2.5 p-3.5">
+            <label className="block">
+              <span className={MOBILE_LABEL}>Nom</span>
+              <input
+                aria-label="Nom du nouveau calendrier"
+                placeholder="Associatif"
+                value={draftName}
+                onChange={(event) => setDraftName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") addLocal();
+                }}
+                className={cn(MOBILE_FIELD, "mt-1.5")}
+              />
+            </label>
+            <div className="flex items-center justify-between gap-2">
+              <span className={MOBILE_LABEL}>Ton</span>
+              <ToneDots label="Ton du nouveau calendrier" value={draftTone} onPick={setDraftTone} />
+            </div>
+            <button
+              type="button"
+              onClick={addLocal}
+              className="focus-ring min-h-11 rounded-full bg-accent px-4 text-[12.5px] font-bold text-accent-contrast"
+            >
+              Créer un calendrier local
+            </button>
+
+            <div className="mt-1 flex gap-1.5" role="group" aria-label="Type de source">
+              {ADD_TABS.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  aria-pressed={tab === entry.id}
+                  onClick={() => setTab(entry.id)}
+                  className={cn(
+                    "focus-ring min-h-10 flex-1 rounded-full text-[11.5px] font-bold transition-colors",
+                    tab === entry.id
+                      ? "bg-accent-soft text-accent-ink ring-1 ring-accent-ring/60"
+                      : "border border-line bg-surface text-ink-soft",
+                  )}
+                >
+                  {entry.label}
+                </button>
+              ))}
+            </div>
+
+            {tab === "ics" ? (
+              <div className="grid gap-2">
+                <label className="block">
+                  <span className={MOBILE_LABEL}>Abonnement iCalendar · URL</span>
+                  <input
+                    aria-label="URL du calendrier ICS"
+                    placeholder="https://exemple.tld/calendrier.ics"
+                    value={draftUrl}
+                    onChange={(event) => setDraftUrl(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void subscribe();
+                    }}
+                    className={cn(MOBILE_FIELD, "mt-1.5")}
+                  />
+                </label>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    disabled={sources.busy}
+                    onClick={() => void subscribe()}
+                    className="focus-ring inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-full bg-accent text-[12.5px] font-bold text-accent-contrast disabled:opacity-45"
+                  >
+                    <Link2 className="size-4" />
+                    Abonner
+                  </button>
+                  <button
+                    type="button"
+                    disabled={sources.busy}
+                    onClick={() => fileInput.current?.click()}
+                    className={cn(SOURCE_ACTION, "min-h-11 flex-1 justify-center")}
+                  >
+                    <Upload className="size-4" />
+                    Fichier .ics
+                  </button>
+                </div>
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept=".ics,text/calendar"
+                  hidden
+                  data-testid="ics-file-input"
+                  aria-label="Fichier iCalendar"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = "";
+                    if (file) void importFile(file);
+                  }}
+                />
+              </div>
+            ) : null}
+
+            {tab === "caldav" ? (
+              <div className="grid gap-2">
+                <label className="block">
+                  <span className={MOBILE_LABEL}>Serveur CalDAV · URL</span>
+                  <input
+                    aria-label="URL du serveur CalDAV"
+                    placeholder="https://caldav.exemple.tld/"
+                    value={caldav.url}
+                    onChange={(event) => setCaldav((current) => ({ ...current, url: event.target.value }))}
+                    className={cn(MOBILE_FIELD, "mt-1.5")}
+                  />
+                </label>
+                <label className="block">
+                  <span className={MOBILE_LABEL}>Identifiant</span>
+                  <input
+                    aria-label="Identifiant CalDAV"
+                    autoComplete="username"
+                    autoCapitalize="none"
+                    value={caldav.username}
+                    onChange={(event) => setCaldav((current) => ({ ...current, username: event.target.value }))}
+                    className={cn(MOBILE_FIELD, "mt-1.5")}
+                  />
+                </label>
+                <label className="block">
+                  <span className={MOBILE_LABEL}>Mot de passe</span>
+                  <input
+                    type="password"
+                    aria-label="Mot de passe CalDAV"
+                    autoComplete="new-password"
+                    value={caldav.password}
+                    onChange={(event) => setCaldav((current) => ({ ...current, password: event.target.value }))}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void connectCaldav();
+                    }}
+                    className={cn(MOBILE_FIELD, "mt-1.5")}
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={sources.busy}
+                  onClick={() => void connectCaldav()}
+                  className="focus-ring inline-flex min-h-11 items-center justify-center gap-1.5 rounded-full bg-accent text-[12.5px] font-bold text-accent-contrast disabled:opacity-45"
+                >
+                  <PlugZap className="size-4" />
+                  Connecter
+                </button>
+              </div>
+            ) : null}
+
+            {tab === "google" ? (
+              <div className="grid gap-2">
+                {sources.googleConnected.length === 0 ? (
+                  <>
+                    <p className="text-[12px] leading-relaxed font-medium text-ink-muted">
+                      Aucun compte Google connecté : le consentement OAuth du compte ouvre aussi l'agenda.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={openConnect}
+                      className={cn(SOURCE_ACTION, "min-h-11 justify-center")}
+                    >
+                      <PlugZap className="size-4" />
+                      Connecter un compte Google
+                    </button>
+                  </>
+                ) : (
+                  sources.googleConnected.map((account) => {
+                    const list = sources.googleCalendars[account.id] ?? [];
+                    const error = sources.googleErrors[account.id];
+                    const busy = sources.googleBusy[account.id] === true;
+                    return (
+                      <div key={account.id} className="grid gap-1.5 rounded-2xl bg-surface-2/60 p-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-[11.5px] font-bold text-ink">
+                            {account.label} · {account.email}
+                          </span>
+                          <button
+                            type="button"
+                            aria-label={`Actualiser les calendriers Google de ${account.email}`}
+                            disabled={busy}
+                            onClick={() => void sources.loadGoogleCalendars(account.id)}
+                            className={cn(SOURCE_ACTION, "ml-auto")}
+                          >
+                            <RefreshCw className={cn("size-3.5", busy && "animate-spin")} />
+                            Relire
+                          </button>
+                        </div>
+                        {error ? (
+                          <p role="alert" className="text-[11px] font-bold text-rose-700 dark:text-rose-300">
+                            {error}
+                          </p>
+                        ) : null}
+                        {!error && list.length === 0 ? (
+                          <p className="text-[11px] font-medium text-ink-muted">
+                            {busy ? "Lecture des calendriers…" : "Aucun calendrier sur ce compte."}
+                          </p>
+                        ) : null}
+                        {list.map((calendar) => (
+                          <div key={calendar.id} className="flex items-center gap-2">
+                            <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold text-ink">
+                              {calendar.summary || calendar.id}
+                            </span>
+                            {sources.googleAttached(account.id, calendar.id) ? (
+                              <span className="text-[10.5px] font-semibold text-ink-muted">Dans l'agenda</span>
+                            ) : (
+                              <button
+                                type="button"
+                                aria-label={`Ajouter le calendrier Google ${calendar.summary || calendar.id}`}
+                                onClick={() => void addGoogle(account, calendar)}
+                                className={SOURCE_ACTION}
+                              >
+                                <Plus className="size-3.5" strokeWidth={3} />
+                                Ajouter
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            ) : null}
+
+            {sources.error ? (
+              <p
+                role="alert"
+                className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[11.5px] font-bold text-rose-700 dark:text-rose-300"
+              >
+                {sources.error}
+              </p>
+            ) : null}
+            <p className="text-[11.5px] leading-relaxed font-medium text-ink-muted">
+              Aucun compte mail n'est requis. Les identifiants CalDAV partent au démon, qui les garde dans son
+              coffre ; ils ne sont jamais rangés ici.
+            </p>
+          </div>
+        </Card>
+      </BlurFade>
+
+      <SectionTitle hint="relire, renommer, supprimer">Sources</SectionTitle>
+      <BlurFade delay={0.12}>
+        <Card className="mx-5 divide-y divide-line/80 overflow-hidden">
+          {sources.calendars.map((entry) => (
+            <CalendarRow
+              key={entry.id}
+              entry={entry}
+              count={sources.countOf(entry.id)}
+              detail={sources.detailOf(entry)}
+              paused={sources.paused(entry)}
+              refreshing={sources.refreshing === entry.id}
+              renaming={renaming === entry.id}
+              removing={removing === entry.id}
+              renameValue={renameValue}
+              onRenameValue={setRenameValue}
+              onStartRename={() => {
+                setRemoving(null);
+                setRenameValue(entry.name);
+                setRenaming(entry.id);
+              }}
+              onCommitRename={() => commitRename(entry.id)}
+              onCancelRename={() => setRenaming(null)}
+              onTone={(tone) => sources.setTone(entry.id, tone)}
+              onRefresh={() => void sources.refresh(entry)}
+              onAskRemove={() => setRemoving(entry.id)}
+              onCancelRemove={() => setRemoving(null)}
+              onRemove={() => void removeSource(entry.id)}
+            />
+          ))}
+          {count === 0 ? (
+            <p className="px-3.5 py-3 text-[12px] font-medium text-ink-muted">
+              Aucun calendrier : les événements gardent leur propre ton.
+            </p>
+          ) : null}
+        </Card>
+        <p className="mt-2 px-5 text-[12px] leading-relaxed font-medium text-ink-muted">
+          Supprimer une source ICS, CalDAV ou Google retire ses événements de l'agenda ; une source CalDAV part aussi
+          du démon.
+        </p>
+      </BlurFade>
+    </>
+  );
+}
+
+function CalendarRow({
+  entry,
+  count,
+  detail,
+  paused,
+  refreshing,
+  renaming,
+  removing,
+  renameValue,
+  onRenameValue,
+  onStartRename,
+  onCommitRename,
+  onCancelRename,
+  onTone,
+  onRefresh,
+  onAskRemove,
+  onCancelRemove,
+  onRemove,
+}: {
+  entry: CalendarDef;
+  count: number;
+  detail: string | undefined;
+  paused: boolean;
+  refreshing: boolean;
+  renaming: boolean;
+  removing: boolean;
+  renameValue: string;
+  onRenameValue: (value: string) => void;
+  onStartRename: () => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
+  onTone: (tone: number) => void;
+  onRefresh: () => void;
+  onAskRemove: () => void;
+  onCancelRemove: () => void;
+  onRemove: () => void;
+}) {
+  const external = isExternalCalendar(entry);
+  const reloadable = external && (!isIcsCalendar(entry) || Boolean(icsUrlOf(entry)));
+  return (
+    <div className="px-3.5 py-2.5" data-testid={`calendar-source-${entry.id}`}>
+      <div className="flex items-center gap-2">
+        <span className={cn("size-2 shrink-0 rounded-full", TONE_DOT[entry.tone % TONE_DOT.length])} />
+        <span className="min-w-0 flex-1 truncate text-[12.5px] font-bold text-ink">{entry.name}</span>
+        <span className="shrink-0 rounded-md bg-surface-2 px-1.5 py-0.5 text-[10px] font-bold text-ink-muted">
+          {calendarSourceKind(entry)}
+        </span>
+        {paused ? (
+          <span className="shrink-0 rounded-md bg-amber-500/14 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300">
+            En pause
+          </span>
+        ) : null}
+      </div>
+      {external ? (
+        <p className="mt-0.5 truncate text-[11px] font-medium text-ink-muted">
+          {detail ?? "URL inconnue"}
+          <span className="tabular-nums">
+            {" "}
+            · {count} événement{count > 1 ? "s" : ""}
+          </span>
+          {paused ? " · agenda du compte coupé" : ""}
+        </p>
+      ) : null}
+      {renaming ? (
+        <div className="mt-1.5 flex items-center gap-1.5">
+          <input
+            aria-label={`Nouveau nom pour ${entry.name}`}
+            value={renameValue}
+            autoFocus
+            onChange={(event) => onRenameValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") onCommitRename();
+              if (event.key === "Escape") onCancelRename();
+            }}
+            className={cn(MOBILE_FIELD, "h-10")}
+          />
+          <button type="button" aria-label="Valider" onClick={onCommitRename} className={SOURCE_ACTION}>
+            <Check className="size-3.5" strokeWidth={3} />
+            Valider
+          </button>
+          <button type="button" aria-label="Annuler" onClick={onCancelRename} className={SOURCE_ACTION}>
+            Annuler
+          </button>
+        </div>
+      ) : (
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          <ToneDots label={`Ton de ${entry.name}`} value={entry.tone % TONE_DOT.length} onPick={onTone} />
+          {reloadable ? (
+            <button
+              type="button"
+              aria-label={`Actualiser le calendrier ${entry.name}`}
+              disabled={refreshing}
+              onClick={onRefresh}
+              className={SOURCE_ACTION}
+            >
+              <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
+              Actualiser
+            </button>
+          ) : null}
+          <button
+            type="button"
+            aria-label={`Renommer le calendrier ${entry.name}`}
+            onClick={onStartRename}
+            className={SOURCE_ACTION}
+          >
+            <PenLine className="size-3.5" />
+            Renommer
+          </button>
+          {removing ? (
+            <>
+              <span className="text-[10.5px] font-semibold text-ink-muted">Supprimer ?</span>
+              <button
+                type="button"
+                aria-label="Confirmer"
+                onClick={onRemove}
+                className="focus-ring inline-flex min-h-10 items-center gap-1 rounded-full bg-rose-500/12 px-2.5 text-[11.5px] font-bold text-rose-700 dark:text-rose-300"
+              >
+                <Trash2 className="size-3.5" />
+                Confirmer
+              </button>
+              <button type="button" aria-label="Annuler" onClick={onCancelRemove} className={SOURCE_ACTION}>
+                Annuler
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              aria-label={`Supprimer le calendrier ${entry.name}`}
+              onClick={onAskRemove}
+              className="focus-ring inline-flex min-h-10 items-center gap-1 rounded-full border border-line bg-surface px-2.5 text-[11.5px] font-bold text-rose-700 transition-colors hover:border-rose-500/40 dark:text-rose-300"
+            >
+              <Trash2 className="size-3.5" />
+              Supprimer
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

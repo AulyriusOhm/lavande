@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CalendarEvent } from "@/lib/calendar";
+import { PERIMETER_EVENT, perimeterOf, storedPerimeters, type AccountPerimeter } from "@/lib/prefs";
 
 export type CalendarSource =
   | { kind: "local" }
@@ -42,6 +43,35 @@ export function caldavSourceIdOf(def: CalendarDef): string | undefined {
 /** Un calendrier relu à sa source : jamais éditable dans l'agenda. */
 export function isExternalCalendar(def: CalendarDef): boolean {
   return isIcsCalendar(def) || isCaldavCalendar(def) || isGoogleCalendar(def);
+}
+
+/** Le compte mail dont dépend un calendrier : seul Google en a un. */
+export function calendarAccountId(def: CalendarDef): string | undefined {
+  return def.source?.kind === "google" ? def.source.accountId : undefined;
+}
+
+/** Le type affiché à côté d'un calendrier. */
+export function calendarSourceKind(def: CalendarDef): "local" | "ICS" | "CalDAV" | "Google" {
+  if (isIcsCalendar(def)) return "ICS";
+  if (isCaldavCalendar(def)) return "CalDAV";
+  if (isGoogleCalendar(def)) return "Google";
+  return "local";
+}
+
+/** Agenda coupé pour le compte d'une source Google : elle reste rangée, hors de l'agenda. */
+export function calendarActivated(
+  def: CalendarDef,
+  perimeters: Record<string, AccountPerimeter> = storedPerimeters(),
+): boolean {
+  const accountId = calendarAccountId(def);
+  return !accountId || perimeterOf(perimeters, accountId).calendar;
+}
+
+export function agendaCalendars(
+  list: CalendarDef[],
+  perimeters: Record<string, AccountPerimeter> = storedPerimeters(),
+): CalendarDef[] {
+  return list.filter((def) => calendarActivated(def, perimeters));
 }
 
 export const TONE_PILL = [
@@ -118,12 +148,39 @@ export function saveCalendars(list: CalendarDef[]) {
 }
 
 export function useCalendars(): [CalendarDef[], (next: CalendarDef[]) => void] {
+  const [calendars, setState] = useState<CalendarDef[]>(() => agendaCalendars(loadCalendars()));
+
+  useEffect(() => {
+    const sync = () => setState(agendaCalendars(loadCalendars()));
+    window.addEventListener("storage", sync);
+    window.addEventListener(PERIMETER_EVENT, sync);
+    return () => {
+      window.removeEventListener("storage", sync);
+      window.removeEventListener(PERIMETER_EVENT, sync);
+    };
+  }, []);
+
+  const setCalendars = useCallback((next: CalendarDef[]) => {
+    const merged = keepPaused(loadCalendars(), next);
+    setState(agendaCalendars(merged));
+    saveCalendars(merged);
+  }, []);
+
+  return [calendars, setCalendars];
+}
+
+/** Toutes les définitions, sources en pause comprises : la gestion des sources. */
+export function useCalendarDefinitions(): [CalendarDef[], (next: CalendarDef[]) => void] {
   const [calendars, setState] = useState<CalendarDef[]>(loadCalendars);
 
   useEffect(() => {
     const sync = () => setState(loadCalendars());
     window.addEventListener("storage", sync);
-    return () => window.removeEventListener("storage", sync);
+    window.addEventListener(PERIMETER_EVENT, sync);
+    return () => {
+      window.removeEventListener("storage", sync);
+      window.removeEventListener(PERIMETER_EVENT, sync);
+    };
   }, []);
 
   const setCalendars = useCallback((next: CalendarDef[]) => {
@@ -132,6 +189,24 @@ export function useCalendars(): [CalendarDef[], (next: CalendarDef[]) => void] {
   }, []);
 
   return [calendars, setCalendars];
+}
+
+/** Une écriture de l'agenda ne doit pas effacer les sources mises en pause. */
+function keepPaused(stored: CalendarDef[], next: CalendarDef[]): CalendarDef[] {
+  const pending = new Map(next.map((def) => [def.id, def]));
+  const perimeters = storedPerimeters();
+  const out: CalendarDef[] = [];
+  for (const def of stored) {
+    const written = pending.get(def.id);
+    if (written) {
+      out.push(written);
+      pending.delete(def.id);
+      continue;
+    }
+    if (!calendarActivated(def, perimeters)) out.push(def);
+  }
+  out.push(...pending.values());
+  return out;
 }
 
 export function toneOfEvent(event: { tone?: number; calendar?: string }, calendars: CalendarDef[]): number {

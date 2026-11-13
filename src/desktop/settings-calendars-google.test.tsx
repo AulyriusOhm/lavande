@@ -280,3 +280,18 @@ describe("Réglages · calendriers Google", () => {
     expect(window.localStorage.getItem(ICS_KEY)).toBeNull();
   });
 });
+
+describe("Réglages · compte Google absent", () => {
+  it("propose de connecter un compte sans lancer de requête Google", async () => {
+    const fetchMock = stubDaemon({ accounts: [] });
+    renderSettings();
+
+    const connect = await screen.findByRole("button", { name: "Connecter un compte Google" });
+    expect(screen.getByText(/Aucun compte Google connecté/)).toBeTruthy();
+
+    fireEvent.click(connect);
+
+    expect(calls(fetchMock, /\/calendars\/google\//)).toHaveLength(0);
+    expect(within(section()).queryByText("Compte Google")).toBeNull();
+  });
+});

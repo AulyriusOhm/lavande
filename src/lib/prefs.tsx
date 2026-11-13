@@ -32,6 +32,17 @@ export type SyncPrefs = {
 
 export const DEFAULT_SYNC: SyncPrefs = { enabled: true, mails: true, calendar: true, kanban: true };
 
+/** Ce qu'un compte synchronise : mails, agenda, contacts. */
+export type AccountPerimeter = { mails: boolean; calendar: boolean; contacts: boolean };
+
+export const DEFAULT_PERIMETER: AccountPerimeter = { mails: true, calendar: true, contacts: false };
+
+/** Les contacts n'ont pas encore de synchronisation : l'interrupteur est rangé, jamais ouvert. */
+export const CONTACTS_PENDING = "Contacts : bientôt disponible";
+
+/** Le périmètre a changé : les calendriers relisent la liste sans passer par le contexte. */
+export const PERIMETER_EVENT = "lavande:perimeter-changed";
+
 /** Notifications système : maître, un interrupteur par compte, rappels d'agenda. */
 export type NotificationPrefs = {
   enabled: boolean;
@@ -79,6 +90,8 @@ export type Prefs = {
   sync: SyncPrefs;
   /** Dossiers personnalisés masqués de la liste, par compte (chemins IMAP). */
   hiddenFolders: Record<string, string[]>;
+  /** Domaines synchronisés de chaque compte ; un compte absent suit les défauts. */
+  perimeters: Record<string, AccountPerimeter>;
   /** Notifications système : nouveaux mails et rappels d'agenda. */
   notifications: NotificationPrefs;
 };
@@ -102,6 +115,7 @@ const DEFAULTS: Prefs = {
   aiTasks: DEFAULT_AI_TASKS,
   sync: DEFAULT_SYNC,
   hiddenFolders: {},
+  perimeters: {},
   notifications: DEFAULT_NOTIFICATIONS,
 };
 
@@ -121,6 +135,7 @@ type PrefsContextValue = Prefs & {
   setAiTasks: (patch: Partial<AiTasksConfig>) => void;
   setSync: (patch: Partial<SyncPrefs>) => void;
   setFolderHidden: (accountId: string, path: string, hidden: boolean) => void;
+  setAccountPerimeter: (accountId: string, patch: Partial<AccountPerimeter>) => void;
   setNotifications: (patch: Partial<NotificationPrefs>) => void;
   setAccountNotification: (accountId: string, value: boolean) => void;
 };
@@ -262,6 +277,32 @@ export function notificationsForAccount(
   return accountId ? notifications.accounts[accountId] !== false : true;
 }
 
+export const asPerimeters = (value: unknown): Record<string, AccountPerimeter> => {
+  if (!value || typeof value !== "object") return {};
+  const out: Record<string, AccountPerimeter> = {};
+  for (const [accountId, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (!entry || typeof entry !== "object") continue;
+    const { mails, calendar, contacts } = entry as Record<string, unknown>;
+    if (typeof mails !== "boolean" && typeof calendar !== "boolean" && typeof contacts !== "boolean") {
+      continue;
+    }
+    out[accountId] = {
+      mails: asBoolean(mails, DEFAULT_PERIMETER.mails),
+      calendar: asBoolean(calendar, DEFAULT_PERIMETER.calendar),
+      contacts: asBoolean(contacts, DEFAULT_PERIMETER.contacts),
+    };
+  }
+  return out;
+};
+
+/** Périmètre d'un compte ; un compte jamais réglé suit les défauts (migration douce). */
+export function perimeterOf(
+  perimeters: Record<string, AccountPerimeter>,
+  accountId: string | null | undefined,
+): AccountPerimeter {
+  return (accountId && perimeters[accountId]) || { ...DEFAULT_PERIMETER };
+}
+
 export const asHiddenFolders = (value: unknown): Record<string, string[]> => {
   if (!value || typeof value !== "object") return {};
   const out: Record<string, string[]> = {};
@@ -346,8 +387,20 @@ function read(): Prefs {
     aiTasks: asAiTasks(stored.aiTasks),
     sync: asSync(stored.sync),
     hiddenFolders: asHiddenFolders(stored.hiddenFolders),
+    perimeters: asPerimeters(stored.perimeters),
     notifications: asNotifications(stored.notifications),
   };
+}
+
+/** Périmètres rangés, lisibles hors React par les sources de l'agenda. */
+export function storedPerimeters(): Record<string, AccountPerimeter> {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}");
+    if (!parsed || typeof parsed !== "object") return {};
+    return asPerimeters((parsed as Record<string, unknown>).perimeters);
+  } catch {
+    return {};
+  }
 }
 
 export function PrefsProvider({ children }: { children: React.ReactNode }) {
@@ -465,6 +518,22 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const setAccountPerimeter = useCallback(
+    (accountId: string, patch: Partial<AccountPerimeter>) =>
+      setPrefs((current) => ({
+        ...current,
+        perimeters: {
+          ...current.perimeters,
+          [accountId]: { ...perimeterOf(current.perimeters, accountId), ...patch },
+        },
+      })),
+    [],
+  );
+
+  useEffect(() => {
+    window.dispatchEvent(new Event(PERIMETER_EVENT));
+  }, [prefs.perimeters]);
+
   const setNotifications = useCallback(
     (patch: Partial<NotificationPrefs>) =>
       setPrefs((current) => ({ ...current, notifications: { ...current.notifications, ...patch } })),
@@ -502,6 +571,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setAiTasks,
       setSync,
       setFolderHidden,
+      setAccountPerimeter,
       setNotifications,
       setAccountNotification,
     }),
@@ -522,6 +592,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setAiTasks,
       setSync,
       setFolderHidden,
+      setAccountPerimeter,
       setNotifications,
       setAccountNotification,
     ],

@@ -42,6 +42,7 @@ import {
   activeSignature,
   isFolderHidden,
   notificationsForAccount,
+  perimeterOf,
   resolvePgp,
   usePrefs,
 } from "@/lib/prefs";
@@ -211,7 +212,7 @@ export type MailStoreValue = {
   searchMails: (query: string) => Promise<Mail[]>;
   openConnect: () => void;
   closeConnect: () => void;
-  createAccount: (input: NewAccount) => Promise<void>;
+  createAccount: (input: NewAccount) => Promise<string>;
   renameAccount: (id: string, label: string) => Promise<void>;
   askRemoveAccount: (account: Account) => void;
   cancelRemoveAccount: () => void;
@@ -233,6 +234,12 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   );
   // Interrupteurs de synchronisation : le maître coupe tous les domaines.
   const mailSyncOn = prefs.sync.enabled && prefs.sync.mails;
+  /** Périmètre du compte : hors mails, sa boîte n'est plus relevée du tout. */
+  const mailsInPerimeter = useCallback(
+    (accountId: string | undefined) =>
+      !accountId || perimeterOf(prefs.perimeters, accountId).mails,
+    [prefs.perimeters],
+  );
   const planning = usePlanning();
   const { tasks, suggestions: storedSuggestions, setTasks, events, setEvents } = planning;
   const [mode, setMode] = useState<MailMode>(mailMode);
@@ -559,13 +566,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const autoSyncedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (mode !== "api" || !mailSyncOn || phase !== "ready" || isComposeWindow()) return;
-    if (targets.length === 0) return;
-    const key = targets.map((t) => `${t.accountId}:${t.path}`).sort().join("|");
+    const due = targets.filter((target) => mailsInPerimeter(target.accountId));
+    if (due.length === 0) return;
+    const key = due.map((t) => `${t.accountId}:${t.path}`).sort().join("|");
     if (autoSyncedRef.current.has(key)) return;
     autoSyncedRef.current.add(key);
     let cancelled = false;
     setSyncing(true);
-    Promise.all(targets.map((t) => mailApi.sync(t.accountId, t.path)))
+    Promise.all(due.map((t) => mailApi.sync(t.accountId, t.path)))
       .then(() => {
         if (!cancelled) setRevision((value) => value + 1);
       })
@@ -579,7 +587,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [mailSyncOn, mode, phase, targets]);
+  }, [mailsInPerimeter, mailSyncOn, mode, phase, targets]);
 
   const demoCounts = useMemo(() => {
     const next: Record<string, { total: number; unread: number }> = {};
@@ -1396,8 +1404,13 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       notify("Choisis un dossier à synchroniser.");
       return;
     }
+    const due = targets.filter((target) => mailsInPerimeter(target.accountId));
+    if (due.length === 0) {
+      notify("Mails hors périmètre de ce compte · synchronisation ignorée");
+      return;
+    }
     setSyncing(true);
-    Promise.all(targets.map((target) => mailApi.sync(target.accountId, target.path)))
+    Promise.all(due.map((target) => mailApi.sync(target.accountId, target.path)))
       .then((results) => {
         const reports = results.flatMap((result) => result.reports);
         if (account === ALL_ACCOUNTS) {
@@ -1417,7 +1430,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       })
       .catch((error: unknown) => notify(`Synchro impossible · ${errorText(error)}`))
       .finally(() => setSyncing(false));
-  }, [account, targets, mode, notify]);
+  }, [account, mailsInPerimeter, targets, mode, notify]);
 
   const openConnect = useCallback(() => setConnectOpen(true), []);
   const closeConnect = useCallback(() => setConnectOpen(false), []);
@@ -1460,9 +1473,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       setConnectOpen(false);
       setPhase("ready");
       setBackendError(null);
-      if (!mailSyncOn) {
+      if (!mailSyncOn || !mailsInPerimeter(summary.id)) {
         notify("Compte connecté · synchronisation des mails coupée");
-        return;
+        return summary.id;
       }
       try {
         const result = await mailApi.sync(summary.id);
@@ -1476,8 +1489,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         notify(`Compte connecté, mais synchro impossible · ${errorText(error)}`);
       }
       setRevision((value) => value + 1);
+      return summary.id;
     },
-    [mailSyncOn, notify],
+    [mailSyncOn, mailsInPerimeter, notify],
   );
 
   const renameAccount = useCallback(

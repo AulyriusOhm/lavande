@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { act, renderHook } from "@testing-library/react";
 import {
   DEFAULT_CALENDARS,
   TONE_DOT,
   TONE_PILL,
+  agendaCalendars,
+  calendarAccountId,
+  calendarActivated,
+  calendarSourceKind,
   calendarsInUse,
   googleRefOf,
   isExternalCalendar,
@@ -10,6 +15,8 @@ import {
   loadCalendars,
   saveCalendars,
   toneOfEvent,
+  useCalendarDefinitions,
+  useCalendars,
   type CalendarDef,
 } from "@/lib/calendars";
 import type { CalendarEvent } from "@/lib/calendar";
@@ -135,5 +142,68 @@ describe("calendars · sources Google", () => {
     );
 
     expect(loadCalendars()).toEqual([{ id: "agenda", name: "Agenda", tone: 2 }]);
+  });
+});
+
+const gmail: CalendarDef = {
+  id: "gmail-prive",
+  name: "Privé",
+  tone: 1,
+  source: { kind: "google", accountId: "gmail", calendarId: "primary" },
+};
+
+describe("calendars · périmètre du compte", () => {
+  it("rattache un calendrier à un compte seulement pour Google", () => {
+    expect(calendarAccountId(gmail)).toBe("gmail");
+    expect(calendarAccountId(DEFAULT_CALENDARS[0])).toBeUndefined();
+    expect(
+      calendarAccountId({ id: "t", name: "T", tone: 0, source: { kind: "caldav", sourceId: "t" } }),
+    ).toBeUndefined();
+    expect(calendarAccountId({ id: "i", name: "I", tone: 0, source: { kind: "ics" } })).toBeUndefined();
+  });
+
+  it("nomme le type de chaque source", () => {
+    expect(calendarSourceKind(DEFAULT_CALENDARS[0])).toBe("local");
+    expect(calendarSourceKind({ id: "i", name: "I", tone: 0, source: { kind: "ics" } })).toBe("ICS");
+    expect(calendarSourceKind({ id: "c", name: "C", tone: 0, source: { kind: "caldav", sourceId: "c" } })).toBe(
+      "CalDAV",
+    );
+    expect(calendarSourceKind(gmail)).toBe("Google");
+  });
+
+  it("sort de l'agenda une source Google dont le compte a coupé l'agenda", () => {
+    const list = [...DEFAULT_CALENDARS, gmail];
+    const off = { gmail: { mails: true, calendar: false, contacts: false } };
+
+    expect(calendarActivated(gmail, {})).toBe(true);
+    expect(calendarActivated(gmail, off)).toBe(false);
+    expect(calendarActivated(DEFAULT_CALENDARS[0], off)).toBe(true);
+    expect(agendaCalendars(list, off)).toEqual([...DEFAULT_CALENDARS]);
+    expect(agendaCalendars(list, {})).toEqual(list);
+  });
+
+  it("garde la source en pause hors de l'agenda mais pas hors du stockage", async () => {
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ perimeters: { gmail: { calendar: false } } }));
+    saveCalendars([...DEFAULT_CALENDARS, gmail]);
+
+    const { result } = renderHook(() => ({
+      agenda: useCalendars(),
+      all: useCalendarDefinitions(),
+    }));
+
+    expect(result.current.agenda[0].map((entry) => entry.id)).toEqual(["pro", "perso", "clients"]);
+    expect(result.current.all[0].map((entry) => entry.id)).toEqual(["pro", "perso", "clients", "gmail-prive"]);
+
+    await act(async () => {
+      result.current.agenda[1]([...result.current.agenda[0], { id: "famille", name: "Famille", tone: 2 }]);
+    });
+
+    expect(loadCalendars().map((entry) => entry.id)).toEqual([
+      "pro",
+      "perso",
+      "clients",
+      "gmail-prive",
+      "famille",
+    ]);
   });
 });

@@ -252,3 +252,33 @@ describe("Réglages · sources ICS", () => {
     expect(within(section()).getAllByText("local")).toHaveLength(4);
   });
 });
+
+describe("Réglages · relecture d'une source", () => {
+  it("relit un abonnement à la demande et met son cache à jour", async () => {
+    const fetchMock = stubDaemon();
+    renderSettings();
+
+    await addFromUrl(URL_ICS, "Google");
+    await waitFor(() => expect(storedIcs().events.google).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "Actualiser le calendrier Google" }));
+
+    await waitFor(() => expect(icsCalls(fetchMock)).toHaveLength(2));
+    expect(within(section()).getByText(/· 2 événements/)).toBeTruthy();
+    expect(storedIcs().synced.google).toBeGreaterThan(0);
+  });
+
+  it("ne propose pas de relecture pour un calendrier local ni pour un fichier importé", async () => {
+    stubDaemon();
+    renderSettings();
+
+    fireEvent.change(screen.getByLabelText("Nom du nouveau calendrier"), { target: { value: "Famille" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter" }));
+
+    await addFromFile(new File(["BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n"], "vacances.ics"), "Vacances");
+    await waitFor(() => expect(storedCalendars()).toHaveLength(5));
+
+    expect(screen.queryByRole("button", { name: "Actualiser le calendrier Famille" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Actualiser le calendrier Vacances" })).toBeNull();
+  });
+});

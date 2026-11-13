@@ -5,16 +5,30 @@ const MICROSOFT_ID = "291c5ae6-2601-4cb5-8ae9-c6edbe9c3c1d";
 const GOOGLE_ID = "1234567890-lavande.apps.googleusercontent.com";
 const OTHER_MICROSOFT_ID = "aaaaaaaa-1111-2222-3333-444444444444";
 
-const { oauthStart, oauthStatus, oauthComplete, health, openExternal, previewFolders, createAccount } =
-  vi.hoisted(() => ({
-    oauthStart: vi.fn(),
-    oauthStatus: vi.fn(),
-    oauthComplete: vi.fn(),
-    health: vi.fn(),
-    openExternal: vi.fn(),
-    previewFolders: vi.fn(),
-    createAccount: vi.fn(),
-  }));
+const {
+  oauthStart,
+  oauthStatus,
+  oauthComplete,
+  health,
+  openExternal,
+  previewFolders,
+  createAccount,
+  setAccountPerimeter,
+} = vi.hoisted(() => ({
+  oauthStart: vi.fn(),
+  oauthStatus: vi.fn(),
+  oauthComplete: vi.fn(),
+  health: vi.fn(),
+  openExternal: vi.fn(),
+  previewFolders: vi.fn(),
+  createAccount: vi.fn(),
+  setAccountPerimeter: vi.fn(),
+}));
+
+vi.mock("@/lib/prefs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/prefs")>()),
+  usePrefs: () => ({ setAccountPerimeter }),
+}));
 
 vi.mock("@/lib/api", () => ({
   ApiError: class ApiError extends Error {},
@@ -264,7 +278,7 @@ describe("Écran de connexion · sélection des dossiers", () => {
     vi.clearAllMocks();
     health.mockResolvedValue({});
     previewFolders.mockResolvedValue(PREVIEWED);
-    createAccount.mockResolvedValue(undefined);
+    createAccount.mockResolvedValue("prenom-domaine-fr");
     vi.stubEnv("VITE_OAUTH_CLIENT_ID", "");
     vi.stubEnv("VITE_GOOGLE_CLIENT_ID", "");
   });
@@ -317,6 +331,28 @@ describe("Écran de connexion · sélection des dossiers", () => {
       "INBOX",
       "INBOX/Travail",
       "Envoyés",
+    ]);
+  });
+
+  it("propose le périmètre du compte avant de le connecter", async () => {
+    renderConnect();
+    fillForm();
+    await preview();
+
+    const mails = screen.getByRole("switch", { name: /^Mails/ });
+    const calendar = screen.getByRole("switch", { name: /^Agenda/ });
+    expect(mails.getAttribute("aria-checked")).toBe("true");
+    expect(calendar.getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByRole("switch", { name: /^Contacts/ })).toBeNull();
+    expect(screen.getByText("Contacts : bientôt disponible")).toBeTruthy();
+
+    fireEvent.click(calendar);
+    fireEvent.click(screen.getByRole("button", { name: /Connecter le compte/ }));
+
+    await waitFor(() => expect(setAccountPerimeter).toHaveBeenCalledTimes(1));
+    expect(setAccountPerimeter.mock.calls[0]).toEqual([
+      "prenom-domaine-fr",
+      { mails: true, calendar: false, contacts: false },
     ]);
   });
 

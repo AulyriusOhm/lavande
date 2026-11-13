@@ -3,13 +3,18 @@ import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
   DEFAULT_NOTIFICATIONS,
+  DEFAULT_PERIMETER,
   DEFAULT_SYNC,
+  PERIMETER_EVENT,
   PrefsProvider,
   accountPgp,
   asHiddenFolders,
   asNotifications,
+  asPerimeters,
   asPgpAccounts,
   asSync,
+  perimeterOf,
+  storedPerimeters,
   isFolderHidden,
   notificationsForAccount,
   resolvePgp,
@@ -497,5 +502,58 @@ describe("préférences · notifications", () => {
     expect(result.current.notifications.enabled).toBe(false);
     expect(result.current.notifications.calendarMinutes).toBe(15);
     expect(stored().notifications).toMatchObject({ enabled: false, calendarMinutes: 15 });
+  });
+});
+
+describe("prefs · périmètre de synchronisation par compte", () => {
+  it("suit les défauts pour un compte jamais réglé", () => {
+    expect(perimeterOf({}, "a1")).toEqual(DEFAULT_PERIMETER);
+    expect(perimeterOf({}, undefined)).toEqual(DEFAULT_PERIMETER);
+    expect(DEFAULT_PERIMETER).toEqual({ mails: true, calendar: true, contacts: false });
+  });
+
+  it("relit un périmètre rangé et ignore les entrées illisibles", () => {
+    expect(
+      asPerimeters({
+        a1: { mails: false, calendar: false, contacts: true },
+        a2: { mails: "oui" },
+        a3: null,
+        a4: { calendar: false },
+      }),
+    ).toEqual({
+      a1: { mails: false, calendar: false, contacts: true },
+      a4: { mails: true, calendar: false, contacts: false },
+    });
+    expect(asPerimeters(null)).toEqual({});
+  });
+
+  it("persiste chaque domaine et prévient les calendriers", () => {
+    const events: string[] = [];
+    const listener = () => events.push(PERIMETER_EVENT);
+    window.addEventListener(PERIMETER_EVENT, listener);
+    const { result } = mount();
+
+    act(() => result.current.setAccountPerimeter("a1", { calendar: false }));
+
+    expect(result.current.perimeters.a1).toEqual({ mails: true, calendar: false, contacts: false });
+    expect(stored().perimeters).toMatchObject({ a1: { calendar: false } });
+    expect(events.length).toBeGreaterThan(0);
+
+    act(() => result.current.setAccountPerimeter("a1", { mails: false }));
+    expect(result.current.perimeters.a1).toEqual({ mails: false, calendar: false, contacts: false });
+
+    window.removeEventListener(PERIMETER_EVENT, listener);
+  });
+
+  it("relit les périmètres rangés hors du contexte React", () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({ perimeters: { gmail: { calendar: false } } }),
+    );
+
+    expect(storedPerimeters()).toEqual({ gmail: { mails: true, calendar: false, contacts: false } });
+
+    window.localStorage.setItem("lavande.prefs", "pas du json");
+    expect(storedPerimeters()).toEqual({});
   });
 });
