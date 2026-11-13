@@ -5,7 +5,6 @@ pub mod caldav;
 pub mod config;
 pub mod error;
 pub mod gcal;
-pub mod http;
 pub mod ics;
 pub mod imap;
 

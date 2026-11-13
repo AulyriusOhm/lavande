@@ -872,9 +872,15 @@ le démon (`http://127.0.0.1:8790/api/oauth/callback`, surchargeable par `LAVAND
 4. Au retour de l'application au premier plan, le front appelle `POST /api/oauth/complete` : le démon
    échange le code (`grant_type=authorization_code` + `code_verifier`), obtient le `refresh_token`,
    **teste la connexion IMAP** (XOAUTH2 + `LIST`) puis enregistre le compte comme `POST /api/accounts`.
-   L'échange est idempotent (passage atomique `code_received` → en cours).
+   L'échange est idempotent (passage atomique `code_received` → en cours). Un **refus réseau** de
+   l'échange (`EPERM`, connexion impossible) est réessayé, pas un refus du fournisseur : Android refuse
+   les sockets d'un UID en arrière-plan ou juste après le retour au premier plan, la levée de la
+   restriction suivant `ActivityManager` avec des dizaines à des centaines de millisecondes de retard.
+   Le démon remet alors l'issue à `code_received` (plafond de 20 tentatives, ≈ 30 s), et c'est
+   l'interrogation suivante du front qui relance l'échange ; un refus définitif (`invalid_grant`, aucun
+   `refresh_token`, autorisation refusée) rend la session `failed` sans aucune tentative supplémentaire.
 5. `GET /api/oauth/status?session=…` permet au front de suivre l'issue sans voir de jeton ; c'est lui
-   qui déclenche l'étape 4 quand il lit `code_received`.
+   qui déclenche l'étape 4 quand il lit `code_received`, y compris pour chaque réessai.
 
 Sessions en mémoire, TTL 10 minutes, `state` à usage unique.
 

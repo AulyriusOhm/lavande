@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use lavande_mail::config::{AccountConfig, AuthConfig, Endpoint};
-use lavande_mail::http::client_builder;
 use lavande_mail::imap;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -21,6 +20,9 @@ use crate::error::ApiError;
 use crate::state::AppState;
 
 const SESSION_TTL: Duration = Duration::from_secs(600);
+/// Budget de réessais de l'échange sur une panne réseau (le front interroge le
+/// statut toutes les 1,5 s, soit une trentaine de secondes au total).
+const MAX_TRANSPORT_ATTEMPTS: u32 = 20;
 const GOOGLE_AUTH: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_SCOPE: &str =
@@ -104,6 +106,7 @@ struct Session {
     provider: Provider,
     config: AccountConfig,
     created: Instant,
+    attempts: u32,
     outcome: Outcome,
 }
 
@@ -189,6 +192,7 @@ pub async fn start(state: &AppState, request: StartRequest) -> Result<StartRespo
         provider,
         config,
         created: Instant::now(),
+        attempts: 0,
         outcome: Outcome::Pending,
     };
     let id = state.sessions().insert(session);
@@ -269,21 +273,35 @@ pub async fn complete(state: &AppState, session: &str) -> Result<StatusResponse,
         return status(state, session);
     };
 
-    let outcome = match finish(state, provider, verifier, config, code, redirect_uri).await {
-        Ok(account_id) => {
-            tracing::info!(account = %account_id, "compte OAuth2 connecté");
-            Ok(account_id)
-        }
-        Err(error) => {
-            let message = error.message().to_string();
-            tracing::warn!(error = %message, "connexion OAuth2 refusée");
-            Err(message)
-        }
-    };
+    let outcome = finish(
+        state,
+        provider,
+        verifier,
+        config,
+        code.clone(),
+        redirect_uri.clone(),
+    )
+    .await;
     state.sessions().with(session, |entry| {
         entry.outcome = match outcome {
-            Ok(account_id) => Outcome::Done(account_id),
-            Err(error) => Outcome::Failed(error),
+            Ok(account_id) => {
+                tracing::info!(account = %account_id, "compte OAuth2 connecté");
+                Outcome::Done(account_id)
+            }
+            Err(error) if error.is_transient() && entry.attempts < MAX_TRANSPORT_ATTEMPTS => {
+                entry.attempts += 1;
+                tracing::warn!(
+                    error = %error.message(),
+                    attempt = entry.attempts,
+                    "échange OAuth2 interrompu : nouvelle tentative au prochain appel"
+                );
+                Outcome::CodeReceived { code, redirect_uri }
+            }
+            Err(error) => {
+                let message = error.message().to_string();
+                tracing::warn!(error = %message, "connexion OAuth2 refusée");
+                Outcome::Failed(message)
+            }
         };
         Some(())
     });
@@ -347,7 +365,7 @@ async fn exchange(
     if let Some(secret) = &provider.client_secret {
         form.push(("client_secret", secret.as_str()));
     }
-    let client = client_builder()
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|error| ApiError::internal("oauth", format!("client HTTP : {error}")))?;
@@ -363,7 +381,7 @@ async fn exchange(
                 message.push_str(&format!(" → {source}"));
                 cause = source.source();
             }
-            ApiError::gateway("oauth", format!("échange du code impossible : {message}"))
+            ApiError::transport("oauth", format!("échange du code impossible : {message}"))
         })?;
     let status = response.status();
     let body = response.text().await.unwrap_or_default();

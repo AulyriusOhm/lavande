@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 
 use crate::error::MailError;
-use crate::http::client_builder;
 
 /// Google token endpoint, used when the account config leaves it empty.
 pub const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
@@ -88,7 +87,7 @@ impl OAuth2Provider {
             } else {
                 token_endpoint
             },
-            http: client_builder().build().expect("client HTTP OAuth2"),
+            http: reqwest::Client::new(),
             cached: None,
         }
     }

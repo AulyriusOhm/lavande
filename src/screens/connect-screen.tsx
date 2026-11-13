@@ -57,6 +57,7 @@ async function waitForOAuth(session: string) {
     const status = await mailApi.oauthStatus(session);
     if (status.status === "code_received") {
       await mailApi.oauthComplete(session);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
       continue;
     }
     if (status.status !== "pending") return status;

@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 
 use lavande_mail::config::Encryption;
 use lavande_mail::error::MailError;
-use lavande_mail::http::client_builder;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::QName;
 use quick_xml::Reader;
@@ -144,7 +143,7 @@ pub struct Discovery {
 
 impl Discovery {
     pub fn new(endpoints: DiscoveryEndpoints) -> Result<Self, MailError> {
-        let client = client_builder()
+        let client = reqwest::Client::builder()
             .timeout(ATTEMPT_TIMEOUT)
             .user_agent(concat!("Lavande/", env!("CARGO_PKG_VERSION")))
             .build()

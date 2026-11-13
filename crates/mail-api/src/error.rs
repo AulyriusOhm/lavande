@@ -12,6 +12,7 @@ pub struct ApiError {
     status: StatusCode,
     kind: &'static str,
     message: String,
+    transient: bool,
 }
 
 impl ApiError {
@@ -20,6 +21,7 @@ impl ApiError {
             status,
             kind,
             message: message.into(),
+            transient: false,
         }
     }
 
@@ -39,6 +41,17 @@ impl ApiError {
         Self::new(StatusCode::BAD_GATEWAY, kind, message)
     }
 
+    /// Panne réseau côté transport : rien ne dit que la demande est refusée,
+    /// elle peut réussir si on la rejoue.
+    pub fn transport(kind: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_GATEWAY,
+            kind,
+            message: message.into(),
+            transient: true,
+        }
+    }
+
     pub fn internal(kind: &'static str, message: impl Into<String>) -> Self {
         let error = Self::new(StatusCode::INTERNAL_SERVER_ERROR, kind, message);
         tracing::error!(kind = error.kind, message = %error.message, "erreur interne");
@@ -55,6 +68,10 @@ impl ApiError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn is_transient(&self) -> bool {
+        self.transient
     }
 }
 
@@ -98,6 +115,7 @@ impl From<MailError> for ApiError {
             status,
             kind,
             message: label(&error),
+            transient: false,
         }
     }
 }

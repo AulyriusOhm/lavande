@@ -17,7 +17,6 @@ use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use lavande_mail::caldav::{CaldavClient, CalendarCollection};
 use lavande_mail::gcal::{GcalClient, GoogleCalendar};
-use lavande_mail::http::client_builder;
 use lavande_mail::ics::{event_uid, parse_events, ExternalEvent, MAX_ICS_BYTES};
 use serde::{Deserialize, Serialize};
 
@@ -461,7 +460,7 @@ fn calendar_url(raw: &str) -> Result<reqwest::Url, ApiError> {
 /// Reads at most [`MAX_ICS_BYTES`] of the calendar, then refuses the rest: the
 /// size announced and the size actually received are both checked.
 async fn fetch(url: &reqwest::Url) -> Result<String, ApiError> {
-    let client = client_builder()
+    let client = reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(FETCH_TIMEOUT)
         .user_agent(concat!("Lavande/", env!("CARGO_PKG_VERSION")))

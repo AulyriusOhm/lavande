@@ -29,7 +29,6 @@ use reqwest::{Method, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 
 use crate::error::MailError;
-use crate::http::client_builder;
 use crate::ics::{event_ics, parse_events, ExternalEvent, MAX_ICS_BYTES, MAX_ICS_EVENTS};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -128,7 +127,7 @@ impl CaldavClient {
         if password.is_empty() {
             return Err(MailError::Config("CalDAV : mot de passe vide".to_string()));
         }
-        let http = client_builder()
+        let http = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
             .user_agent(concat!("Lavande/", env!("CARGO_PKG_VERSION")))
