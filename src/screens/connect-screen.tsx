@@ -462,7 +462,7 @@ export function ConnectScreen({
               <ToggleRow
                 icon={<CalendarDays className="size-4" />}
                 label="Agenda"
-                hint="Affiche et relit les calendriers Google du compte"
+                hint="Affiche et relit les calendriers du compte (Google, CalDAV rattaché)"
                 checked={perimeter.calendar}
                 onChange={(value) => setPerimeter((current) => ({ ...current, calendar: value }))}
               />

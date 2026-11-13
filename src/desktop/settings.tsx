@@ -1142,7 +1142,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                             <ToggleRow
                               icon={<CalendarDays className="size-4" />}
                               label="Agenda"
-                              hint="Affiche et relit les calendriers Google du compte"
+                              hint="Affiche et relit les calendriers du compte (Google, CalDAV rattaché)"
                               checked={perimeterOf(perimeters, item.id).calendar}
                               onChange={(value) => setAccountPerimeter(item.id, { calendar: value })}
                             />
