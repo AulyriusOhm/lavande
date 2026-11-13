@@ -990,7 +990,7 @@ function DayPanel({
   const readOnly = external !== null && !editable;
 
   return (
-    <div className="flex min-h-0 flex-col gap-2">
+    <div className="flex shrink-0 flex-col gap-2">
       <div className="flex items-center gap-2">
         <SectionLabel>Journée</SectionLabel>
         <span className="ml-auto text-[11px] font-bold text-ink-muted tabular-nums">
@@ -1000,7 +1000,7 @@ function DayPanel({
 
       <p
         data-testid="day-heading"
-        className="truncate text-[19px] leading-tight font-extrabold tracking-[-0.035em] text-ink"
+        className="shrink-0 truncate text-[19px] leading-tight font-extrabold tracking-[-0.035em] text-ink"
       >
         {longDate(selectedDate)}
       </p>
