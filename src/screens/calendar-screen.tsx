@@ -15,7 +15,12 @@ import {
   monthLabel,
 } from "@/lib/calendar";
 import { TONES } from "@/lib/mail";
+import { draftFromSuggestion, type EventDraft, type MailSuggestion } from "@/lib/tasks";
+import { sourceAccountLabel } from "@/lib/accounts";
+import { useMailStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { EventSuggestionCard } from "@/components/event-suggestion-card";
+import { SectionTitle } from "@/components/ui/primitives";
 import { AnimatedGradientText } from "@/components/ui/animated-text";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { MeshGlow } from "@/components/ui/backdrops";
@@ -36,18 +41,27 @@ const fullDate = (iso: string) =>
 export function CalendarScreen({
   events: allEvents,
   onNewEvent,
+  onAcceptSuggestion,
+  onDismissSuggestion,
   onOpenMail,
   onSelectedDateChange,
   availableMailIds,
+  suggestions = [],
 }: {
   events: CalendarEvent[];
   onNewEvent?: (date: string) => void;
+  onAcceptSuggestion?: (draft: EventDraft) => void;
+  onDismissSuggestion?: (suggestion: MailSuggestion) => void;
   onOpenMail?: (event: CalendarEvent) => void;
   onSelectedDateChange?: (date: string) => void;
   availableMailIds?: Set<string>;
+  suggestions?: MailSuggestion[];
 }) {
+  const { accounts, mails, openMessage } = useMailStore();
   const [view, setView] = useState({ year: CURRENT_YEAR, month: CURRENT_MONTH });
   const [selected, setSelected] = useState(TODAY_ISO);
+
+  const eventSuggestions = suggestions.filter((suggestion) => suggestion.kind === "event");
 
   const pick = (date: string) => {
     setSelected(date);
@@ -286,6 +300,29 @@ export function CalendarScreen({
           </p>
         )}
       </div>
+
+      {eventSuggestions.length > 0 && (
+        <section className="mt-4" data-testid="event-suggestions">
+          <SectionTitle
+            hint={`${eventSuggestions.length} proposition${eventSuggestions.length > 1 ? "s" : ""}`}
+          >
+            Suggestions de RDV
+          </SectionTitle>
+          <div className="space-y-2 px-4">
+            {eventSuggestions.map((suggestion) => (
+              <EventSuggestionCard
+                key={suggestion.id}
+                suggestion={suggestion}
+                account={sourceAccountLabel(accounts, suggestion.account)}
+                mail={mails.find((mail) => mail.id === suggestion.mailId)}
+                onAccept={() => onAcceptSuggestion?.(draftFromSuggestion(suggestion))}
+                onOpenMail={(mail) => openMessage(mail)}
+                onDismiss={() => onDismissSuggestion?.(suggestion)}
+              />
+            ))}
+          </div>
+        </section>
+      )}
 
       <div className="mt-5 px-5">
         <ShimmerButton

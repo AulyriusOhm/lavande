@@ -17,7 +17,7 @@ import { McpApprovalHost, McpScreen } from "@/screens/mcp-screen";
 import { PlanningScreen as PlanningView } from "@/screens/planning-screen";
 import { TaskScreen } from "@/screens/task-screen";
 import { NewTaskSheet, createTask } from "@/screens/new-task-sheet";
-import { NewEventSheet } from "@/screens/new-event-sheet";
+import { NewEventSheet, type NewEventDraft } from "@/screens/new-event-sheet";
 import { SettingsScreen as SettingsView } from "@/screens/settings-screen";
 import { MessageScreen } from "@/screens/message-screen";
 import { ComposeScreen } from "@/screens/compose-screen";
@@ -185,6 +185,7 @@ function PhoneApp({ native }: { native?: boolean }) {
   const [detail, setDetail] = useState<{ task: Task; suggestion?: MailSuggestion } | null>(null);
   const [taskDraftOpen, setTaskDraftOpen] = useState(false);
   const [eventDraftOpen, setEventDraftOpen] = useState(false);
+  const [eventDraft, setEventDraft] = useState<NewEventDraft | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [movingTask, setMovingTask] = useState<Task | null>(null);
 
@@ -201,12 +202,17 @@ function PhoneApp({ native }: { native?: boolean }) {
     if (!order.includes(tab)) setTab("inbox");
   }, [order, tab]);
 
+  const closeEventDraft = useCallback(() => {
+    setEventDraftOpen(false);
+    setEventDraft(null);
+  }, []);
+
   const layers: [boolean, () => void][] = [
     [helpOpen, () => setHelpOpen(false)],
     [Boolean(removeTarget), cancelRemoveAccount],
     [connectOpen, closeConnect],
     [composeOpen, minimizeCompose],
-    [eventDraftOpen, () => setEventDraftOpen(false)],
+    [eventDraftOpen, () => closeEventDraft()],
     [taskDraftOpen, () => setTaskDraftOpen(false)],
     [accountsOpen, () => setAccountsOpen(false)],
     [foldersOpen, () => setFoldersOpen(false)],
@@ -306,8 +312,14 @@ function PhoneApp({ native }: { native?: boolean }) {
     [],
   );
   const openEventDraft = useCallback(
-    (date?: string) => {
-      if (date) setSelectedDate(date);
+    (init?: string | NewEventDraft) => {
+      if (typeof init === "string") {
+        setSelectedDate(init);
+        setEventDraft(null);
+      } else {
+        if (init?.date) setSelectedDate(init.date);
+        setEventDraft(init ?? null);
+      }
       setEventDraftOpen(true);
     },
     [setSelectedDate],
@@ -434,7 +446,10 @@ function PhoneApp({ native }: { native?: boolean }) {
                 <CalendarScreen
                   events={events}
                   availableMailIds={availableMailIds}
+                  suggestions={suggestions}
                   onNewEvent={openEventDraft}
+                  onAcceptSuggestion={openEventDraft}
+                  onDismissSuggestion={dismissSuggestion}
                   onOpenMail={openMailFromEvent}
                   onSelectedDateChange={setSelectedDate}
                 />
@@ -474,7 +489,7 @@ function PhoneApp({ native }: { native?: boolean }) {
           onChange={changeTab}
           onCompose={openComposer}
           onNewTask={() => setTaskDraftOpen(true)}
-          onNewEvent={() => setEventDraftOpen(true)}
+          onNewEvent={() => openEventDraft()}
         />
 
         {composeDraft && !composeOpen && (
@@ -731,7 +746,7 @@ function PhoneApp({ native }: { native?: boolean }) {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                onClick={() => setEventDraftOpen(false)}
+                onClick={closeEventDraft}
               />
               <motion.div
                 className="absolute inset-x-0 bottom-0 top-16 overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-20px_60px_-20px_rgba(40,20,80,0.35)]"
@@ -743,7 +758,8 @@ function PhoneApp({ native }: { native?: boolean }) {
                 <NewEventSheet
                   initialDate={selectedDate}
                   events={events}
-                  onClose={() => setEventDraftOpen(false)}
+                  draft={eventDraft ?? undefined}
+                  onClose={closeEventDraft}
                   onCreate={(event) => {
                     setEvents((current) => [...current, event]);
                     notify("Rendez-vous créé");

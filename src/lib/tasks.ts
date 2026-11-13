@@ -1,3 +1,5 @@
+import { clampIsoDay, isoTime } from "@/lib/calendar";
+
 export type TaskState = "todo" | "doing" | "waiting" | "review" | "done";
 
 export type Subtask = { title: string; done: boolean };
@@ -235,6 +237,28 @@ export function dueToneFor(iso: string): Task["dueTone"] {
 }
 
 const DUE_ORDER: Record<Task["dueTone"], number> = { late: 0, soon: 1, soft: 2, none: 3 };
+
+/** Créneau prêt à préremplir la création d'un rendez-vous. */
+export type EventDraft = {
+  title?: string;
+  date?: string;
+  start?: string;
+  end?: string;
+  location?: string;
+};
+
+export function draftFromSuggestion(suggestion: MailSuggestion): EventDraft {
+  const date = clampIsoDay(suggestion.date);
+  const start = isoTime(suggestion.start);
+  const end = isoTime(suggestion.end);
+  return {
+    title: suggestion.proposal,
+    ...(date ? { date } : {}),
+    ...(start ? { start } : {}),
+    ...(start && end && end > start ? { end } : {}),
+    ...(suggestion.location ? { location: suggestion.location } : {}),
+  };
+}
 
 export function taskFromSuggestion(suggestion: MailSuggestion, id: string): Task {
   return {

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AlertTriangle, CalendarPlus } from "lucide-react";
 import type { CalendarEvent } from "@/lib/calendar";
 import { TODAY_ISO, isoInDays, overlappingEvents } from "@/lib/calendar";
+import type { EventDraft } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 
@@ -26,13 +27,7 @@ const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 /** Créneau prérempli par une suggestion issue d'un mail. */
-export type NewEventDraft = {
-  title?: string;
-  date?: string;
-  start?: string;
-  end?: string;
-  location?: string;
-};
+export type NewEventDraft = EventDraft;
 
 export function addMinutes(time: string, minutes: number) {
   const [hours, mins] = time.split(":").map((part) => Number.parseInt(part, 10));
