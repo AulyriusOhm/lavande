@@ -101,10 +101,12 @@ export function Dock({
                   "transition-transform duration-200 active:scale-90",
                 )}
               >
-                <span
-                  className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/40 to-transparent"
-                  style={{ animation: "shimmer-sweep 3.5s ease-in-out infinite" }}
-                />
+                <span className="pointer-events-none absolute inset-0 overflow-hidden rounded-full [clip-path:inset(0_round_999px)]">
+                  <span
+                    className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/40 to-transparent"
+                    style={{ animation: "shimmer-sweep 3.5s ease-in-out infinite" }}
+                  />
+                </span>
                 <fab.icon className="relative z-10 size-[18px]" strokeWidth={2.4} />
               </button>
             </motion.div>

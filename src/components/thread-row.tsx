@@ -9,6 +9,19 @@ import { SwipeAction, type SwipeActionDef } from "@/components/ui/swipe-action";
 import { usePrefs, type SwipeActionId } from "@/lib/prefs";
 import { accountLabelInk, accountTint, useTheme } from "@/lib/theme";
 
+const ACCOUNT_CHIP_TIERS = [
+  { max: 6, classes: "text-[10.5px] tracking-[0.08em]" },
+  { max: 8, classes: "text-[9.5px] tracking-[0.05em]" },
+  { max: 10, classes: "text-[8.5px] tracking-[0.03em]" },
+] as const;
+
+const ACCOUNT_CHIP_TIGHT = "text-[8px] tracking-[0.01em]";
+
+export function accountChipFont(label: string) {
+  const length = [...label.trim()].length;
+  return ACCOUNT_CHIP_TIERS.find((tier) => length <= tier.max)?.classes ?? ACCOUNT_CHIP_TIGHT;
+}
+
 export function ThreadRow({
   thread,
   onOpen,
@@ -161,7 +174,12 @@ export function ThreadRow({
           )}
           {showAccount && account ? (
             <span
-              className="inline-block max-w-[88px] truncate rounded-full px-1.5 py-[3px] text-[10.5px] leading-none font-extrabold tracking-[0.08em] uppercase"
+              data-account-chip={account.id}
+              title={account.label}
+              className={cn(
+                "-ml-1 inline-block max-w-[64px] truncate rounded-full px-1.5 py-[3px] leading-none font-extrabold uppercase",
+                accountChipFont(account.label),
+              )}
               style={{
                 backgroundColor: accountTint(account.color),
                 color: accountLabelInk(account.color, dark),

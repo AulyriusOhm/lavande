@@ -15,7 +15,7 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("@/lib/open-external", () => ({ openExternal, isTauriShell: () => false }));
 
-const { MailBody } = await import("@/components/mail-body");
+const { MailBody, fitMailWidth } = await import("@/components/mail-body");
 
 const SOURCE: MailSource = { accountId: "perso", folderPath: "INBOX", uid: 12 };
 const STORED = "<p>Soldes du mois</p>";
@@ -138,10 +138,15 @@ describe("feuille de repli", () => {
 
     expect(mobile).toBeGreaterThan(-1);
     expect(doc.indexOf("table{width:100%!important}")).toBeGreaterThan(mobile);
-    expect(doc.indexOf("body *{max-width:100%!important}")).toBeGreaterThan(mobile);
+    expect(doc.indexOf("body *{max-width:100%!important;min-width:0!important}")).toBeGreaterThan(
+      mobile,
+    );
     expect(doc.indexOf("td,th{white-space:normal!important}")).toBeGreaterThan(mobile);
     expect(doc.indexOf("img{height:auto!important}")).toBeGreaterThan(mobile);
     expect(doc.indexOf("box-sizing:border-box!important")).toBeGreaterThan(mobile);
+    expect(
+      doc.indexOf("html,body{width:100%!important;max-width:100%!important;min-width:0!important}"),
+    ).toBeGreaterThan(mobile);
     expect(doc).not.toContain("overflow-x");
   });
 
@@ -167,6 +172,122 @@ describe("feuille de repli", () => {
     expect(doc).toContain("background:transparent");
     expect(doc).not.toContain("invert");
     expect(doc).not.toContain("filter:");
+  });
+});
+
+describe("largeur du cadre", () => {
+  const NEWSLETTER =
+    '<style>body{width:600px;margin:0;color:#3b3548}\n' +
+    ".wrap{min-width:600px;width:600px;padding:24px}\n" +
+    "@media (min-width:480px){.card{width:600px}}\n" +
+    "@supports (display:grid){.grid{width:30pc}}\n" +
+    ".small{width:320px}</style>" +
+    '<table width="600"><tr><td width="600" style="min-width:600px;padding:0 32px">x</td></tr></table>';
+
+  function neutralize(available: number) {
+    const style = document.createElement("style");
+    style.textContent =
+      "body{width:600px;margin:0;color:#3b3548}" +
+      ".wrap{min-width:600px;width:600px;padding:24px}" +
+      "@media (min-width:480px){.card{width:600px}}" +
+      "@supports (display:grid){.grid{width:30pc}}" +
+      ".small{width:320px}";
+    document.head.appendChild(style);
+    const cell = document.createElement("td");
+    cell.setAttribute("width", "600");
+    cell.style.minWidth = "600px";
+    cell.style.padding = "0 32px";
+    const link = document.createElement("a");
+    link.style.color = "#e1306c";
+    document.body.append(cell, link);
+
+    fitMailWidth(document, available);
+
+    const rules = style.sheet?.cssRules ?? [];
+    const nested = (index: number) => rules[index].cssRules[0].style;
+    return {
+      body: rules[0].style,
+      wrap: rules[1].style,
+      media: nested(2),
+      supports: nested(3),
+      small: rules[4].style,
+      cell,
+      link,
+      cleanup: () => {
+        style.remove();
+        cell.remove();
+        link.remove();
+        document.documentElement.style.removeProperty("width");
+        document.documentElement.style.removeProperty("min-width");
+        document.body.style.removeProperty("width");
+        document.body.style.removeProperty("min-width");
+      },
+    };
+  }
+
+  it("ramène à 100% les largeurs absolues plus larges que le cadre", () => {
+    const page = neutralize(400);
+    try {
+      expect(page.body.getPropertyValue("width")).toBe("100%");
+      expect(page.wrap.getPropertyValue("width")).toBe("100%");
+      expect(Number.parseFloat(page.wrap.getPropertyValue("min-width"))).toBe(0);
+      expect(page.media.getPropertyValue("width")).toBe("100%");
+      expect(page.supports.getPropertyValue("width")).toBe("100%");
+      expect(page.cell.getAttribute("width")).toBe("100%");
+      expect(Number.parseFloat(page.cell.style.getPropertyValue("min-width"))).toBe(0);
+      expect(document.documentElement.style.getPropertyValue("width")).toBe("100%");
+      expect(Number.parseFloat(document.body.style.getPropertyValue("min-width"))).toBe(0);
+    } finally {
+      page.cleanup();
+    }
+  });
+
+  it("ne touche ni aux couleurs, ni aux marges, ni aux largeurs qui tiennent", () => {
+    const page = neutralize(400);
+    try {
+      expect(page.body.getPropertyValue("color")).toBe("rgb(59, 53, 72)");
+      expect(page.body.getPropertyValue("margin")).toBe("0px");
+      expect(page.wrap.getPropertyValue("padding")).toBe("24px");
+      expect(page.small.getPropertyValue("width")).toBe("320px");
+      expect(page.link.style.getPropertyValue("color")).toBe("rgb(225, 48, 108)");
+      expect(page.cell.style.getPropertyValue("padding")).toBe("0px 32px");
+    } finally {
+      page.cleanup();
+    }
+  });
+
+  it("laisse un cadre large à la mise en page du mail", () => {
+    const page = neutralize(800);
+    try {
+      expect(page.body.getPropertyValue("width")).toBe("600px");
+      expect(page.wrap.getPropertyValue("min-width")).toBe("600px");
+      expect(page.cell.getAttribute("width")).toBe("600");
+      expect(document.documentElement.style.getPropertyValue("width")).toBe("");
+    } finally {
+      page.cleanup();
+    }
+  });
+
+  it("neutralise le document à l'onload quand le cadre est étroit", () => {
+    const { container } = renderBody(NEWSLETTER);
+    const element = frame(container);
+    const contentDocument = loadedDocument(container, NEWSLETTER);
+    Object.defineProperty(element, "clientWidth", { configurable: true, value: 412 });
+
+    fireEvent.load(element);
+
+    expect(contentDocument.documentElement.style.getPropertyValue("width")).toBe("100%");
+  });
+
+  it("laisse le document tel quel quand le cadre est large", () => {
+    const { container } = renderBody(NEWSLETTER);
+    const element = frame(container);
+    const contentDocument = loadedDocument(container, NEWSLETTER);
+    Object.defineProperty(element, "clientWidth", { configurable: true, value: 1000 });
+
+    fireEvent.load(element);
+
+    expect(contentDocument.documentElement.style.getPropertyValue("width")).toBe("");
   });
 });
 

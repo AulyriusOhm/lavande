@@ -43,6 +43,24 @@ const DARK: Palette = {
 const DEFAULT_ACCENT = "#8b7cf6";
 const HEX = /^#[0-9a-f]{3,8}$/i;
 const MAX_HEIGHT = 900;
+const MOBILE_WIDTH = 720;
+
+const UNIT_PX: Record<string, number> = {
+  px: 1,
+  pt: 4 / 3,
+  pc: 16,
+  in: 96,
+  cm: 96 / 2.54,
+  mm: 96 / 25.4,
+  q: 96 / 101.6,
+};
+
+function absolutePx(value: string): number | null {
+  const match = /^\s*(-?\d*\.?\d+)\s*(px|pt|pc|in|cm|mm|q)\s*$/i.exec(value);
+  if (!match) return null;
+  const size = Number.parseFloat(match[1]) * UNIT_PX[match[2].toLowerCase()];
+  return Number.isFinite(size) ? size : null;
+}
 
 type Theme = { dark: boolean; accent: string };
 
@@ -58,9 +76,10 @@ function themeSnapshot(): Theme {
  *  bordures de cellules, les marges de paragraphes et la largeur des tables
  *  appartiennent au mail. En dessous, la largeur disponible prime sur la
  *  fidélité (une newsletter en table de 600px déborde sinon du téléphone) :
- *  tables ramenées à 100%, images et blocs plafonnés, cellules `nowrap`
- *  autorisées à replier. */
-function mailStyles({ dark, accent }: Theme) {
+ *  `html` et `body` ramenés à 100%, largeurs et largeurs minimales rendues
+ *  compressibles, tables ramenées à 100%, images plafonnées, cellules
+ *  `nowrap` autorisées à replier. */
+export function mailStyles({ dark, accent }: Theme) {
   const palette = dark ? DARK : LIGHT;
   return `@font-face{font-family:"Plus Jakarta Sans";font-style:normal;font-weight:300 800;font-display:swap;src:url("${jakartaFont}") format("woff2")}
 @font-face{font-family:"Plus Jakarta Sans";font-style:normal;font-weight:300 800;font-display:swap;src:url("${jakartaFontExt}") format("woff2")}
@@ -83,14 +102,15 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em
 pre{white-space:pre-wrap;background:var(--surface-2);padding:.6em;border-radius:.5em}
 @media (max-width:720px){
 *,:before,:after{box-sizing:border-box!important}
-body *{max-width:100%!important}
+html,body{width:100%!important;max-width:100%!important;min-width:0!important}
+body *{max-width:100%!important;min-width:0!important}
 table{width:100%!important}
 td,th{white-space:normal!important}
 img{height:auto!important}
 }`;
 }
 
-function mailDocument(body: string, theme: Theme) {
+export function mailDocument(body: string, theme: Theme) {
   return `<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -103,6 +123,61 @@ function mailDocument(body: string, theme: Theme) {
 }
 
 /**
+ * Sous 720px, neutralise **à la source** les contraintes de largeur que le mail
+ * impose et que notre feuille de repli ne peut pas battre : `body{width:600px}`
+ * ou `.wrap{min-width:600px}` réinjectés en tête du body, styles inline et
+ * attributs `width` de table. Une largeur absolue plus large que le cadre passe
+ * à `100%`, une largeur minimale à `0` ; couleurs, polices, marges et
+ * remplissages ne sont jamais touchés, le mail garde son identité.
+ */
+export function fitMailWidth(contentDocument: Document, available: number) {
+  if (!(available > 0) || available >= MOBILE_WIDTH) return;
+
+  const constrain = (style: CSSStyleDeclaration | null) => {
+    if (!style) return;
+    for (const property of ["width", "min-width"]) {
+      const size = absolutePx(style.getPropertyValue(property));
+      if (size === null || size <= available) continue;
+      const important = style.getPropertyPriority(property) === "important";
+      const next = property === "width" ? "100%" : "0";
+      style.setProperty(property, next, important ? "important" : "");
+    }
+  };
+
+  const walk = (rules: CSSRuleList) => {
+    for (const rule of Array.from(rules)) {
+      const nested = (rule as CSSGroupingRule).cssRules;
+      if (nested) walk(nested);
+      constrain((rule as CSSStyleRule).style ?? null);
+    }
+  };
+
+  for (const sheet of Array.from(contentDocument.styleSheets)) {
+    try {
+      const rules = sheet.cssRules;
+      if (rules) walk(rules);
+    } catch {
+      continue;
+    }
+  }
+
+  for (const element of Array.from(contentDocument.querySelectorAll<HTMLElement>("*"))) {
+    constrain(element.style);
+    const attribute = element.getAttribute("width");
+    if (!attribute) continue;
+    const tag = element.tagName.toLowerCase();
+    if (tag !== "table" && tag !== "td" && tag !== "th") continue;
+    const size = absolutePx(/^\d+(\.\d+)?$/.test(attribute) ? `${attribute}px` : attribute);
+    if (size !== null && size > available) element.setAttribute("width", "100%");
+  }
+
+  for (const element of [contentDocument.documentElement, contentDocument.body]) {
+    element?.style.setProperty("width", "100%", "important");
+    element?.style.setProperty("min-width", "0", "important");
+  }
+}
+
+/**
  * Corps du message : le HTML est **déjà assaini côté service** (liste blanche
  * stricte, styles filtrés, images de tracking retirées, liens `noopener`), on ne
  * fait donc que le rendre — dans une iframe `srcdoc` sans `allow-scripts`, donc
@@ -111,9 +186,10 @@ function mailDocument(body: string, theme: Theme) {
  * page (styles inline, blocs `<style>` réinjectés en tête du body, attributs de
  * table) et notre palette ne sert qu'au contenu non stylé — le rendu fidèle
  * prime, y compris en thème sombre (sauf sous 720px, où la feuille ramène
- * tables et images à la largeur de l'écran). Les liens sont interceptés côté
- * parent — l'iframe n'exécute aucun script — et remis au navigateur du système,
- * la base `target="_blank"` ne restant qu'un repli.
+ * tables et images à la largeur de l'écran et où `fitMailWidth` neutralise dans
+ * le document les largeurs absolues que le mail impose). Les liens sont
+ * interceptés côté parent — l'iframe n'exécute aucun script — et remis au
+ * navigateur du système, la base `target="_blank"` ne restant qu'un repli.
  * Sans HTML, on retombe sur les paragraphes texte.
  *
  * Les images distantes restent masquées par défaut : le bandeau ne fait que
@@ -140,6 +216,9 @@ export function MailBody({
   const [height, setHeight] = useState<number | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const observerRef = useRef<ResizeObserver | null>(null);
+  const widthRef = useRef(0);
+  const fittedRef = useRef(false);
+  const frameDocumentRef = useRef("");
 
   const key = source ? `${source.accountId}:${source.folderPath}:${source.uid}` : undefined;
   const current = key && reveal?.key === key ? reveal : null;
@@ -170,6 +249,7 @@ export function MailBody({
   }, []);
 
   const frameDocument = body ? mailDocument(body, theme) : "";
+  frameDocumentRef.current = frameDocument;
 
   const measure = useCallback(() => {
     const root = frameRef.current?.contentDocument?.documentElement;
@@ -178,7 +258,16 @@ export function MailBody({
     if (measured > 0) setHeight(Math.min(measured, MAX_HEIGHT));
   }, []);
 
+  const fitWidth = useCallback(() => {
+    const element = frameRef.current;
+    const contentDocument = element?.contentDocument;
+    if (!element || !contentDocument) return;
+    if (element.clientWidth < MOBILE_WIDTH) fittedRef.current = true;
+    fitMailWidth(contentDocument, element.clientWidth);
+  }, []);
+
   const syncHeight = useCallback(() => {
+    fitWidth();
     measure();
     observerRef.current?.disconnect();
     observerRef.current = null;
@@ -225,6 +314,24 @@ export function MailBody({
       observerRef.current = null;
     };
   }, [body, frameDocument, syncHeight]);
+
+  useEffect(() => {
+    const element = frameRef.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (element.clientWidth === widthRef.current) return;
+      widthRef.current = element.clientWidth;
+      if (element.clientWidth >= MOBILE_WIDTH && fittedRef.current) {
+        fittedRef.current = false;
+        element.srcdoc = frameDocumentRef.current;
+        return;
+      }
+      fitWidth();
+      measure();
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [fitWidth, measure, body]);
 
   if (!body) {
     return (

@@ -34,10 +34,12 @@ export function ShimmerButton({
       )}
     >
       {reduce ? null : (
-        <span
-          className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/35 to-transparent"
-          style={{ animation: `shimmer-sweep ${shimmerDuration}s ease-in-out infinite` }}
-        />
+        <span className="pointer-events-none absolute inset-0 overflow-hidden rounded-full [clip-path:inset(0_round_999px)]">
+          <span
+            className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/35 to-transparent"
+            style={{ animation: `shimmer-sweep ${shimmerDuration}s ease-in-out infinite` }}
+          />
+        </span>
       )}
       <span className="relative z-10 inline-flex items-center gap-2">{children}</span>
     </button>

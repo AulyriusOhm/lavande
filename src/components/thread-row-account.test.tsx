@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { ThreadRow } from "@/components/thread-row";
+import { ThreadRow, accountChipFont } from "@/components/thread-row";
 import { MailStoreProvider } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
@@ -55,12 +55,22 @@ describe("étiquette de compte de la ligne de mail", () => {
     expect(contrastRatio(rgbToHex(label.style.color), "#f6f3fd")).toBeGreaterThanOrEqual(4.5);
   });
 
-  it("remonte la taille et élargit la troncature", () => {
+  it("garde la plus grande taille pour un libellé court, dans la largeur de la colonne", () => {
     const label = mount();
 
     expect(label.className).toContain("text-[10.5px]");
-    expect(label.className).toContain("max-w-[88px]");
-    expect(label.className).not.toContain("text-[8.5px]");
-    expect(label.className).not.toContain("max-w-[56px]");
+    expect(label.className).toContain("tracking-[0.08em]");
+    expect(label.className).toContain("max-w-[64px]");
+    expect(label.className).toContain("truncate");
+    expect(label.className).toContain("-ml-1");
+    expect(label.getAttribute("title")).toBe(ACCOUNT.label);
+  });
+
+  it("rétrécit la police à mesure que le libellé s'allonge", () => {
+    expect(accountChipFont("Perso")).toBe("text-[10.5px] tracking-[0.08em]");
+    expect(accountChipFont("Studio")).toBe("text-[10.5px] tracking-[0.08em]");
+    expect(accountChipFont("POLARIS")).toBe("text-[9.5px] tracking-[0.05em]");
+    expect(accountChipFont("POLARIS07")).toBe("text-[8.5px] tracking-[0.03em]");
+    expect(accountChipFont("POLARIS07-XL")).toBe("text-[8px] tracking-[0.01em]");
   });
 });

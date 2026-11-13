@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<title>Aperçu mobile du corps de mail</title>
+<style>
+body{margin:0;padding:12px;display:flex;gap:16px;align-items:flex-start;background:#f4f1fa;font-family:system-ui,sans-serif}
+figure{margin:0;flex-shrink:0}
+figcaption{margin:0 0 6px;font:700 12px system-ui,sans-serif;color:#6b6478}
+iframe{display:block;border:1px solid #d9d3e8;border-radius:12px;background:#fff;height:820px}
+</style>
+</head>
+<body>
+<figure>
+  <figcaption>412px — téléphone</figcaption>
+  <iframe id="mobile" title="mobile" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"></iframe>
+</figure>
+<figure>
+  <figcaption>412px — feuille mobile seule, sans neutralisation</figcaption>
+  <iframe id="mobile-nofit" title="mobile-nofit" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"></iframe>
+</figure>
+<figure>
+  <figcaption>1000px — bureau</figcaption>
+  <iframe id="desktop" title="desktop" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"></iframe>
+</figure>
+<figure>
+  <figcaption>1000px — ancienne feuille</figcaption>
+  <iframe id="desktop-legacy" title="desktop-legacy" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"></iframe>
+</figure>
+<figure>
+  <figcaption>412px — ancienne feuille, défaut</figcaption>
+  <iframe id="legacy" title="legacy" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"></iframe>
+</figure>
+<figure>
+  <figcaption>412px — composant MailBody (redimensionné par le check)</figcaption>
+  <div id="component" style="width:412px"></div>
+</figure>
+<script type="module">
+import { fitMailWidth, mailDocument, MailBody } from "../src/components/mail-body.tsx";
+import "../src/index.css";
+import { createElement } from "react";
+import { createRoot } from "react-dom/client";
+
+const THEME = { dark: false, accent: "#8b7cf6" };
+
+const FIXTURE = `<style>
+body{width:600px;margin:0;background-color:#ffffff;color:#3b3548}
+.wrap{min-width:600px;width:600px;margin:0 auto}
+p{margin:0 0 16px;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#3b3548}
+a{color:#e1306c}
+.hero-title{margin:0 0 14px;font-family:Georgia,"Times New Roman",serif;font-size:26px;line-height:1.25;color:#1b1523}
+.kicker{margin:0 0 10px;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#8c8699}
+.btn{display:inline-block;padding:14px 28px;background-color:#e1306c;color:#ffffff;border-radius:8px;text-decoration:none;font-family:Helvetica,Arial,sans-serif;font-size:15px;font-weight:700}
+.footer{margin:0;font-family:Helvetica,Arial,sans-serif;font-size:12px;color:#8c8699}
+</style>
+<table class="wrap" width="600" align="center" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff">
+<tbody>
+<tr><td width="600" align="left" style="padding:28px 32px 8px">
+  <div class="preheader" style="width:600px!important;min-width:600px!important;font-family:Helvetica,Arial,sans-serif;font-size:12px;color:#8c8699">Nouveautés, statistiques et réponses de la semaine</div>
+  <p class="kicker">Instagram</p>
+  <h1 class="hero-title">Vos publications de la semaine</h1>
+</td></tr>
+<tr><td width="600" style="padding:0 32px 8px">
+  <p>Bonjour Roman, trois personnes ont aimé votre dernière publication et deux nouvelles réponses vous attendent dans vos messages.</p>
+  <p style="margin:0 0 22px">Retrouvez le détail de votre activité, les statistiques de la semaine et les comptes que vous pourriez aimer suivre.</p>
+</td></tr>
+<tr><td width="600" align="center" style="padding:0 32px 26px">
+  <table role="presentation" align="center" cellpadding="0" cellspacing="0" border="0"><tbody><tr>
+    <td align="center" bgcolor="#e1306c" style="border-radius:8px"><a class="btn" href="https://www.instagram.example/activity">Voir mon activité</a></td>
+  </tr></tbody></table>
+</td></tr>
+<tr><td width="600" style="padding:18px 32px 32px;border-top:1px solid #ece8f5">
+  <p class="footer">Cet e-mail a été envoyé à roman@lavande.example. <a href="https://www.instagram.example/unsubscribe">Se désinscrire</a> · <a href="https://www.instagram.example/help">Aide</a></p>
+  <p class="footer" style="margin-top:8px">© 2025 Instagram from Meta, 1601 Willow Road, Menlo Park, CA 94025</p>
+</td></tr>
+</tbody>
+</table>`;
+
+const DOCUMENT = mailDocument(FIXTURE, THEME);
+
+const LEGACY = DOCUMENT.replace(
+  "html,body{width:100%!important;max-width:100%!important;min-width:0!important}\nbody *{max-width:100%!important;min-width:0!important}",
+  "body *{max-width:100%!important}",
+);
+
+const FRAMES = [
+  { id: "mobile", width: 412, srcdoc: DOCUMENT, fit: true },
+  { id: "mobile-nofit", width: 412, srcdoc: DOCUMENT, fit: false },
+  { id: "desktop", width: 1000, srcdoc: DOCUMENT, fit: false },
+  { id: "desktop-legacy", width: 1000, srcdoc: LEGACY, fit: false },
+  { id: "legacy", width: 412, srcdoc: LEGACY, fit: false },
+];
+
+window.__measurements = [];
+
+for (const { id, width, srcdoc, fit } of FRAMES) {
+  const frame = document.getElementById(id);
+  frame.style.width = `${width}px`;
+  frame.addEventListener("load", () => {
+    const doc = frame.contentDocument;
+    const available = frame.clientWidth;
+    const before = doc.documentElement.scrollWidth;
+    const mobile = fit && available > 0 && available < 720;
+    if (mobile) fitMailWidth(doc, available);
+    const after = doc.documentElement.scrollWidth;
+    const button = doc.querySelector(".btn");
+    const cell = doc.querySelector("td[width]");
+    window.__measurements.push({
+      id,
+      clientWidth: available,
+      mobile,
+      before,
+      after,
+      overflowBefore: before - available,
+      overflowAfter: after - available,
+      buttonBackground: button ? getComputedStyle(button).backgroundColor : null,
+      bodyWidth: getComputedStyle(doc.body).width,
+      rootWidth: getComputedStyle(doc.documentElement).width,
+      cellWidth: cell ? getComputedStyle(cell).width : null,
+      tableWidth: getComputedStyle(doc.querySelector("table.wrap")).width,
+      tdWidthAttribute: cell ? cell.getAttribute("width") : null,
+      linkColor: getComputedStyle(doc.querySelector(".footer a")).color,
+      titleFont: getComputedStyle(doc.querySelector(".hero-title")).fontFamily,
+      preheaderWidth: getComputedStyle(doc.querySelector(".preheader")).width,
+      preheaderMinWidth: getComputedStyle(doc.querySelector(".preheader")).minWidth,
+    });
+    window.__ready = window.__measurements.length;
+  });
+  frame.srcdoc = srcdoc;
+}
+
+createRoot(document.getElementById("component")).render(
+  createElement(MailBody, { html: FIXTURE, paragraphs: [] }),
+);
+</script>
+</body>
+</html>
