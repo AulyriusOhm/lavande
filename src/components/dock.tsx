@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { CalendarDays, CalendarPlus, Inbox, ListChecks, PenLine, Plus, Settings2 } from "lucide-react";
+import { isNativeShell } from "@/lib/native";
 import { usePrefs } from "@/lib/prefs";
 import { cn } from "@/lib/utils";
 
@@ -25,6 +26,7 @@ export function Dock({
   onNewTask: () => void;
   onNewEvent: () => void;
 }) {
+  const native = isNativeShell();
   const { calendarEnabled, planningEnabled } = usePrefs();
   const tabs = TABS.filter((tab) =>
     tab.id === "calendar" ? calendarEnabled : tab.id === "planning" ? planningEnabled : true,
@@ -37,6 +39,26 @@ export function Dock({
         : active === "calendar"
           ? { icon: CalendarPlus, label: "Nouveau rendez-vous", run: onNewEvent }
           : { icon: PenLine, label: "Nouveau message", run: onCompose };
+  const fabButton = fab ? (
+    <>
+      <div className="mx-1 h-6 w-px shrink-0 bg-line" />
+      <button
+        type="button"
+        onClick={fab.run}
+        aria-label={fab.label}
+        className={cn(
+          "focus-ring group relative grid size-12 shrink-0 place-items-center overflow-hidden rounded-full",
+          "bg-accent text-accent-contrast",
+          native
+            ? undefined
+            : "shadow-[0_10px_24px_-10px_var(--accent)] transition-transform duration-200 active:scale-90",
+        )}
+      >
+        <span className="pointer-events-none absolute inset-0 rounded-full bg-gradient-to-br from-white/25 via-white/5 to-transparent" />
+        <fab.icon className="relative z-10 size-[18px]" strokeWidth={2.4} />
+      </button>
+    </>
+  ) : null;
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-4 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+1.35rem)] sm:pb-7">
       <div
@@ -80,33 +102,24 @@ export function Dock({
           );
         })}
 
-        <AnimatePresence initial={false}>
-          {fab && (
-            <motion.div
-              key="fab"
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: "auto", opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
-              transition={{ type: "spring", stiffness: 380, damping: 34 }}
-              className="flex items-center overflow-hidden"
-            >
-              <div className="mx-1 h-6 w-px shrink-0 bg-line" />
-              <button
-                type="button"
-                onClick={fab.run}
-                aria-label={fab.label}
-                className={cn(
-                  "focus-ring group relative grid size-12 shrink-0 place-items-center overflow-hidden rounded-full",
-                  "bg-accent text-accent-contrast shadow-[0_10px_24px_-10px_var(--accent)]",
-                  "transition-transform duration-200 active:scale-90",
-                )}
+        {native ? (
+          fabButton && <div className="flex items-center overflow-hidden">{fabButton}</div>
+        ) : (
+          <AnimatePresence initial={false}>
+            {fabButton && (
+              <motion.div
+                key="fab"
+                initial={{ width: 0, opacity: 0 }}
+                animate={{ width: "auto", opacity: 1 }}
+                exit={{ width: 0, opacity: 0 }}
+                transition={{ type: "spring", stiffness: 380, damping: 34 }}
+                className="flex items-center overflow-hidden"
               >
-                <span className="pointer-events-none absolute inset-0 rounded-full bg-gradient-to-br from-white/25 via-white/5 to-transparent" />
-                <fab.icon className="relative z-10 size-[18px]" strokeWidth={2.4} />
-              </button>
-            </motion.div>
-          )}
-        </AnimatePresence>
+                {fabButton}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        )}
       </div>
     </div>
   );
