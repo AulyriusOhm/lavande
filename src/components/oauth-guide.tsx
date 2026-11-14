@@ -26,7 +26,7 @@ export function OAuthGuide({ redirectUri }: { redirectUri: string }) {
     <details className="mt-2 rounded-xl border border-line bg-surface px-3 py-2">
       <summary className="flex cursor-pointer items-center gap-1.5 text-[11.5px] font-bold text-accent-ink">
         <KeyRound className="size-3.5" strokeWidth={2.6} />
-        Comment obtenir cet identifiant ?
+        Comment obtenir ces identifiants ?
       </summary>
 
       <div className="mt-2.5 space-y-2 border-t border-line pt-2.5">
@@ -101,8 +101,16 @@ export function OAuthGuide({ redirectUri }: { redirectUri: string }) {
           <p className={STEP}>
             <span className={NUMBER}>2</span>
             <span>
-              Ajoute la même adresse de retour, puis copie l'identifiant client. Les comptes Gmail
-              demandent aussi l'accès IMAP activé côté compte.
+              La redirection loopback ci-dessus est acceptée d'office par ce type de client ; copie
+              l'identifiant client <strong>et le secret du client</strong>.
+            </span>
+          </p>
+          <p className={STEP}>
+            <span className={NUMBER}>3</span>
+            <span>
+              Configure l'<strong>écran de consentement OAuth</strong> (mode test, avec ton compte en
+              testeur), sinon Google refuse la connexion. Les comptes Gmail demandent aussi l'accès
+              IMAP activé côté compte.
             </span>
           </p>
         </div>

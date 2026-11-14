@@ -5,7 +5,7 @@
  * domaine de l'adresse.
  */
 
-import { ApiError, type ApiAccount } from "@/lib/api";
+import type { ApiAccount } from "@/lib/api";
 
 /** Un agenda Google répond vite : son cache se périme comme celui d'un serveur CalDAV. */
 export const GOOGLE_REFRESH_MS = 15 * 60 * 1000;
@@ -13,9 +13,6 @@ export const GOOGLE_REFRESH_MS = 15 * 60 * 1000;
 /** Fenêtre relue : trois mois passés, un an à venir. */
 export const GOOGLE_WINDOW_PAST_DAYS = 90;
 export const GOOGLE_WINDOW_FUTURE_DAYS = 365;
-
-/** Le scope `calendar` a été ajouté après coup : un compte ancien doit le re-consentir. */
-export const GOOGLE_RECONSENT = "reconnecte le compte Google pour autoriser l'agenda";
 
 const GOOGLE_HOSTS = ["gmail.com", "googlemail.com", "google.com"];
 
@@ -44,11 +41,6 @@ export function isGoogleAccount(account: GoogleAccountInfo): boolean {
 
 export function googleAccounts(accounts: ApiAccount[]): ApiAccount[] {
   return accounts.filter(isGoogleAccount);
-}
-
-/** Un refus 401/403 du démon : le compte n'a pas (encore) le droit agenda. */
-export function googleConsentMissing(error: unknown): boolean {
-  return error instanceof ApiError && (error.status === 401 || error.status === 403);
 }
 
 export function googleWindow(now = new Date()): { time_min: string; time_max: string } {

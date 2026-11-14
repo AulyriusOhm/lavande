@@ -389,7 +389,7 @@ async fn exchange(
     if !status.is_success() {
         return Err(ApiError::gateway(
             "oauth",
-            format!("le fournisseur a refusé le code ({})", status.as_u16()),
+            refusal_message(status.as_u16(), &body),
         ));
     }
     let payload: serde_json::Value = serde_json::from_str(&body).map_err(|error| {
@@ -408,6 +408,34 @@ async fn exchange(
                 "aucun refresh token : l'accès hors ligne n'a pas été accordé",
             )
         })
+}
+
+#[derive(Deserialize)]
+struct ProviderRefusal {
+    error: String,
+    #[serde(default)]
+    error_description: Option<String>,
+}
+
+fn refusal_message(code: u16, body: &str) -> String {
+    let Ok(refusal) = serde_json::from_str::<ProviderRefusal>(body) else {
+        return format!("le fournisseur a refusé le code ({code})");
+    };
+    let description = refusal
+        .error_description
+        .filter(|value| !value.trim().is_empty());
+    match description {
+        Some(description) => {
+            format!(
+                "le fournisseur a refusé le code ({code}) : {} ({description})",
+                refusal.error
+            )
+        }
+        None => format!(
+            "le fournisseur a refusé le code ({code}) : {}",
+            refusal.error
+        ),
+    }
 }
 
 fn provider_of(request: &StartRequest) -> Result<Provider, ApiError> {
@@ -458,13 +486,17 @@ fn provider_of(request: &StartRequest) -> Result<Provider, ApiError> {
                 ),
             )
         })?;
-    let client_secret = request.client_secret.clone().or_else(|| {
-        env::var(format!(
-            "LAVANDE_MAIL_{}_CLIENT_SECRET",
-            provider.to_uppercase()
-        ))
-        .ok()
-    });
+    let client_secret = request
+        .client_secret
+        .clone()
+        .or_else(|| {
+            env::var(format!(
+                "LAVANDE_MAIL_{}_CLIENT_SECRET",
+                provider.to_uppercase()
+            ))
+            .ok()
+        })
+        .filter(|value| !value.trim().is_empty());
     Ok(Provider {
         auth_endpoint,
         token_endpoint,

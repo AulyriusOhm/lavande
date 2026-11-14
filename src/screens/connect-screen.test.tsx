@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const MICROSOFT_ID = "291c5ae6-2601-4cb5-8ae9-c6edbe9c3c1d";
 const GOOGLE_ID = "1234567890-lavande.apps.googleusercontent.com";
+const GOOGLE_SECRET = "GOCSPX-lavande";
 const OTHER_MICROSOFT_ID = "aaaaaaaa-1111-2222-3333-444444444444";
 
 const {
@@ -55,11 +56,16 @@ vi.mock("@/lib/store", () => ({
   }),
 }));
 
-const { ConnectScreen, builtInClientId, resolveClientId } = await import(
-  "@/screens/connect-screen"
-);
+const {
+  ConnectScreen,
+  builtInClientId,
+  resolveClientId,
+  builtInClientSecret,
+  resolveClientSecret,
+} = await import("@/screens/connect-screen");
 
 const GOOGLE_FIELD = "Identifiant d'application Google (client_id)";
+const GOOGLE_SECRET_FIELD = "Secret d'application Google (client_secret)";
 const MICROSOFT_FIELD = "Identifiant d'application Microsoft (client_id)";
 
 function renderConnect() {
@@ -130,6 +136,36 @@ describe("client_id OAuth résolu par fournisseur", () => {
   });
 });
 
+describe("client_secret OAuth résolu par fournisseur", () => {
+  it("google reprend le secret embarqué", () => {
+    expect(builtInClientSecret("google", {})).toBe("");
+    expect(builtInClientSecret("google", { VITE_GOOGLE_CLIENT_SECRET: GOOGLE_SECRET })).toBe(
+      GOOGLE_SECRET,
+    );
+    expect(
+      resolveClientSecret("google", "", { VITE_GOOGLE_CLIENT_SECRET: GOOGLE_SECRET }),
+    ).toBe(GOOGLE_SECRET);
+  });
+
+  it("google préfère la saisie manuelle, espaces retirés", () => {
+    expect(
+      resolveClientSecret("google", `  ${GOOGLE_SECRET}-main  `, {
+        VITE_GOOGLE_CLIENT_SECRET: GOOGLE_SECRET,
+      }),
+    ).toBe(`${GOOGLE_SECRET}-main`);
+    expect(resolveClientSecret("google", `  ${GOOGLE_SECRET}  `, {})).toBe(GOOGLE_SECRET);
+  });
+
+  it("microsoft et custom n'ont aucun secret, même embarqué", () => {
+    const env = { VITE_GOOGLE_CLIENT_SECRET: GOOGLE_SECRET };
+
+    expect(builtInClientSecret("microsoft", env)).toBe("");
+    expect(builtInClientSecret("custom", env)).toBe("");
+    expect(resolveClientSecret("microsoft", "", env)).toBe("");
+    expect(resolveClientSecret("custom", "", env)).toBe("");
+  });
+});
+
 describe("Écran de connexion · identifiant par fournisseur", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -139,6 +175,7 @@ describe("Écran de connexion · identifiant par fournisseur", () => {
     vi.spyOn(window, "open").mockReturnValue(null);
     vi.stubEnv("VITE_OAUTH_CLIENT_ID", MICROSOFT_ID);
     vi.stubEnv("VITE_GOOGLE_CLIENT_ID", "");
+    vi.stubEnv("VITE_GOOGLE_CLIENT_SECRET", "");
     vi.stubEnv("VITE_MICROSOFT_CLIENT_ID", "");
   });
 
@@ -162,6 +199,7 @@ describe("Écran de connexion · identifiant par fournisseur", () => {
 
     expect(sent.provider).toBe("google");
     expect(sent.client_id).toBeUndefined();
+    expect(sent.client_secret).toBeUndefined();
   });
 
   it("envoie l'identifiant Google saisi à la main", async () => {
@@ -197,6 +235,42 @@ describe("Écran de connexion · identifiant par fournisseur", () => {
     const sent = await startWith("Google");
 
     expect(sent.client_id).toBe(GOOGLE_ID);
+  });
+
+  it("envoie le secret Google embarqué quand la variable est renseignée", async () => {
+    vi.stubEnv("VITE_GOOGLE_CLIENT_ID", GOOGLE_ID);
+    vi.stubEnv("VITE_GOOGLE_CLIENT_SECRET", GOOGLE_SECRET);
+    renderConnect();
+    fillRequired();
+
+    const sent = await startWith("Google");
+
+    expect(sent.client_id).toBe(GOOGLE_ID);
+    expect(sent.client_secret).toBe(GOOGLE_SECRET);
+  });
+
+  it("n'envoie aucun secret quand la variable est vide", async () => {
+    vi.stubEnv("VITE_GOOGLE_CLIENT_ID", GOOGLE_ID);
+    renderConnect();
+    fillRequired();
+
+    const sent = await startWith("Google");
+
+    expect(sent.client_secret).toBeUndefined();
+  });
+
+  it("envoie le secret Google saisi à la main", async () => {
+    renderConnect();
+    fillRequired();
+    fireEvent.change(screen.getByLabelText(GOOGLE_FIELD), { target: { value: GOOGLE_ID } });
+    fireEvent.change(screen.getByLabelText(GOOGLE_SECRET_FIELD), {
+      target: { value: `  ${GOOGLE_SECRET}  ` },
+    });
+
+    const sent = await startWith("Google");
+
+    expect(sent.client_id).toBe(GOOGLE_ID);
+    expect(sent.client_secret).toBe(GOOGLE_SECRET);
   });
 
   it("déclenche l'échange une fois le code reçu", async () => {

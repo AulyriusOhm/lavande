@@ -84,6 +84,27 @@ async fn refusing_provider() -> String {
     serve_provider(400).await
 }
 
+/// Même fournisseur, avec un corps de refus sur mesure.
+async fn rejecting_provider(status: u16, body: &'static str) -> String {
+    serve_provider_with(move |_| (status, body.to_string())).await
+}
+
+/// Fournisseur qui refuse toute requête de jeton portant un `client_secret`.
+async fn strict_provider() -> String {
+    serve_provider_with(|request| {
+        if request.contains("client_secret=") {
+            (
+                400,
+                r#"{"error":"invalid_request","error_description":"client_secret must be absent"}"#
+                    .to_string(),
+            )
+        } else {
+            (200, TOKEN_BODY.to_string())
+        }
+    })
+    .await
+}
+
 /// Point d'écoute fermé : l'échange échoue sur le transport, sans réseau.
 async fn closed_endpoint() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("écoute");
@@ -92,7 +113,24 @@ async fn closed_endpoint() -> String {
     base
 }
 
+const TOKEN_BODY: &str = r#"{"access_token":"secret","refresh_token":"refresh-123","expires_in":3600,"token_type":"Bearer"}"#;
+
 async fn serve_provider(token_status: u16) -> String {
+    serve_provider_with(move |_| {
+        let body = if token_status == 200 {
+            TOKEN_BODY
+        } else {
+            r#"{"error":"invalid_grant"}"#
+        };
+        (token_status, body.to_string())
+    })
+    .await
+}
+
+async fn serve_provider_with<F>(token_reply: F) -> String
+where
+    F: Fn(&str) -> (u16, String) + Send + 'static,
+{
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("écoute");
     let base = format!("http://{}", listener.local_addr().expect("adresse"));
     tokio::spawn(async move {
@@ -112,16 +150,15 @@ async fn serve_provider(token_status: u16) -> String {
                 format!(
                     "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 )
-            } else if token_status == 200 {
-                let body = r#"{"access_token":"secret","refresh_token":"refresh-123","expires_in":3600,"token_type":"Bearer"}"#;
-                format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                )
             } else {
-                let body = r#"{"error":"invalid_grant"}"#;
+                let (token_status, body) = token_reply(&request);
+                let reason = if token_status == 200 {
+                    "OK"
+                } else {
+                    "Bad Request"
+                };
                 format!(
-                    "HTTP/1.1 {token_status} Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {token_status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 )
             };
@@ -135,12 +172,11 @@ async fn serve_provider(token_status: u16) -> String {
 /// Déroule le consentement jusqu'à `code_received` et rend l'identifiant de
 /// session, prêt pour `/api/oauth/complete`.
 async fn consent(state: &Arc<AppState>, token_endpoint: &str, auth_endpoint: &str) -> String {
-    let (status, payload) = post(
-        state,
-        "/api/oauth/start",
-        account_input(token_endpoint, auth_endpoint),
-    )
-    .await;
+    consent_with(state, account_input(token_endpoint, auth_endpoint)).await
+}
+
+async fn consent_with(state: &Arc<AppState>, input: Value) -> String {
+    let (status, payload) = post(state, "/api/oauth/start", input).await;
     assert_eq!(status, StatusCode::CREATED, "{payload}");
     let session = payload["session"].as_str().expect("session").to_string();
     let state_param = payload["auth_url"]
@@ -162,12 +198,7 @@ async fn consent(state: &Arc<AppState>, token_endpoint: &str, auth_endpoint: &st
 }
 
 async fn complete(state: &Arc<AppState>, session: &str) -> Value {
-    let (status, payload) = post(
-        state,
-        "/api/oauth/complete",
-        json!({ "session": session }),
-    )
-    .await;
+    let (status, payload) = post(state, "/api/oauth/complete", json!({ "session": session })).await;
     assert_eq!(status, StatusCode::OK, "{payload}");
     payload
 }
@@ -217,8 +248,7 @@ async fn a_broken_imap_leaves_no_account_and_a_failed_session() {
     let completed = complete(&state, &session).await;
     assert_eq!(completed["status"], "failed", "{completed}");
 
-    let (_, status_payload) =
-        get(&state, &format!("/api/oauth/status?session={session}")).await;
+    let (_, status_payload) = get(&state, &format!("/api/oauth/status?session={session}")).await;
     let parsed: Value = serde_json::from_str(&status_payload).expect("json");
     assert_eq!(parsed["status"], "failed", "{parsed}");
 
@@ -265,18 +295,52 @@ async fn a_refused_code_fails_the_session_without_any_retry() {
 
     let completed = complete(&state, &session).await;
     assert_eq!(completed["status"], "failed", "{completed}");
-    assert!(
-        completed["error"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("refusé"),
-        "{completed}"
-    );
+    let error = completed["error"].as_str().unwrap_or_default();
+    assert!(error.contains("refusé"), "{completed}");
+    assert!(error.contains("invalid_grant"), "{completed}");
 
     let replay = complete(&state, &session).await;
     assert_eq!(replay["status"], "failed", "{replay}");
 }
 
+#[tokio::test]
+async fn a_rejected_client_explains_why_in_the_provider_words() {
+    let (_directory, state) = state().await;
+    let provider = rejecting_provider(
+        401,
+        r#"{"error":"invalid_client","error_description":"The provided client secret is invalid."}"#,
+    )
+    .await;
+    let session = consent(
+        &state,
+        &format!("{provider}/token"),
+        &format!("{provider}/authorize"),
+    )
+    .await;
+
+    let completed = complete(&state, &session).await;
+    assert_eq!(completed["status"], "failed", "{completed}");
+    let error = completed["error"].as_str().unwrap_or_default();
+    assert!(error.contains("invalid_client"), "{completed}");
+    assert!(error.contains("client secret is invalid"), "{completed}");
+}
+
+#[tokio::test]
+async fn an_empty_client_secret_is_never_sent_to_the_provider() {
+    let (_directory, state) = state().await;
+    let provider = strict_provider().await;
+    let mut input = account_input(
+        &format!("{provider}/token"),
+        &format!("{provider}/authorize"),
+    );
+    input["client_secret"] = json!("");
+    let session = consent_with(&state, input).await;
+
+    let completed = complete(&state, &session).await;
+    assert_eq!(completed["status"], "failed", "{completed}");
+    let error = completed["error"].as_str().unwrap_or_default();
+    assert!(!error.contains("refusé"), "{completed}");
+}
 
 #[tokio::test]
 async fn a_denied_consent_marks_the_session_failed() {

@@ -860,8 +860,8 @@ Parcours « application installée » : PKCE (S256), `state` aléatoire, retour 
 le démon (`http://127.0.0.1:8790/api/oauth/callback`, surchargeable par `LAVANDE_MAIL_PUBLIC_URL`).
 
 1. `POST /api/oauth/start` avec `provider` (`google`, `microsoft` ou `custom`), `email`, `label`, les
-   endpoints `imap`/`smtp` (typiquement ceux renvoyés par `/api/discover`), et `client_id`
-   (facultatif si `LAVANDE_MAIL_<PROVIDER>_CLIENT_ID` est défini ; `*_CLIENT_SECRET` de même).
+   endpoints `imap`/`smtp` (typiquement ceux renvoyés par `/api/discover`), `client_id` et
+   `client_secret` (facultatifs si `LAVANDE_MAIL_<PROVIDER>_CLIENT_ID` / `*_CLIENT_SECRET` sont définis).
    Réponse : `{ session, auth_url, redirect_uri }`.
 2. Le client ouvre `auth_url` dans le navigateur ; l'utilisateur consent. Ouverture côté front :
    `window.open` dans une page web (l'onglet est pré-ouvert **avant** la requête, sinon le bloqueur de
@@ -891,9 +891,17 @@ L'identifiant d'application Microsoft est **livré dans le build** (`.env.produc
 accounts », plateforme *Public client/native*, redirection
 `http://127.0.0.1:8790/api/oauth/callback`, *public client flows* autorisés, permissions déléguées
 `IMAP.AccessAsUser.All` + `SMTP.Send`. Un client public PKCE n'a pas de secret : l'identifiant est
-visible sur l'écran de consentement, seul le `refresh_token` reste dans le démon. Pour livrer un autre
-identifiant (Google, ou une inscription à vous), reconstruisez avec `VITE_OAUTH_CLIENT_ID=…` ; sans
-identifiant livré, l'écran de connexion réaffiche le champ et le guide d'inscription.
+visible sur l'écran de consentement, seul le `refresh_token` reste dans le démon.
+
+Google est livré aussi, client « Application de bureau » (installed) : `VITE_GOOGLE_CLIENT_ID` et le
+secret du client `VITE_GOOGLE_CLIENT_SECRET`, que Google **exige** à l'échange de jetons (sans lui, il
+répond `client_secret is missing`). Ce secret n'est pas confidentiel : le modèle « application
+installée » de Google veut qu'il soit visible dans le binaire, comme le `client_id`.
+
+Pour livrer d'autres identifiants (une inscription à vous), reconstruisez avec
+`VITE_OAUTH_CLIENT_ID=…`, `VITE_GOOGLE_CLIENT_ID=…` et `VITE_GOOGLE_CLIENT_SECRET=…` ; sans
+identifiant livré, l'écran de connexion réaffiche les champs (identifiant et, si requis, secret) et le
+guide d'inscription.
 
 Le `redirect_uri` est `public_url` du démon : le port livré (`8790`) est celui de l'inscription. Changer
 `LAVANDE_MAIL_BIND` ou `LAVANDE_MAIL_PUBLIC_URL` impose d'enregistrer la même adresse chez le

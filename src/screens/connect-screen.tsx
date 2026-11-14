@@ -50,7 +50,10 @@ export type OAuthProvider = "google" | "microsoft" | "custom";
 
 type OAuthEnv = Pick<
   ImportMetaEnv,
-  "VITE_OAUTH_CLIENT_ID" | "VITE_MICROSOFT_CLIENT_ID" | "VITE_GOOGLE_CLIENT_ID"
+  | "VITE_OAUTH_CLIENT_ID"
+  | "VITE_MICROSOFT_CLIENT_ID"
+  | "VITE_GOOGLE_CLIENT_ID"
+  | "VITE_GOOGLE_CLIENT_SECRET"
 >;
 
 const OAUTH_PROVIDERS: { value: OAuthProvider; label: string }[] = [
@@ -72,6 +75,22 @@ export function resolveClientId(
   env: OAuthEnv = import.meta.env,
 ): string {
   return manualClientId.trim() || builtInClientId(provider, env);
+}
+
+export function builtInClientSecret(
+  provider: OAuthProvider,
+  env: OAuthEnv = import.meta.env,
+): string {
+  if (provider === "google") return env.VITE_GOOGLE_CLIENT_SECRET ?? "";
+  return "";
+}
+
+export function resolveClientSecret(
+  provider: OAuthProvider,
+  manualSecret: string,
+  env: OAuthEnv = import.meta.env,
+): string {
+  return manualSecret.trim() || builtInClientSecret(provider, env);
 }
 
 async function waitForOAuth(session: string) {
@@ -129,6 +148,11 @@ export function ConnectScreen({
   const [error, setError] = useState<string | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [manualClientIds, setManualClientIds] = useState<Record<OAuthProvider, string>>({
+    google: "",
+    microsoft: "",
+    custom: "",
+  });
+  const [manualClientSecrets, setManualClientSecrets] = useState<Record<OAuthProvider, string>>({
     google: "",
     microsoft: "",
     custom: "",
@@ -236,6 +260,7 @@ export function ConnectScreen({
         imap: { host: imapHost.trim(), port: Number(imapPort), encryption: imapEncryption },
         smtp: { host: smtpHost.trim(), port: Number(smtpPort), encryption: smtpEncryption },
         client_id: resolveClientId(provider, manualClientIds[provider]) || undefined,
+        client_secret: resolveClientSecret(provider, manualClientSecrets[provider]) || undefined,
       });
       if (tab) {
         tab.location.replace(started.auth_url);
@@ -589,23 +614,37 @@ export function ConnectScreen({
                 <p className="mt-1 text-[11px] leading-relaxed font-medium text-ink-muted">
                   {manualProviders.length === 0
                     ? "Le consentement s'ouvre dans ton navigateur : l'identifiant d'application de chaque fournisseur est embarqué dans Lavande. Aucun mot de passe ne transite par l'interface."
-                    : `Le consentement s'ouvre dans ton navigateur. ${embeddedNames ? `${embeddedNames} : identifiant d'application embarqué. ` : ""}${manualNames} : aucun identifiant embarqué, saisis le tien ci-dessous.`}
+                    : `Le consentement s'ouvre dans ton navigateur. ${embeddedNames ? `${embeddedNames} : identifiants d'application embarqués. ` : ""}${manualNames} : aucun identifiant embarqué, saisis le tien ci-dessous (et le secret si requis).`}
                 </p>
                 {manualProviders.map((entry) => (
-                  <input
-                    key={entry.value}
-                    className={cn(FIELD, "mt-2 h-9 text-[12px]")}
-                    value={manualClientIds[entry.value]}
-                    onChange={(event) =>
-                      setManualClientIds((current) => ({
-                        ...current,
-                        [entry.value]: event.target.value,
-                      }))
-                    }
-                    placeholder="Application (client) ID"
-                    autoComplete="off"
-                    aria-label={`Identifiant d'application ${entry.label} (client_id)`}
-                  />
+                  <div key={entry.value}>
+                    <input
+                      className={cn(FIELD, "mt-2 h-9 text-[12px]")}
+                      value={manualClientIds[entry.value]}
+                      onChange={(event) =>
+                        setManualClientIds((current) => ({
+                          ...current,
+                          [entry.value]: event.target.value,
+                        }))
+                      }
+                      placeholder="Application (client) ID"
+                      autoComplete="off"
+                      aria-label={`Identifiant d'application ${entry.label} (client_id)`}
+                    />
+                    <input
+                      className={cn(FIELD, "mt-2 h-9 text-[12px]")}
+                      value={manualClientSecrets[entry.value]}
+                      onChange={(event) =>
+                        setManualClientSecrets((current) => ({
+                          ...current,
+                          [entry.value]: event.target.value,
+                        }))
+                      }
+                      placeholder="Client secret (si requis)"
+                      autoComplete="off"
+                      aria-label={`Secret d'application ${entry.label} (client_secret)`}
+                    />
+                  </div>
                 ))}
                 {manualProviders.length > 0 ? <OAuthGuide redirectUri={redirectUri} /> : null}
                 <div className="mt-2 flex flex-wrap gap-1.5">

@@ -77,18 +77,25 @@ propose la démo.
 Pour un fournisseur qui n'accepte plus le mot de passe (Gmail, Outlook/Hotmail), le bouton
 **Google / Microsoft** demande un consentement OAuth2 : il ouvre le navigateur du système (plugin
 `opener` dans la coquille Tauri, `window.open` côté web), et un lien de secours s'affiche dans la
-carte si l'ouverture est bloquée. Le `client_id` d'application est le seul prérequis :
+carte si l'ouverture est bloquée. Le `client_id` d'application — et, chez Google, le secret de son
+client « Application de bureau » — est le seul prérequis :
 
 - **livré dans les paquets** : `.env.production` porte l'identifiant Microsoft de Lavande
-  (`VITE_OAUTH_CLIENT_ID`), donc `npm run android:build` et `npx tauri build` le figent dans le bundle ;
-  le champ et le guide disparaissent de l'écran de connexion, l'utilisateur clique simplement
-  **Microsoft** ; pour livrer un autre identifiant, surchargez la variable au build ;
-- **sinon**, le champ du formulaire l'accepte (ou `LAVANDE_MAIL_MICROSOFT_CLIENT_ID` /
-  `LAVANDE_MAIL_GOOGLE_CLIENT_ID` côté démon), et l'app affiche les étapes d'inscription avec l'adresse
-  de retour à copier — voir [`docs/mail-core.md`](./docs/mail-core.md#oauth2-apioauth).
+  (`VITE_OAUTH_CLIENT_ID`) et celui de Google (`VITE_GOOGLE_CLIENT_ID`) avec le secret de son client
+  « Application de bureau » (`VITE_GOOGLE_CLIENT_SECRET`), donc `npm run android:build` et
+  `npx tauri build` les figent dans le bundle ; le champ et le guide disparaissent de l'écran de
+  connexion, l'utilisateur clique simplement **Microsoft** ou **Google** ; pour livrer d'autres
+  identifiants, surchargez les variables au build ;
+- **sinon**, les champs du formulaire acceptent l'identifiant et, s'il est requis, le secret (ou
+  `LAVANDE_MAIL_MICROSOFT_CLIENT_ID` / `LAVANDE_MAIL_GOOGLE_CLIENT_ID` côté démon), et l'app affiche
+  les étapes d'inscription avec l'adresse de retour à copier — voir
+  [`docs/mail-core.md`](./docs/mail-core.md#oauth2-apioauth).
 
 Un `client_id` public (PKCE) n'est pas un secret : il est visible sur l'écran de consentement, c'est
-l'identité de l'application. Seul le `refresh_token` reste dans le démon.
+l'identité de l'application. Google exige en plus le secret de son client « Application de bureau »
+à l'échange de jetons ; ce secret n'est pas confidentiel non plus — le modèle « application
+installée » de Google le livre dans le binaire, comme le `client_id`. Seul le `refresh_token` reste
+dans le démon.
 
 Pour essayer sans vraie boîte : `scripts/mail-test-server.sh start`, puis connecte
 `roman@lavande.test` / `secret` en IMAP `localhost:3993`, SMTP `localhost:3465`, TLS implicite — le

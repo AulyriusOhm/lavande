@@ -34,7 +34,7 @@ import {
   useCalendarDefinitions,
   type CalendarDef,
 } from "@/lib/calendars";
-import { GOOGLE_RECONSENT, GOOGLE_REFRESH_MS, googleAccounts, googleConsentMissing, googleWindow } from "@/lib/gcal";
+import { GOOGLE_REFRESH_MS, googleAccounts, googleWindow } from "@/lib/gcal";
 import { storedPerimeters } from "@/lib/prefs";
 
 export const ICS_STORAGE_KEY = "lavande.ics.v1";
@@ -528,7 +528,7 @@ export function useCalendarSources(notify: (message: string) => void): CalendarS
     } catch (failure) {
       setGoogleErrors((current) => ({
         ...current,
-        [accountId]: googleConsentMissing(failure) ? GOOGLE_RECONSENT : `Google · ${errorText(failure)}`,
+        [accountId]: `Google · ${errorText(failure)}`,
       }));
     } finally {
       googleInFlight.current.delete(accountId);
@@ -673,8 +673,9 @@ export function useCalendarSources(notify: (message: string) => void): CalendarS
     try {
       setIcs(setIcsCalendarEvents(loadIcsState(), def.id, await fetchGoogleCalendar(def)));
     } catch (failure) {
-      const message = googleConsentMissing(failure) ? GOOGLE_RECONSENT : errorText(failure);
-      setError(`Source ajoutée, événements non lus · ${message}`);
+      setError(
+        `Source ajoutée, événements non lus · ${failure instanceof ApiError ? failure.message : errorText(failure)}`,
+      );
     }
     return true;
   };

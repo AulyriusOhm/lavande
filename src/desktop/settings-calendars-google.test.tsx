@@ -77,6 +77,7 @@ function stubDaemon(
     accounts?: ApiAccount[];
     calendars?: GoogleCalendar[];
     calendarsStatus?: number;
+    calendarsError?: string;
     events?: unknown;
     eventsStatus?: number;
   } = {},
@@ -91,7 +92,12 @@ function stubDaemon(
     if (/\/calendars\/google\/[^/]+\/calendars$/.test(url)) {
       return reply(
         options.calendarsStatus !== undefined && options.calendarsStatus >= 400
-          ? { error: "Google a refusé le jeton d'accès (403) : reconnectez le compte", kind: "auth" }
+          ? {
+              error:
+                options.calendarsError ??
+                "Google a refusé le jeton d'accès (403) : reconnectez le compte",
+              kind: "auth",
+            }
           : (options.calendars ?? GOOGLE_CALENDARS),
         options.calendarsStatus ?? 200,
       );
@@ -180,16 +186,32 @@ describe("Réglages · calendriers Google", () => {
     expect(screen.queryByRole("button", { name: "Ajouter le calendrier Google Agenda perso" })).toBeNull();
   });
 
-  it("demande le re-consentement quand le droit agenda manque, sans boucle", async () => {
+  it("affiche le refus du démon quand le droit agenda manque, sans boucle", async () => {
     const fetchMock = stubDaemon({ calendarsStatus: 403 });
     renderSettings();
 
     await waitFor(() =>
-      expect(section().textContent).toContain("reconnecte le compte Google pour autoriser l'agenda"),
+      expect(section().textContent).toContain(
+        "Google a refusé le jeton d'accès (403) : reconnectez le compte",
+      ),
     );
     expect(calls(fetchMock, /\/calendars\/google\/gmail\/calendars$/)).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "Ajouter le calendrier Google Agenda perso" })).toBeNull();
     expect(window.localStorage.getItem(CALENDARS_KEY)).toBeNull();
+  });
+
+  it("affiche la vraie raison d'un 403 qui n'est pas un défaut de consentement", async () => {
+    stubDaemon({
+      calendarsStatus: 403,
+      calendarsError:
+        "accès Google Calendar interdit (403) : Google Calendar API has not been used in project 123 before or it is disabled",
+    });
+    renderSettings();
+
+    await waitFor(() =>
+      expect(section().textContent).toContain("Google Calendar API has not been used in project 123"),
+    );
+    expect(section().textContent).not.toContain("reconnecte le compte Google pour autoriser l'agenda");
   });
 
   it("ne demande rien à un compte qui n'est pas Google", async () => {

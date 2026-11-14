@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, type ApiAccount } from "@/lib/api";
+import type { ApiAccount } from "@/lib/api";
 import {
   GOOGLE_WINDOW_FUTURE_DAYS,
   GOOGLE_WINDOW_PAST_DAYS,
   googleAccounts,
-  googleConsentMissing,
   googleWindow,
   isGoogleAccount,
 } from "@/lib/gcal";
@@ -80,19 +79,6 @@ describe("gcal · détection d'un compte Google", () => {
 
   it("ne garde que les comptes Google d'une liste", () => {
     expect(googleAccounts([account(), gmail()]).map((entry) => entry.id)).toEqual(["gmail"]);
-  });
-});
-
-describe("gcal · re-consentement", () => {
-  it("reconnaît un refus 401 et 403 du démon", () => {
-    expect(googleConsentMissing(new ApiError("jeton refusé", "auth", 401))).toBe(true);
-    expect(googleConsentMissing(new ApiError("scope manquant", "auth", 403))).toBe(true);
-  });
-
-  it("laisse passer les autres échecs", () => {
-    expect(googleConsentMissing(new ApiError("serveur muet", "gcal", 502))).toBe(false);
-    expect(googleConsentMissing(new Error("réseau"))).toBe(false);
-    expect(googleConsentMissing(null)).toBe(false);
   });
 });
 
