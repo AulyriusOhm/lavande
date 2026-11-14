@@ -24,3 +24,4 @@ deploy/nginx/lavande-token.inc
 site-vitrine/public/demo/
 site-vitrine/node_modules/
 site-vitrine/dist/
+public/vitrine-preview/
