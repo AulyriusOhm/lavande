@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { BorderBeam } from "@/components/magicui/border-beam";
 import { Icon, type IconName } from "@/components/icons";
@@ -37,6 +37,7 @@ function defaultMode(): Mode {
 }
 
 export function DemoStage({ theme }: { theme: Theme }) {
+  const pillId = useId();
   const [mode, setMode] = useState<Mode>(defaultMode);
   const [loaded, setLoaded] = useState(false);
   const chosen = useRef(false);
@@ -106,7 +107,7 @@ export function DemoStage({ theme }: { theme: Theme }) {
               >
                 {active ? (
                   <motion.span
-                    layoutId="demo-mode-pill"
+                    layoutId={`demo-mode-pill-${pillId}`}
                     className="absolute inset-0 -z-10 rounded-full bg-[linear-gradient(135deg,var(--accent-strong),var(--accent-deep))] shadow-[0_10px_24px_-14px_var(--glow)]"
                     transition={{ type: "spring", stiffness: 420, damping: 34 }}
                   />
