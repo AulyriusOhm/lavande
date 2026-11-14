@@ -10,7 +10,7 @@ const prefs = vi.hoisted(() => ({
 }));
 
 const store = vi.hoisted(() => ({
-  accounts: [{ id: "perso", label: "Perso", email: "roman@lavande.mail" }],
+  mailAccounts: [{ id: "perso", label: "Perso", email: "roman@lavande.mail" }],
   mails: [] as unknown[],
   openThread: undefined as unknown,
 }));

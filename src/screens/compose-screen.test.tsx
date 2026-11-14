@@ -7,7 +7,7 @@ import { buildQuotedHtml, textToHtml } from "@/lib/rich-text";
 
 vi.mock("@/lib/store", () => ({
   useMailStore: () => ({
-    accounts: [{ id: "perso", label: "Perso", email: "roman@lavande.mail" }],
+    mailAccounts: [{ id: "perso", label: "Perso", email: "roman@lavande.mail" }],
   }),
 }));
 

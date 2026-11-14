@@ -67,7 +67,7 @@ export function ComposeScreen({
   onHeaderPointerDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
   onHeaderDoubleClick?: () => void;
 }) {
-  const { accounts, mails, openThread, saveToDrafts } = useMailStore();
+  const { mailAccounts, mails, openThread, saveToDrafts } = useMailStore();
   const prefs = usePrefs();
   const { signatures, llm, aiReplyEnabled } = prefs;
   const accountSignature = activeSignature(signatures, draft.account);
@@ -251,7 +251,7 @@ export function ComposeScreen({
             }}
             className="min-w-0 flex-1 cursor-pointer bg-transparent text-[13px] font-semibold text-ink outline-none"
           >
-            {accounts.map((entry) => (
+            {mailAccounts.map((entry) => (
               <option key={entry.id} value={entry.id} className="bg-surface text-ink">
                 {entry.label} · {entry.email}
               </option>

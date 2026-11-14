@@ -523,7 +523,7 @@ export function DesktopInbox({
   const {
     mails,
     account,
-    accounts,
+    mailAccounts,
     mode,
     syncing,
     syncFolder,
@@ -866,7 +866,7 @@ export function DesktopInbox({
 
               <SectionLabel className="mt-4 mb-1.5 px-2.5">Comptes</SectionLabel>
               <div className="space-y-0.5">
-                {(mode === "demo" || accounts.length > 1) && (
+                {(mailAccounts.length > 1) && (
                   <RailItem
                     active={account === ALL_ACCOUNTS}
                     onClick={() => setAccount(ALL_ACCOUNTS)}
@@ -875,7 +875,7 @@ export function DesktopInbox({
                     icon={<span className="size-2 rounded-full bg-accent" />}
                   />
                 )}
-                {accounts.map((entry) => (
+                {mailAccounts.map((entry) => (
                   <RailItem
                     key={entry.id}
                     active={account === entry.id}
@@ -1074,10 +1074,10 @@ export function DesktopInbox({
                   onChange={(event) => setAccount(event.target.value)}
                   className="focus-ring h-9 min-w-0 flex-1 rounded-full border border-line bg-surface px-3 text-[12px] font-semibold text-ink"
                 >
-                  {mode === "demo" || accounts.length > 1 ? (
+                  {mailAccounts.length > 1 ? (
                     <option value={ALL_ACCOUNTS}>Tous les comptes</option>
                   ) : null}
-                  {accounts.map((entry) => (
+                  {mailAccounts.map((entry) => (
                     <option key={entry.id} value={entry.id}>
                       {entry.label}
                     </option>

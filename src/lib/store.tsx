@@ -139,6 +139,8 @@ export type MailStoreValue = {
   account: string;
   accountById: (id: string) => Account | undefined;
   accounts: Account[];
+  /** Comptes dont le périmètre mails est ouvert : seuls eux paraissent dans la boîte. */
+  mailAccounts: Account[];
   folder: FolderId;
   folderPath: string | null;
   folderOptions: FolderOption[];
@@ -303,6 +305,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     [accounts],
   );
 
+  const mailAccounts = useMemo(
+    () => accounts.filter((entry) => perimeterOf(prefs.perimeters, entry.id).mails),
+    [accounts, prefs.perimeters],
+  );
+
   const bootstrap = useCallback(async () => {
     setPhase("loading");
     setBackendError(null);
@@ -361,6 +368,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   notifyPrefs.current = prefs.notifications;
   const notifyAccounts = useRef(accounts);
   notifyAccounts.current = accounts;
+  const notifyMailAccounts = useRef(mailAccounts);
+  notifyMailAccounts.current = mailAccounts;
   const liveMails = useRef(mails);
   liveMails.current = mails;
 
@@ -378,6 +387,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           if (
             inserted > 0 &&
             payload.folder_path.toUpperCase() === "INBOX" &&
+            notifyMailAccounts.current.some((entry) => entry.id === payload.account_id) &&
             notificationsForAccount(notifyPrefs.current, payload.account_id)
           ) {
             const label = notifyAccounts.current.find((entry) => entry.id === payload.account_id)?.label;
@@ -429,7 +439,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         ? folderTargets(
             folderRecords,
             account === ALL_ACCOUNTS
-              ? accounts.map((entry) => entry.id)
+              ? mailAccounts.map((entry) => entry.id)
               : account
                 ? [account]
                 : [],
@@ -437,7 +447,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
             folderPath ?? undefined,
           )
         : [],
-    [mode, folderRecords, account, accounts, folder, folderPath],
+    [mode, folderRecords, account, mailAccounts, folder, folderPath],
   );
 
   useEffect(() => {
@@ -505,9 +515,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         !isFolderHidden(prefs.hiddenFolders, record.accountId, record.path),
     );
     return account === ALL_ACCOUNTS
-      ? folderOptionsForAll(visible, accounts.map((entry) => entry.id))
+      ? folderOptionsForAll(visible, mailAccounts.map((entry) => entry.id))
       : optionsOf(visible, account);
-  }, [mode, folderRecords, account, accounts, prefs.hiddenFolders]);
+  }, [mode, folderRecords, account, mailAccounts, prefs.hiddenFolders]);
 
   const hiddenFolderOptions = useMemo<FolderOption[]>(() => {
     if (mode !== "api" || !account || account === ALL_ACCOUNTS) return [];
@@ -530,16 +540,32 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     [folderRecords, mode],
   );
 
+  /**
+   * Repli de sélection : un compte coupé pendant qu'il était ouvert ramène la
+   * boîte sur le seul compte visible, ou sur « Tous les comptes ».
+   */
+  useEffect(() => {
+    if (account === ALL_ACCOUNTS && mailAccounts.length === 1) {
+      setAccount(mailAccounts[0].id);
+      return;
+    }
+    if (!account || account === ALL_ACCOUNTS) return;
+    if (mailAccounts.some((entry) => entry.id === account)) return;
+    setAccount(ALL_ACCOUNTS);
+  }, [account, mailAccounts, setAccount]);
+
   useEffect(() => {
     if (mode !== "api" || phase !== "ready" || isComposeWindow()) return;
     let cancelled = false;
-    Promise.allSettled(accounts.map((entry) => mailApi.folderCounts(entry.id))).then((results) => {
+    Promise.allSettled(mailAccounts.map((entry) => mailApi.folderCounts(entry.id))).then((results) => {
       if (cancelled) return;
       const next: Record<string, { total: number; unread: number }> = {};
       results.forEach((result, index) => {
         if (result.status !== "fulfilled") return;
+        const accountId = mailAccounts[index]?.id;
+        if (!accountId) return;
         for (const count of result.value) {
-          next[`${accounts[index].id}:${count.path}`] = { total: count.total, unread: count.unread };
+          next[`${accountId}:${count.path}`] = { total: count.total, unread: count.unread };
         }
       });
       setFolderCounts(next);
@@ -547,18 +573,19 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [mode, phase, accounts, revision]);
+  }, [mode, phase, mailAccounts, revision]);
 
   useEffect(() => {
     if (mode !== "api") return;
+    const visible = new Set(mailAccounts.map((entry) => entry.id));
     let unread = 0;
     for (const record of folderRecords) {
-      if (record.role === "inbox") {
+      if (record.role === "inbox" && visible.has(record.accountId)) {
         unread += folderCounts[`${record.accountId}:${record.path}`]?.unread ?? 0;
       }
     }
     setUnreadBadge(unread);
-  }, [mode, folderCounts, folderRecords]);
+  }, [mode, folderCounts, folderRecords, mailAccounts]);
 
   // Première visite d'un dossier : synchro automatique en arrière-plan, pour ne
   // pas avoir à cliquer sur « Synchroniser ». Une seule fois par portée
@@ -637,9 +664,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       statsFor(
         id,
         path,
-        account === ALL_ACCOUNTS ? accounts.map((entry) => entry.id) : account ? [account] : [],
+        account === ALL_ACCOUNTS ? mailAccounts.map((entry) => entry.id) : account ? [account] : [],
       ),
-    [account, accounts, statsFor],
+    [account, mailAccounts, statsFor],
   );
 
   const accountUnread = useCallback(
@@ -647,9 +674,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       statsFor(
         "inbox",
         undefined,
-        accountId === ALL_ACCOUNTS ? accounts.map((entry) => entry.id) : [accountId],
+        accountId === ALL_ACCOUNTS ? mailAccounts.map((entry) => entry.id) : [accountId],
       ).unread,
-    [accounts, statsFor],
+    [mailAccounts, statsFor],
   );
 
   const adjustCounts = useCallback(
@@ -967,7 +994,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     if (mode === "api") {
       const purges = folderTargets(
         folderRecords,
-        account === ALL_ACCOUNTS ? accounts.map((entry) => entry.id) : [account],
+        account === ALL_ACCOUNTS ? mailAccounts.map((entry) => entry.id) : [account],
         "trash",
       );
       if (purges.length === 0) {
@@ -1006,7 +1033,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           ...removed.filter((entry) => !current.some((item) => item.id === entry.id)),
         ]),
     });
-  }, [account, accounts, folderRecords, mails, mode, notify]);
+  }, [account, folderRecords, mailAccounts, mails, mode, notify]);
 
   /** Reprise remplacée ou abandonnée : plus rien à supprimer côté serveur. */
   const resetDraftSource = useCallback(() => {
@@ -1401,7 +1428,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     if (targets.length === 0) {
-      notify("Choisis un dossier à synchroniser.");
+      notify(
+        accounts.length > 0 && mailAccounts.length === 0
+          ? "Mails hors périmètre de ce compte · synchronisation ignorée"
+          : "Choisis un dossier à synchroniser.",
+      );
       return;
     }
     const due = targets.filter((target) => mailsInPerimeter(target.accountId));
@@ -1430,7 +1461,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       })
       .catch((error: unknown) => notify(`Synchro impossible · ${errorText(error)}`))
       .finally(() => setSyncing(false));
-  }, [account, mailsInPerimeter, targets, mode, notify]);
+  }, [account, accounts, mailAccounts, mailsInPerimeter, targets, mode, notify]);
 
   const openConnect = useCallback(() => setConnectOpen(true), []);
   const closeConnect = useCallback(() => setConnectOpen(false), []);
@@ -1443,12 +1474,13 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         return [];
       }
       if (mode !== "api") {
-        const found = MAILS.filter((mail) => mailMatches(mail, trimmed));
+        const visible = new Set(mailAccounts.map((entry) => entry.id));
+        const found = MAILS.filter((mail) => visible.has(mail.account) && mailMatches(mail, trimmed));
         setSearchResults(found);
         return found;
       }
       const results = await Promise.allSettled(
-        accounts.map((entry) => mailApi.search(entry.id, trimmed)),
+        mailAccounts.map((entry) => mailApi.search(entry.id, trimmed)),
       );
       const found = results.flatMap((result) =>
         result.status === "fulfilled"
@@ -1458,7 +1490,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       setSearchResults(found);
       return found;
     },
-    [accounts, folderRecords, mode],
+    [folderRecords, mailAccounts, mode],
   );
 
   const createAccount = useCallback(
@@ -1542,7 +1574,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       const ids = accountId
         ? [accountId]
         : account === ALL_ACCOUNTS
-          ? accounts.map((entry) => entry.id)
+          ? mailAccounts.map((entry) => entry.id)
           : account
             ? [account]
             : [];
@@ -1575,7 +1607,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       );
       return failure === null;
     },
-    [account, accounts, folder, folderPath, folderRecords, mode, notify, setFolder],
+    [account, folder, folderPath, folderRecords, mailAccounts, mode, notify, setFolder],
   );
 
   /**
@@ -1906,6 +1938,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       account,
       accountById,
       accounts,
+      mailAccounts,
       folder,
       folderPath,
       folderOptions,
@@ -1991,6 +2024,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       account,
       accountById,
       accounts,
+      mailAccounts,
       folder,
       folderPath,
       folderOptions,

@@ -662,9 +662,9 @@ export function AccountSwitchSheet({
   onSelect: (id: string) => void;
   onClose: () => void;
 }) {
-  const { accounts, mode, openConnect, accountUnread } = useMailStore();
+  const { mailAccounts, openConnect, accountUnread } = useMailStore();
   const rows = [
-    ...(mode === "demo" || accounts.length > 1
+    ...(mailAccounts.length > 1
       ? [
           {
             id: ALL_ACCOUNTS,
@@ -675,7 +675,7 @@ export function AccountSwitchSheet({
           },
         ]
       : []),
-    ...accounts.map((account) => ({
+    ...mailAccounts.map((account) => ({
       id: account.id,
       label: account.label,
       email: account.email,
