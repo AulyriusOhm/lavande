@@ -27,6 +27,7 @@ const GOOGLE_AUTH: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_SCOPE: &str =
     "https://mail.google.com/ https://www.googleapis.com/auth/calendar openid email";
+const GOOGLE_MAIL_SCOPE: &str = "https://mail.google.com/";
 const MICROSOFT_AUTH: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
 const MICROSOFT_TOKEN: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const MICROSOFT_SCOPE: &str =
@@ -90,6 +91,12 @@ struct Provider {
     scope: String,
     client_id: String,
     client_secret: Option<String>,
+}
+
+struct Exchange {
+    refresh_token: String,
+    access_token: Option<String>,
+    id_token: Option<String>,
 }
 
 enum Outcome {
@@ -324,11 +331,12 @@ async fn finish(
     code: String,
     redirect_uri: String,
 ) -> Result<String, ApiError> {
-    let refresh_token = exchange(&provider, &verifier, &code, &redirect_uri).await?;
+    let exchange = exchange(&provider, &verifier, &code, &redirect_uri).await?;
+    verify_identity(&exchange, &provider.token_endpoint, &config.email).await?;
     config.auth = AuthConfig::OAuth2 {
         client_id: provider.client_id,
         client_secret: provider.client_secret.unwrap_or_default(),
-        refresh_token,
+        refresh_token: exchange.refresh_token,
         token_endpoint: provider.token_endpoint,
     };
     config.validate()?;
@@ -350,12 +358,86 @@ async fn finish(
     Ok(config.id)
 }
 
+async fn verify_identity(
+    exchange: &Exchange,
+    token_endpoint: &str,
+    expected: &str,
+) -> Result<(), ApiError> {
+    if let Some(authorized) = exchange.id_token.as_deref().and_then(jwt_email) {
+        if !authorized.eq_ignore_ascii_case(expected) {
+            return Err(ApiError::gateway(
+                "oauth",
+                format!(
+                    "Le compte autorisé ({authorized}) ne correspond pas à l'adresse saisie \
+                     ({expected}). Sur l'écran de consentement, choisis le compte attendu dans \
+                     le navigateur."
+                ),
+            ));
+        }
+    }
+    let Some(url) = tokeninfo_url(token_endpoint) else {
+        return Ok(());
+    };
+    let Some(access_token) = exchange.access_token.as_deref() else {
+        return Ok(());
+    };
+    if gmail_granted(&url, access_token).await == Some(false) {
+        return Err(ApiError::gateway(
+            "oauth",
+            "La permission Gmail n'a pas été accordée : sur l'écran de consentement, coche \
+             l'accès à Gmail.",
+        ));
+    }
+    Ok(())
+}
+
+fn jwt_email(id_token: &str) -> Option<String> {
+    let encoded = id_token.split('.').nth(1)?;
+    let bytes = URL_SAFE_NO_PAD.decode(encoded.trim_end_matches('=')).ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let email = claims.get("email")?.as_str()?.trim();
+    (!email.is_empty()).then(|| email.to_string())
+}
+
+/// `https://oauth2.googleapis.com/tokeninfo` pour le point de jeton de Google.
+fn tokeninfo_url(token_endpoint: &str) -> Option<String> {
+    let base = token_endpoint.strip_suffix("/token")?;
+    base.contains("googleapis.com")
+        .then(|| format!("{base}/tokeninfo"))
+}
+
+/// Best-effort : `None` quand tokeninfo ne répond pas, la garde ne bloque pas.
+async fn gmail_granted(url: &str, access_token: &str) -> Option<bool> {
+    let response = http_client()
+        .ok()?
+        .get(url)
+        .query(&[("access_token", access_token)])
+        .send()
+        .await
+        .ok()?;
+    let body = response.text().await.ok()?;
+    let payload: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let scope = payload.get("scope")?.as_str()?;
+    Some(
+        scope
+            .split_whitespace()
+            .any(|granted| granted == GOOGLE_MAIL_SCOPE),
+    )
+}
+
+fn http_client() -> Result<reqwest::Client, ApiError> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|error| ApiError::internal("oauth", format!("client HTTP : {error}")))
+}
+
 async fn exchange(
     provider: &Provider,
     verifier: &str,
     code: &str,
     redirect_uri: &str,
-) -> Result<String, ApiError> {
+) -> Result<Exchange, ApiError> {
     let mut form = vec![
         ("grant_type", "authorization_code"),
         ("code", code),
@@ -366,10 +448,7 @@ async fn exchange(
     if let Some(secret) = &provider.client_secret {
         form.push(("client_secret", secret.as_str()));
     }
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .map_err(|error| ApiError::internal("oauth", format!("client HTTP : {error}")))?;
+    let client = http_client()?;
     let response = client
         .post(&provider.token_endpoint)
         .form(&form)
@@ -398,16 +477,23 @@ async fn exchange(
             format!("réponse du fournisseur illisible : {error}"),
         )
     })?;
-    payload
-        .get("refresh_token")
-        .and_then(|value| value.as_str())
-        .map(str::to_string)
-        .ok_or_else(|| {
-            ApiError::gateway(
-                "oauth",
-                "aucun refresh token : l'accès hors ligne n'a pas été accordé",
-            )
-        })
+    let field = |name: &str| {
+        payload
+            .get(name)
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+    };
+    let refresh_token = field("refresh_token").ok_or_else(|| {
+        ApiError::gateway(
+            "oauth",
+            "aucun refresh token : l'accès hors ligne n'a pas été accordé",
+        )
+    })?;
+    Ok(Exchange {
+        refresh_token,
+        access_token: field("access_token"),
+        id_token: field("id_token"),
+    })
 }
 
 #[derive(Deserialize)]

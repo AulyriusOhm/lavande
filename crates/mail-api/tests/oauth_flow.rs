@@ -115,6 +115,25 @@ async fn closed_endpoint() -> String {
 
 const TOKEN_BODY: &str = r#"{"access_token":"secret","refresh_token":"refresh-123","expires_in":3600,"token_type":"Bearer"}"#;
 
+/// `{"email":"autre@gmail.com","email_verified":true}`
+const ID_TOKEN_OTHER_ACCOUNT: &str =
+    "eyJhbGciOiJSUzI1NiJ9.eyJlbWFpbCI6ImF1dHJlQGdtYWlsLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlfQ.c2ln";
+
+/// `{"email":"Roman@Lavande.Test"}`
+const ID_TOKEN_SAME_ACCOUNT: &str =
+    "eyJhbGciOiJSUzI1NiJ9.eyJlbWFpbCI6IlJvbWFuQExhdmFuZGUuVGVzdCJ9.c2ln";
+
+fn token_body(id_token: &str) -> String {
+    json!({
+        "access_token": "secret",
+        "refresh_token": "refresh-123",
+        "expires_in": 3600,
+        "token_type": "Bearer",
+        "id_token": id_token
+    })
+    .to_string()
+}
+
 async fn serve_provider(token_status: u16) -> String {
     serve_provider_with(move |_| {
         let body = if token_status == 200 {
@@ -405,4 +424,90 @@ async fn an_unknown_session_is_a_404() {
     let (_directory, state) = state().await;
     let (status, _) = get(&state, "/api/oauth/status?session=inconnue").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_consent_for_another_account_never_creates_it() {
+    let (directory, state) = state().await;
+    let provider = serve_provider_with(|_| (200, token_body(ID_TOKEN_OTHER_ACCOUNT))).await;
+    let session = consent(
+        &state,
+        &format!("{provider}/token"),
+        &format!("{provider}/authorize"),
+    )
+    .await;
+
+    let completed = complete(&state, &session).await;
+    assert_eq!(completed["status"], "failed", "{completed}");
+    let error = completed["error"].as_str().unwrap_or_default();
+    assert!(error.contains("autre@gmail.com"), "{completed}");
+    assert!(error.contains("roman@lavande.test"), "{completed}");
+    assert!(
+        std::fs::read(directory.path().join("accounts.json")).is_err(),
+        "un compte a été écrit malgré le compte autorisé différent"
+    );
+}
+
+#[tokio::test]
+async fn a_consent_for_the_expected_account_in_another_case_succeeds() {
+    let (_directory, state) = state().await;
+    let provider = serve_provider_with(|_| (200, token_body(ID_TOKEN_SAME_ACCOUNT))).await;
+    let session = consent(
+        &state,
+        &format!("{provider}/token"),
+        &format!("{provider}/authorize"),
+    )
+    .await;
+
+    let completed = complete(&state, &session).await;
+    assert_eq!(completed["status"], "failed", "{completed}");
+    let error = completed["error"].as_str().unwrap_or_default();
+    assert!(error.contains("serveur IMAP"), "{completed}");
+    assert!(!error.contains("ne correspond pas"), "{completed}");
+}
+
+#[tokio::test]
+async fn a_consent_without_an_id_token_is_not_blocked() {
+    let (_directory, state) = state().await;
+    let provider = fake_provider().await;
+    let session = consent(
+        &state,
+        &format!("{provider}/token"),
+        &format!("{provider}/authorize"),
+    )
+    .await;
+
+    let completed = complete(&state, &session).await;
+    assert_eq!(completed["status"], "failed", "{completed}");
+    let error = completed["error"].as_str().unwrap_or_default();
+    assert!(error.contains("serveur IMAP"), "{completed}");
+    assert!(!error.contains("ne correspond pas"), "{completed}");
+}
+
+#[tokio::test]
+async fn a_google_consent_without_the_gmail_permission_is_refused() {
+    let (_directory, state) = state().await;
+    let provider = serve_provider_with(|request| {
+        if request.contains("/tokeninfo") {
+            (
+                200,
+                r#"{"email":"roman@lavande.test","scope":"openid email https://www.googleapis.com/auth/calendar"}"#
+                    .to_string(),
+            )
+        } else {
+            (200, token_body(ID_TOKEN_SAME_ACCOUNT))
+        }
+    })
+    .await;
+    let session = consent(
+        &state,
+        &format!("{provider}/googleapis.com/token"),
+        &format!("{provider}/authorize"),
+    )
+    .await;
+
+    let completed = complete(&state, &session).await;
+    assert_eq!(completed["status"], "failed", "{completed}");
+    let error = completed["error"].as_str().unwrap_or_default();
+    assert!(error.contains("permission Gmail"), "{completed}");
 }
