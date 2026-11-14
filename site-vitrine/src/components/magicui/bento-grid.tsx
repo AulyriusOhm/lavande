@@ -49,7 +49,7 @@ const BentoCard = ({
     className={cn(
       "group relative flex flex-col overflow-hidden rounded-2xl border border-line bg-surface/60",
       "transform-gpu transition-[transform,border-color,box-shadow,background-color] duration-500 ease-out",
-      "hover:-translate-y-1 hover:border-accent-ring/70 hover:bg-surface hover:shadow-[var(--shadow-soft)]",
+      "hover:-translate-y-0.5 hover:border-accent-ring/70 hover:bg-surface hover:shadow-[var(--shadow-soft)]",
       className,
     )}
     {...props}

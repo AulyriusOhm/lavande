@@ -1,6 +1,7 @@
 import { MotionConfig } from "motion/react";
 
 import { DemoSection } from "@/components/demo-section";
+import { LightboxProvider } from "@/components/ui/lightbox";
 import { Download } from "@/components/download";
 import { Features } from "@/components/features";
 import { Flow } from "@/components/flow";
@@ -17,6 +18,7 @@ export function App() {
 
   return (
     <MotionConfig reducedMotion="user">
+      <LightboxProvider>
       <a
         href="#contenu"
         className="sr-only rounded-b-xl bg-accent-strong px-4 py-2.5 text-sm font-bold text-white no-underline focus:not-sr-only focus:fixed focus:top-0 focus:left-1/2 focus:z-[70] focus:-translate-x-1/2"
@@ -36,6 +38,7 @@ export function App() {
         <Security />
       </main>
       <Footer />
+      </LightboxProvider>
     </MotionConfig>
   );
 }

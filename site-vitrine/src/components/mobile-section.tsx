@@ -55,9 +55,8 @@ export function MobileSection() {
               className={`group flex flex-col items-center gap-4 ${index === 2 ? "sm:col-span-2 lg:col-span-1" : ""}`}
             >
               <motion.div
-                whileHover={{ rotate: 0, y: -6 }}
+                whileHover={{ scale: 1.02, y: -2 }}
                 transition={{ type: "spring", stiffness: 260, damping: 24 }}
-                style={{ rotate: phone.tilt }}
                 className="w-[min(100%,16.5rem)]"
               >
                 <PhoneShell>

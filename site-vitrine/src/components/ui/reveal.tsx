@@ -2,22 +2,13 @@ import { motion, type Variants } from "motion/react";
 import type { ReactNode } from "react";
 
 const TAGS = {
-  div: motion.div,
-  section: motion.section,
-  li: motion.li,
-  article: motion.article,
-  header: motion.header,
-  ul: motion.ul,
+  div: "div",
+  section: "section",
+  li: "li",
+  article: "article",
+  header: "header",
+  ul: "ul",
 } as const;
-
-const variants: Variants = {
-  hidden: { opacity: 0, y: 22 },
-  visible: (delay: number) => ({
-    opacity: 1,
-    y: 0,
-    transition: { duration: 0.6, ease: "easeOut", delay },
-  }),
-};
 
 interface RevealProps {
   children: ReactNode;
@@ -26,20 +17,9 @@ interface RevealProps {
   as?: keyof typeof TAGS;
 }
 
-export function Reveal({ children, delay = 0, className, as = "div" }: RevealProps) {
+export function Reveal({ children, className, as = "div" }: RevealProps) {
   const Component = TAGS[as];
-  return (
-    <Component
-      className={className}
-      variants={variants}
-      custom={delay}
-      initial="hidden"
-      whileInView="visible"
-      viewport={{ once: true, margin: "-12% 0px -8% 0px" }}
-    >
-      {children}
-    </Component>
-  );
+  return <Component className={className}>{children}</Component>;
 }
 
 export const stagger: Variants = {
@@ -51,3 +31,5 @@ export const staggerItem: Variants = {
   hidden: { opacity: 0, y: 20 },
   visible: { opacity: 1, y: 0, transition: { duration: 0.55, ease: "easeOut" } },
 };
+
+export const heroMotion = motion;

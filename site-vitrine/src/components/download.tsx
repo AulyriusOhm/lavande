@@ -103,7 +103,7 @@ export function Download() {
               className={platform.featured ? "sm:col-span-2 lg:col-span-1 lg:row-span-1" : undefined}
             >
               <article
-                className={`group relative flex h-full flex-col overflow-hidden rounded-2xl border p-6 transition-all duration-500 hover:-translate-y-1 hover:shadow-[var(--shadow-soft)] ${
+                className={`group relative flex h-full flex-col overflow-hidden rounded-2xl border p-6 transition-all duration-500 hover:-translate-y-0.5 hover:shadow-[var(--shadow-soft)] ${
                   platform.featured
                     ? "border-accent-ring/70 bg-[linear-gradient(160deg,var(--accent-soft),var(--surface)_58%)]"
                     : "border-line bg-surface/55 hover:border-accent-ring/60 hover:bg-surface"

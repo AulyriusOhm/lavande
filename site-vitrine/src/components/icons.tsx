@@ -166,6 +166,22 @@ const paths = {
       <path d="M9 18c-4.51 2-5-2-7-2" />
     </>
   ),
+  zoomIn: (
+    <>
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.3-4.3" />
+      <path d="M11 8v6" />
+      <path d="M8 11h6" />
+    </>
+  ),
+  close: (
+    <>
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </>
+  ),
+  chevronLeft: <path d="m15 18-6-6 6-6" />,
+  chevronRight: <path d="m9 18 6-6-6-6" />,
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof paths;

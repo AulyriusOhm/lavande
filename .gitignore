@@ -25,3 +25,7 @@ site-vitrine/public/demo/
 site-vitrine/node_modules/
 site-vitrine/dist/
 public/vitrine-preview/
+
+# Skill design (taste-skill) — installé via npx skills, régénérable
+.agents/
+.taste-skill/

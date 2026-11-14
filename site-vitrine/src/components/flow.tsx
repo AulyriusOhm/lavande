@@ -72,7 +72,7 @@ export function Flow() {
           <ol className="relative grid gap-6 md:grid-cols-3 md:gap-5" role="list">
             {STEPS.map((step, index) => (
               <Reveal as="li" key={step.title} delay={index * 0.1} className="relative">
-                <div className="group h-full rounded-2xl border border-line bg-surface/55 p-6 transition-all duration-500 hover:-translate-y-1 hover:border-accent-ring/70 hover:bg-surface hover:shadow-[var(--shadow-soft)]">
+                <div className="group h-full rounded-2xl border border-line bg-surface/55 p-6 transition-all duration-500 hover:-translate-y-0.5 hover:border-accent-ring/70 hover:bg-surface hover:shadow-[var(--shadow-soft)]">
                   <div className="flex items-center gap-3">
                     <span
                       ref={refs[index]}
