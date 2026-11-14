@@ -8,7 +8,7 @@ delete process.env.VITE_DISTRIBUTION;
 
 const FFMPEG = "/home/roman/.local/bin/ffmpeg";
 const RAW_DIR = "artifacts/vitrine-shots";
-const OUT_DIR = "site-vitrine/assets/img/shots";
+const OUT_DIR = "site-vitrine/public/shots";
 const PORT = 1426;
 const CACHE_DIR = "/tmp/lavande-vite-capture";
 const BASE = `http://127.0.0.1:${PORT}`;

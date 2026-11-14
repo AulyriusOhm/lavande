@@ -50,6 +50,7 @@ import { suggestionsInWindow, usePlanning } from "@/lib/planning-store";
 import { mailApi, errorText } from "@/lib/api";
 import type { LiveEvent } from "@/lib/api";
 import type { NewAccount } from "@/lib/api";
+import { shellLayout } from "@/lib/native";
 import {
   READ_ONLY_NOTICE,
   demoReadOnly,
@@ -955,6 +956,16 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const closeMessage = useCallback(() => setOpenMail(null), []);
+
+  // Vitrine : la démo desktop s'ouvre sur un fil lu, pas sur un panneau vide.
+  const demoOpened = useRef(false);
+  useEffect(() => {
+    if (!demoReadOnly || demoOpened.current || shellLayout() !== "desktop") return;
+    const first = mails.find((entry) => entry.folder === "inbox");
+    if (!first) return;
+    demoOpened.current = true;
+    openMessage(first);
+  }, [mails, openMessage]);
 
   const moveToInbox = useCallback(
     (mail: Mail) => {

@@ -97,9 +97,9 @@ PY
   grep -q "\"version\": \"$VERSION\"" src-tauri/tauri.conf.json ||
     die "src-tauri/tauri.conf.json : version $VERSION absente après bump"
   old_pattern="${OLD_VERSION//./\\.}"
-  sed -i "s/$old_pattern/$VERSION/g" site-vitrine/index.html
-  grep -q "$VERSION" site-vitrine/index.html ||
-    die "site-vitrine/index.html : $VERSION absent après remplacement de $OLD_VERSION"
+  sed -i "s/$old_pattern/$VERSION/g" site-vitrine/src/components/download.tsx
+  grep -q "$VERSION" site-vitrine/src/components/download.tsx ||
+    die "site-vitrine/src/components/download.tsx : $VERSION absent après remplacement de $OLD_VERSION"
 fi
 echo "   version publiée : $VERSION"
 
@@ -159,7 +159,7 @@ rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
 cp artifacts/updater/latest.json artifacts/updater/*"$VERSION"* "$STAGING_DIR/"
 cp artifacts/apk/Lavande.apk "$STAGING_DIR/"
-tar -czf "$STAGING_DIR/vitrine.tar.gz" -C site-vitrine .
+tar -czf "$STAGING_DIR/vitrine.tar.gz" -C site-vitrine/dist .
 gpg --batch --yes --armor --export "$LAVANDE_GPG_KEY_ID" >"$STAGING_DIR/lavande-release.asc"
 
 echo "== étape 9 : récapitulatif"

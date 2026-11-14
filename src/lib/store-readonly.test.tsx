@@ -46,6 +46,21 @@ describe("démo lecture seule", () => {
     expect(result.current.mails).toHaveLength(MAILS.length);
   });
 
+  it("pré-ouvre le premier fil de la boîte en démo desktop (vitrine)", () => {
+    window.history.replaceState({}, "", "?desktop");
+    try {
+      const { result } = mount();
+      const first = result.current.mails.find((entry) => entry.folder === "inbox")!;
+      expect(result.current.openMail?.id).toBe(first.id);
+      act(() => {
+        result.current.closeMessage();
+      });
+      expect(result.current.openMail).toBeNull();
+    } finally {
+      window.history.replaceState({}, "", "/");
+    }
+  });
+
   it("laisse la navigation et la lecture intactes", () => {
     const { result } = mount();
     const mail = result.current.mails.find((entry) => entry.folder === "inbox")!;

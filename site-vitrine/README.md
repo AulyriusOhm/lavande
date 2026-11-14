@@ -1,58 +1,110 @@
 # Site vitrine de Lavande
 
-Site statique autonome (HTML + CSS + JS vanilla, aucune dépendance externe, aucun build) pour
-**https://lavande.lanro.eu/** — la racine du domaine. L'endpoint de mise à jour `/updates/` est
-servi à côté et **ne fait pas partie de ce dossier**.
+Application **Vite + React + TypeScript + Tailwind v4** (une page, ancres) servie à la racine de
+**https://lavande.lanro.eu/**, avec une **démo live en lecture seule** de l'application embarquée
+dans une iframe same-origin (`/demo/`). L'endpoint de mise à jour `/updates/` est servi à côté et
+**ne fait pas partie de ce dossier**.
 
-## Contenu
+## Structure
 
 ```
 site-vitrine/
-├── index.html                      # page unique : hero, fonctionnalités, flux mail→tâche,
-│                                   # téléchargement, sécurité, pied de page
-└── assets/
-    ├── css/style.css               # design system (tokens DESIGN.md), thèmes clair/sombre,
-    │                               # responsive, animations sobres
-    ├── js/theme-init.js            # applique le thème avant le premier rendu (pas de flash)
-    ├── js/main.js                  # bascule de thème persistée, en-tête au scroll,
-    │                               # apparitions au défilement, année du pied de page
-    ├── fonts/plus-jakarta-sans-*.woff2   # Plus Jakarta Sans (OFL, voir OFL.txt)
-    ├── fonts/OFL.txt               # licence de la police
-    └── img/favicon.svg             # carré dégradé violet, sans lettre
+├── index.html                       # entrée Vite : métadonnées FR, script inline anti-flash du thème
+├── package.json / tsconfig.json     # projet autonome (npm install local) — strict, alias @/ → src/
+├── vite.config.ts                   # @vitejs/plugin-react + @tailwindcss/vite, outDir dist/
+├── src/
+│   ├── main.tsx                     # montage React (StrictMode)
+│   ├── App.tsx                      # composition : header + 6 sections + footer, MotionConfig reducedMotion="user"
+│   ├── styles.css                   # tokens Lavande (clair/sombre), halos + grain, polices locales,
+│   │                                # keyframes Magic UI (marquee, shimmer, aurora, shiny)
+│   ├── hooks/useTheme.ts            # thème persisté (lavande.site.theme) + clé démo (lavande.theme)
+│   ├── lib/{utils,layout}.ts        # cn() (clsx + tailwind-merge), conteneurs/rythme de section
+│   └── components/
+│       ├── header.tsx               # header fixe, section active (IntersectionObserver), menu mobile
+│       ├── hero.tsx                 # hero = démo d'abord, marquee des protocoles
+│       ├── demo-stage.tsx           # iframe /demo/?desktop | ?app, toggle PC/téléphone, poster
+│       ├── features.tsx             # BentoGrid (6 cartes, captures theme-aware)
+│       ├── mobile-section.tsx       # 3 châssis téléphone (captures mobile)
+│       ├── flow.tsx                 # 3 étapes mail → tâche → rendez-vous
+│       ├── download.tsx             # RPM / DEB / AppImage / Windows / APK + signatures
+│       ├── security.tsx             # 8 garanties (PGP, trousseau, IA, MCP, paquets signés…)
+│       ├── footer.tsx
+│       ├── icons.tsx                # sprite SVG inline (aucune icône distante)
+│       ├── magicui/                 # composants Magic UI copiés (MIT, en-tête de licence conservé)
+│       │   ├── bento-grid.tsx  bottom  border-beam.tsx  dot-pattern.tsx
+│       │   ├── marquee.tsx  shimmer-button.tsx  animated-shiny-text.tsx  aurora-text.tsx
+│       └── ui/                      # revealed au scroll, cadre d'écran mis à l'échelle, châssis phone,
+│                                    # captures dark/light basculées en CSS, titres de section
+└── public/
+    ├── demo/                        # bundle démo lecture seule (gitignored, régénéré par script)
+    ├── fonts/plus-jakarta-sans-*.woff2 + OFL.txt
+    ├── shots/{pc,mobile}-*-{dark,light}.webp   # 16 captures réelles (PC 1600×1000, mobile 780×1688)
+    └── favicon.svg
 ```
 
-Aucune requête réseau : polices, icônes (sprite SVG inline), visuels (CSS/SVG) et scripts sont
-locaux. Les seuls liens sortants sont la documentation et le code source (GitHub/Gitea de
-l'instance) ; ils ne sont jamais chargés, seulement suivis au clic.
-
-## Ouvrir en local
+## Développer, construire, prévisualiser
 
 ```bash
-python3 -m http.server 8080 --directory site-vitrine
-# http://localhost:8080/
+cd site-vitrine
+npm install          # dépendances locales au dossier
+npm run dev          # http://localhost:5173 (sert aussi public/demo/)
+npm run build        # tsc --noEmit puis vite build → site-vitrine/dist/
+npm run preview      # sert dist/ sur http://localhost:4173
 ```
 
-`index.html` s'ouvre aussi directement (`file://`) : la mise en page et les scripts fonctionnent,
-la police embarquée est alors remplacée par la police système du navigateur (restriction CORS des
-navigateurs sur les polices en `file://`). Servir en HTTP donne le rendu exact.
+## Régénérer la démo embarquée (avant le build du site)
+
+`public/demo/` est produit depuis les sources de l'application, jamais édité à la main :
+
+```bash
+bash scripts/build-vitrine-demo.sh     # depuis la racine du dépôt
+cd site-vitrine && npm run build       # le build copie public/demo/ dans dist/demo/
+```
+
+L'ordre compte : le script écrit dans `site-vitrine/public/demo/`, que Vite recopie tel quel dans
+`dist/`. Une release (`scripts/release.sh`) archive `site-vitrine/dist/`, donc la démo doit avoir
+été régénérée **avant** le `npm run build` du site.
+
+## Contraintes runtime (tenues)
+
+- **Zéro requête réseau hors du domaine** : polices (`public/fonts/`), favicon, captures
+  (`public/shots/`), icônes (SVG inline) et démo (`/demo/`) sont locaux. Aucun CDN, aucune police
+  distante, aucun script tiers.
+- **Démo same-origin en lecture seule** : iframe `/demo/?desktop` (PC) ou `/demo/?app` (téléphone),
+  bandeau « Démo · lecture seule » fourni par le bundle, zéro mutation, zéro réseau.
+- **Viewport logique fixe** : l'iframe fait toujours 1280×800 (PC) ou 390×844 (phone) et est mise à
+  l'échelle par `transform: scale()` calculé au `ResizeObserver` — le layout interne de l'app ne
+  casse jamais et les clics restent justes.
+- **Thème synchrone** : le toggle écrit `lavande.site.theme` (site) et `lavande.theme` `{mode}`
+  (clé partagée avec l'app dans l'iframe), puis recharge l'iframe ; le thème est appliqué avant le
+  premier rendu par un script inline dans `index.html` (pas de flash), sombre par défaut.
+- **Accessibilité** : `lang="fr"`, landmarks, lien d'évitement, `alt` français, `title` sur l'iframe,
+  focus visible, `aria-pressed` sur les bascules, contrastes AA, `prefers-reduced-motion` respecté.
+
+## Vérifier avant de publier
+
+```bash
+# depuis la racine du dépôt, après npm run build dans site-vitrine/
+node scripts/check-vitrine-site.mjs
+```
+
+Le script sert `site-vitrine/dist/` en local et vérifie : toutes les requêtes sont same-origin,
+zéro erreur console, thème sombre → clair persisté + captures basculées + iframe rechargée dans le
+bon thème, bascule PC ↔ téléphone (`?desktop` / `?app`) avec bandeau de démo dans les deux modes,
+ancres atterrissant sous le header, absence de débordement horizontal en 390 / 768 / 1440, liens de
+téléchargement présents. Il écrit aussi `artifacts/vitrine-site-{dark,light,mobile}.png`.
 
 ## Déployer avec nginx
 
-Le site est prévu pour être servi **à la racine** : les cinq liens de téléchargement sont absolus
-(`/updates/…`). Deux montages possibles.
-
-### A. Déposer le site dans le docroot existant
-
-`/updates/` est déjà servi par le même serveur : on copie le site à côté, sans toucher au dossier
-des mises à jour.
+Le site est prévu pour être servi **à la racine** : les liens de téléchargement sont absolus
+(`/updates/…`). `scripts/release.sh` produit `vitrine.tar.gz` à partir de `site-vitrine/dist/`.
 
 ```bash
-rsync -a --exclude updates site-vitrine/ /srv/www/lavande/
-# /srv/www/lavande/index.html, /srv/www/lavande/assets/…
-# /srv/www/lavande/updates/  ← inchangé
+# /updates/ est servi par le même serveur : on déploie le site à côté, sans y toucher.
+tar -xzf vitrine.tar.gz -C /srv/www/lavande
+# /srv/www/lavande/index.html, /srv/www/lavande/assets/…, /srv/www/lavande/demo/…
+# /srv/www/lavande/updates/  ← inchangé (dossier séparé)
 ```
-
-### B. Racine dédiée + alias pour /updates/
 
 ```nginx
 server {
@@ -60,7 +112,7 @@ server {
     http2 on;
     server_name lavande.lanro.eu;
 
-    root /srv/www/lavande;          # contenu de site-vitrine/
+    root /srv/www/lavande;          # contenu de site-vitrine/dist/
     index index.html;
     charset utf-8;
 
@@ -75,55 +127,47 @@ server {
         add_header Cache-Control "no-cache";
     }
 
-    # Cache long pour les assets versionnés par leur contenu.
-    location ~* \.(?:css|js|svg|woff2)$ {
+    # Cache long pour les assets versionnés par leur contenu (Vite les hache).
+    location ~* \.(?:css|js|svg|woff2|webp)$ {
         add_header Cache-Control "public, max-age=604800";
         try_files $uri =404;
     }
 
-    # En-têtes utiles, sans effet sur le fonctionnement du site.
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 }
 ```
 
-### Vérifier après déploiement
+Après déploiement :
 
 ```bash
-curl -sI https://lavande.lanro.eu/ | head -1          # 200
-curl -sI https://lavande.lanro.eu/assets/css/style.css | head -1
+curl -sI https://lavande.lanro.eu/ | head -1
+curl -sI https://lavande.lanro.eu/demo/ | head -1
 curl -s  https://lavande.lanro.eu/updates/latest.json | head -c 80
 ```
 
-## Câbler les téléchargements
+## Téléchargements (version 0.2.4)
 
-Les liens pointent tous vers `/updates/…` (dossier public de l'updater). Ils fonctionneront dès que
-les fichiers y seront publiés ; les noms doivent correspondre aux artefacts produits par
-`scripts/release-updater.mjs` (voir `docs/UPDATER.md`).
-
-| Lien dans `index.html` | Fichier attendu dans `/updates/` |
+| Lien | Fichier attendu dans `/updates/` |
 | --- | --- |
-| ligne 463 | `Lavande_0.2.0_amd64.AppImage.tar.gz` |
-| ligne 481 | `Lavande-0.2.0-1.x86_64.rpm` |
-| ligne 498 | `Lavande.apk` |
-| lignes 515-516, 627 | `latest.json`, `lavande-release.asc` |
+| `src/components/download.tsx` | `Lavande_0.2.4_amd64.AppImage.tar.gz` (recommandé) |
+| `src/components/download.tsx` | `Lavande-0.2.4-1.x86_64.rpm` |
+| `src/components/download.tsx` | `Lavande_0.2.4_amd64.deb` |
+| `src/components/download.tsx` | `Lavande_0.2.0_x64-setup.exe` |
+| `src/components/download.tsx` / `mobile-section.tsx` | `Lavande.apk` |
+| `src/components/download.tsx` / `footer.tsx` | `latest.json`, `lavande-release.asc` |
 
-Pour une nouvelle version : remplacer `0.2.0` aux lignes 439 (texte « Version 0.2.0 »), 462-463
-(AppImage), 480-481 (RPM). Le reste du site ne dépend pas du numéro de version.
+Pour une nouvelle version : mettre à jour le numéro dans `download.tsx` (texte « Version 0.2.4 »,
+noms de fichiers et `href`). Le reste du site ne dépend pas du numéro.
 
-## Thème, langue, accessibilité
+## Composants Magic UI (MIT)
 
-- Deux thèmes complets (`data-theme="dark"` par défaut, `light`), bascule persistée en
-  `localStorage` (`lavande.site.theme`), sinon préférence système `prefers-color-scheme`.
-- Tokens de couleur repris de `DESIGN.md` (`--canvas`, `--surface`, `--ink`, `--accent` dérivé en
-  `--accent-soft` / `--accent-ring` / `--accent-ink` par `color-mix`).
-- `lang="fr"`, lien d'évitement, landmarks, focus visible, `aria-pressed` sur la bascule de thème,
-  `role="img"` sur l'aperçu, contrastes ≥ 4,5:1 (texte) et ≥ 4,89:1 (bouton principal).
-- `prefers-reduced-motion` : apparitions et animations désactivées, contenu immédiatement visible.
-- Sans JavaScript, tout le contenu reste affiché (les apparitions ne sont activées que par
-  `main.js`).
+Copiés depuis `magicuidesign/magicui` (branche `main`, `apps/www/registry/magicui/`) puis adaptés :
+`bento-grid`, `shimmer-button`, `border-beam`, `dot-pattern`, `marquee`, `animated-shiny-text`,
+`aurora-text`. Adaptations : `framer-motion` → `motion/react`, icônes Radix → SVG inline, `cn` local
+(`clsx` + `tailwind-merge`), utilitaires Tailwind v4 non disponibles remplacés par des styles
+inline. Chaque fichier conserve son en-tête de licence et la mention de la source.
 
 ## Police
 
-Plus Jakarta Sans, sous SIL Open Font License 1.1 — licence complète dans
-`assets/fonts/OFL.txt`. Les fichiers sont ceux de l'application (`public/maquettes/fonts/`).
+Plus Jakarta Sans, SIL Open Font License 1.1 — licence complète dans `public/fonts/OFL.txt`.

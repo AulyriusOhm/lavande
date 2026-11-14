@@ -1,0 +1,286 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  font-style: normal;
+  font-weight: 300 800;
+  font-display: swap;
+  src: url("/fonts/plus-jakarta-sans-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  font-style: normal;
+  font-weight: 300 800;
+  font-display: swap;
+  src: url("/fonts/plus-jakarta-sans-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+:root {
+  color-scheme: dark;
+  --accent: #8b7cf6;
+  --accent-bright: #bda9ff;
+  --accent-strong: #7457ea;
+  --accent-deep: #6247dd;
+  --canvas: #0e0c13;
+  --surface: #16131f;
+  --surface-2: #1d1929;
+  --ink: #f4f1fa;
+  --ink-soft: #aaa3ba;
+  --ink-muted: #948ea3;
+  --line: #2a2438;
+  --line-strong: #3a3250;
+  --green: #34d399;
+  --amber: #fbbf24;
+  --accent-soft: color-mix(in oklab, var(--accent) 15%, var(--canvas));
+  --accent-ring: color-mix(in oklab, var(--accent) 38%, var(--canvas));
+  --accent-ink: color-mix(in oklab, var(--accent) 58%, var(--ink));
+  --glow: color-mix(in oklab, var(--accent) 40%, transparent);
+  --shadow-soft: 0 28px 70px -36px color-mix(in oklab, var(--accent) 55%, transparent);
+  --wrap: 71rem;
+  --gutter: clamp(1.15rem, 4vw, 2.5rem);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --canvas: #fbfaff;
+  --surface: #ffffff;
+  --surface-2: #f6f3fd;
+  --ink: #1b1523;
+  --ink-soft: #625b70;
+  --ink-muted: #6b6478;
+  --line: #ece8f5;
+  --line-strong: #ddd6ec;
+  --green: #047857;
+  --amber: #b45309;
+  --accent-ink: color-mix(in oklab, var(--accent) 64%, var(--ink));
+  --shadow-soft: 0 26px 60px -34px color-mix(in oklab, var(--accent) 50%, transparent);
+}
+
+@theme inline {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-muted: var(--ink-muted);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-bright: var(--accent-bright);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-deep: var(--accent-deep);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-ring: var(--accent-ring);
+  --color-green: var(--green);
+  --color-amber: var(--amber);
+
+  --animate-marquee: marquee var(--duration, 40s) infinite linear;
+  --animate-marquee-vertical: marquee-vertical var(--duration, 40s) infinite linear;
+  --animate-shimmer-slide: shimmer-slide var(--speed, 3s) ease-in-out infinite alternate;
+  --animate-spin-around: spin-around calc(var(--speed, 3s) * 2) infinite linear;
+  --animate-shiny-text: shiny-text 8s infinite;
+  --animate-aurora: aurora 14s ease-in-out infinite alternate;
+
+  @keyframes marquee {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(calc(-100% - var(--gap, 1rem)));
+    }
+  }
+
+  @keyframes marquee-vertical {
+    from {
+      transform: translateY(0);
+    }
+    to {
+      transform: translateY(calc(-100% - var(--gap, 1rem)));
+    }
+  }
+
+  @keyframes shimmer-slide {
+    to {
+      transform: translate(calc(100cqw - 100%), 0);
+    }
+  }
+
+  @keyframes spin-around {
+    0% {
+      transform: translateZ(0) rotate(0);
+    }
+    15%,
+    35% {
+      transform: translateZ(0) rotate(90deg);
+    }
+    65%,
+    85% {
+      transform: translateZ(0) rotate(270deg);
+    }
+    100% {
+      transform: translateZ(0) rotate(360deg);
+    }
+  }
+
+  @keyframes shiny-text {
+    0%,
+    90%,
+    100% {
+      background-position: calc(-100% - var(--shiny-width, 100px)) 0;
+    }
+    30%,
+    60% {
+      background-position: calc(100% + var(--shiny-width, 100px)) 0;
+    }
+  }
+
+  @keyframes aurora {
+    0%,
+    10% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: 0% 50%;
+    }
+  }
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+    scrollbar-color: var(--accent-strong) var(--canvas);
+    scrollbar-width: thin;
+  }
+
+  body {
+    min-height: 100vh;
+    font-family: var(--font-sans);
+    font-size: 1rem;
+    line-height: 1.65;
+    color: var(--ink);
+    background-color: var(--canvas);
+    background-image:
+      radial-gradient(70rem 34rem at 82% -6%, color-mix(in oklab, var(--accent) 17%, transparent), transparent 68%),
+      radial-gradient(44rem 28rem at 4% 6%, color-mix(in oklab, #38bdf8 7%, transparent), transparent 72%),
+      radial-gradient(48rem 30rem at 88% 62%, color-mix(in oklab, var(--accent) 9%, transparent), transparent 72%);
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow-x: hidden;
+  }
+
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    pointer-events: none;
+    opacity: 0.028;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-size: 180px 180px;
+  }
+
+  :root[data-theme="light"] body::after {
+    opacity: 0.02;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: -0.035em;
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--accent) 40%, transparent);
+    color: var(--ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 0.4rem;
+  }
+
+  ::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: color-mix(in oklab, var(--canvas) 90%, var(--ink));
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid var(--canvas);
+    border-radius: 999px;
+    background: linear-gradient(180deg, var(--accent-bright), var(--accent-strong));
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, var(--accent), var(--accent-deep));
+  }
+}
+
+@layer utilities {
+  .shot-dark {
+    display: block;
+  }
+
+  .shot-light {
+    display: none;
+  }
+
+  :root[data-theme="light"] .shot-dark {
+    display: none;
+  }
+
+  :root[data-theme="light"] .shot-light {
+    display: block;
+  }
+
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
