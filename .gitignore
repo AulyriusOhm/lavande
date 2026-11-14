@@ -21,3 +21,4 @@ deploy/nginx/lavande-token.inc
 .gnupg/
 .tauri/gnupg/
 .tauri/*.pass
+site-vitrine/public/demo/

@@ -1,4 +1,4 @@
-import { AlertTriangle, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, Lock, RefreshCw, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 import { useMailStore } from "@/lib/store";
 import { useEscapeLayer } from "@/desktop/escape";
@@ -150,6 +150,31 @@ export function BackendLoading() {
     <div className="flex h-full items-center justify-center gap-2 text-[12.5px] font-semibold text-ink-muted">
       <Loader2 className="size-4 animate-spin" />
       Connexion au service mail local…
+    </div>
+  );
+}
+
+/** Démo vitrine : la coquille est navigable, rien ne s'écrit, rien ne part. */
+export function ReadOnlyBanner({ variant = "mobile" }: { variant?: "mobile" | "desktop" }) {
+  const { readOnly } = useMailStore();
+  if (!readOnly) return null;
+
+  return (
+    <div
+      role="status"
+      data-demo-readonly
+      className={cn(
+        "relative z-[60] flex items-center gap-2 border-b border-accent-ring/40 bg-accent-soft px-4 py-1.5 text-accent-ink",
+        variant === "desktop" && "justify-center",
+      )}
+    >
+      <Lock className="size-3.5 shrink-0" strokeWidth={2.4} />
+      <p className="text-[11.5px] font-bold tracking-tight">
+        Démo · lecture seule
+        <span className="ml-1.5 font-semibold opacity-70">
+          données d'exemple, aucune action enregistrée
+        </span>
+      </p>
     </div>
   );
 }

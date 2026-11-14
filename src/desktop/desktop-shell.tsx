@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useMailStore } from "@/lib/store";
 import { usePrefs } from "@/lib/prefs";
 import { Notice } from "@/components/ui/notice";
-import { AccountRemoveDialog, BackendBanner, BackendLoading } from "@/components/backend-status";
+import { AccountRemoveDialog, BackendBanner, BackendLoading, ReadOnlyBanner } from "@/components/backend-status";
 import { ConnectScreen } from "@/screens/connect-screen";
 import { DESKTOP_TABS, DesktopDock, type DesktopView } from "@/desktop/dock";
 import { DesktopInbox } from "@/desktop/inbox";
@@ -31,6 +31,7 @@ export function DesktopApp() {
 function DesktopMain() {
   const {
     notices,
+    readOnly,
     dismissNotice,
     openComposer,
     openMail,
@@ -86,13 +87,14 @@ function DesktopMain() {
 
   const openNewEvent = useCallback(
     (init?: string | NewEventInit, suggestion?: MailSuggestion) => {
+      if (readOnly) return;
       setEditingEvent(null);
       setPendingInit(typeof init === "string" ? init : undefined);
       setPendingDraft(typeof init === "string" ? undefined : init);
       setPendingSuggestion(suggestion ?? null);
       setNewEventOpen(true);
     },
-    [],
+    [readOnly],
   );
 
   const overlayOpen =
@@ -169,6 +171,7 @@ function DesktopMain() {
       className="relative flex h-full w-full flex-col overflow-hidden bg-canvas text-ink"
     >
       <BackendBanner variant="desktop" />
+      <ReadOnlyBanner variant="desktop" />
       <main className="relative min-h-0 flex-1">
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
@@ -196,7 +199,10 @@ function DesktopMain() {
               />
             )}
             {view === "planning" && (
-              <DesktopPlanning onNewTask={() => setNewTaskOpen(true)} onOpenSync={() => changeView("settings")} />
+              <DesktopPlanning
+                onNewTask={readOnly ? undefined : () => setNewTaskOpen(true)}
+                onOpenSync={() => changeView("settings")}
+              />
             )}
             {view === "settings" && <DesktopSettings onOpenPgp={() => setPgpOpen(true)} />}
           </motion.div>

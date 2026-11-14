@@ -14,6 +14,7 @@ export const SWIPE_ACTIONS: { id: SwipeActionId; label: string }[] = [
 const STORAGE_KEY = "lavande.prefs";
 
 import { EMPTY_LLM, type LlmConfig } from "@/lib/llm";
+import { demoReadOnly } from "@/lib/mail-backend";
 import { setMcpRights } from "@/lib/mcp";
 import { DEFAULT_AI_TASKS, DEFAULT_SUMMARY, type AiTasksConfig, type SummaryConfig } from "@/lib/summary";
 
@@ -418,9 +419,16 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     });
   }, [prefs.mcpEnabled, prefs.mcpAlwaysAllow, prefs.mcpConfirmSend]);
 
-  const patch = useCallback(<K extends keyof Prefs>(key: K, value: Prefs[K]) => {
-    setPrefs((current) => ({ ...current, [key]: value }));
+  /** Démo vitrine : les réglages s'affichent mais ne s'écrivent pas. */
+  const write = useCallback((update: (current: Prefs) => Prefs) => {
+    if (demoReadOnly) return;
+    setPrefs(update);
   }, []);
+
+  const patch = useCallback(
+    <K extends keyof Prefs>(key: K, value: Prefs[K]) => write((current) => ({ ...current, [key]: value })),
+    [write],
+  );
 
   const setSwipe = useCallback(
     (side: "left" | "right", action: SwipeActionId) =>
@@ -432,7 +440,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
   const setPlanningEnabled = useCallback((value: boolean) => patch("planningEnabled", value), [patch]);
   const setMcpEnabled = useCallback(
     (serverId: string, value: boolean) =>
-      setPrefs((current) => ({
+      write((current) => ({
         ...current,
         mcpEnabled: { ...current.mcpEnabled, [serverId]: value },
       })),
@@ -440,19 +448,19 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
   );
   const setMcpAlwaysAllow = useCallback(
     (type: string, value: boolean) =>
-      setPrefs((current) => ({
+      write((current) => ({
         ...current,
         mcpAlwaysAllow: { ...current.mcpAlwaysAllow, [type]: value },
       })),
     [],
   );
   const resetMcpAllowances = useCallback(
-    () => setPrefs((current) => ({ ...current, mcpAlwaysAllow: {}, mcpConfirmSend: DEFAULTS.mcpConfirmSend })),
+    () => write((current) => ({ ...current, mcpAlwaysAllow: {}, mcpConfirmSend: DEFAULTS.mcpConfirmSend })),
     [],
   );
   const setSignature = useCallback(
     (accountId: string, patch: Partial<AccountSignature>) =>
-      setPrefs((current) => ({
+      write((current) => ({
         ...current,
         signatures: {
           ...current.signatures,
@@ -464,7 +472,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
 
   const setAccountPgp = useCallback(
     (accountId: string, patch: Partial<AccountPgp>) =>
-      setPrefs((current) => ({
+      write((current) => ({
         ...current,
         pgpAccounts: {
           ...current.pgpAccounts,
@@ -476,7 +484,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
 
   const setLlm = useCallback(
     (patch: Partial<LlmConfig>) =>
-      setPrefs((current) => ({ ...current, llm: { ...current.llm, ...patch } })),
+      write((current) => ({ ...current, llm: { ...current.llm, ...patch } })),
     [],
   );
 
@@ -484,26 +492,25 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
 
   const setSummary = useCallback(
     (patch: Partial<SummaryConfig>) =>
-      setPrefs((current) => ({ ...current, summary: { ...current.summary, ...patch } })),
+      write((current) => ({ ...current, summary: { ...current.summary, ...patch } })),
     [],
   );
 
   const setAiTasks = useCallback(
     (patch: Partial<AiTasksConfig>) =>
-      setPrefs((current) => ({ ...current, aiTasks: { ...current.aiTasks, ...patch } })),
+      write((current) => ({ ...current, aiTasks: { ...current.aiTasks, ...patch } })),
     [],
   );
 
   const setSync = useCallback(
     (patch: Partial<SyncPrefs>) =>
-      setPrefs((current) => ({ ...current, sync: { ...current.sync, ...patch } })),
+      write((current) => ({ ...current, sync: { ...current.sync, ...patch } })),
     [],
   );
 
   const setFolderHidden = useCallback(
-
     (accountId: string, path: string, hidden: boolean) =>
-      setPrefs((current) => {
+      write((current) => {
         const own = current.hiddenFolders[accountId] ?? [];
         const next = hidden
           ? own.includes(path)
@@ -520,7 +527,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
 
   const setAccountPerimeter = useCallback(
     (accountId: string, patch: Partial<AccountPerimeter>) =>
-      setPrefs((current) => ({
+      write((current) => ({
         ...current,
         perimeters: {
           ...current.perimeters,
@@ -536,13 +543,13 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
 
   const setNotifications = useCallback(
     (patch: Partial<NotificationPrefs>) =>
-      setPrefs((current) => ({ ...current, notifications: { ...current.notifications, ...patch } })),
+      write((current) => ({ ...current, notifications: { ...current.notifications, ...patch } })),
     [],
   );
 
   const setAccountNotification = useCallback(
     (accountId: string, value: boolean) =>
-      setPrefs((current) => ({
+      write((current) => ({
         ...current,
         notifications: {
           ...current.notifications,

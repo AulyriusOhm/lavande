@@ -9,6 +9,7 @@ import {
   CornerUpRight,
   Download,
   Loader2,
+  Lock,
   Paperclip,
   PenLine,
   RotateCcw,
@@ -44,6 +45,7 @@ export function MessageScreen({
   onRestore,
   onOpenPgp,
   bodyLoading = false,
+  readOnly = false,
 }: {
   thread: Thread;
   onClose: () => void;
@@ -57,6 +59,8 @@ export function MessageScreen({
   onRestore?: (mail: Mail) => void;
   onOpenPgp?: () => void;
   bodyLoading?: boolean;
+  /** Démo vitrine : le lecteur affiche, il ne modifie rien. */
+  readOnly?: boolean;
 }) {
   const prefs = usePrefs();
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -141,7 +145,7 @@ export function MessageScreen({
         <IconButton aria-label="Retour" onClick={onClose}>
           <ArrowLeft className="size-4.5" />
         </IconButton>
-        <div className="ml-auto flex items-center">
+        <div className={cn("ml-auto flex items-center", readOnly && "hidden")}>
           {inTrash ? (
             onRestore && (
               <IconButton aria-label="Restaurer" onClick={() => onRestore(mail)}>
@@ -347,13 +351,15 @@ export function MessageScreen({
                 {mail.folder === "sent" ? `à ${mail.to ?? "destinataire"}` : "à moi"} · {mail.time}
               </span>
             </button>
-            <IconButton
-              aria-label={mail.folder === "drafts" ? "Reprendre le brouillon" : "Répondre"}
-              onClick={() => (mail.folder === "drafts" ? onResume?.(mail) : onReply(mail))}
-              className="bg-accent-soft text-accent-ink"
-            >
-              {mail.folder === "drafts" ? <PenLine className="size-4" /> : <CornerUpLeft className="size-4" />}
-            </IconButton>
+            {readOnly ? null : (
+              <IconButton
+                aria-label={mail.folder === "drafts" ? "Reprendre le brouillon" : "Répondre"}
+                onClick={() => (mail.folder === "drafts" ? onResume?.(mail) : onReply(mail))}
+                className="bg-accent-soft text-accent-ink"
+              >
+                {mail.folder === "drafts" ? <PenLine className="size-4" /> : <CornerUpLeft className="size-4" />}
+              </IconButton>
+            )}
           </div>
 
           {detailsOpen && (
@@ -435,6 +441,12 @@ export function MessageScreen({
       </div>
 
       <div className="relative border-t border-line/80 px-5 py-3 glass safe-bottom sm:pb-5">
+        {readOnly ? (
+          <p className="flex items-center justify-center gap-1.5 text-[11.5px] font-semibold text-ink-muted">
+            <Lock className="size-3.5" strokeWidth={2.4} />
+            Démo · lecture seule
+          </p>
+        ) : (
         <div className="flex items-center gap-2">
           {mail.folder === "drafts" ? (
             <ShimmerButton
@@ -464,6 +476,7 @@ export function MessageScreen({
             </>
           )}
         </div>
+        )}
       </div>
     </div>
   );

@@ -11,7 +11,7 @@ import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { MAIL_SUGGESTIONS, TASKS, TASK_STATES, sortTasks, taskFromSuggestion } from "@/lib/tasks";
 import { EVENTS, type CalendarEvent } from "@/lib/calendar";
 import { useCalendarReminders } from "@/lib/calendar-reminders";
-import { mailMode } from "@/lib/mail-backend";
+import { demoReadOnly, mailMode } from "@/lib/mail-backend";
 import { usePrefs } from "@/lib/prefs";
 import type { MailSuggestion, Subtask, Task, TaskState } from "@/lib/tasks";
 import { createClock, type Clock } from "@/lib/sync/clock";
@@ -426,6 +426,7 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
 
   const setTasks = useCallback<Dispatch<SetStateAction<Task[]>>>(
     (action) => {
+      if (demoReadOnly) return;
       const previous = latest.current.tasks;
       const readOnly = latest.current.readOnlyIds;
       const next = typeof action === "function" ? action(previous) : action;
@@ -452,6 +453,7 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
 
   const setEvents = useCallback<Dispatch<SetStateAction<CalendarEvent[]>>>(
     (action) => {
+      if (demoReadOnly) return;
       const previous = latestEvents.current;
       const next = typeof action === "function" ? action(previous) : action;
       const previousById = new Map(previous.map((event) => [event.id, event]));
@@ -473,6 +475,7 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
 
   const addSuggestion = useCallback(
     (suggestion: MailSuggestion) => {
+      if (demoReadOnly) return;
       const id = suggestionDocId(suggestion);
       const taskId = promotedTaskId(id);
       emit("suggestion", id, { status: "accepted", taskId });
@@ -493,6 +496,7 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
 
   const dismissSuggestion = useCallback(
     (suggestion: MailSuggestion) => {
+      if (demoReadOnly) return;
       emit("suggestion", suggestionDocId(suggestion), { status: "dismissed" });
     },
     [emit],
@@ -502,6 +506,7 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
 
   const unpromote = useCallback(
     (suggestion: MailSuggestion) => {
+      if (demoReadOnly) return;
       const id = suggestionDocId(suggestion);
       emit("task", promotedTaskId(id), {}, "delete");
       emit("suggestion", id, { status: "pending" });

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CalendarEvent } from "@/lib/calendar";
 import { PERIMETER_EVENT, perimeterOf, storedPerimeters, type AccountPerimeter } from "@/lib/prefs";
+import { demoReadOnly } from "@/lib/mail-backend";
 
 export type CalendarSource =
   | { kind: "local" }
@@ -140,6 +141,7 @@ export function loadCalendars(): CalendarDef[] {
 }
 
 export function saveCalendars(list: CalendarDef[]) {
+  if (demoReadOnly) return;
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
   } catch {
@@ -161,6 +163,7 @@ export function useCalendars(): [CalendarDef[], (next: CalendarDef[]) => void] {
   }, []);
 
   const setCalendars = useCallback((next: CalendarDef[]) => {
+    if (demoReadOnly) return;
     const merged = keepPaused(loadCalendars(), next);
     setState(agendaCalendars(merged));
     saveCalendars(merged);
@@ -184,6 +187,7 @@ export function useCalendarDefinitions(): [CalendarDef[], (next: CalendarDef[]) 
   }, []);
 
   const setCalendars = useCallback((next: CalendarDef[]) => {
+    if (demoReadOnly) return;
     setState(next);
     saveCalendars(next);
   }, []);

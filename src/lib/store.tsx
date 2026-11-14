@@ -51,6 +51,8 @@ import { mailApi, errorText } from "@/lib/api";
 import type { LiveEvent } from "@/lib/api";
 import type { NewAccount } from "@/lib/api";
 import {
+  READ_ONLY_NOTICE,
+  demoReadOnly,
   folderOptions as optionsOf,
   folderOptionsForAll,
   folderPathOf,
@@ -145,6 +147,8 @@ export type MailStoreValue = {
   folderPath: string | null;
   folderOptions: FolderOption[];
   mode: MailMode;
+  /** Démo vitrine : lecture seule, aucune mutation ni appel réseau. */
+  readOnly: boolean;
   phase: BackendPhase;
   backendError: string | null;
   threadsLoading: boolean;
@@ -299,6 +303,13 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const dismissNotice = useCallback(() => setNotices((current) => current.slice(1)), []);
+
+  /** Démo vitrine : la mutation est refusée et l'utilisateur est prévenu. */
+  const readOnlyBlocked = useCallback(() => {
+    if (!demoReadOnly) return false;
+    notify(READ_ONLY_NOTICE);
+    return true;
+  }, [notify]);
 
   const accountById = useCallback(
     (id: string) => accounts.find((entry) => entry.id === id),
@@ -730,6 +741,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
   const toggleStar = useCallback(
     (id: string) => {
+      if (readOnlyBlocked()) return;
       const mail =
         mails.find((entry) => entry.id === id) ?? searchResults.find((entry) => entry.id === id);
       setMails((current) =>
@@ -752,11 +764,12 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         notify(errorText(error));
       });
     },
-    [flagsFor, mails, mode, notify, searchResults],
+    [flagsFor, mails, mode, notify, readOnlyBlocked, searchResults],
   );
 
   const moveTo = useCallback(
     (mail: Mail, role: FolderId, message?: string) => {
+      if (readOnlyBlocked()) return;
       if (!mail.source) return;
       const target = folderPathOf(folderRecords, mail.source.accountId, role);
       if (!target) {
@@ -785,30 +798,33 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           notify(errorText(error));
         });
     },
-    [adjustCounts, folderRecords, notify],
+    [adjustCounts, folderRecords, notify, readOnlyBlocked],
   );
 
   const addSuggestion = useCallback(
     (suggestion: MailSuggestion) => {
+      if (readOnlyBlocked()) return;
       planning.addSuggestion(suggestion);
       notify("Tâche ajoutée à la planification", {
         label: "Annuler",
         run: () => planning.unpromote(suggestion),
       });
     },
-    [notify, planning],
+    [notify, planning, readOnlyBlocked],
   );
 
   const dismissSuggestion = useCallback(
     (suggestion: MailSuggestion) => {
+      if (readOnlyBlocked()) return;
       planning.dismissSuggestion(suggestion);
       notify("Suggestion masquée");
     },
-    [notify, planning],
+    [notify, planning, readOnlyBlocked],
   );
 
   const mailAction = useCallback(
     (kind: "delete" | "archive" | "read", mail: Mail) => {
+      if (readOnlyBlocked()) return;
       if (kind === "read") {
         setMails((current) =>
           current.map((entry) => (entry.id === mail.id ? { ...entry, unread: !entry.unread } : entry)),
@@ -884,7 +900,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           ),
       });
     },
-    [adjustCounts, flagsFor, mails, mode, moveTo, notify],
+    [adjustCounts, flagsFor, mails, mode, moveTo, notify, readOnlyBlocked],
   );
 
   const openMessage = useCallback(
@@ -899,7 +915,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       setOpenMail({ ...mail, unread: false });
-      setMails((current) => current.map((item) => (item.id === mail.id ? { ...item, unread: false } : item)));
+      if (!demoReadOnly) {
+        setMails((current) =>
+          current.map((item) => (item.id === mail.id ? { ...item, unread: false } : item)),
+        );
+      }
       if (mode !== "api" || !mail.source) return;
       if (mail.unread) {
         adjustCounts(mail.source.accountId, mail.source.folderPath, 0, -1);
@@ -938,6 +958,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
   const moveToInbox = useCallback(
     (mail: Mail) => {
+      if (readOnlyBlocked()) return;
       if (mode === "api") {
         moveTo(mail, "inbox", "Message déplacé vers la boîte de réception");
         return;
@@ -956,11 +977,12 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           ),
       });
     },
-    [mode, moveTo, notify],
+    [mode, moveTo, notify, readOnlyBlocked],
   );
 
   const restoreMail = useCallback(
     (mail: Mail) => {
+      if (readOnlyBlocked()) return;
       if (mode === "api") {
         moveTo(mail, "inbox", "Message restauré dans la boîte de réception");
         return;
@@ -984,10 +1006,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           ),
       });
     },
-    [mode, moveTo, notify],
+    [mode, moveTo, notify, readOnlyBlocked],
   );
 
   const emptyTrash = useCallback(() => {
+    if (readOnlyBlocked()) return;
     const inTrash = (entry: Mail) =>
       entry.folder === "trash" && (account === ALL_ACCOUNTS || entry.account === account);
 
@@ -1033,7 +1056,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           ...removed.filter((entry) => !current.some((item) => item.id === entry.id)),
         ]),
     });
-  }, [account, folderRecords, mailAccounts, mails, mode, notify]);
+  }, [account, folderRecords, mailAccounts, mails, mode, notify, readOnlyBlocked]);
 
   /** Reprise remplacée ou abandonnée : plus rien à supprimer côté serveur. */
   const resetDraftSource = useCallback(() => {
@@ -1074,6 +1097,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
    */
   const resumeDraft = useCallback(
     (mail: Mail) => {
+      if (readOnlyBlocked()) return;
       const open = (draft: ComposeDraft, source: MailSource | null) => {
         resumedDraftId.current = source ? null : mail.id;
         setDraftSource(source);
@@ -1173,12 +1197,13 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       }
       start();
     },
-    [composeDetached, composeDraft, mode, notify, pgpPrefs],
+    [composeDetached, composeDraft, mode, notify, pgpPrefs, readOnlyBlocked],
   );
   resumeDraftRef.current = resumeDraft;
 
   const saveToDrafts = useCallback(
     async (draft: ComposeDraft): Promise<boolean> => {
+      if (readOnlyBlocked()) return false;
       const source = draftSource;
       if (mode !== "api") {
         forgetDraftSource(null);
@@ -1196,7 +1221,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
     },
-    [draftSource, forgetDraftSource, mode, notify],
+    [draftSource, forgetDraftSource, mode, notify, readOnlyBlocked],
   );
 
   const detachCompose = useCallback(() => {
@@ -1268,13 +1293,15 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   }, [account, accounts, pgpPrefs]);
 
   const startBlankDraft = useCallback(() => {
+    if (readOnlyBlocked()) return;
     setComposeDraft(blankDraft());
     setComposeTitle("Nouveau message");
     setComposeOpen(true);
     resetDraftSource();
-  }, [blankDraft, resetDraftSource]);
+  }, [blankDraft, readOnlyBlocked, resetDraftSource]);
 
   const openComposer = useCallback(() => {
+    if (readOnlyBlocked()) return;
     if (composeDetached) {
       composeBus.current?.post({ kind: "focus" });
       if (!composeDraft || emptyDraft(composeDraft)) startBlankDraft();
@@ -1286,12 +1313,16 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     startBlankDraft();
-  }, [composeDetached, composeDraft, composeOpen, notify, startBlankDraft]);
+  }, [composeDetached, composeDraft, composeOpen, notify, readOnlyBlocked, startBlankDraft]);
 
-  const resumeCompose = useCallback(() => setComposeOpen(true), []);
+  const resumeCompose = useCallback(() => {
+    if (readOnlyBlocked()) return;
+    setComposeOpen(true);
+  }, [readOnlyBlocked]);
 
   const replyTo = useCallback(
     (mail: Mail) => {
+      if (readOnlyBlocked()) return;
       const start = () => {
         resetDraftSource();
         const pgp = resolvePgp(pgpPrefs, mail.account);
@@ -1321,11 +1352,12 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       }
       start();
     },
-    [composeDetached, composeDraft, notify, pgpPrefs, resetDraftSource],
+    [composeDetached, composeDraft, notify, pgpPrefs, readOnlyBlocked, resetDraftSource],
   );
 
   const forwardMail = useCallback(
     (mail: Mail) => {
+      if (readOnlyBlocked()) return;
       const start = () => {
         resetDraftSource();
         const pgp = resolvePgp(pgpPrefs, mail.account);
@@ -1352,11 +1384,12 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       }
       start();
     },
-    [composeDetached, composeDraft, notify, pgpPrefs],
+    [composeDetached, composeDraft, notify, pgpPrefs, readOnlyBlocked],
   );
 
   const sendDraft = useCallback(
     (draft: ComposeDraft) => {
+      if (readOnlyBlocked()) return;
       const source = draftSource;
       if (mode === "api") {
         mailApi
@@ -1418,11 +1451,12 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       notify("Message envoyé");
       composeBus.current?.post({ kind: "sent" });
     },
-    [accounts, draftSource, forgetDraftSource, mode, notify, prefs.signatures],
+    [accounts, draftSource, forgetDraftSource, mode, notify, prefs.signatures, readOnlyBlocked],
   );
   sendDraftRef.current = sendDraft;
 
   const syncFolder = useCallback(() => {
+    if (readOnlyBlocked()) return;
     if (mode !== "api") {
       notify("Mode démo : la synchronisation est simulée.");
       return;
@@ -1461,9 +1495,12 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       })
       .catch((error: unknown) => notify(`Synchro impossible · ${errorText(error)}`))
       .finally(() => setSyncing(false));
-  }, [account, accounts, mailAccounts, mailsInPerimeter, targets, mode, notify]);
+  }, [account, accounts, mailAccounts, mailsInPerimeter, targets, mode, notify, readOnlyBlocked]);
 
-  const openConnect = useCallback(() => setConnectOpen(true), []);
+  const openConnect = useCallback(() => {
+    if (readOnlyBlocked()) return;
+    setConnectOpen(true);
+  }, [readOnlyBlocked]);
   const closeConnect = useCallback(() => setConnectOpen(false), []);
 
   const searchMails = useCallback(
@@ -1495,6 +1532,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
   const createAccount = useCallback(
     async (input: NewAccount) => {
+      if (readOnlyBlocked()) return "";
       const summary = await mailApi.createAccount(input);
       const { accounts: loaded, folders: records } = await loadMailbox();
       setAccounts(loaded);
@@ -1523,11 +1561,12 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       setRevision((value) => value + 1);
       return summary.id;
     },
-    [mailSyncOn, mailsInPerimeter, notify],
+    [mailSyncOn, mailsInPerimeter, notify, readOnlyBlocked],
   );
 
   const renameAccount = useCallback(
     async (id: string, label: string) => {
+      if (readOnlyBlocked()) return;
       const clean = label.trim();
       if (!clean) return;
       try {
@@ -1540,13 +1579,20 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         notify(errorText(error));
       }
     },
-    [notify],
+    [notify, readOnlyBlocked],
   );
 
-  const askRemoveAccount = useCallback((target: Account) => setRemoveTarget(target), []);
+  const askRemoveAccount = useCallback(
+    (target: Account) => {
+      if (readOnlyBlocked()) return;
+      setRemoveTarget(target);
+    },
+    [readOnlyBlocked],
+  );
   const cancelRemoveAccount = useCallback(() => setRemoveTarget(null), []);
 
   const confirmRemoveAccount = useCallback(() => {
+    if (readOnlyBlocked()) return;
     const target = removeTarget;
     setRemoveTarget(null);
     if (!target) return;
@@ -1562,7 +1608,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         await bootstrap();
       })
       .catch((error: unknown) => notify(errorText(error)));
-  }, [bootstrap, notify, removeTarget]);
+  }, [bootstrap, notify, readOnlyBlocked, removeTarget]);
 
   /**
    * Supprime un dossier personnalisé : le serveur d'abord, le cache local
@@ -1570,6 +1616,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
    */
   const deleteFolder = useCallback(
     async (path: string, label: string, accountId?: string) => {
+      if (readOnlyBlocked()) return false;
       if (mode !== "api") return false;
       const ids = accountId
         ? [accountId]
@@ -1607,7 +1654,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       );
       return failure === null;
     },
-    [account, folder, folderPath, folderRecords, mailAccounts, mode, notify, setFolder],
+    [account, folder, folderPath, folderRecords, mailAccounts, mode, notify, readOnlyBlocked, setFolder],
   );
 
   /**
@@ -1616,19 +1663,21 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
    */
   const hideFolder = useCallback(
     (path: string) => {
+      if (readOnlyBlocked()) return;
       if (mode !== "api" || !account || account === ALL_ACCOUNTS) return;
       prefs.setFolderHidden(account, path, true);
       if (folder === "other" && folderPath === path) setFolder("inbox", null);
     },
-    [prefs, account, folder, folderPath, mode, setFolder],
+    [prefs, account, folder, folderPath, mode, readOnlyBlocked, setFolder],
   );
 
   const unhideFolder = useCallback(
     (path: string) => {
+      if (readOnlyBlocked()) return;
       if (mode !== "api" || !account || account === ALL_ACCOUNTS) return;
       prefs.setFolderHidden(account, path, false);
     },
-    [prefs, account, mode],
+    [prefs, account, mode, readOnlyBlocked],
   );
 
   const inboxMails = useMemo(() => mails.filter((mail) => mail.folder === "inbox"), [mails]);
@@ -1943,6 +1992,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       folderPath,
       folderOptions,
       mode,
+      readOnly: demoReadOnly,
       phase,
       backendError,
       threadsLoading,

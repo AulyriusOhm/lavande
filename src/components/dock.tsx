@@ -19,12 +19,14 @@ export function Dock({
   onCompose,
   onNewTask,
   onNewEvent,
+  readOnly = false,
 }: {
   active: TabId;
   onChange: (id: TabId) => void;
   onCompose: () => void;
   onNewTask: () => void;
   onNewEvent: () => void;
+  readOnly?: boolean;
 }) {
   const native = isNativeShell();
   const { calendarEnabled, planningEnabled } = usePrefs();
@@ -32,7 +34,7 @@ export function Dock({
     tab.id === "calendar" ? calendarEnabled : tab.id === "planning" ? planningEnabled : true,
   );
   const fab =
-    active === "settings"
+    readOnly || active === "settings"
       ? null
       : active === "planning"
         ? { icon: Plus, label: "Nouvelle tâche", run: onNewTask }

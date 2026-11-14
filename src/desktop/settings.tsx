@@ -393,7 +393,7 @@ function sourceTone(def: CalendarDef) {
 }
 
 function CalendarsSection() {
-  const { notify, openConnect } = useMailStore();
+  const { notify, readOnly, openConnect } = useMailStore();
   const sources = useCalendarSources(notify);
   const { calendars } = sources;
   const [draftName, setDraftName] = useState("");
@@ -635,10 +635,12 @@ function CalendarsSection() {
           <span className="min-w-0 flex-1 text-[10.5px] font-semibold text-ink-muted">
             Aucun compte Google connecté : le consentement OAuth ouvre aussi l'agenda.
           </span>
-          <DButton variant="ghost" size="sm" aria-label="Connecter un compte Google" onClick={openConnect}>
-            <PlugZap className="size-3.5" strokeWidth={2.6} />
-            Connecter
-          </DButton>
+          {readOnly ? null : (
+            <DButton variant="ghost" size="sm" aria-label="Connecter un compte Google" onClick={openConnect}>
+              <PlugZap className="size-3.5" strokeWidth={2.6} />
+              Connecter
+            </DButton>
+          )}
         </div>
       )}
 
@@ -812,7 +814,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     setAccountNotification,
     perimeters,
   } = usePrefs();
-  const { notify, accounts, mode, openConnect, askRemoveAccount, renameAccount } = useMailStore();
+  const { notify, accounts, mode, readOnly, openConnect, askRemoveAccount, renameAccount } = useMailStore();
   const [active, setActive] = useState<SectionId>("comptes");
   const [hex, setHex] = useState(accent);
   const [openServer, setOpenServer] = useState<string | null>(null);
@@ -1107,10 +1109,12 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                                 <SlidersHorizontal className="size-3.5" />
                                 Périmètre
                               </DButton>
-                              <DButton variant="danger" size="sm" onClick={() => askRemoveAccount(item)}>
-                                <Trash2 className="size-3.5" />
-                                Retirer
-                              </DButton>
+                              {readOnly ? null : (
+                                <DButton variant="danger" size="sm" onClick={() => askRemoveAccount(item)}>
+                                  <Trash2 className="size-3.5" />
+                                  Retirer
+                                </DButton>
+                              )}
                             </div>
                           ))}
                         {mode === "api" && folderPanel === item.id ? (
@@ -1160,14 +1164,16 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                         ) : null}
                       </Surface>
                     ))}
-                    <button
-                      type="button"
-                      onClick={openConnect}
-                      className="focus-ring flex min-h-[88px] items-center justify-center gap-2 rounded-[26px] border border-dashed border-line bg-surface/60 text-[12px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
-                    >
-                      <Plus className="size-4" strokeWidth={3} />
-                      Ajouter un compte
-                    </button>
+                    {readOnly ? null : (
+                      <button
+                        type="button"
+                        onClick={openConnect}
+                        className="focus-ring flex min-h-[88px] items-center justify-center gap-2 rounded-[26px] border border-dashed border-line bg-surface/60 text-[12px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+                      >
+                        <Plus className="size-4" strokeWidth={3} />
+                        Ajouter un compte
+                      </button>
+                    )}
                   </div>
                 </BlurFade>
               </Block>

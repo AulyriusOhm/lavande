@@ -1,3 +1,5 @@
+import { READ_ONLY_NOTICE, demoReadOnly } from "@/lib/demo-mode";
+
 /**
  * Client HTTP du démon mail local (`lavande-maild`).
  *
@@ -426,6 +428,7 @@ async function daemonFetch(
   options: RequestOptions,
   init: (headers: Record<string, string>) => RequestInit,
 ): Promise<Response> {
+  if (demoReadOnly) throw new ApiError(READ_ONLY_NOTICE, "config", 0);
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), options.timeout ?? SHORT_TIMEOUT);
   const relay = () => controller.abort();

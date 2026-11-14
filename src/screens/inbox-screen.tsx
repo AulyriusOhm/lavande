@@ -662,7 +662,7 @@ export function AccountSwitchSheet({
   onSelect: (id: string) => void;
   onClose: () => void;
 }) {
-  const { mailAccounts, openConnect, accountUnread } = useMailStore();
+  const { mailAccounts, readOnly, openConnect, accountUnread } = useMailStore();
   const rows = [
     ...(mailAccounts.length > 1
       ? [
@@ -730,17 +730,19 @@ export function AccountSwitchSheet({
           );
         })}
 
-        <button
-          type="button"
-          onClick={() => {
-            onClose();
-            openConnect();
-          }}
-          className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-line py-3 text-[12.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
-        >
-          <Plus className="size-4" />
-          Ajouter un compte
-        </button>
+        {readOnly ? null : (
+          <button
+            type="button"
+            onClick={() => {
+              onClose();
+              openConnect();
+            }}
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-line py-3 text-[12.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+          >
+            <Plus className="size-4" />
+            Ajouter un compte
+          </button>
+        )}
       </div>
     </div>
   );

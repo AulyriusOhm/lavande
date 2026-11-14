@@ -525,6 +525,7 @@ export function DesktopInbox({
     account,
     mailAccounts,
     mode,
+    readOnly,
     syncing,
     syncFolder,
     folderOptions,
@@ -782,7 +783,7 @@ export function DesktopInbox({
   const toggleAllPrevious = () =>
     setCollapsedPrevious(allExpanded ? previous.map((message) => message.id) : []);
 
-  const readerActions: QuickAction[] = mail
+  const readerActions: QuickAction[] = mail && !readOnly
     ? [
         {
           label: mail.starred ? "Retirer l'étoile" : "Marquer d'une étoile",
@@ -1223,7 +1224,12 @@ export function DesktopInbox({
                 </header>
 
                 <div className="flex items-center gap-2 border-b border-line bg-surface/70 px-5 py-2.5 backdrop-blur">
-                  {mail.folder === "drafts" ? (
+                  {readOnly ? (
+                    <p className="flex items-center gap-1.5 text-[11.5px] font-semibold text-ink-muted">
+                      <Lock className="size-3.5" strokeWidth={2.4} />
+                      Démo · lecture seule
+                    </p>
+                  ) : mail.folder === "drafts" ? (
                     <ShimmerButton
                       size="sm"
                       onClick={() => resumeDraft(mail)}

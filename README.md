@@ -264,6 +264,27 @@ Ce que le verrou retire du bundle :
   réglages (« Voir la maquette PC », « Aperçu de la maquette mobile »), les badges « maquette PC » et
   « design preview », la légende sous la maquette mobile (`src/App.tsx`).
 
+### Démo lecture seule (site vitrine)
+
+`bash scripts/build-vitrine-demo.sh` produit le bundle embarqué par le site vitrine sous `/demo/`
+(`site-vitrine/public/demo`) :
+
+```bash
+VITE_MAIL_BACKEND=demo VITE_DEMO_READONLY=1 \
+  npx vite build --base /demo/ --outDir site-vitrine/public/demo --emptyOutDir
+```
+
+`VITE_DEMO_READONLY=1` (et lui seul, avec le mode démo) arme `demoReadOnly`
+(`src/lib/mail-backend.ts`) : l'app s'affiche avec les fixtures et se parcourt, mais **aucune
+mutation** ne prend — mails, tâches, agenda, réglages, comptes, calendriers — et **aucune requête
+réseau** ne part (le client `/api` et les appels LLM refusent). Le FAB de création disparaît, les
+actions du lecteur sont masquées, un bandeau « Démo · lecture seule » coiffe les deux coquilles
+(`/demo/?desktop`, `/demo/?app`). Le drapeau est faux par défaut : builds normaux et distribués
+sont inchangés (et `VITE_DISTRIBUTION=1` le garde faux de toute façon).
+
+Audit headless : `node scripts/check-demo-readonly.mjs` (vite dev + Playwright, requêtes
+same-origin uniquement, navigation, absence de FAB, `Suppr` sans effet).
+
 `VITE_PLATFORM=android` (posé par `scripts/build-android-release.sh` et `npm run android:build:debug`)
 aliase `@/lib/mcp` et `@/screens/mcp-screen` vers `src/lib/mcp.android.ts` et
 `src/screens/mcp-screen.android.tsx` (`vite.config.ts`) : le code MCP est **absent** du bundle Android, pas

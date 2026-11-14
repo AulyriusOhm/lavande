@@ -13,14 +13,10 @@ import type { FolderId, Mail, MailSource } from "@/lib/mail";
 import { TONES, folderLabel } from "@/lib/mail";
 import { ensureHtml, htmlToText } from "@/lib/rich-text";
 
-export type MailMode = "api" | "demo";
+export { demoReadOnly, mailMode, READ_ONLY_NOTICE } from "@/lib/demo-mode";
+export type { MailMode } from "@/lib/demo-mode";
 
 const ACCOUNT_COLORS = ["#8b7cf6", "#38bdf8", "#fb7185", "#34d399", "#fbbf24", "#c084fc"];
-
-export function mailMode(): MailMode {
-  if (import.meta.env.VITE_DISTRIBUTION === "1") return "api";
-  return import.meta.env.VITE_MAIL_BACKEND === "demo" ? "demo" : "api";
-}
 
 export const ROLE_TO_FOLDER: Record<ApiFolderRole, FolderId> = {
   inbox: "inbox",

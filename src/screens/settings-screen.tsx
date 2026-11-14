@@ -105,7 +105,7 @@ export function SettingsScreen({
   onOpenMcp: () => void;
 }) {
   const { accent, mode: themeMode, brand, setAccent, setMode: setThemeMode, reset } = useTheme();
-  const { accounts, mode, openConnect, askRemoveAccount, folderOptions, deleteFolder } =
+  const { accounts, mode, readOnly, openConnect, askRemoveAccount, folderOptions, deleteFolder } =
     useMailStore();
   const {
     swipeLeft,
@@ -284,7 +284,7 @@ export function SettingsScreen({
                     )}
                     <ChevronRight className="size-4 shrink-0 text-ink-muted" />
                   </button>
-                  {mode === "api" && (
+                  {mode === "api" && !readOnly && (
                     <button
                       type="button"
                       aria-label={`Retirer le compte ${item.label}`}
@@ -296,14 +296,16 @@ export function SettingsScreen({
                   )}
                 </div>
               ))}
-              <Row
-                icon={<Plus className="size-4" />}
-                label="Ajouter un compte"
-                hint="IMAP + SMTP · connexion testée par le service local"
-                onClick={openConnect}
-              >
-                <ChevronRight className="size-4 text-ink-muted" />
-              </Row>
+              {readOnly ? null : (
+                <Row
+                  icon={<Plus className="size-4" />}
+                  label="Ajouter un compte"
+                  hint="IMAP + SMTP · connexion testée par le service local"
+                  onClick={openConnect}
+                >
+                  <ChevronRight className="size-4 text-ink-muted" />
+                </Row>
+              )}
               <Row
                 icon={<Users className="size-4" />}
                 label="Boîte unifiée"
@@ -1023,7 +1025,7 @@ function ToneDots({ label, value, onPick }: { label: string; value: number; onPi
 }
 
 function CalendarsSettings() {
-  const { notify, openConnect } = useMailStore();
+  const { notify, readOnly, openConnect } = useMailStore();
   const sources = useCalendarSources(notify);
   const [draftName, setDraftName] = useState("");
   const [draftTone, setDraftTone] = useState(0);
@@ -1227,14 +1229,16 @@ function CalendarsSettings() {
                     <p className="text-[12px] leading-relaxed font-medium text-ink-muted">
                       Aucun compte Google connecté : le consentement OAuth du compte ouvre aussi l'agenda.
                     </p>
-                    <button
-                      type="button"
-                      onClick={openConnect}
-                      className={cn(SOURCE_ACTION, "min-h-11 justify-center")}
-                    >
-                      <PlugZap className="size-4" />
-                      Connecter un compte Google
-                    </button>
+                    {readOnly ? null : (
+                      <button
+                        type="button"
+                        onClick={openConnect}
+                        className={cn(SOURCE_ACTION, "min-h-11 justify-center")}
+                      >
+                        <PlugZap className="size-4" />
+                        Connecter un compte Google
+                      </button>
+                    )}
                   </>
                 ) : (
                   sources.googleConnected.map((account) => {

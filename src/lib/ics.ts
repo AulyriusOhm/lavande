@@ -36,6 +36,7 @@ import {
 } from "@/lib/calendars";
 import { GOOGLE_REFRESH_MS, googleAccounts, googleWindow } from "@/lib/gcal";
 import { storedPerimeters } from "@/lib/prefs";
+import { READ_ONLY_NOTICE, demoReadOnly } from "@/lib/mail-backend";
 
 export const ICS_STORAGE_KEY = "lavande.ics.v1";
 
@@ -241,6 +242,7 @@ export async function createCaldavEvent(
   def: CalendarDef,
   input: CaldavEventInput,
 ): Promise<IcsState> {
+  if (demoReadOnly) throw new Error(READ_ONLY_NOTICE);
   const sourceId = caldavSourceIdOf(def);
   if (!sourceId) throw new Error("source CalDAV sans identifiant");
   const written = await mailApi.caldavCreateEvent(sourceId, input);
@@ -253,6 +255,7 @@ export async function updateCaldavEvent(
   event: CalendarEvent,
   input: CaldavEventInput,
 ): Promise<IcsState> {
+  if (demoReadOnly) throw new Error(READ_ONLY_NOTICE);
   const binding = event.caldav;
   if (!binding) throw new Error("événement CalDAV sans identifiant serveur");
   const written = await mailApi.caldavUpdateEvent(binding.sourceId, binding.uid, {
@@ -266,6 +269,7 @@ export async function deleteCaldavEvent(
   def: CalendarDef,
   event: CalendarEvent,
 ): Promise<IcsState> {
+  if (demoReadOnly) throw new Error(READ_ONLY_NOTICE);
   const binding = event.caldav;
   if (!binding) throw new Error("événement CalDAV sans identifiant serveur");
   await mailApi.caldavDeleteEvent(binding.sourceId, binding.uid, binding.etag);
@@ -404,6 +408,7 @@ export function useExternalCalendarRefresh(
 
   const refresh = useCallback(
     async (targets: CalendarDef[]) => {
+      if (demoReadOnly) return;
       const queue = targets.filter((def) => !inFlight.current.has(def.id));
       if (queue.length === 0) return;
       for (const def of queue) inFlight.current.add(def.id);

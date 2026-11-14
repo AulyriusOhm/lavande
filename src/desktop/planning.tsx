@@ -39,7 +39,13 @@ const FIELD = "mt-1.5";
 
 type Selection = { kind: "task"; id: string } | { kind: "suggestion"; suggestion: MailSuggestion } | null;
 
-export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => void; onOpenSync: () => void }) {
+export function DesktopPlanning({
+  onNewTask,
+  onOpenSync,
+}: {
+  onNewTask?: () => void;
+  onOpenSync: () => void;
+}) {
   const { tasks, setTasks, suggestions, addSuggestion, dismissSuggestion, notify, openMessage, mails, accounts } =
     useMailStore();
   const [selection, setSelection] = useState<Selection>(null);
@@ -107,10 +113,12 @@ export function DesktopPlanning({ onNewTask, onOpenSync }: { onNewTask: () => vo
               <span className="font-bold">{taskSuggestions.length > 1 ? "suggestions" : "suggestion"}</span>
             </span>
           ) : null}
-          <DButton variant="primary" size="md" onClick={onNewTask}>
-            <Plus className="size-3.5" strokeWidth={3} />
-            Nouvelle tâche
-          </DButton>
+          {onNewTask ? (
+            <DButton variant="primary" size="md" onClick={onNewTask}>
+              <Plus className="size-3.5" strokeWidth={3} />
+              Nouvelle tâche
+            </DButton>
+          ) : null}
         </div>
       </header>
 

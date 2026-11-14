@@ -28,7 +28,7 @@ import type { CalendarEvent } from "@/lib/calendar";
 import { useCalendars, isExternalCalendar } from "@/lib/calendars";
 import { externalCalendarEvents, useExternalCalendarRefresh } from "@/lib/ics";
 import { shellLayout } from "@/lib/native";
-import { AccountRemoveDialog, BackendBanner, BackendLoading } from "@/components/backend-status";
+import { AccountRemoveDialog, BackendBanner, BackendLoading, ReadOnlyBanner } from "@/components/backend-status";
 import { ConnectScreen } from "@/screens/connect-screen";
 import { useShortcuts } from "@/lib/shortcuts";
 import { appShortcuts, type MailNavigation } from "@/lib/app-shortcuts";
@@ -162,6 +162,7 @@ function PhoneApp({ native }: { native?: boolean }) {
     forwardMail,
     sendDraft,
     mode,
+    readOnly,
     phase,
     connectOpen,
     closeConnect,
@@ -306,7 +307,10 @@ function PhoneApp({ native }: { native?: boolean }) {
   const openSearch = useCallback(() => setSearchOpen(true), []);
   const openPgp = useCallback(() => setPgpOpen(true), []);
   const openMcp = useCallback(() => setMcpOpen(true), []);
-  const openTaskDraft = useCallback(() => setTaskDraftOpen(true), []);
+  const openTaskDraft = useCallback(() => {
+    if (readOnly) return;
+    setTaskDraftOpen(true);
+  }, [readOnly]);
   const openTask = useCallback((task: Task) => setDetail({ task }), []);
   const openSuggestion = useCallback(
     (suggestion: MailSuggestion) =>
@@ -315,6 +319,7 @@ function PhoneApp({ native }: { native?: boolean }) {
   );
   const openEventDraft = useCallback(
     (init?: string | NewEventDraft) => {
+      if (readOnly) return;
       if (typeof init === "string") {
         setSelectedDate(init);
         setEventDraft(null);
@@ -324,7 +329,7 @@ function PhoneApp({ native }: { native?: boolean }) {
       }
       setEventDraftOpen(true);
     },
-    [setSelectedDate],
+    [readOnly, setSelectedDate],
   );
   const openMailFromEvent = useCallback(
     (event: CalendarEvent) => {
@@ -413,6 +418,7 @@ function PhoneApp({ native }: { native?: boolean }) {
       )}
     >
       <BackendBanner />
+      <ReadOnlyBanner />
       <div
         className="relative flex-1 overflow-hidden"
         onPointerDown={onPointerDown}
@@ -456,7 +462,7 @@ function PhoneApp({ native }: { native?: boolean }) {
                   sourceCount={sourceCount}
                   availableMailIds={availableMailIds}
                   suggestions={suggestions}
-                  onNewEvent={openEventDraft}
+                  onNewEvent={readOnly ? undefined : openEventDraft}
                   onAcceptSuggestion={openEventDraft}
                   onDismissSuggestion={dismissSuggestion}
                   onOpenMail={openMailFromEvent}
@@ -472,7 +478,7 @@ function PhoneApp({ native }: { native?: boolean }) {
                   onDismissSuggestion={dismissSuggestion}
                   onOpenTask={openTask}
                   onOpenSuggestion={openSuggestion}
-                  onNewTask={openTaskDraft}
+                  onNewTask={readOnly ? undefined : openTaskDraft}
                   movingTask={movingTask}
                   onMovingChange={setMovingTask}
                   onOpenSync={() => changeTab("settings")}
@@ -499,6 +505,7 @@ function PhoneApp({ native }: { native?: boolean }) {
           onCompose={openComposer}
           onNewTask={() => setTaskDraftOpen(true)}
           onNewEvent={() => openEventDraft()}
+          readOnly={readOnly}
         />
 
         {composeDraft && !composeOpen && (
@@ -526,6 +533,7 @@ function PhoneApp({ native }: { native?: boolean }) {
             >
               <MessageScreen
                 thread={openThread}
+                readOnly={readOnly}
                 bodyLoading={bodyFetching === openMail.id}
                 onClose={() => closeMessage()}
                 onToggleStar={() => toggleStar(openMail.id)}
@@ -615,7 +623,7 @@ function PhoneApp({ native }: { native?: boolean }) {
                   openMessage(mail);
                 }}
                 onEdit={
-                  detail.suggestion
+                  detail.suggestion || readOnly
                     ? undefined
                     : (next) => {
                         setTasks((current) =>
@@ -625,7 +633,7 @@ function PhoneApp({ native }: { native?: boolean }) {
                       }
                 }
                 onDelete={
-                  detail.suggestion
+                  detail.suggestion || readOnly
                     ? undefined
                     : () => {
                         const removed = detail.task;

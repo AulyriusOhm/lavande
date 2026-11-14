@@ -30,13 +30,13 @@ export function DesktopDock({
   onSearch: () => void;
 }) {
   const { calendarEnabled, planningEnabled } = usePrefs();
-  const { folderStats } = useMailStore();
+  const { folderStats, readOnly } = useMailStore();
   const unread = folderStats("inbox").unread;
   const tabs = DESKTOP_TABS.filter((tab) =>
     tab.id === "calendar" ? calendarEnabled : tab.id === "planning" ? planningEnabled : true,
   );
   const fab =
-    active === "settings"
+    readOnly || active === "settings"
       ? null
       : active === "planning"
         ? { icon: Plus, label: "Nouvelle tâche", run: onNewTask }

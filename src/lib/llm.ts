@@ -1,4 +1,5 @@
 import { isTauriShell } from "@/lib/open-external";
+import { READ_ONLY_NOTICE, demoReadOnly } from "@/lib/mail-backend";
 
 export type LlmConfig = { endpoint: string; apiKey: string; model: string };
 
@@ -40,6 +41,7 @@ export async function llmChat(
   user: string,
   signal?: AbortSignal,
 ): Promise<string> {
+  if (demoReadOnly) throw new Error(READ_ONLY_NOTICE);
   const base = config.endpoint.trim().replace(/\/+$/, "");
   const response = await llmFetch(`${base}/chat/completions`, {
     method: "POST",
