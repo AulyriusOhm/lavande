@@ -158,7 +158,12 @@ echo "== étape 8 : staging public ($STAGING_DIR)"
 rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
 cp artifacts/updater/latest.json artifacts/updater/*"$VERSION"* "$STAGING_DIR/"
-cp artifacts/apk/Lavande.apk "$STAGING_DIR/"
+# L'APK publié est celui que release-updater.mjs a signé dans $UPDATER_DIR : la
+# signature de latest.json porte sur ces octets-là.
+apk_source="$UPDATER_DIR/Lavande.apk"
+[ -f "$apk_source" ] || apk_source=artifacts/apk/Lavande.apk
+[ -f "$apk_source" ] || die "APK introuvable (ni $UPDATER_DIR/Lavande.apk ni artifacts/apk/Lavande.apk)"
+cp "$apk_source" "$STAGING_DIR/"
 tar -czf "$STAGING_DIR/vitrine.tar.gz" -C site-vitrine/dist .
 gpg --batch --yes --armor --export "$LAVANDE_GPG_KEY_ID" >"$STAGING_DIR/lavande-release.asc"
 

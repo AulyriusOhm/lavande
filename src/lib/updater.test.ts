@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import {
   APP_VERSION,
+  androidUpdater,
   checkForUpdate,
+  compareVersions,
   installAndRelaunch,
   messageOf,
   phaseLabel,
@@ -12,6 +14,83 @@ import {
   type UpdatePhase,
   type UpdaterBackend,
 } from "@/lib/updater";
+
+const { invokeMock, fetchMock, listenMock, getVersionMock, unlistenMock } = vi.hoisted(() => ({
+  invokeMock: vi.fn(),
+  fetchMock: vi.fn(),
+  listenMock: vi.fn(),
+  getVersionMock: vi.fn(),
+  unlistenMock: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
+vi.mock("@tauri-apps/plugin-http", () => ({ fetch: fetchMock }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
+vi.mock("@tauri-apps/api/app", () => ({ getVersion: getVersionMock }));
+
+const ANDROID_ENDPOINT = "https://lavande.lanro.eu/updates/latest.json";
+const APK_URL = "https://lavande.lanro.eu/updates/Lavande.apk";
+const APK_PATH = "/data/user/0/eu.lanro.lavande/cache/Lavande.apk";
+const UNKNOWN_SOURCES =
+  "Autorisez l'installation d'applications inconnues pour Lavande, puis relancez la mise à jour.";
+
+function shellOn(platform: "desktop" | "android" | "browser" | "preview-app") {
+  if (platform === "desktop" || platform === "android") {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    vi.spyOn(window.navigator, "userAgent", "get").mockReturnValue(
+      platform === "android" ? "Mozilla/5.0 (Linux; Android 14) wv" : "Mozilla/5.0 (X11; Linux x86_64)",
+    );
+  }
+  if (platform === "preview-app") window.history.replaceState({}, "", "/?app");
+}
+
+function androidManifest(
+  patch: { version?: string; notes?: string; platforms?: Record<string, unknown> } = {},
+) {
+  return {
+    version: "0.3.0",
+    notes: "  Nouveautés  ",
+    platforms: { android: { signature: "c2lnbmF0dXJl", url: APK_URL } },
+    ...patch,
+  };
+}
+
+function serve(json: unknown) {
+  fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => json });
+}
+
+function androidShell(options: { allowed?: boolean } = {}) {
+  const commands: string[] = [];
+  let progress: ((event: { payload: { received: number; total: number; percent?: number } }) => void) | null =
+    null;
+  listenMock.mockImplementation(async (_event: string, handler: typeof progress) => {
+    progress = handler;
+    return unlistenMock;
+  });
+  invokeMock.mockImplementation(async (command: string) => {
+    commands.push(command);
+    if (command === "android_update_endpoint") return ANDROID_ENDPOINT;
+    if (command === "plugin:lavandeupdater|downloadApk") {
+      progress?.({ payload: { received: 512, total: 1024, percent: 50 } });
+      progress?.({ payload: { received: 1024, total: 1024 } });
+      return { path: APK_PATH };
+    }
+    if (command === "plugin:lavandeupdater|canInstall") return { allowed: options.allowed ?? true };
+    if (command === "plugin:lavandeupdater|installApk") return { sessionId: 7 };
+    return null;
+  });
+  return commands;
+}
+
+beforeEach(() => {
+  getVersionMock.mockResolvedValue("0.2.4");
+  serve(androidManifest());
+});
+
+afterEach(() => {
+  delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  window.history.replaceState({}, "", "/");
+});
 
 function backendWith(patch: Partial<UpdaterBackend> = {}): UpdaterBackend {
   return {
@@ -138,7 +217,7 @@ describe("installAndRelaunch", () => {
 
 describe("phaseLabel", () => {
   it("décrit chaque état", () => {
-    expect(phaseLabel({ kind: "unsupported" }).label).toBe("Bureau uniquement");
+    expect(phaseLabel({ kind: "unsupported" }).label).toBe("Non disponible dans le navigateur");
     expect(phaseLabel({ kind: "idle" })).toEqual({ label: "Non vérifiée", tone: "neutral" });
     expect(phaseLabel({ kind: "checking" })).toEqual({ label: "Vérification…", tone: "accent" });
     expect(phaseLabel({ kind: "current" })).toEqual({ label: "À jour", tone: "green" });
@@ -160,5 +239,149 @@ describe("phaseLabel", () => {
     expect(messageOf(new Error("échec"))).toBe("échec");
     expect(messageOf("refus")).toBe("refus");
     expect(messageOf(null)).toBe("mise à jour impossible");
+  });
+});
+
+describe("compareVersions", () => {
+  it("ordonne les numéros de version", () => {
+    expect(compareVersions("0.3.0", "0.2.9")).toBeGreaterThan(0);
+    expect(compareVersions("0.2.4", "0.2.4")).toBe(0);
+    expect(compareVersions("0.1.9", "0.2.0")).toBeLessThan(0);
+  });
+
+  it("traite les segments absents comme des zéros", () => {
+    expect(compareVersions("0.3", "0.3.0")).toBe(0);
+    expect(compareVersions("0.3.1", "0.3")).toBeGreaterThan(0);
+    expect(compareVersions("1", "1.0.1")).toBeLessThan(0);
+  });
+
+  it("ignore le « v » initial", () => {
+    expect(compareVersions("v0.2.4", "0.2.4")).toBe(0);
+    expect(compareVersions("V0.3.0", "0.2.4")).toBeGreaterThan(0);
+  });
+});
+
+describe("updaterSupported", () => {
+  it("accepte la coquille de bureau", () => {
+    shellOn("desktop");
+    expect(updaterSupported()).toBe(true);
+  });
+
+  it("accepte la coquille Android", () => {
+    shellOn("android");
+    expect(updaterSupported()).toBe(true);
+  });
+
+  it("refuse la maquette ?app dans un navigateur", () => {
+    shellOn("preview-app");
+    expect(updaterSupported()).toBe(false);
+  });
+
+  it("refuse un navigateur ordinaire", () => {
+    shellOn("browser");
+    expect(updaterSupported()).toBe(false);
+  });
+});
+
+describe("androidUpdater.check", () => {
+  it("manifeste plus récent et bloc android : mise à jour proposée", async () => {
+    shellOn("android");
+    const commands = androidShell();
+    const pending = await androidUpdater().check();
+    expect(pending).not.toBeNull();
+    expect(pending?.version).toBe("0.3.0");
+    expect(pending?.notes).toBe("Nouveautés");
+    expect(commands).toEqual(["android_update_endpoint"]);
+    expect(fetchMock).toHaveBeenCalledWith(ANDROID_ENDPOINT, { connectTimeout: 20_000 });
+  });
+
+  it("version identique : rien à installer", async () => {
+    shellOn("android");
+    androidShell();
+    serve(androidManifest({ version: "0.2.4" }));
+    await expect(androidUpdater().check()).resolves.toBeNull();
+  });
+
+  it("bloc android absent : rien à installer", async () => {
+    shellOn("android");
+    androidShell();
+    serve(androidManifest({ platforms: {} }));
+    await expect(androidUpdater().check()).resolves.toBeNull();
+  });
+
+  it("manifeste sans signature : erreur explicite", async () => {
+    shellOn("android");
+    androidShell();
+    serve(androidManifest({ platforms: { android: { url: APK_URL } } }));
+    await expect(androidUpdater().check()).rejects.toThrow("manifeste Android incomplet");
+  });
+
+  it("manifeste inaccessible : erreur avec le statut", async () => {
+    shellOn("android");
+    androidShell();
+    fetchMock.mockResolvedValue({ ok: false, status: 503, json: async () => ({}) });
+    await expect(androidUpdater().check()).rejects.toThrow("manifeste de mise à jour inaccessible (503)");
+  });
+});
+
+describe("androidUpdater.install", () => {
+  it("télécharge, vérifie, contrôle l'autorisation puis installe", async () => {
+    shellOn("android");
+    const commands = androidShell();
+    const pending = await androidUpdater().check();
+    const percents: (number | null)[] = [];
+    await pending?.install((percent) => percents.push(percent));
+
+    expect(commands).toEqual([
+      "android_update_endpoint",
+      "plugin:lavandeupdater|downloadApk",
+      "verify_android_update",
+      "plugin:lavandeupdater|canInstall",
+      "plugin:lavandeupdater|installApk",
+    ]);
+    expect(invokeMock).toHaveBeenCalledWith("plugin:lavandeupdater|downloadApk", { url: APK_URL });
+    expect(invokeMock).toHaveBeenCalledWith("verify_android_update", {
+      path: APK_PATH,
+      signature: "c2lnbmF0dXJl",
+      version: "0.3.0",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("plugin:lavandeupdater|installApk", { path: APK_PATH });
+    expect(listenMock).toHaveBeenCalledWith(
+      "plugin:lavandeupdater://download-progress",
+      expect.any(Function),
+    );
+    expect(percents).toEqual([50, null]);
+    expect(unlistenMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("installateur non autorisé : réglages ouverts et erreur française", async () => {
+    shellOn("android");
+    const commands = androidShell({ allowed: false });
+    const pending = await androidUpdater().check();
+    await expect(pending?.install(() => undefined)).rejects.toThrow(UNKNOWN_SOURCES);
+    expect(invokeMock).toHaveBeenCalledWith("plugin:lavandeupdater|openInstallSettings");
+    expect(commands).not.toContain("plugin:lavandeupdater|installApk");
+    expect(unlistenMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("échec natif en chaîne : remonté en Error", async () => {
+    shellOn("android");
+    androidShell();
+    const pending = await androidUpdater().check();
+    invokeMock.mockRejectedValueOnce("téléchargement interrompu");
+    await expect(pending?.install(() => undefined)).rejects.toThrow("téléchargement interrompu");
+    expect(unlistenMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useUpdater sur la coquille Android", () => {
+  it("résout le backend natif et lit la version installée", async () => {
+    shellOn("android");
+    androidShell();
+    serve(androidManifest({ version: "0.2.4" }));
+    const { result } = renderHook(() => useUpdater());
+    expect(result.current.supported).toBe(true);
+    await vi.waitFor(() => expect(result.current.current).toBe("0.2.4"));
+    await vi.waitFor(() => expect(result.current.phase.kind).toBe("current"));
   });
 });

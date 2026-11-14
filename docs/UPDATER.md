@@ -1,10 +1,16 @@
-# Mises à jour de l'application de bureau
+# Mises à jour de l'application
 
-Lavande embarque `tauri-plugin-updater` : l'app interroge un manifeste public,
-télécharge le paquet signé correspondant à son installation, vérifie la
-signature minisign, installe puis redémarre. Android n'est pas concerné (l'APK
-se réinstalle à la main) : le plugin n'est utilisé que dans la coquille de
-bureau.
+Deux chaînes, un seul manifeste public et une seule clé minisign.
+
+**Bureau** — `tauri-plugin-updater` : l'app interroge le manifeste, télécharge le
+paquet correspondant à son installation, vérifie la signature minisign, installe
+puis redémarre.
+
+**Android** — le plugin est desktop-only, donc l'app fait la même chose elle-même :
+elle lit `platforms.android` du manifeste, télécharge l'APK (plugin Kotlin
+`lavandeupdater`), en vérifie la signature minisign **côté Rust**
+(`verify_android_update`, même clé que le bureau), puis le confie à
+`PackageInstaller` (confirmation système) — voir [`android.md`](./android.md#mises-à-jour-apk).
 
 ## Clés
 
@@ -52,6 +58,18 @@ chiffrée). Perdue, elle oblige à republier un installeur complet.
 
 Le même dossier public doit contenir les artefacts, puisque les URLs du
 manifeste sont relatives à `--url-base` (par défaut le dossier de l'endpoint).
+
+Quand `artifacts/apk/Lavande.apk` existe au moment de la release, le script y
+ajoute `platforms.android`, signé minisign comme les paquets de bureau :
+
+```json
+"platforms": {
+  "android": { "signature": "dW50cnVzdGVk…", "url": "https://lavande.lanro.eu/updates/Lavande.apk" }
+}
+```
+
+Sans cet APK, la release reste valable pour le bureau : le script avertit
+bruyamment et n'écrit aucune entrée `android`.
 
 ## Publier une release
 
@@ -187,8 +205,10 @@ Exemple de manifeste :
   avoir importé `lavande-release.asc` s'il applique `gpgcheck`.
 - **AppImage** : mise à jour en place du fichier `.AppImage` ; c'est le format
   le plus fiable pour l'auto-update Linux.
-- **Android** : pas d'auto-update Tauri ; l'APK reste manuel
-  (`scripts/build-android-release.sh`).
+- **Android** : pas d'auto-update Tauri, mais une chaîne dédiée (voir
+  [`android.md`](./android.md#mises-à-jour-apk)) : l'installation passe par la
+  confirmation système de `PackageInstaller` et exige que l'APK soit signé par la
+  **même clé** que l'installation existante (`~/.android/lavande-release.jks`).
 - `bundle.createUpdaterArtifacts` reste `false` : un `tauri build` sans clé
   continue de fonctionner (build RPM du conteneur inclus) ; c'est le script de
   release qui signe. Si on préfère la signature automatique du bundler, passer

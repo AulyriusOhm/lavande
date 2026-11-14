@@ -20,6 +20,12 @@
  * `linux-x86_64-deb` pour un paquet DEB, `linux-x86_64-rpm` pour un paquet RPM,
  * `linux-x86_64-appimage` pour un AppImage, et `linux-x86_64` en dernier recours.
  * Le DEB est publié brut : l'updater attend le `.deb`, pas une archive.
+ *
+ * Si `artifacts/apk/Lavande.apk` est présent, il est copié dans le dossier de
+ * sortie, signé minisign comme les paquets de bureau et publié dans
+ * `platforms.android` : l'app Android télécharge cet APK, vérifie la signature
+ * et le fait installer par PackageInstaller. Sans APK, la release reste valable
+ * pour le bureau (avertissement bruyant, aucune entrée android).
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -206,6 +212,26 @@ for (const [platform, name] of Object.entries(bundles)) {
 }
 
 platforms["linux-x86_64"] = platforms["linux-x86_64-rpm"] ?? platforms["linux-x86_64-appimage"];
+
+const apkSource = path.join(ROOT, "artifacts/apk/Lavande.apk");
+if (fs.existsSync(apkSource)) {
+  const apkName = "Lavande.apk";
+  fs.copyFileSync(apkSource, path.join(outDir, apkName));
+  platforms.android = {
+    signature: sign(path.join(outDir, apkName)),
+    url: `${urlBase}/${apkName}`,
+  };
+  console.log(`signé (minisign) : ${apkName}`);
+} else {
+  console.warn(
+    [
+      "release-updater : artifacts/apk/Lavande.apk absent — AUCUNE mise à jour Android publiée.",
+      "  latest.json ne contient pas de plateforme android : les appareils resteront",
+      "  sur leur version installée jusqu'au prochain build avec APK.",
+      "  bash -lc 'source scripts/android-env.sh && bash scripts/build-android-release.sh'",
+    ].join("\n"),
+  );
+}
 
 const manifest = {
   version,

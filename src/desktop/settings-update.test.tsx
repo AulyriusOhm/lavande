@@ -37,7 +37,7 @@ describe("Réglages · mise à jour", () => {
 
     expect(await screen.findByRole("heading", { name: "Mise à jour" })).toBeTruthy();
     expect(screen.getByText("Version installée")).toBeTruthy();
-    expect(screen.getByText("Bureau uniquement")).toBeTruthy();
+    expect(screen.getByText("Non disponible dans le navigateur")).toBeTruthy();
 
     const check = screen.getByRole("button", { name: /Vérifier les mises à jour/i }) as HTMLButtonElement;
     expect(check.disabled).toBe(true);

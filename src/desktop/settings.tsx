@@ -2272,7 +2272,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                   <p className="mt-3 text-[10.5px] leading-relaxed font-semibold text-ink-muted">
                     {updater.supported
                       ? "Le paquet est signé et vérifié avant installation ; l'application redémarre ensuite sur la nouvelle version."
-                      : "La mise à jour automatique n'existe que dans l'application de bureau (paquet RPM ou AppImage) : sur Android, l'APK se réinstalle à la main."}
+                      : "La mise à jour automatique n'existe que dans l'application installée (bureau ou Android), pas dans le navigateur."}
                   </p>
                 </Surface>
               </Block>

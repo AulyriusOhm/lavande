@@ -122,6 +122,31 @@ adb install -r artifacts/apk/Lavande.apk
 Sans câble : transférer l'APK sur le téléphone (cloud, Bluetooth, `scp`), l'ouvrir depuis le gestionnaire
 de fichiers et autoriser l'installation depuis cette source. `-r` réinstalle en conservant les données.
 
+## Mises à jour (APK)
+
+L'app se met à jour elle-même, sans store : Réglages → **Mise à jour** (groupe *Application*).
+
+| Étape | Qui | Détail |
+| --- | --- | --- |
+| 1. Manifeste | Front | `android_update_endpoint` (Rust) renvoie `plugins.updater.endpoints[0]` ; le front lit `version`, `notes` et `platforms.android` (filtré par `http:default`, HTTPS) |
+| 2. Comparaison | Front | `compareVersions` sur des segments numériques : rien à faire si la version annoncée n'est pas supérieure |
+| 3. Téléchargement | Plugin Kotlin | `plugin:lavandeupdater\|downloadApk` vers `cacheDir/lavande-update.apk`, schéma `https` exigé (HTTP seulement vers la boucle locale), progression par événement `plugin:lavandeupdater://download-progress` |
+| 4. Signature | Rust | `verify_android_update` : minisign avec la **même clé** que le bureau, et version du *trusted comment* égale à celle du manifeste — la vérification ne dépend pas du plugin |
+| 5. Autorisation | Plugin Kotlin | `canInstall` (`REQUEST_INSTALL_PACKAGES`) ; sinon `openInstallSettings` ouvre le réglage système de l'app et l'UI explique quoi faire |
+| 6. Installation | Plugin Kotlin | `installApk` : session `PackageInstaller`, `InstallResultReceiver` relaie la confirmation système (`STATUS_PENDING_USER_ACTION`) |
+
+Ce qui reste vrai :
+
+- **Continuité de signature** — l'APK publié doit être signé par le keystore release, sinon Android refuse
+  la mise à jour par-dessus l'installation existante. Le même `.jks` signe donc build et updater.
+- **`REQUEST_INSTALL_PACKAGES`** est déclarée par `scripts/patch-android.mjs` (avec le receiver) : la
+  permission ne suffit pas, l'utilisateur doit autoriser « installer des applications inconnues » pour
+  Lavande — l'UI le détecte et ouvre le réglage au lieu d'échouer.
+- **Publication** — `scripts/release-updater.mjs` copie et signe `artifacts/apk/Lavande.apk` dans le
+  dossier de sortie et écrit `platforms.android` ; `scripts/release.sh` publie cet APK-là (les octets
+  couverts par la signature). L'installation depuis un build **debug** demande toujours une désinstallation
+  préalable (clé différente).
+
 ## Signature
 
 L'APK est signé en release avec `~/.android/lavande-release.jks` (alias `lavande`), créé par
@@ -158,7 +183,9 @@ est **idempotent** et rejoué après `init` puis avant chaque build (les deux co
 | `res/values/colors.xml` | `lavande_canvas` `#fbfaff`, `ic_launcher_background` `#8b7cf6` | fond de fenêtre et fond de l'icône adaptative |
 | `res/values/themes.xml` et `res/values-night/themes.xml` | `android:windowBackground` = `@color/lavande_canvas` | évite le flash blanc au lancement (thème `Theme.Material3.DayNight.NoActionBar`) |
 | `res/mipmap-anydpi-v26/ic_launcher.xml` et `ic_launcher_round.xml` | icône adaptative : fond couleur + `@mipmap/ic_launcher_foreground` (dégradé plein cadre) | icône ronde / adaptative = carré dégradé violet |
-| `AndroidManifest.xml` | retire `android:usesCleartextTraffic`, pose `android:networkSecurityConfig`, `android:allowBackup="false"`, `android:fullBackupContent="false"`, `android:dataExtractionRules` | cleartext borné, sauvegarde fermée (voir ci-dessous) |
+| `AndroidManifest.xml` | retire `android:usesCleartextTraffic`, pose `android:networkSecurityConfig`, `android:allowBackup="false"`, `android:fullBackupContent="false"`, `android:dataExtractionRules`, `REQUEST_INSTALL_PACKAGES` et le receiver `.InstallResultReceiver` | cleartext borné, sauvegarde fermée (voir ci-dessous), installation d'APK (mises à jour) |
+| `java/mail/lavande/app/LavandeUpdaterPlugin.kt` | plugin Tauri `lavandeupdater` : `downloadApk`, `canInstall`, `openInstallSettings`, `installApk` | téléchargement de l'APK et session `PackageInstaller` |
+| `java/mail/lavande/app/InstallResultReceiver.kt` | receiver du résultat de session : relaie `STATUS_PENDING_USER_ACTION` (confirmation système) | sans lui, la confirmation d'installation n'apparaît jamais |
 | `res/xml/network_security_config.xml` | `cleartextTrafficPermitted="false"` en `base-config`, `true` seulement pour `127.0.0.1`, `localhost` et les hôtes de `LAVANDE_SYNC_HOSTS` | le démon mail local parle HTTP ; tout le reste doit être HTTPS |
 | `res/xml/data_extraction_rules.xml` | exclut `secrets.enc`, `secrets.key`, `daemon-token`, `mail.db` (+ `-wal`, `-shm`) et `app_webview` de `cloud-backup` et `device-transfer` | les secrets ne quittent pas l'appareil par une sauvegarde, même quand `allowBackup="false"` est ignoré (transfert d'appareil à appareil) |
 

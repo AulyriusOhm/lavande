@@ -24,6 +24,8 @@ lavande-mail-api = { path = "../crates/mail-api" }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+minisign-verify = "0.3"
+base64 = "0.21"
 
 [profile.dev]
 strip = "debuginfo"

@@ -3002,8 +3002,10 @@ dependencies = [
 name = "lavande"
 version = "0.1.0"
 dependencies = [
+ "base64 0.21.7",
  "lavande-mail",
  "lavande-mail-api",
+ "minisign-verify",
  "serde",
  "serde_json",
  "tauri",

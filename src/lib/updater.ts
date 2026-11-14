@@ -1,15 +1,15 @@
 /**
- * Mises à jour de l'application de bureau.
+ * Mises à jour de l'application.
  *
- * Le plugin `updater` n'existe que dans la coquille Tauri de bureau : dans un
- * navigateur, sur Android ou sous les tests, tout se contente de répondre
- * « non pris en charge » sans jamais charger le plugin. Les états et les
- * transitions vivent dans des fonctions pures, pilotées par un `UpdaterBackend`
- * qu'un test peut remplacer.
+ * Deux backends : le plugin `updater` (bureau) et le plugin natif
+ * `lavandeupdater` (Android : APK téléchargé puis confié à PackageInstaller).
+ * Dans un navigateur ou sous les tests, tout répond « non pris en charge » sans
+ * jamais charger un plugin. Les états et les transitions vivent dans des
+ * fonctions pures, pilotées par un `UpdaterBackend` qu'un test peut remplacer.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import packageJson from "../../package.json";
-import { shellLayout } from "@/lib/native";
+import { isNativeShell, shellLayout } from "@/lib/native";
 import { isTauriShell } from "@/lib/open-external";
 
 /** Version du front, affichée quand la coquille ne peut pas la donner. */
@@ -41,9 +41,9 @@ export type UpdaterBackend = {
   relaunch: () => Promise<void>;
 };
 
-/** L'updater Tauri ne cible pas Android : il ne s'active que sur le bureau. */
+/** Coquilles Tauri servies : bureau (plugin updater) et Android (plugin natif). */
 export function updaterSupported(): boolean {
-  return typeof window !== "undefined" && isTauriShell() && shellLayout() === "desktop";
+  return typeof window !== "undefined" && isTauriShell() && shellLayout() !== "stage";
 }
 
 export function messageOf(error: unknown): string {
@@ -52,10 +52,26 @@ export function messageOf(error: unknown): string {
   return "mise à jour impossible";
 }
 
+/** Comparaison numérique segment par segment, « v » initial ignoré. */
+export function compareVersions(a: string, b: string): number {
+  const segments = (value: string) =>
+    value
+      .replace(/^v/i, "")
+      .split(".")
+      .map((part) => Number.parseInt(part, 10) || 0);
+  const left = segments(a);
+  const right = segments(b);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const diff = (left[index] ?? 0) - (right[index] ?? 0);
+    if (diff !== 0) return diff > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
 export function phaseLabel(phase: UpdatePhase): { label: string; tone: UpdateTone } {
   switch (phase.kind) {
     case "unsupported":
-      return { label: "Bureau uniquement", tone: "neutral" };
+      return { label: "Non disponible dans le navigateur", tone: "neutral" };
     case "idle":
       return { label: "Non vérifiée", tone: "neutral" };
     case "checking":
@@ -155,6 +171,82 @@ export function tauriUpdater(): UpdaterBackend {
   };
 }
 
+const ANDROID_PROGRESS_EVENT = "plugin:lavandeupdater://download-progress";
+
+const ANDROID_UNKNOWN_SOURCES =
+  "Autorisez l'installation d'applications inconnues pour Lavande, puis relancez la mise à jour.";
+
+type AndroidManifest = {
+  version?: string;
+  notes?: string;
+  platforms?: { android?: { signature?: string; url?: string } };
+};
+
+type AndroidApk = { url: string; signature: string; version: string };
+
+/** Backend Android : APK signé téléchargé par le plugin natif, puis installé. */
+export function androidUpdater(): UpdaterBackend {
+  return {
+    version: async () => {
+      const { getVersion } = await import("@tauri-apps/api/app");
+      return getVersion();
+    },
+    check: async () => {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const { getVersion } = await import("@tauri-apps/api/app");
+      const { fetch } = await import("@tauri-apps/plugin-http");
+      const endpoint = await invoke<string>("android_update_endpoint");
+      const response = await fetch(endpoint, { connectTimeout: 20_000 });
+      if (!response.ok) throw new Error(`manifeste de mise à jour inaccessible (${response.status})`);
+      const manifest = (await response.json()) as AndroidManifest;
+      const android = manifest.platforms?.android;
+      const version = manifest.version;
+      if (!version || !android) return null;
+      if (compareVersions(version, await getVersion()) <= 0) return null;
+      if (!android.url || !android.signature) throw new Error("manifeste Android incomplet");
+      const notes = manifest.notes?.trim() ?? "";
+      return pendingAndroidUpdate({ url: android.url, signature: android.signature, version }, notes);
+    },
+    relaunch: async () => undefined,
+  };
+}
+
+function pendingAndroidUpdate(apk: AndroidApk, notes: string): PendingUpdate {
+  return {
+    version: apk.version,
+    notes,
+    install: async (onProgress) => {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const { listen } = await import("@tauri-apps/api/event");
+      const unlisten = await listen<{ received: number; total: number; percent?: number }>(
+        ANDROID_PROGRESS_EVENT,
+        (event) => onProgress(event.payload.percent ?? null),
+      );
+      try {
+        const { path } = await invoke<{ path: string }>("plugin:lavandeupdater|downloadApk", {
+          url: apk.url,
+        });
+        await invoke("verify_android_update", {
+          path,
+          signature: apk.signature,
+          version: apk.version,
+        });
+        const { allowed } = await invoke<{ allowed: boolean }>("plugin:lavandeupdater|canInstall");
+        if (!allowed) {
+          await invoke("plugin:lavandeupdater|openInstallSettings");
+          throw new Error(ANDROID_UNKNOWN_SOURCES);
+        }
+        await invoke("plugin:lavandeupdater|installApk", { path });
+      } catch (error) {
+        throw new Error(messageOf(error));
+      } finally {
+        unlisten();
+      }
+    },
+    close: async () => undefined,
+  };
+}
+
 const AUTO_CHECK_KEY = "lavande:updater-auto-check";
 
 /**
@@ -168,7 +260,10 @@ export function useUpdater() {
   const pending = useRef<PendingUpdate | null>(null);
   const backend = useRef<UpdaterBackend | null>(null);
 
-  const resolveBackend = useCallback(() => (backend.current ??= tauriUpdater()), []);
+  const resolveBackend = useCallback(
+    () => (backend.current ??= isNativeShell() ? androidUpdater() : tauriUpdater()),
+    [],
+  );
 
   useEffect(() => {
     if (!supported) return;

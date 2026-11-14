@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import {
   ArrowLeft,
+  AlertTriangle,
   Bell,
   Blocks,
   CalendarDays,
@@ -8,6 +9,7 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  Download,
   FolderTree,
   KeyRound,
   Keyboard,
@@ -64,6 +66,7 @@ import { shortcutCatalog } from "@/lib/app-shortcuts";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { AnimatedGradientText } from "@/components/ui/animated-text";
+import { APP_VERSION, phaseLabel, useUpdater, type UpdateTone } from "@/lib/updater";
 
 const LLM_FIELDS: { key: keyof LlmConfig; label: string; aria: string; placeholder: string; password?: boolean }[] = [
   { key: "endpoint", label: "Endpoint", aria: "Endpoint du modèle", placeholder: "https://api.openai.com/v1" },
@@ -147,6 +150,9 @@ export function SettingsScreen({
   const mod = detectModKey();
   const shortcuts = shortcutCatalog();
   const customFolders = folderOptions.filter((entry) => entry.id === "other");
+  const updater = useUpdater();
+  const updateState = phaseLabel(updater.phase);
+  const installedVersion = updater.current ?? APP_VERSION;
 
   const showGroup = (id: GroupId | null) => {
     setOpenGroup(id);
@@ -964,10 +970,93 @@ export function SettingsScreen({
             </Card>
           </BlurFade>
 
+          <SectionTitle hint={`v${installedVersion}`}>Mise à jour</SectionTitle>
+          <BlurFade delay={0.14}>
+            <Card className="mx-5 space-y-3 p-3.5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="leading-tight">
+                  <p className={MOBILE_LABEL}>Version installée</p>
+                  <p className="mt-1 text-[17px] font-extrabold tracking-[-0.02em] text-ink tabular-nums">
+                    v{installedVersion}
+                  </p>
+                </div>
+                {updater.supported ? (
+                  <span
+                    className={cn(
+                      "inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-[10.5px] font-bold",
+                      UPDATE_TONES[updateState.tone],
+                    )}
+                  >
+                    {updateState.label}
+                  </span>
+                ) : null}
+              </div>
+
+              {updater.supported ? (
+                <>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      disabled={updater.busy}
+                      onClick={() => void updater.check()}
+                      className={SOURCE_ACTION}
+                    >
+                      <RefreshCw
+                        className={cn("size-3.5", updater.phase.kind === "checking" && "animate-spin")}
+                      />
+                      Vérifier les mises à jour
+                    </button>
+                    {updater.canInstall ? (
+                      <button
+                        type="button"
+                        disabled={updater.busy}
+                        onClick={() => void updater.install()}
+                        className="focus-ring inline-flex min-h-10 items-center gap-1 rounded-full bg-accent px-3 text-[11.5px] font-bold text-accent-contrast disabled:pointer-events-none disabled:opacity-45"
+                      >
+                        <Download className="size-3.5" />
+                        Installer
+                      </button>
+                    ) : null}
+                  </div>
+
+                  {updater.phase.kind === "downloading" ? (
+                    <div className="h-1.5 overflow-hidden rounded-full bg-surface-2">
+                      <div
+                        className={cn(
+                          "h-full rounded-full bg-accent transition-[width] duration-300",
+                          updater.phase.percent === null && "animate-pulse",
+                        )}
+                        style={{ width: `${updater.phase.percent ?? 35}%` }}
+                      />
+                    </div>
+                  ) : null}
+
+                  {updater.phase.kind === "available" && updater.phase.notes ? (
+                    <p className="max-h-40 overflow-y-auto rounded-xl bg-surface-2/70 px-2.5 py-2 text-[11.5px] leading-relaxed font-medium whitespace-pre-line text-ink-soft">
+                      {updater.phase.notes}
+                    </p>
+                  ) : null}
+
+                  {updater.phase.kind === "error" ? (
+                    <p className="flex items-start gap-1.5 rounded-xl bg-rose-500/10 px-2.5 py-2 text-[11px] font-semibold text-rose-700 dark:text-rose-300">
+                      <AlertTriangle className="mt-px size-3.5 shrink-0" />
+                      {updater.phase.message}
+                    </p>
+                  ) : null}
+
+                  <p className="text-[11px] leading-relaxed font-medium text-ink-muted">
+                    L'APK signé est vérifié avant installation, puis Android installe et relance
+                    Lavande sur la nouvelle version.
+                  </p>
+                </>
+              ) : null}
+            </Card>
+          </BlurFade>
+
           <BlurFade delay={0.15}>
             <div className="mt-6 px-5 text-center">
               <p className="text-[11px] font-semibold text-ink-muted">
-                <AnimatedGradientText>{brand}</AnimatedGradientText> · v0.2.2
+                <AnimatedGradientText>{brand}</AnimatedGradientText> · v{APP_VERSION}
                 {import.meta.env.VITE_DISTRIBUTION === "1" ? null : " · design preview"}
               </p>
               {import.meta.env.VITE_DISTRIBUTION === "1" ? null : (
@@ -990,6 +1079,14 @@ const MOBILE_FIELD =
   "focus-ring h-11 w-full rounded-xl border border-line bg-surface px-3 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted";
 
 const MOBILE_LABEL = "text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase";
+
+const UPDATE_TONES: Record<UpdateTone, string> = {
+  neutral: "bg-surface-2 text-ink-muted",
+  accent: "bg-accent-soft text-accent-ink",
+  green: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
+  amber: "bg-amber-500/14 text-amber-700 dark:text-amber-300",
+  rose: "bg-rose-500/12 text-rose-700 dark:text-rose-300",
+};
 
 const SOURCE_ACTION =
   "focus-ring inline-flex min-h-10 items-center gap-1 rounded-full border border-line bg-surface px-2.5 text-[11.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink disabled:pointer-events-none disabled:opacity-45";
