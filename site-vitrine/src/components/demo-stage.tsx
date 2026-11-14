@@ -19,7 +19,7 @@ const MODES: Record<
     icon: "monitor",
     width: 1280,
     height: 800,
-    src: `${import.meta.env.BASE_URL}demo/?desktop`,
+    src: `${import.meta.env.BASE_URL}demo/index.html?desktop`,
     poster: "pc-inbox",
   },
   phone: {
@@ -27,7 +27,7 @@ const MODES: Record<
     icon: "smartphone",
     width: 390,
     height: 844,
-    src: `${import.meta.env.BASE_URL}demo/?app`,
+    src: `${import.meta.env.BASE_URL}demo/index.html?app`,
     poster: "mobile-inbox",
   },
 };
