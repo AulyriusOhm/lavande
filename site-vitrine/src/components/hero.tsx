@@ -1,12 +1,13 @@
 import { motion } from "motion/react";
 
 import { Brand } from "@/components/brand";
-import { DemoStage } from "@/components/demo-stage";
 import { Icon } from "@/components/icons";
 import { AnimatedShinyText } from "@/components/magicui/animated-shiny-text";
 import { AuroraText } from "@/components/magicui/aurora-text";
+import { BorderBeam } from "@/components/magicui/border-beam";
 import { Marquee } from "@/components/magicui/marquee";
 import { ShimmerButton } from "@/components/magicui/shimmer-button";
+import { ThemeShot } from "@/components/ui/theme-shot";
 import { stagger, staggerItem } from "@/components/ui/reveal";
 import type { Theme } from "@/hooks/useTheme";
 import { container, sectionPad } from "@/lib/layout";
@@ -18,7 +19,7 @@ const AURORA_LIGHT = ["#6247dd", "#7457ea", "#c026d3", "#4f46e5"];
 
 export function Hero({ theme }: { theme: Theme }) {
   return (
-    <section id="demo" aria-labelledby="hero-title" className={`relative overflow-hidden ${sectionPad} pt-28 lg:pt-32`}>
+    <section id="top-hero" aria-labelledby="hero-title" className={`relative overflow-hidden ${sectionPad} pt-28 lg:pt-32`}>
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 -top-40 -z-10 h-[46rem] opacity-70 [mask-image:radial-gradient(70%_60%_at_50%_30%,#000_0%,transparent_80%)]"
@@ -29,7 +30,7 @@ export function Hero({ theme }: { theme: Theme }) {
       />
 
       <div className={`relative ${container}`}>
-        <div className="grid items-center gap-10 lg:grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)] lg:gap-12">
+        <div className="grid items-center gap-12 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
           <motion.div initial="hidden" animate="visible" variants={stagger} className="max-w-[32rem]">
             <motion.p variants={staggerItem}>
               <span className="inline-flex items-center gap-2 rounded-full border border-accent-ring/70 bg-accent-soft px-3 py-1.5 text-[0.7rem] font-extrabold tracking-[0.09em] text-accent-ink uppercase">
@@ -91,10 +92,9 @@ export function Hero({ theme }: { theme: Theme }) {
                 <span className="flex items-center gap-2.5 text-ink-soft">
                   <Brand name="linux" className="size-4" />
                   <Brand name="windows" className="size-3.5" />
-                  <Brand name="apple" className="size-4" />
                   <Brand name="android" className="size-4" />
                 </span>
-                Linux · Windows · macOS · Android
+                Linux · Windows · Android
               </li>
             </motion.ul>
           </motion.div>
@@ -109,11 +109,47 @@ export function Hero({ theme }: { theme: Theme }) {
               aria-hidden="true"
               className="pointer-events-none absolute inset-[-10%_-6%] -z-10 rounded-[3rem] bg-[radial-gradient(58%_58%_at_60%_34%,var(--glow),transparent_72%)] blur-[42px]"
             />
-            <DemoStage theme={theme} />
+            <div className="relative overflow-hidden rounded-[1.35rem] border border-line-strong bg-surface/85 shadow-[var(--shadow-soft)]">
+              <div className="flex items-center gap-2 border-b border-line bg-surface-2/70 px-3 py-2">
+                <span className="flex gap-1.5" aria-hidden="true">
+                  <i className="block size-2.5 rounded-full bg-[#f87171]/80" />
+                  <i className="block size-2.5 rounded-full bg-[#fbbf24]/80" />
+                  <i className="block size-2.5 rounded-full bg-[#34d399]/80" />
+                </span>
+                <span className="min-w-0 flex-1 truncate text-center text-[0.72rem] font-semibold text-ink-muted">
+                  Lavande — Boîte unifiée
+                </span>
+                <Icon name="inbox" className="size-3.5 text-ink-muted/70" />
+              </div>
+              <ThemeShot
+                name="pc-inbox"
+                alt="Boîte de réception Lavande : comptes unifiés, résumé IA et fil de discussion ouvert dans le panneau de lecture."
+                width={1600}
+                height={1000}
+                wrapperClassName="block w-full"
+                className="block aspect-[16/10] w-full object-cover object-top"
+              />
+              <BorderBeam size={170} duration={7} borderWidth={1.5} colorFrom="var(--accent-bright)" colorTo="var(--accent-deep)" />
+            </div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.7, duration: 0.6, ease: "easeOut" }}
+              className="absolute -bottom-5 -left-4 flex items-center gap-3 rounded-2xl border border-line-strong bg-surface/95 px-4 py-3 shadow-[var(--shadow-soft)] backdrop-blur sm:-left-8"
+            >
+              <span className="grid size-9 place-items-center rounded-xl bg-accent-soft text-accent">
+                <Icon name="sparkles" className="size-4" />
+              </span>
+              <span className="text-[0.78rem] leading-tight">
+                <strong className="block text-ink">Tâche suggérée</strong>
+                <span className="text-ink-muted">« Valider la v3 » · vendredi</span>
+              </span>
+            </motion.div>
           </motion.div>
         </div>
 
-        <div className="relative mt-14 overflow-hidden rounded-2xl border border-line/80 bg-surface/40 py-3">
+        <div className="relative mt-16 overflow-hidden rounded-2xl border border-line/80 bg-surface/40 py-3">
           <Marquee pauseOnHover className="[--duration:38s]">
             {PROTOCOLS.map((protocol) => (
               <span

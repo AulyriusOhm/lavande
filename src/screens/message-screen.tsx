@@ -444,7 +444,7 @@ export function MessageScreen({
         {readOnly ? (
           <p className="flex items-center justify-center gap-1.5 text-[11.5px] font-semibold text-ink-muted">
             <Lock className="size-3.5" strokeWidth={2.4} />
-            Démo · lecture seule
+            Démo · données d'exemple
           </p>
         ) : (
         <div className="flex items-center gap-2">

@@ -16,7 +16,7 @@ import { PrefsProvider, usePrefs } from "@/lib/prefs";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { createMemoryStorage } from "@/lib/sync/storage";
 
-const NOTICE = "Démo en lecture seule";
+const NOTICE = "Action indisponible dans la démo";
 
 function mount() {
   const wrapper = ({ children }: { children: ReactNode }) => (

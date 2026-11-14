@@ -28,8 +28,8 @@ export function DemoSection({ theme }: { theme: Theme }) {
           align="center"
           className="mx-auto max-w-[40rem] text-center"
         >
-          La vraie application, en lecture seule. Parcourez les dossiers, l’agenda, le kanban — sur
-          ordinateur ou téléphone. Rien n’est enregistré, rien ne sort de votre navigateur.
+          La vraie application, avec des données d'exemple. Parcourez les dossiers, l'agenda, le kanban —
+          sur ordinateur ou téléphone, directement dans votre navigateur.
         </SectionHead>
 
         <Reveal className="mx-auto mt-12 max-w-[62rem]">

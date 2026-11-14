@@ -170,10 +170,7 @@ export function ReadOnlyBanner({ variant = "mobile" }: { variant?: "mobile" | "d
     >
       <Lock className="size-3.5 shrink-0" strokeWidth={2.4} />
       <p className="text-[11.5px] font-bold tracking-tight">
-        Démo · lecture seule
-        <span className="ml-1.5 font-semibold opacity-70">
-          données d'exemple, aucune action enregistrée
-        </span>
+        Démo · données d'exemple
       </p>
     </div>
   );

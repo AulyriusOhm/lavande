@@ -118,10 +118,6 @@ export function DemoStage({ theme }: { theme: Theme }) {
             );
           })}
         </div>
-        <span className="inline-flex items-center gap-1.5 text-[0.72rem] font-semibold text-ink-muted">
-          <Icon name="shield" className="size-3.5 text-accent" />
-          Lecture seule
-        </span>
       </div>
 
       {mode === "desktop" ? (
@@ -133,7 +129,7 @@ export function DemoStage({ theme }: { theme: Theme }) {
               <i className="block size-2.5 rounded-full bg-[#34d399]/80" />
             </span>
             <span className="min-w-0 flex-1 truncate text-center text-[0.72rem] font-semibold text-ink-muted">
-              Lavande — démo en lecture seule
+              Lavande — démo
             </span>
             <Icon name="monitor" className="size-3.5 text-ink-muted/70" />
           </div>
@@ -141,7 +137,7 @@ export function DemoStage({ theme }: { theme: Theme }) {
             width={frame.width}
             height={frame.height}
             src={frame.src}
-            title="Lavande — démo en lecture seule"
+            title="Lavande — démo"
             frameKey={`${mode}-${theme}`}
             onLoad={() => setLoaded(true)}
             overlay={poster}
@@ -155,7 +151,7 @@ export function DemoStage({ theme }: { theme: Theme }) {
               width={frame.width}
               height={frame.height}
               src={frame.src}
-              title="Lavande — démo en lecture seule"
+              title="Lavande — démo"
               frameKey={`${mode}-${theme}`}
               onLoad={() => setLoaded(true)}
               overlay={poster}
@@ -166,7 +162,7 @@ export function DemoStage({ theme }: { theme: Theme }) {
 
       <p className="mt-3 flex items-start gap-1.5 text-[0.72rem] leading-relaxed text-ink-muted">
         <Icon name="sparkles" className="mt-0.5 size-3.5 shrink-0 text-accent" />
-        Données d’exemple · naviguez librement, rien n’est enregistré
+        Données d’exemple — naviguez librement.
       </p>
     </div>
   );

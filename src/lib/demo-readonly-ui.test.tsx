@@ -54,7 +54,7 @@ describe("démo lecture seule · coquille PC", () => {
   it("affiche le bandeau et masque le bouton de création", async () => {
     await openDesktop();
 
-    expect(banner()?.textContent).toContain("Démo · lecture seule");
+    expect(banner()?.textContent).toContain("Démo · données d'exemple");
     expect(screen.queryByRole("button", { name: "Nouveau message" })).toBeNull();
   });
 
@@ -77,14 +77,14 @@ describe("démo lecture seule · coquille PC", () => {
     await waitFor(() => expect(document.querySelector("[data-desktop]")).toBeTruthy());
     expect(screen.queryByRole("button", { name: "Répondre" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Transférer" })).toBeNull();
-    expect(screen.getAllByText("Démo · lecture seule").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Démo · données d'exemple").length).toBeGreaterThan(0);
 
     fireEvent.keyDown(window, { key: "Delete" });
     fireEvent.keyDown(window, { key: "e", ctrlKey: true });
     fireEvent.keyDown(window, { key: "S", ctrlKey: true, shiftKey: true });
 
     expect(rowIds()).toEqual(ids);
-    await waitFor(() => expect(screen.getByText("Démo en lecture seule")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Action indisponible dans la démo")).toBeTruthy());
   });
 
   it("garde la sélection et la lecture d'un message", async () => {
@@ -93,7 +93,7 @@ describe("démo lecture seule · coquille PC", () => {
     fireEvent.keyDown(window, { key: "Enter" });
 
     await waitFor(() => expect(document.querySelector("[data-desktop]")).toBeTruthy());
-    expect(within(banner()!).getByText(/Démo · lecture seule/)).toBeTruthy();
+    expect(within(banner()!).getByText(/Démo · données d'exemple/)).toBeTruthy();
     expect(rows().some((row) => row.dataset.mailRow === id)).toBe(true);
   });
 });

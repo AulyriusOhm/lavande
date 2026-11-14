@@ -82,7 +82,7 @@ page.on("pageerror", (error) => consoleErrors.push(String(error)));
 await page.goto(`${base}/`, { waitUntil: "load" });
 
 const darkFrame = await demoFrame(page, "?desktop");
-check("démo PC chargée dans le hero", darkFrame !== null, darkFrame ? darkFrame.url() : "absente");
+check("démo PC chargée (section essayer)", darkFrame !== null, darkFrame ? darkFrame.url() : "absente");
 
 const themeState = await page.evaluate(() => ({
   theme: document.documentElement.getAttribute("data-theme"),
@@ -151,7 +151,7 @@ await page.waitForTimeout(600);
 const backDark = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
 check("retour au thème sombre", backDark === "dark", `data-theme=${backDark}`);
 
-await page.locator("#demo").getByRole("button", { name: /Téléphone/i }).click();
+await page.locator("#essayer").getByRole("button", { name: /Téléphone/i }).click();
 await page.waitForTimeout(700);
 const phoneFrame = await demoFrame(page, "?app");
 const phoneSrc = await page.evaluate(() => document.querySelector("iframe").getAttribute("src"));
@@ -162,7 +162,7 @@ const phoneBanner = phoneFrame
   : "";
 check("bandeau lecture seule (téléphone)", phoneBanner.length > 0, phoneBanner);
 
-await page.locator("#demo").getByRole("button", { name: /Ordinateur/i }).click();
+await page.locator("#essayer").getByRole("button", { name: /Ordinateur/i }).click();
 await page.waitForTimeout(700);
 const desktopAgain = await demoFrame(page, "?desktop");
 const desktopSrc = await page.evaluate(() => document.querySelector("iframe").getAttribute("src"));
@@ -173,7 +173,7 @@ const desktopBanner = desktopAgain
 check("bandeau lecture seule (PC)", desktopBanner.length > 0, desktopBanner);
 
 const frameTitle = await page.evaluate(() => document.querySelector("iframe").getAttribute("title"));
-check("iframe titrée", frameTitle === "Lavande — démo en lecture seule", frameTitle ?? "absente");
+check("iframe titrée", frameTitle === "Lavande — démo", frameTitle ?? "absente");
 
 const links = await page.evaluate(() =>
   Array.from(document.querySelectorAll("a[href^='/updates/']")).map((a) => a.getAttribute("href")),

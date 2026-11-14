@@ -166,17 +166,6 @@ export function Download() {
           </div>
         </Reveal>
 
-        <p className="mt-5 flex flex-wrap items-center gap-2 text-[0.82rem] leading-relaxed text-ink-muted">
-          <Brand name="apple" className="size-4" />
-          macOS se compile depuis les sources (Tauri) ; la procédure est décrite dans la{" "}
-          <a
-            href="https://git.lanro.eu/Roman/lavande/src/branch/main/docs"
-            className="text-accent-ink underline-offset-4 hover:underline"
-          >
-            documentation
-          </a>
-          .
-        </p>
       </div>
     </section>
   );

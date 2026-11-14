@@ -54,7 +54,7 @@ const runLayout = async ({ label, url, viewport, isMobile = false, tabs, inboxTa
 
   const banner = page.locator("[data-demo-readonly]");
   const bannerCount = await banner.count();
-  check(`${label} · bandeau « Démo · lecture seule »`, bannerCount === 1,
+  check(`${label} · bandeau « Démo · données d'exemple »`, bannerCount === 1,
     bannerCount === 1 ? (await banner.innerText()).replace(/\s+/g, " ").trim() : "absent");
 
   const fabs = await Promise.all(FABS.map((name) => page.getByRole("button", { name, exact: true }).count()));
@@ -98,7 +98,7 @@ const runLayout = async ({ label, url, viewport, isMobile = false, tabs, inboxTa
   await rows.first().click();
   await page.waitForTimeout(400);
   const replies = await page.getByRole("button", { name: "Répondre", exact: true }).count();
-  const note = await page.getByText("Démo · lecture seule").count();
+  const note = await page.getByText("Démo · données d'exemple").count();
   check(`${label} · lecteur sans « Répondre » mais avec la mention`,
     replies === 0 && note > 0, `boutons=${replies} mentions=${note}`);
 

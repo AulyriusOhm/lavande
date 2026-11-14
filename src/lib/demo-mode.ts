@@ -13,4 +13,4 @@ export function mailMode(): MailMode {
 export const demoReadOnly: boolean =
   mailMode() === "demo" && import.meta.env.VITE_DEMO_READONLY === "1";
 
-export const READ_ONLY_NOTICE = "Démo en lecture seule";
+export const READ_ONLY_NOTICE = "Action indisponible dans la démo";
