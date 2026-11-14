@@ -184,6 +184,17 @@ const MOBILE_SHOTS = [
     },
   },
   {
+    name: "mobile-planning",
+    ready: "text=Planification",
+    act: async (page) => {
+      await clickUntil(
+        page,
+        () => page.getByRole("button", { name: "Planif.", exact: true }).click(),
+        "text=Planification",
+      );
+    },
+  },
+  {
     name: "mobile-settings",
     ready: "[data-mail-row]",
     act: async (page) => {

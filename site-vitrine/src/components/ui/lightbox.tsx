@@ -21,6 +21,7 @@ export const SHOTS = [
   { name: "pc-settings", label: "Réglages", device: "Ordinateur", w: 1600, h: 1000 },
   { name: "mobile-inbox", label: "Boîte de réception", device: "Téléphone", w: 780, h: 1688 },
   { name: "mobile-agenda", label: "Agenda", device: "Téléphone", w: 780, h: 1688 },
+  { name: "mobile-planning", label: "Planification", device: "Téléphone", w: 780, h: 1688 },
   { name: "mobile-settings", label: "Réglages", device: "Téléphone", w: 780, h: 1688 },
 ] as const;
 
