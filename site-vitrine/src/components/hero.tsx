@@ -2,7 +2,6 @@ import { motion } from "motion/react";
 
 import { Brand } from "@/components/brand";
 import { Icon } from "@/components/icons";
-import { AnimatedShinyText } from "@/components/magicui/animated-shiny-text";
 import { AuroraText } from "@/components/magicui/aurora-text";
 import { BorderBeam } from "@/components/magicui/border-beam";
 import { Marquee } from "@/components/magicui/marquee";
@@ -10,7 +9,7 @@ import { ShimmerButton } from "@/components/magicui/shimmer-button";
 import { ThemeShot } from "@/components/ui/theme-shot";
 import { stagger, staggerItem } from "@/components/ui/reveal";
 import type { Theme } from "@/hooks/useTheme";
-import { container, sectionPad } from "@/lib/layout";
+import { container } from "@/lib/layout";
 
 const PROTOCOLS = ["IMAP", "SMTP", "OAuth2", "CalDAV", "Google Agenda", "ICS", "OpenPGP", "MCP", "IA locale"];
 
@@ -19,7 +18,7 @@ const AURORA_LIGHT = ["#6247dd", "#7457ea", "#c026d3", "#4f46e5"];
 
 export function Hero({ theme }: { theme: Theme }) {
   return (
-    <section id="top-hero" aria-labelledby="hero-title" className={`relative overflow-hidden ${sectionPad} pt-28 lg:pt-32`}>
+    <section id="top-hero" aria-labelledby="hero-title" className="relative flex min-h-[100svh] flex-col justify-center overflow-hidden pt-24 pb-10">
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 -top-40 -z-10 h-[46rem] opacity-70 [mask-image:radial-gradient(70%_60%_at_50%_30%,#000_0%,transparent_80%)]"
@@ -32,16 +31,6 @@ export function Hero({ theme }: { theme: Theme }) {
       <div className={`relative ${container}`}>
         <div className="grid items-center gap-12 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
           <motion.div initial="hidden" animate="visible" variants={stagger} className="max-w-[32rem]">
-            <motion.p variants={staggerItem}>
-              <span className="inline-flex items-center gap-2 rounded-full border border-accent-ring/70 bg-accent-soft px-3 py-1.5 text-[0.7rem] font-extrabold tracking-[0.09em] text-accent-ink uppercase">
-                <span
-                  aria-hidden="true"
-                  className="block size-1.5 rounded-full bg-accent shadow-[0_0_0_4px_color-mix(in_oklab,var(--accent)_22%,transparent)]"
-                />
-                <AnimatedShinyText shimmerWidth={90}>Auto-hébergé · chiffré · sans tracking</AnimatedShinyText>
-              </span>
-            </motion.p>
-
             <motion.h1
               variants={staggerItem}
               id="hero-title"
