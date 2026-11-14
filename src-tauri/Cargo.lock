@@ -3003,6 +3003,7 @@ name = "lavande"
 version = "0.1.0"
 dependencies = [
  "base64 0.21.7",
+ "jni 0.21.1",
  "lavande-mail",
  "lavande-mail-api",
  "minisign-verify",
@@ -3054,6 +3055,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chacha20poly1305",
+ "chrono",
  "futures",
  "keyring",
  "lavande-mail",

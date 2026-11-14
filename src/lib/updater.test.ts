@@ -15,17 +15,14 @@ import {
   type UpdaterBackend,
 } from "@/lib/updater";
 
-const { invokeMock, fetchMock, listenMock, getVersionMock, unlistenMock } = vi.hoisted(() => ({
+const { invokeMock, fetchMock, getVersionMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
   fetchMock: vi.fn(),
-  listenMock: vi.fn(),
   getVersionMock: vi.fn(),
-  unlistenMock: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 vi.mock("@tauri-apps/plugin-http", () => ({ fetch: fetchMock }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: getVersionMock }));
 
 const ANDROID_ENDPOINT = "https://lavande.lanro.eu/updates/latest.json";
@@ -61,22 +58,12 @@ function serve(json: unknown) {
 
 function androidShell(options: { allowed?: boolean } = {}) {
   const commands: string[] = [];
-  let progress: ((event: { payload: { received: number; total: number; percent?: number } }) => void) | null =
-    null;
-  listenMock.mockImplementation(async (_event: string, handler: typeof progress) => {
-    progress = handler;
-    return unlistenMock;
-  });
   invokeMock.mockImplementation(async (command: string) => {
     commands.push(command);
     if (command === "android_update_endpoint") return ANDROID_ENDPOINT;
-    if (command === "plugin:lavandeupdater|downloadApk") {
-      progress?.({ payload: { received: 512, total: 1024, percent: 50 } });
-      progress?.({ payload: { received: 1024, total: 1024 } });
-      return { path: APK_PATH };
-    }
-    if (command === "plugin:lavandeupdater|canInstall") return { allowed: options.allowed ?? true };
-    if (command === "plugin:lavandeupdater|installApk") return { sessionId: 7 };
+    if (command === "plugin:lavandeupdater|download_apk") return { path: APK_PATH };
+    if (command === "plugin:lavandeupdater|can_install") return { allowed: options.allowed ?? true };
+    if (command === "plugin:lavandeupdater|install_apk") return { sessionId: 7 };
     return null;
   });
   return commands;
@@ -334,24 +321,19 @@ describe("androidUpdater.install", () => {
 
     expect(commands).toEqual([
       "android_update_endpoint",
-      "plugin:lavandeupdater|downloadApk",
+      "plugin:lavandeupdater|download_apk",
       "verify_android_update",
-      "plugin:lavandeupdater|canInstall",
-      "plugin:lavandeupdater|installApk",
+      "plugin:lavandeupdater|can_install",
+      "plugin:lavandeupdater|install_apk",
     ]);
-    expect(invokeMock).toHaveBeenCalledWith("plugin:lavandeupdater|downloadApk", { url: APK_URL });
+    expect(invokeMock).toHaveBeenCalledWith("plugin:lavandeupdater|download_apk", { url: APK_URL });
     expect(invokeMock).toHaveBeenCalledWith("verify_android_update", {
       path: APK_PATH,
       signature: "c2lnbmF0dXJl",
       version: "0.3.0",
     });
-    expect(invokeMock).toHaveBeenCalledWith("plugin:lavandeupdater|installApk", { path: APK_PATH });
-    expect(listenMock).toHaveBeenCalledWith(
-      "plugin:lavandeupdater://download-progress",
-      expect.any(Function),
-    );
-    expect(percents).toEqual([50, null]);
-    expect(unlistenMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).toHaveBeenCalledWith("plugin:lavandeupdater|install_apk", { path: APK_PATH });
+    expect(percents).toEqual([null]);
   });
 
   it("installateur non autorisé : réglages ouverts et erreur française", async () => {
@@ -359,9 +341,8 @@ describe("androidUpdater.install", () => {
     const commands = androidShell({ allowed: false });
     const pending = await androidUpdater().check();
     await expect(pending?.install(() => undefined)).rejects.toThrow(UNKNOWN_SOURCES);
-    expect(invokeMock).toHaveBeenCalledWith("plugin:lavandeupdater|openInstallSettings");
-    expect(commands).not.toContain("plugin:lavandeupdater|installApk");
-    expect(unlistenMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).toHaveBeenCalledWith("plugin:lavandeupdater|open_install_settings");
+    expect(commands).not.toContain("plugin:lavandeupdater|install_apk");
   });
 
   it("échec natif en chaîne : remonté en Error", async () => {
@@ -370,7 +351,6 @@ describe("androidUpdater.install", () => {
     const pending = await androidUpdater().check();
     invokeMock.mockRejectedValueOnce("téléchargement interrompu");
     await expect(pending?.install(() => undefined)).rejects.toThrow("téléchargement interrompu");
-    expect(unlistenMock).toHaveBeenCalledTimes(1);
   });
 });
 

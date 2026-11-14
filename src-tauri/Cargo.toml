@@ -27,6 +27,11 @@ serde_json = "1"
 minisign-verify = "0.3"
 base64 = "0.21"
 
+# Pont JNI du widget : la synchro de fond (WorkManager) appelle le Rust sans
+# WebView.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+
 [profile.dev]
 strip = "debuginfo"
 

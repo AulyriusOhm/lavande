@@ -130,10 +130,14 @@ L'app se met à jour elle-même, sans store : Réglages → **Mise à jour** (gr
 | --- | --- | --- |
 | 1. Manifeste | Front | `android_update_endpoint` (Rust) renvoie `plugins.updater.endpoints[0]` ; le front lit `version`, `notes` et `platforms.android` (filtré par `http:default`, HTTPS) |
 | 2. Comparaison | Front | `compareVersions` sur des segments numériques : rien à faire si la version annoncée n'est pas supérieure |
-| 3. Téléchargement | Plugin Kotlin | `plugin:lavandeupdater\|downloadApk` vers `cacheDir/lavande-update.apk`, schéma `https` exigé (HTTP seulement vers la boucle locale), progression par événement `plugin:lavandeupdater://download-progress` |
+| 3. Téléchargement | Plugin Kotlin | `plugin:lavandeupdater|download_apk` (relais Rust → Kotlin) vers `cacheDir/lavande-update.apk`, schéma `https` exigé (HTTP seulement vers la boucle locale) ; la barre reste indéterminée, le plugin ne relaie pas de pourcentage |
 | 4. Signature | Rust | `verify_android_update` : minisign avec la **même clé** que le bureau, et version du *trusted comment* égale à celle du manifeste — la vérification ne dépend pas du plugin |
-| 5. Autorisation | Plugin Kotlin | `canInstall` (`REQUEST_INSTALL_PACKAGES`) ; sinon `openInstallSettings` ouvre le réglage système de l'app et l'UI explique quoi faire |
-| 6. Installation | Plugin Kotlin | `installApk` : session `PackageInstaller`, `InstallResultReceiver` relaie la confirmation système (`STATUS_PENDING_USER_ACTION`) |
+| 5. Autorisation | Plugin Kotlin | `can_install` (`REQUEST_INSTALL_PACKAGES`) ; sinon `open_install_settings` ouvre le réglage système de l'app et l'UI explique quoi faire |
+| 6. Installation | Plugin Kotlin | `install_apk` : session `PackageInstaller`, `InstallResultReceiver` relaie la confirmation système (`STATUS_PENDING_USER_ACTION`) |
+
+Un plugin Kotlin n'est pas joignable depuis le JS : chaque commande ci-dessus est une
+commande **Rust** du plugin qui relaie vers Kotlin (`run_mobile_plugin_async`), et c'est ce
+relais qui porte la permission ACL.
 
 Ce qui reste vrai :
 
@@ -183,9 +187,17 @@ est **idempotent** et rejoué après `init` puis avant chaque build (les deux co
 | `res/values/colors.xml` | `lavande_canvas` `#fbfaff`, `ic_launcher_background` `#8b7cf6` | fond de fenêtre et fond de l'icône adaptative |
 | `res/values/themes.xml` et `res/values-night/themes.xml` | `android:windowBackground` = `@color/lavande_canvas` | évite le flash blanc au lancement (thème `Theme.Material3.DayNight.NoActionBar`) |
 | `res/mipmap-anydpi-v26/ic_launcher.xml` et `ic_launcher_round.xml` | icône adaptative : fond couleur + `@mipmap/ic_launcher_foreground` (dégradé plein cadre) | icône ronde / adaptative = carré dégradé violet |
-| `AndroidManifest.xml` | retire `android:usesCleartextTraffic`, pose `android:networkSecurityConfig`, `android:allowBackup="false"`, `android:fullBackupContent="false"`, `android:dataExtractionRules`, `REQUEST_INSTALL_PACKAGES` et le receiver `.InstallResultReceiver` | cleartext borné, sauvegarde fermée (voir ci-dessous), installation d'APK (mises à jour) |
+| `AndroidManifest.xml` | retire `android:usesCleartextTraffic`, pose `android:networkSecurityConfig`, `android:allowBackup="false"`, `android:fullBackupContent="false"`, `android:dataExtractionRules`, `REQUEST_INSTALL_PACKAGES`, `RECEIVE_BOOT_COMPLETED`, le receiver `.InstallResultReceiver`, le receiver `.LavandeWidgetProvider` (exporté, `APPWIDGET_UPDATE` + méta-données du widget) et le receiver `.BootReceiver` (`BOOT_COMPLETED`) | cleartext borné, sauvegarde fermée (voir ci-dessous), installation d'APK (mises à jour), widget et synchro de fond |
 | `java/mail/lavande/app/LavandeUpdaterPlugin.kt` | plugin Tauri `lavandeupdater` : `downloadApk`, `canInstall`, `openInstallSettings`, `installApk` | téléchargement de l'APK et session `PackageInstaller` |
 | `java/mail/lavande/app/InstallResultReceiver.kt` | receiver du résultat de session : relaie `STATUS_PENDING_USER_ACTION` (confirmation système) | sans lui, la confirmation d'installation n'apparaît jamais |
+| `java/mail/lavande/app/BackgroundSyncPlugin.kt` | plugin Tauri `lavandebgsync` : `setBackgroundSync`, `backgroundSyncState`, `setMutedAccounts`, `syncNow` | planification de la synchro de fond depuis les réglages de l'app |
+| `java/mail/lavande/app/BackgroundSyncLib.kt` | `object` JNI : `System.loadLibrary("lavande_lib")` + `external fun syncNow(dataDir)`, symbole `Java_mail_lavande_app_BackgroundSyncLib_syncNow` | WorkManager réveille le worker sans activité : la bibliothèque native doit être chargée par le worker lui-même |
+| `java/mail/lavande/app/LavandeSyncWorker.kt` | `CoroutineWorker` : appelle le Rust, filtre les comptes muets, écrit le résumé, rafraîchit le widget, notifie sur une hausse des non lus | exécution hors WebView, rejeu unique sur panne réseau (`runAttemptCount`) |
+| `java/mail/lavande/app/LavandeWidgetProvider.kt` | `AppWidgetProvider` qui rend `widget_summary` en `RemoteViews`, plus `refresh(context)` | affichage instantané, même app jamais ouverte |
+| `java/mail/lavande/app/LavandeBgPrefs.kt` | `SharedPreferences` `lavande_bg` : interrupteur, comptes muets, résumé du widget, non lus par compte | une seule source lue par le plugin, le worker, le widget et `BootReceiver` |
+| `java/mail/lavande/app/BootReceiver.kt` | réinscrit le travail périodique sur `BOOT_COMPLETED` si l'interrupteur est ouvert | WorkManager perd ses échéances au redémarrage de l'appareil |
+| `res/layout/lavande_widget.xml`, `res/xml/lavande_widget_info.xml`, `res/drawable/lavande_widget_bg.xml`, `res/drawable/ic_lavande_notification.xml` | mise en page (`LinearLayout`), métadonnées du widget (`minWidth`/`minHeight`, `updatePeriodMillis=0`), fond arrondi, icône de notification monochrome | `RemoteViews` refuse `ConstraintLayout` ; Android 8+ exige une petite icône blanche |
+| `app/build.gradle.kts` | ajoute `androidx.work:work-runtime-ktx:2.9.1` et `androidx.core:core-ktx:1.13.1` au bloc `dependencies` (seulement s'ils manquent) | WorkManager et `NotificationCompat` absents du modèle Gradle généré |
 | `res/xml/network_security_config.xml` | `cleartextTrafficPermitted="false"` en `base-config`, `true` seulement pour `127.0.0.1`, `localhost` et les hôtes de `LAVANDE_SYNC_HOSTS` | le démon mail local parle HTTP ; tout le reste doit être HTTPS |
 | `res/xml/data_extraction_rules.xml` | exclut `secrets.enc`, `secrets.key`, `daemon-token`, `mail.db` (+ `-wal`, `-shm`) et `app_webview` de `cloud-backup` et `device-transfer` | les secrets ne quittent pas l'appareil par une sauvegarde, même quand `allowBackup="false"` est ignoré (transfert d'appareil à appareil) |
 
@@ -223,6 +235,43 @@ mesuré : `.native-shell` réserve une marge fixe de 44 px (`--native-top`), par
 d'encoche change selon la marque et le modèle — une valeur mesurée serait juste ici et fausse ailleurs.
 Le listener garde la dernière valeur, réinjecte après `onResume` et sur `addOnGlobalLayoutListener`, et
 **n'injecte rien** si la signature `bottom|ime` n'a pas changé.
+
+## Synchronisation en arrière-plan et widget
+
+Le démon embarqué ne vit que dans l'app ouverte : un réveil système (WorkManager) synchronise les
+boîtes app fermée, et un widget d'écran d'accueil affiche les non lus et les derniers mails.
+
+| Pièce | Rôle |
+| --- | --- |
+| Cycle | un seul travail périodique unique (`lavande-mail-periodic`, **15 min**, minimum imposé par Android) avec contraintes « réseau connecté » + « batterie pas faible », plus un travail ponctuel (`lavande-mail-now`) à l'activation et sur `syncNow` |
+| Interrupteur | JS → `plugin:lavandebgsync\|set_background_sync` (`{enabled:boolean}`), relais Rust vers Kotlin `setBackgroundSync` : écrit `background_sync_enabled` dans les `SharedPreferences` `lavande_bg` puis planifie ou annule le travail ; `background_sync_state` relit le drapeau. `sync_now` renvoie `{ok:true}` après mise en file |
+| Réveil | `LavandeSyncWorker` (`CoroutineWorker`, contexte applicatif) appelle `BackgroundSyncLib.syncNow(dataDir)` |
+| Pont JNI | `src-tauri/src/sync_bridge.rs`, symbole `Java_mail_lavande_app_BackgroundSyncLib_syncNow` : runtime tokio, **sa propre** instance de `AppState` sur le même `mail.db`, puis `lavande_mail_api::widget::sync_and_summarize(&state, 3)`. Rend `{"summary":{"accounts":[…],"mails":[…],"unread":N,"updated_at":TS}}` ou `{"error":"…"}` ; aucune panique ni exception ne traverse la FFI |
+| Résumé | `crates/mail-api/src/widget.rs` : par compte, INBOX résolue par `role == Inbox` (repli `INBOX`), non lus = `folder_counts` de **cette seule** boîte, mails = `threads_in_folder(…, 3, 0)` (les 3 plus récents, comptes mêlés), `from` = nom affiché sinon adresse. Erreurs de lecture et de synchro collectées, jamais fatales ; `summarize` est testé côté hôte |
+| Comptes muets | `plugin:lavandebgsync\|set_muted_accounts` (`{ids}`) → Kotlin `setMutedAccounts` (périmètre #32) : le Rust rend **tous** les comptes, le filtrage se fait en Kotlin après parsing — un compte muet disparaît du widget et des notifications |
+| Widget | `LavandeWidgetProvider` rend le résumé stocké en `RemoteViews` (`LinearLayout` de quatre `TextView`) : « N non lus » + jusqu'à 3 lignes « étiquette · sujet », « Aucun compte » si aucun compte ; tout le widget ouvre `MainActivity`. `updatePeriodMillis=0` : seul le worker le rafraîchit |
+| Notification | canal `mails`, le même que `src/lib/notify.ts` (créé s'il manque, `IMPORTANCE_HIGH`, description identique) ; une seule notification, et seulement quand le nombre de non lus d'un compte **dépasse** le compteur mémorisé (`widget_unread`) |
+| Démarrage | `BootReceiver` (`BOOT_COMPLETED` + `RECEIVE_BOOT_COMPLETED`) réinscrit le travail périodique quand l'interrupteur est ouvert |
+
+Points durs :
+
+- **Même base SQLite, deux instances.** Le worker entre par un autre chemin que l'app (aucune activité,
+aucune WebView) et ouvre ses propres connexions ; `journal_mode=WAL` et `busy_timeout(5s)`, posés par
+`Store::open`, sérialisent les écritures. Une synchro de l'app ouverte et une du worker peuvent se
+chevaucher sans corruption, au prix d'un aller-retour IMAP en double.
+- **Le worker charge la bibliothèque lui-même** : le `System.loadLibrary` vit dans `BackgroundSyncLib.init`,
+parce qu'aucun `MainActivity` n'existe quand WorkManager réveille le processus.
+- **Persistance du travail** : WorkManager garde ses échéances dans sa propre base, elles survivent à un
+kill de l'app mais **pas** au redémarrage de l'appareil — d'où `BootReceiver`. Une mise à jour d'APK
+conserve la file. Désactiver la synchro annule le travail périodique, pas le résumé déjà stocké.
+- **Rythme imprécis** : 15 min est un minimum, Android regroupe les réveils et Doze décale davantage.
+Rien ne garantit une relève à l'heure près ; le résumé porte son horodatage (`updated_at`), que le
+widget n'affiche pas faute de place.
+- **`RemoteViews`** : ni `ConstraintLayout` ni `TextView` riche — la mise en page reste un `LinearLayout`
+de `TextView`, ce qui borne la mise en forme (une ligne par mail, tronquée).
+- **Permission de notification** : `POST_NOTIFICATIONS` est déclarée, mais un refus utilisateur
+(`areNotificationsEnabled()` faux) laisse le worker silencieux : widget et compteurs se mettent à jour
+quand même.
 
 ## Côté web
 

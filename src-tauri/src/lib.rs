@@ -1,5 +1,18 @@
 use tauri::Manager;
 
+#[cfg(target_os = "android")]
+pub mod sync_bridge;
+
+/// Poignées des plugins Kotlin. Une commande Kotlin n'est joignable depuis le
+/// JS que par une commande Rust qui la relaie : `PluginManager.runCommand`
+/// n'est appelé que par `run_mobile_plugin`. C'est ce relais qui porte aussi la
+/// permission ACL (`build.rs`).
+#[cfg(target_os = "android")]
+struct UpdaterPluginHandle(tauri::plugin::PluginHandle<tauri::Wry>);
+
+#[cfg(target_os = "android")]
+struct SyncPluginHandle(tauri::plugin::PluginHandle<tauri::Wry>);
+
 /// Boucle locale : la coquille Tauri embarque le routeur HTTP du démon mail.
 const BIND: &str = "127.0.0.1:8790";
 
@@ -81,6 +94,81 @@ fn android_update_endpoint(app: tauri::AppHandle) -> Result<String, String> {
         .ok_or("aucun endpoint updater configuré".to_string())
 }
 
+/// Relais des commandes du plugin Kotlin `LavandeUpdaterPlugin`.
+#[cfg(target_os = "android")]
+mod android_commands {
+    use super::{SyncPluginHandle, UpdaterPluginHandle};
+    use serde_json::Value;
+    use tauri::State;
+
+    async fn forward(
+        handle: &tauri::plugin::PluginHandle<tauri::Wry>,
+        command: &str,
+        payload: Value,
+    ) -> Result<Value, String> {
+        handle
+            .run_mobile_plugin_async(command, payload)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn download_apk(
+        updater: State<'_, UpdaterPluginHandle>,
+        url: String,
+    ) -> Result<Value, String> {
+        forward(&updater.0, "downloadApk", serde_json::json!({ "url": url })).await
+    }
+
+    #[tauri::command]
+    pub async fn can_install(updater: State<'_, UpdaterPluginHandle>) -> Result<Value, String> {
+        forward(&updater.0, "canInstall", Value::Null).await
+    }
+
+    #[tauri::command]
+    pub async fn open_install_settings(
+        updater: State<'_, UpdaterPluginHandle>,
+    ) -> Result<Value, String> {
+        forward(&updater.0, "openInstallSettings", Value::Null).await
+    }
+
+    #[tauri::command]
+    pub async fn install_apk(
+        updater: State<'_, UpdaterPluginHandle>,
+        path: String,
+    ) -> Result<Value, String> {
+        forward(&updater.0, "installApk", serde_json::json!({ "path": path })).await
+    }
+
+    #[tauri::command]
+    pub async fn set_background_sync(
+        sync: State<'_, SyncPluginHandle>,
+        enabled: bool,
+    ) -> Result<Value, String> {
+        forward(&sync.0, "setBackgroundSync", serde_json::json!({ "enabled": enabled })).await
+    }
+
+    #[tauri::command]
+    pub async fn background_sync_state(
+        sync: State<'_, SyncPluginHandle>,
+    ) -> Result<Value, String> {
+        forward(&sync.0, "backgroundSyncState", Value::Null).await
+    }
+
+    #[tauri::command]
+    pub async fn set_muted_accounts(
+        sync: State<'_, SyncPluginHandle>,
+        ids: Vec<String>,
+    ) -> Result<Value, String> {
+        forward(&sync.0, "setMutedAccounts", serde_json::json!({ "ids": ids })).await
+    }
+
+    #[tauri::command]
+    pub async fn sync_now(sync: State<'_, SyncPluginHandle>) -> Result<Value, String> {
+        forward(&sync.0, "syncNow", Value::Null).await
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -89,15 +177,41 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
-    // Plugin Kotlin local (téléchargement + PackageInstaller) : fourni par
-    // scripts/patch-android.mjs dans le projet Android régénéré.
+    // Plugins Kotlin locaux (fournis par scripts/patch-android.mjs) + leurs
+    // relais Rust : sans `invoke_handler`, un invoke JS sur le plugin n'a
+    // aucune commande à qui répondre.
     #[cfg(target_os = "android")]
     let builder = builder.plugin(
         tauri::plugin::Builder::<_, ()>::new("lavandeupdater")
-            .setup(|_app, api| {
-                api.register_android_plugin("mail.lavande.app", "LavandeUpdaterPlugin")?;
+            .setup(|app, api| {
+                let handle =
+                    api.register_android_plugin("mail.lavande.app", "LavandeUpdaterPlugin")?;
+                app.manage(UpdaterPluginHandle(handle));
                 Ok(())
             })
+            .invoke_handler(tauri::generate_handler![
+                android_commands::download_apk,
+                android_commands::can_install,
+                android_commands::open_install_settings,
+                android_commands::install_apk
+            ])
+            .build(),
+    );
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<_, ()>::new("lavandebgsync")
+            .setup(|app, api| {
+                let handle =
+                    api.register_android_plugin("mail.lavande.app", "BackgroundSyncPlugin")?;
+                app.manage(SyncPluginHandle(handle));
+                Ok(())
+            })
+            .invoke_handler(tauri::generate_handler![
+                android_commands::set_background_sync,
+                android_commands::background_sync_state,
+                android_commands::set_muted_accounts,
+                android_commands::sync_now
+            ])
             .build(),
     );
     builder

@@ -171,8 +171,6 @@ export function tauriUpdater(): UpdaterBackend {
   };
 }
 
-const ANDROID_PROGRESS_EVENT = "plugin:lavandeupdater://download-progress";
-
 const ANDROID_UNKNOWN_SOURCES =
   "Autorisez l'installation d'applications inconnues pour Lavande, puis relancez la mise à jour.";
 
@@ -217,13 +215,9 @@ function pendingAndroidUpdate(apk: AndroidApk, notes: string): PendingUpdate {
     notes,
     install: async (onProgress) => {
       const { invoke } = await import("@tauri-apps/api/core");
-      const { listen } = await import("@tauri-apps/api/event");
-      const unlisten = await listen<{ received: number; total: number; percent?: number }>(
-        ANDROID_PROGRESS_EVENT,
-        (event) => onProgress(event.payload.percent ?? null),
-      );
+      onProgress(null);
       try {
-        const { path } = await invoke<{ path: string }>("plugin:lavandeupdater|downloadApk", {
+        const { path } = await invoke<{ path: string }>("plugin:lavandeupdater|download_apk", {
           url: apk.url,
         });
         await invoke("verify_android_update", {
@@ -231,16 +225,14 @@ function pendingAndroidUpdate(apk: AndroidApk, notes: string): PendingUpdate {
           signature: apk.signature,
           version: apk.version,
         });
-        const { allowed } = await invoke<{ allowed: boolean }>("plugin:lavandeupdater|canInstall");
+        const { allowed } = await invoke<{ allowed: boolean }>("plugin:lavandeupdater|can_install");
         if (!allowed) {
-          await invoke("plugin:lavandeupdater|openInstallSettings");
+          await invoke("plugin:lavandeupdater|open_install_settings");
           throw new Error(ANDROID_UNKNOWN_SOURCES);
         }
-        await invoke("plugin:lavandeupdater|installApk", { path });
+        await invoke("plugin:lavandeupdater|install_apk", { path });
       } catch (error) {
         throw new Error(messageOf(error));
-      } finally {
-        unlisten();
       }
     },
     close: async () => undefined,

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   AlertTriangle,
@@ -67,6 +67,12 @@ import { BlurFade } from "@/components/ui/blur-fade";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { AnimatedGradientText } from "@/components/ui/animated-text";
 import { APP_VERSION, phaseLabel, useUpdater, type UpdateTone } from "@/lib/updater";
+import {
+  backgroundSyncSupported,
+  readBackgroundSync,
+  useMutedAccountsSync,
+  writeBackgroundSync,
+} from "@/lib/background-sync";
 
 const LLM_FIELDS: { key: keyof LlmConfig; label: string; aria: string; placeholder: string; password?: boolean }[] = [
   { key: "endpoint", label: "Endpoint", aria: "Endpoint du modèle", placeholder: "https://api.openai.com/v1" },
@@ -138,6 +144,10 @@ export function SettingsScreen({
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [probing, setProbing] = useState(false);
   const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(null);
+  const [backgroundSync, setBackgroundSync] = useState(false);
+  const [backgroundSyncError, setBackgroundSyncError] = useState<string | null>(null);
+  const backgroundSyncOn = backgroundSyncSupported();
+  useMutedAccountsSync(accounts, perimeters);
   const scrollRef = useRef<HTMLDivElement>(null);
   const groups =
     import.meta.env.VITE_PLATFORM === "android" ? GROUPS.filter((entry) => entry.id !== "mcp") : GROUPS;
@@ -157,6 +167,28 @@ export function SettingsScreen({
   const showGroup = (id: GroupId | null) => {
     setOpenGroup(id);
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  };
+
+  useEffect(() => {
+    if (!backgroundSyncOn) return;
+    let alive = true;
+    void readBackgroundSync().then((enabled) => {
+      if (alive) setBackgroundSync(enabled);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [backgroundSyncOn]);
+
+  const toggleBackgroundSync = async (enabled: boolean) => {
+    setBackgroundSyncError(null);
+    setBackgroundSync(enabled);
+    try {
+      await writeBackgroundSync(enabled);
+    } catch (failure) {
+      setBackgroundSync(!enabled);
+      setBackgroundSyncError(failureText(failure));
+    }
   };
 
   const updateLlm = (key: keyof LlmConfig, value: string) => {
@@ -712,6 +744,33 @@ export function SettingsScreen({
               ) : null}
             </Card>
           </BlurFade>
+
+          {backgroundSyncOn ? (
+            <>
+              <SectionTitle hint="Android">Application</SectionTitle>
+              <BlurFade delay={0.19}>
+                <Card className="mx-5 divide-y divide-line/80 overflow-hidden">
+                  <ToggleRow
+                    icon={<RefreshCw className="size-4" />}
+                    label="Synchronisation en arrière-plan"
+                    hint="Relevé des boîtes app fermée"
+                    checked={backgroundSync}
+                    onChange={(value) => void toggleBackgroundSync(value)}
+                  />
+                </Card>
+                <p className="mt-2 px-5 text-[12px] leading-relaxed font-medium text-ink-muted">
+                  Android relève les boîtes toutes les 15 minutes au mieux, réseau obligatoire. Le widget de
+                  l'écran d'accueil affiche les non-lus par compte.
+                </p>
+                {backgroundSyncError ? (
+                  <p className="mx-5 mt-2 flex items-start gap-1.5 rounded-xl bg-rose-500/10 px-2.5 py-2 text-[11px] font-semibold text-rose-700 dark:text-rose-300">
+                    <AlertTriangle className="mt-px size-3.5 shrink-0" />
+                    Réglage non enregistré · {backgroundSyncError}
+                  </p>
+                ) : null}
+              </BlurFade>
+            </>
+          ) : null}
         </>
       ) : null}
 
@@ -1077,6 +1136,9 @@ export function SettingsScreen({
 
 const MOBILE_FIELD =
   "focus-ring h-11 w-full rounded-xl border border-line bg-surface px-3 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted";
+
+const failureText = (failure: unknown): string =>
+  failure instanceof Error ? failure.message : typeof failure === "string" ? failure : "échec inconnu";
 
 const MOBILE_LABEL = "text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase";
 

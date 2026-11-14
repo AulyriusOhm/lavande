@@ -18,6 +18,7 @@
     "core:window:allow-set-title",
     "updater:default",
     "lavandeupdater:default",
+    "lavandebgsync:default",
     "process:default"
   ]
 }
