@@ -19,7 +19,7 @@ const MODES: Record<
     icon: "monitor",
     width: 1280,
     height: 800,
-    src: "/demo/?desktop",
+    src: `${import.meta.env.BASE_URL}demo/?desktop`,
     poster: "pc-inbox",
   },
   phone: {
@@ -27,7 +27,7 @@ const MODES: Record<
     icon: "smartphone",
     width: 390,
     height: 844,
-    src: "/demo/?app",
+    src: `${import.meta.env.BASE_URL}demo/?app`,
     poster: "mobile-inbox",
   },
 };
@@ -70,12 +70,12 @@ export function DemoStage({ theme }: { theme: Theme }) {
     >
       <span className="block h-full w-full">
         <img
-          src={`/shots/${frame.poster}-dark.webp`}
+          src={`${import.meta.env.BASE_URL}shots/${frame.poster}-dark.webp`}
           alt=""
           className="shot-dark h-full w-full object-cover object-top"
         />
         <img
-          src={`/shots/${frame.poster}-light.webp`}
+          src={`${import.meta.env.BASE_URL}shots/${frame.poster}-light.webp`}
           alt=""
           className="shot-light h-full w-full object-cover object-top"
         />

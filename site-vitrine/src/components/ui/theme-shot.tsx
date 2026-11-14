@@ -13,7 +13,7 @@ export function ThemeShot({ name, alt, width, height, className, wrapperClassNam
   return (
     <span className={wrapperClassName}>
       <img
-        src={`/shots/${name}-dark.webp`}
+        src={`${import.meta.env.BASE_URL}shots/${name}-dark.webp`}
         alt={alt}
         width={width}
         height={height}
@@ -22,7 +22,7 @@ export function ThemeShot({ name, alt, width, height, className, wrapperClassNam
         className={`shot-dark ${className ?? ""}`}
       />
       <img
-        src={`/shots/${name}-light.webp`}
+        src={`${import.meta.env.BASE_URL}shots/${name}-light.webp`}
         alt=""
         aria-hidden="true"
         width={width}
