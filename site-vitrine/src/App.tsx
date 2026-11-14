@@ -1,11 +1,13 @@
 import { MotionConfig } from "motion/react";
 
+import { DemoSection } from "@/components/demo-section";
 import { Download } from "@/components/download";
 import { Features } from "@/components/features";
 import { Flow } from "@/components/flow";
 import { Footer } from "@/components/footer";
 import { Header } from "@/components/header";
 import { Hero } from "@/components/hero";
+import { Manifesto } from "@/components/manifesto";
 import { MobileSection } from "@/components/mobile-section";
 import { Security } from "@/components/security";
 import { useTheme } from "@/hooks/useTheme";
@@ -26,8 +28,10 @@ export function App() {
         <span id="top" aria-hidden="true" />
         <Hero theme={theme} />
         <Features />
-        <MobileSection />
         <Flow />
+        <MobileSection />
+        <Manifesto />
+        <DemoSection theme={theme} />
         <Download />
         <Security />
       </main>

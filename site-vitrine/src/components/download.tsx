@@ -1,3 +1,4 @@
+import { Brand, type BrandName } from "@/components/brand";
 import { Icon, type IconName } from "@/components/icons";
 import { BorderBeam } from "@/components/magicui/border-beam";
 import { DotPattern } from "@/components/magicui/dot-pattern";
@@ -8,7 +9,7 @@ import { container, sectionPad } from "@/lib/layout";
 interface Platform {
   name: string;
   os: string;
-  icon: IconName;
+  brand: BrandName;
   copy: string;
   file: string;
   href: string;
@@ -20,7 +21,7 @@ const PLATFORMS: Platform[] = [
   {
     name: "Linux · AppImage",
     os: "x86_64",
-    icon: "package",
+    brand: "linux",
     copy: "Un fichier unique, sans installation : rendez-le exécutable et lancez-le. C’est le format qui se met à jour en place.",
     file: "Lavande_0.2.4_amd64.AppImage.tar.gz",
     href: "/updates/Lavande_0.2.4_amd64.AppImage.tar.gz",
@@ -30,8 +31,8 @@ const PLATFORMS: Platform[] = [
   {
     name: "Linux · RPM",
     os: "Fedora · RHEL",
-    icon: "server",
-    copy: "Paquet système pour Fedora et dérivés RHEL. L’installation et les mises à jour demandent polkit ou sudo.",
+    brand: "linux",
+    copy: "Paquet système pour Fedora et dérivés RHEL. Installation et mises à jour via polkit ou sudo.",
     file: "Lavande-0.2.4-1.x86_64.rpm",
     href: "/updates/Lavande-0.2.4-1.x86_64.rpm",
     cta: "Télécharger le RPM",
@@ -39,8 +40,8 @@ const PLATFORMS: Platform[] = [
   {
     name: "Linux · DEB",
     os: "Debian · Ubuntu",
-    icon: "package",
-    copy: "Paquet système pour Debian, Ubuntu et dérivés. L’installation et les mises à jour demandent sudo.",
+    brand: "linux",
+    copy: "Paquet système pour Debian, Ubuntu et dérivés. Installation et mises à jour via sudo.",
     file: "Lavande_0.2.4_amd64.deb",
     href: "/updates/Lavande_0.2.4_amd64.deb",
     cta: "Télécharger le DEB",
@@ -48,16 +49,16 @@ const PLATFORMS: Platform[] = [
   {
     name: "Windows · Installeur",
     os: "x64",
-    icon: "columns",
+    brand: "windows",
     copy: "Installeur NSIS pour Windows 10/11 (WebView2 préinstallé). Le moteur mail et l’agenda tournent en local, comme sur Linux.",
-    file: "Lavande_0.2.0_x64-setup.exe",
-    href: "/updates/Lavande_0.2.0_x64-setup.exe",
+    file: "Lavande_0.2.4_x64-setup.exe",
+    href: "/updates/Lavande_0.2.4_x64-setup.exe",
     cta: "Télécharger l’installeur",
   },
   {
     name: "Android · APK",
     os: "arm64",
-    icon: "smartphone",
+    brand: "android",
     copy: "La même interface, en plein écran, avec le moteur mail embarqué. L’APK se réinstalle à la main à chaque version.",
     file: "Lavande.apk",
     href: "/updates/Lavande.apk",
@@ -81,9 +82,8 @@ export function Download() {
         cr={1}
       />
       <div className={`relative ${container}`}>
-        <SectionHead kicker="Téléchargement" title="Emportez Lavande avec vous" titleId="download-title">
-          Version 0.2.4. Paquets signés pour Linux et Android, mises à jour automatiques sur le
-          bureau.
+        <SectionHead index="05" kicker="Téléchargement" title="Installez-la chez vous" titleId="download-title">
+          Version 0.2.4. Paquets signés pour Linux et Android, mises à jour automatiques sur le bureau.
         </SectionHead>
 
         <Reveal className="mt-5 flex flex-wrap gap-x-5 gap-y-2">
@@ -117,9 +117,9 @@ export function Download() {
                     Recommandé
                   </span>
                 ) : null}
-                <div className="flex items-center gap-2.5">
-                  <span className="grid size-9 place-items-center rounded-xl border border-line bg-surface-2 text-accent-ink transition-colors group-hover:border-accent-ring group-hover:text-accent">
-                    <Icon name={platform.icon} className="size-[1.15rem]" />
+                <div className="flex items-center gap-3">
+                  <span className="grid size-10 place-items-center rounded-xl border border-line bg-surface-2 text-ink transition-colors group-hover:border-accent-ring group-hover:text-accent">
+                    <Brand name={platform.brand} className="size-5" />
                   </span>
                   <h3 className="text-lg text-ink">{platform.name}</h3>
                 </div>
@@ -166,8 +166,9 @@ export function Download() {
           </div>
         </Reveal>
 
-        <p className="mt-5 text-[0.82rem] leading-relaxed text-ink-muted">
-          Windows et macOS se compilent depuis les sources (Tauri) ; la procédure est décrite dans la{" "}
+        <p className="mt-5 flex flex-wrap items-center gap-2 text-[0.82rem] leading-relaxed text-ink-muted">
+          <Brand name="apple" className="size-4" />
+          macOS se compile depuis les sources (Tauri) ; la procédure est décrite dans la{" "}
           <a
             href="https://git.lanro.eu/Roman/lavande/src/branch/main/docs"
             className="text-accent-ink underline-offset-4 hover:underline"

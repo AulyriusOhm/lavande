@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 
 const NAV = [
   { id: "fonctionnalites", label: "Fonctionnalités" },
-  { id: "demo", label: "Démo" },
+  { id: "essayer", label: "Démo" },
   { id: "mobile", label: "Mobile" },
   { id: "telecharger", label: "Télécharger" },
   { id: "securite", label: "Sécurité" },
@@ -72,12 +72,12 @@ export function Header({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: 
     >
       <div className={`${container} flex min-h-[4.4rem] items-center gap-3`}>
         <a href="#top" className="inline-flex items-center gap-2.5 text-ink no-underline" aria-label="Lavande, revenir en haut de la page">
-          <span
+          <img
+            src={`${import.meta.env.BASE_URL}favicon.svg`}
+            alt=""
             aria-hidden="true"
-            className="grid size-9 place-items-center rounded-xl bg-[linear-gradient(145deg,var(--accent-bright),var(--accent)_55%,#6d5ce0)] text-sm font-extrabold text-white shadow-[0_8px_20px_-8px_var(--glow)]"
-          >
-            L
-          </span>
+            className="size-9 rounded-xl shadow-[0_8px_20px_-8px_var(--glow)]"
+          />
           <span className="text-[1.05rem] font-extrabold tracking-[-0.025em]">Lavande</span>
         </a>
 

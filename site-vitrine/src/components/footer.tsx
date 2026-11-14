@@ -16,12 +16,12 @@ export function Footer() {
         <div className="flex flex-col gap-8 py-12 md:flex-row md:justify-between">
           <div className="max-w-sm">
             <a href="#top" className="inline-flex items-center gap-2.5 text-ink no-underline">
-              <span
+              <img
+                src={`${import.meta.env.BASE_URL}favicon.svg`}
+                alt=""
                 aria-hidden="true"
-                className="grid size-9 place-items-center rounded-xl bg-[linear-gradient(145deg,var(--accent-bright),var(--accent)_55%,#6d5ce0)] text-sm font-extrabold text-white shadow-[0_8px_20px_-8px_var(--glow)]"
-              >
-                L
-              </span>
+                className="size-9 rounded-xl shadow-[0_8px_20px_-8px_var(--glow)]"
+              />
               <span className="text-[1.05rem] font-extrabold tracking-[-0.025em]">Lavande</span>
             </a>
             <p className="mt-3 text-sm leading-relaxed text-ink-soft">

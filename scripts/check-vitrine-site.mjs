@@ -151,22 +151,22 @@ await page.waitForTimeout(600);
 const backDark = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
 check("retour au thème sombre", backDark === "dark", `data-theme=${backDark}`);
 
-await page.getByRole("button", { name: /Téléphone/i }).click();
+await page.locator("#demo").getByRole("button", { name: /Téléphone/i }).click();
 await page.waitForTimeout(700);
 const phoneFrame = await demoFrame(page, "?app");
 const phoneSrc = await page.evaluate(() => document.querySelector("iframe").getAttribute("src"));
-check("bascule téléphone : src de l'iframe", phoneSrc === "/demo/?app", phoneSrc ?? "absente");
+check("bascule téléphone : src de l'iframe", phoneSrc === "/demo/index.html?app", phoneSrc ?? "absente");
 check("démo téléphone chargée + bandeau", phoneFrame !== null, phoneFrame ? phoneFrame.url() : "absente");
 const phoneBanner = phoneFrame
   ? (await phoneFrame.locator("[data-demo-readonly]").innerText()).replace(/\s+/g, " ").trim()
   : "";
 check("bandeau lecture seule (téléphone)", phoneBanner.length > 0, phoneBanner);
 
-await page.getByRole("button", { name: /Ordinateur/i }).click();
+await page.locator("#demo").getByRole("button", { name: /Ordinateur/i }).click();
 await page.waitForTimeout(700);
 const desktopAgain = await demoFrame(page, "?desktop");
 const desktopSrc = await page.evaluate(() => document.querySelector("iframe").getAttribute("src"));
-check("retour PC : src de l'iframe", desktopSrc === "/demo/?desktop", desktopSrc ?? "absente");
+check("retour PC : src de l'iframe", desktopSrc === "/demo/index.html?desktop", desktopSrc ?? "absente");
 const desktopBanner = desktopAgain
   ? (await desktopAgain.locator("[data-demo-readonly]").innerText()).replace(/\s+/g, " ").trim()
   : "";
@@ -182,7 +182,7 @@ const expected = [
   "/updates/Lavande_0.2.4_amd64.AppImage.tar.gz",
   "/updates/Lavande-0.2.4-1.x86_64.rpm",
   "/updates/Lavande_0.2.4_amd64.deb",
-  "/updates/Lavande_0.2.0_x64-setup.exe",
+  "/updates/Lavande_0.2.4_x64-setup.exe",
   "/updates/Lavande.apk",
   "/updates/latest.json",
   "/updates/lavande-release.asc",
@@ -203,7 +203,7 @@ const settle = async () => {
 
 const anchors = [
   ["Fonctionnalités", "fonctionnalites", "features-title"],
-  ["Démo", "demo", "hero-title"],
+  ["Démo", "essayer", "essayer-title"],
   ["Mobile", "mobile", "mobile-title"],
   ["Télécharger", "telecharger", "download-title"],
   ["Sécurité", "securite", "security-title"],
@@ -291,7 +291,7 @@ for (const viewport of viewports) {
   );
   if (viewport.name === "mobile") {
     const mobileSrc = await page.evaluate(() => document.querySelector("iframe").getAttribute("src"));
-    check("démo en mode téléphone par défaut sur mobile", mobileSrc === "/demo/?app", mobileSrc ?? "absente");
+    check("démo en mode téléphone par défaut sur mobile", mobileSrc === "/demo/index.html?app", mobileSrc ?? "absente");
     await scrollThrough();
     await page.waitForTimeout(400);
     await page.screenshot({ path: "artifacts/vitrine-site-mobile.png", fullPage: true });

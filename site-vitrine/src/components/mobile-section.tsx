@@ -36,7 +36,7 @@ export function MobileSection() {
         className="pointer-events-none absolute inset-x-0 top-1/4 -z-10 mx-auto h-[26rem] w-[70rem] max-w-full rounded-full bg-[radial-gradient(circle,var(--glow),transparent_70%)] opacity-70 blur-[80px]"
       />
       <div className={container}>
-        <SectionHead kicker="Android" title="Dans votre poche" titleId="mobile-title" align="center">
+        <SectionHead index="03" kicker="Android" title="Dans votre poche" titleId="mobile-title" align="center">
           La même interface, en plein écran, avec le moteur mail embarqué. L’APK se réinstalle à la
           main à chaque version.
         </SectionHead>
