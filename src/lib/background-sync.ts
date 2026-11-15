@@ -6,6 +6,8 @@
 import { useEffect } from "react";
 import { isNativeShell } from "@/lib/native";
 import { perimeterOf, type AccountPerimeter } from "@/lib/prefs";
+import type { CalendarEvent } from "@/lib/calendar";
+import { toneOfEvent, type CalendarDef } from "@/lib/calendars";
 
 function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   return import("@tauri-apps/api/core").then(({ invoke }) =>
@@ -57,4 +59,44 @@ export function useMutedAccountsSync(
   useEffect(() => {
     void syncMutedAccounts(accounts, perimeters).catch(() => undefined);
   }, [accounts, perimeters]);
+}
+
+/** Dernier résumé agenda poussé : un même jeu n'est jamais renvoyé. */
+let pushedAgenda: string | null = null;
+
+/**
+ * Pousse le résumé agenda au widget natif. Le Rust calcule « prochain / journée
+ * libre » (summarize_agenda, testé) à partir des événements du front ; les bornes
+ * du jour sont locales. Le widget lit ensuite ce résumé instantanément.
+ */
+export async function syncWidgetAgenda(
+  events: CalendarEvent[],
+  calendars: CalendarDef[],
+): Promise<void> {
+  if (!backgroundSyncSupported()) return;
+  const widgetEvents = events.map((event) => ({
+    id: event.id,
+    title: event.title,
+    start: Math.floor(new Date(`${event.date}T${event.start}`).getTime() / 1000),
+    end: Math.floor(new Date(`${event.date}T${event.end}`).getTime() / 1000),
+    calendar: event.calendar ?? "",
+    tone: toneOfEvent(event, calendars),
+    location: event.location ?? null,
+  }));
+  const nowDate = new Date();
+  const now = Math.floor(nowDate.getTime() / 1000);
+  const dayStart = Math.floor(
+    new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate()).getTime() / 1000,
+  );
+  const dayEnd = dayStart + 86400;
+  const key = JSON.stringify(widgetEvents) + ":" + dayStart;
+  if (key === pushedAgenda) return;
+  await call("set_widget_agenda_summary", { events: widgetEvents, now, dayStart, dayEnd });
+  pushedAgenda = key;
+}
+
+export function useWidgetAgendaSync(events: CalendarEvent[], calendars: CalendarDef[]): void {
+  useEffect(() => {
+    void syncWidgetAgenda(events, calendars).catch(() => undefined);
+  }, [events, calendars]);
 }

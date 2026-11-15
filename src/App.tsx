@@ -27,6 +27,7 @@ import { Notice } from "@/components/ui/notice";
 import type { CalendarEvent } from "@/lib/calendar";
 import { useCalendars, isExternalCalendar } from "@/lib/calendars";
 import { externalCalendarEvents, useExternalCalendarRefresh } from "@/lib/ics";
+import { useWidgetAgendaSync } from "@/lib/background-sync";
 import { shellLayout } from "@/lib/native";
 import { AccountRemoveDialog, BackendBanner, BackendLoading, ReadOnlyBanner } from "@/components/backend-status";
 import { ConnectScreen } from "@/screens/connect-screen";
@@ -344,6 +345,9 @@ function PhoneApp({ native }: { native?: boolean }) {
   const { ics } = useExternalCalendarRefresh(calendars, notify);
   const externalEvents = useMemo(() => externalCalendarEvents(ics, calendars), [ics, calendars]);
   const sourceCount = useMemo(() => calendars.filter(isExternalCalendar).length, [calendars]);
+
+  const widgetEvents = useMemo(() => [...events, ...externalEvents], [events, externalEvents]);
+  useWidgetAgendaSync(widgetEvents, calendars);
 
   const shortcutActions = useMemo(
     () => ({

@@ -164,6 +164,20 @@ mod android_commands {
     }
 
     #[tauri::command]
+    pub async fn set_widget_agenda_summary(
+        sync: State<'_, SyncPluginHandle>,
+        events: Vec<lavande_mail_api::widget_agenda::WidgetEvent>,
+        now: i64,
+        day_start: i64,
+        day_end: i64,
+    ) -> Result<Value, String> {
+        let summary =
+            lavande_mail_api::widget_agenda::summarize_agenda(&events, now, day_start, day_end);
+        let json = serde_json::to_string(&summary).map_err(|error| error.to_string())?;
+        forward(&sync.0, "setWidgetAgendaSummary", serde_json::json!({ "summary": json })).await
+    }
+
+    #[tauri::command]
     pub async fn sync_now(sync: State<'_, SyncPluginHandle>) -> Result<Value, String> {
         forward(&sync.0, "syncNow", Value::Null).await
     }
@@ -210,6 +224,7 @@ pub fn run() {
                 android_commands::set_background_sync,
                 android_commands::background_sync_state,
                 android_commands::set_muted_accounts,
+                android_commands::set_widget_agenda_summary,
                 android_commands::sync_now
             ])
             .build(),

@@ -169,6 +169,14 @@ const WIDGET_RECEIVERS = `<receiver android:name=".LavandeWidgetProvider" androi
             android:name="android.appwidget.provider"
             android:resource="@xml/lavande_widget_info" />
         </receiver>
+        <receiver android:name=".LavandeAgendaWidgetProvider" android:exported="true">
+          <intent-filter>
+            <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+          </intent-filter>
+          <meta-data
+            android:name="android.appwidget.provider"
+            android:resource="@xml/lavande_agenda_widget_info" />
+        </receiver>
         <receiver android:name=".BootReceiver" android:exported="false">
           <intent-filter>
             <action android:name="android.intent.action.BOOT_COMPLETED" />
@@ -176,10 +184,23 @@ const WIDGET_RECEIVERS = `<receiver android:name=".LavandeWidgetProvider" androi
         </receiver>`;
 
 function patchWidgetReceivers(source) {
-  if (source.includes('android:name=".LavandeWidgetProvider"')) return source;
+  if (source.includes('android:name=".LavandeWidgetProvider"') && source.includes('android:name=".LavandeAgendaWidgetProvider"')) return source;
   const pattern = /([ \t]*)<\/application>/;
   if (!pattern.test(source)) throw new Error("balise </application> introuvable dans AndroidManifest.xml");
-  return source.replace(pattern, (_, indent) => `${indent}    ${WIDGET_RECEIVERS}\n${indent}</application>`);
+  if (!source.includes('android:name=".LavandeWidgetProvider"')) {
+    source = source.replace(pattern, (_, indent) => `${indent}    ${WIDGET_RECEIVERS}\n${indent}</application>`);
+  } else if (!source.includes('android:name=".LavandeAgendaWidgetProvider"')) {
+    const agenda = `<receiver android:name=".LavandeAgendaWidgetProvider" android:exported="true">
+          <intent-filter>
+            <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+          </intent-filter>
+          <meta-data
+            android:name="android.appwidget.provider"
+            android:resource="@xml/lavande_agenda_widget_info" />
+        </receiver>`;
+    source = source.replace(pattern, (_, indent) => `${indent}    ${agenda}\n${indent}</application>`);
+  }
+  return source;
 }
 
 const GRADLE_DEPS = [
@@ -363,6 +384,7 @@ object LavandeBgPrefs {
   private const val KEY_ENABLED = "background_sync_enabled"
   private const val KEY_MUTED = "muted_accounts"
   private const val KEY_SUMMARY = "widget_summary"
+  private const val KEY_AGENDA_SUMMARY = "widget_agenda_summary"
   private const val KEY_UNREAD = "widget_unread"
 
   private fun open(context: Context): SharedPreferences =
@@ -394,6 +416,12 @@ object LavandeBgPrefs {
 
   fun setSummary(context: Context, summary: String) {
     open(context).edit().putString(KEY_SUMMARY, summary).apply()
+  }
+
+  fun agendaSummary(context: Context): String = open(context).getString(KEY_AGENDA_SUMMARY, "") ?: ""
+
+  fun setAgendaSummary(context: Context, summary: String) {
+    open(context).edit().putString(KEY_AGENDA_SUMMARY, summary).apply()
   }
 
   /** Non lus par compte du dernier résumé rendu : une notification ne part que sur une hausse. */
@@ -611,6 +639,9 @@ class BackgroundSyncArgs { var enabled: Boolean = false }
 @InvokeArg
 class MutedAccountsArgs { var ids: List<String> = emptyList() }
 
+@InvokeArg
+class AgendaSummaryArgs { var summary: String = "" }
+
 @TauriPlugin
 class BackgroundSyncPlugin(private val activity: Activity) : Plugin(activity) {
 
@@ -641,6 +672,14 @@ class BackgroundSyncPlugin(private val activity: Activity) : Plugin(activity) {
     val args = invoke.parseArgs(MutedAccountsArgs::class.java)
     LavandeBgPrefs.setMuted(activity, args.ids)
     LavandeWidgetProvider.refresh(activity)
+    invoke.resolve(JSObject())
+  }
+
+  @Command
+  fun setWidgetAgendaSummary(invoke: Invoke) {
+    val args = invoke.parseArgs(AgendaSummaryArgs::class.java)
+    LavandeBgPrefs.setAgendaSummary(activity, args.summary)
+    LavandeAgendaWidgetProvider.refresh(activity)
     invoke.resolve(JSObject())
   }
 
@@ -682,10 +721,14 @@ import android.widget.RemoteViews
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
- * Widget d'écran d'accueil : ne lit que le résumé stocké par le worker
- * (clé widget_summary), donc il s'affiche instantanément, même app fermée.
+ * Widget mails 2×2 « A·Total » : total en grand, non-lus par compte, dernier
+ * expéditeur. Ne lit que le résumé stocké par le worker (widget_summary), donc
+ * affichage instantané même app fermée. Couleurs sémantiques (clair/sombre/Material You).
  */
 class LavandeWidgetProvider : AppWidgetProvider() {
   override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
@@ -693,12 +736,6 @@ class LavandeWidgetProvider : AppWidgetProvider() {
   }
 
   companion object {
-    private val MAIL_ROWS = intArrayOf(
-      R.id.lavande_widget_mail_1,
-      R.id.lavande_widget_mail_2,
-      R.id.lavande_widget_mail_3,
-    )
-
     fun refresh(context: Context) {
       val manager = AppWidgetManager.getInstance(context)
       val ids = manager.getAppWidgetIds(ComponentName(context, LavandeWidgetProvider::class.java))
@@ -717,24 +754,57 @@ class LavandeWidgetProvider : AppWidgetProvider() {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
       views.setOnClickPendingIntent(R.id.lavande_widget_root, open)
-      for (row in MAIL_ROWS) views.setViewVisibility(row, View.GONE)
+      views.setViewVisibility(R.id.lavande_widget_normal, View.GONE)
+      views.setViewVisibility(R.id.lavande_widget_free, View.GONE)
+      views.setViewVisibility(R.id.lavande_widget_none, View.GONE)
+      views.setViewVisibility(R.id.lavande_widget_warn, View.GONE)
 
       val summary = stored(context)
       if (summary == null || (summary.optJSONArray("accounts")?.length() ?: 0) == 0) {
-        views.setTextViewText(R.id.lavande_widget_count, "Aucun compte")
+        views.setViewVisibility(R.id.lavande_widget_none, View.VISIBLE)
         return views
       }
 
-      views.setTextViewText(R.id.lavande_widget_count, unreadLabel(summary.optInt("unread", 0)))
+      val unread = summary.optInt("unread", 0)
+      if (unread == 0) {
+        views.setViewVisibility(R.id.lavande_widget_free, View.VISIBLE)
+        views.setTextViewText(R.id.lavande_widget_free_sub, "Synchro à " + clock(summary.optLong("updated_at", 0)))
+        return views
+      }
+
+      views.setViewVisibility(R.id.lavande_widget_normal, View.VISIBLE)
+      views.setTextViewText(R.id.lavande_widget_number, unread.toString())
+      views.setTextViewText(R.id.lavande_widget_unit, if (unread == 1) "non lu" else "non lus")
+      views.setTextViewText(R.id.lavande_widget_accounts, accountsLine(summary.optJSONArray("accounts") ?: JSONArray()))
+
       val mails = summary.optJSONArray("mails") ?: JSONArray()
-      val shown = minOf(mails.length(), MAIL_ROWS.size)
-      for (index in 0 until shown) {
-        val mail = mails.optJSONObject(index) ?: continue
-        val line = mail.optString("label") + " · " + mail.optString("subject")
-        views.setTextViewText(MAIL_ROWS[index], line)
-        views.setViewVisibility(MAIL_ROWS[index], View.VISIBLE)
+      val first = mails.optJSONObject(0)
+      if (first != null) {
+        views.setViewVisibility(R.id.lavande_widget_last, View.VISIBLE)
+        views.setTextViewText(R.id.lavande_widget_sender, first.optString("from"))
+        views.setTextViewText(R.id.lavande_widget_time, clock(first.optLong("date", 0)))
+        views.setImageViewResource(
+          R.id.lavande_widget_dot,
+          if (first.optBoolean("unread", true)) R.drawable.lavande_widget_dot else R.drawable.lavande_widget_dot_read,
+        )
+      } else {
+        views.setViewVisibility(R.id.lavande_widget_last, View.GONE)
       }
       return views
+    }
+
+    private fun accountsLine(accounts: JSONArray): String {
+      val parts = mutableListOf<String>()
+      for (index in 0 until accounts.length()) {
+        val account = accounts.optJSONObject(index) ?: continue
+        parts.add(account.optString("label") + " " + account.optInt("unread", 0))
+      }
+      return parts.joinToString(" · ")
+    }
+
+    private fun clock(seconds: Long): String {
+      if (seconds <= 0) return ""
+      return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(seconds * 1000))
     }
 
     private fun stored(context: Context): JSONObject? {
@@ -746,12 +816,6 @@ class LavandeWidgetProvider : AppWidgetProvider() {
         android.util.Log.e("LavandeSync", "résumé du widget illisible : \${e.message}")
         null
       }
-    }
-
-    private fun unreadLabel(unread: Int): String = when {
-      unread == 0 -> "Aucun mail non lu"
-      unread == 1 -> "1 non lu"
-      else -> "" + unread + " non lus"
     }
   }
 }
@@ -774,57 +838,163 @@ class BootReceiver : BroadcastReceiver() {
 `;
 
 const BG_WIDGET_LAYOUT_XML = `<?xml version="1.0" encoding="utf-8"?>
-<!-- RemoteViews n'accepte que LinearLayout/FrameLayout/RelativeLayout : pas de ConstraintLayout. -->
+<!-- RemoteViews : LinearLayout uniquement. Couleurs sémantiques (values / values-night / values-v31). -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/lavande_widget_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/lavande_widget_bg"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:padding="14dp">
 
     <TextView
-        android:id="@+id/lavande_widget_count"
+        android:id="@+id/lavande_widget_brand"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:ellipsize="end"
-        android:maxLines="1"
-        android:text="Aucun compte"
-        android:textColor="#2b2340"
-        android:textSize="15sp"
+        android:text="@string/lavande_widget_brand"
+        android:textColor="@color/lavande_widget_ink_soft"
+        android:textSize="11sp"
         android:textStyle="bold" />
 
-    <TextView
-        android:id="@+id/lavande_widget_mail_1"
+    <LinearLayout
+        android:id="@+id/lavande_widget_normal"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:ellipsize="end"
-        android:maxLines="1"
-        android:textColor="#5c5480"
-        android:textSize="13sp"
-        android:visibility="gone" />
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:gravity="bottom"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/lavande_widget_number"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/lavande_widget_accent_ink"
+                android:textSize="28sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/lavande_widget_unit"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:layout_marginBottom="3dp"
+                android:textColor="@color/lavande_widget_ink_soft"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/lavande_widget_accounts"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="@color/lavande_widget_ink_soft"
+            android:textSize="11sp" />
+
+        <LinearLayout
+            android:id="@+id/lavande_widget_last"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageView
+                android:id="@+id/lavande_widget_dot"
+                android:layout_width="7dp"
+                android:layout_height="7dp"
+                android:contentDescription="@null"
+                android:src="@drawable/lavande_widget_dot" />
+
+            <TextView
+                android:id="@+id/lavande_widget_sender"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="@color/lavande_widget_ink"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/lavande_widget_time"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:textColor="@color/lavande_widget_ink_muted"
+                android:textSize="10sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/lavande_widget_free"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Boîte calme"
+            android:textColor="@color/lavande_widget_ink"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/lavande_widget_free_sub"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textColor="@color/lavande_widget_ink_muted"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/lavande_widget_none"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Aucun compte mail"
+            android:textColor="@color/lavande_widget_ink"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="Ouvrir Lavande"
+            android:textColor="@color/lavande_widget_ink_muted"
+            android:textSize="11sp" />
+    </LinearLayout>
 
     <TextView
-        android:id="@+id/lavande_widget_mail_2"
+        android:id="@+id/lavande_widget_warn"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
         android:ellipsize="end"
         android:maxLines="1"
-        android:textColor="#5c5480"
-        android:textSize="13sp"
-        android:visibility="gone" />
-
-    <TextView
-        android:id="@+id/lavande_widget_mail_3"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:ellipsize="end"
-        android:maxLines="1"
-        android:textColor="#5c5480"
-        android:textSize="13sp"
+        android:textColor="@color/lavande_widget_warn"
+        android:textSize="10sp"
         android:visibility="gone" />
 </LinearLayout>
 `;
@@ -833,10 +1003,10 @@ const BG_WIDGET_INFO_XML = `<?xml version="1.0" encoding="utf-8"?>
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:initialLayout="@layout/lavande_widget"
     android:minHeight="110dp"
-    android:minWidth="180dp"
+    android:minWidth="110dp"
     android:resizeMode="horizontal|vertical"
     android:targetCellHeight="2"
-    android:targetCellWidth="4"
+    android:targetCellWidth="2"
     android:updatePeriodMillis="0"
     android:widgetCategory="home_screen" />
 `;
@@ -844,12 +1014,422 @@ const BG_WIDGET_INFO_XML = `<?xml version="1.0" encoding="utf-8"?>
 const BG_WIDGET_BG_XML = `<?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="#FDFCFF" />
-    <corners android:radius="24dp" />
+    <solid android:color="@color/lavande_widget_surface" />
+    <corners android:radius="26dp" />
     <stroke
         android:width="1dp"
-        android:color="#E6E1F5" />
+        android:color="@color/lavande_widget_line" />
 </shape>
+`;
+
+const BG_AGENDA_WIDGET_KT = `package mail.lavande.app
+
+import android.app.PendingIntent
+import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProvider
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.view.View
+import android.widget.RemoteViews
+import androidx.core.content.ContextCompat
+import org.json.JSONException
+import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
+
+/**
+ * Widget agenda 2×2 « A·Prochain » : prochain rendez-vous (heure, titre,
+ * calendrier, compte à rebours) ou, jour libre (cas fréquent), la date en grand
+ * + le prochain événement même lointain. Lit le résumé poussé par le front
+ * (widget_agenda_summary). Couleurs sémantiques + tons calendriers fixes.
+ */
+class LavandeAgendaWidgetProvider : AppWidgetProvider() {
+  override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
+    refresh(context)
+  }
+
+  companion object {
+    fun refresh(context: Context) {
+      val manager = AppWidgetManager.getInstance(context)
+      val ids = manager.getAppWidgetIds(ComponentName(context, LavandeAgendaWidgetProvider::class.java))
+      if (ids.isEmpty()) return
+      val views = render(context)
+      for (id in ids) manager.updateAppWidget(id, views)
+    }
+
+    private fun render(context: Context): RemoteViews {
+      val views = RemoteViews(context.packageName, R.layout.lavande_agenda_widget)
+      val open = PendingIntent.getActivity(
+        context,
+        1,
+        Intent(context, MainActivity::class.java)
+          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      )
+      views.setOnClickPendingIntent(R.id.lavande_agenda_root, open)
+      views.setViewVisibility(R.id.lavande_agenda_date, View.GONE)
+      views.setViewVisibility(R.id.lavande_agenda_normal, View.GONE)
+      views.setViewVisibility(R.id.lavande_agenda_free, View.GONE)
+      views.setViewVisibility(R.id.lavande_agenda_none, View.GONE)
+
+      val summary = stored(context)
+      if (summary == null) {
+        views.setViewVisibility(R.id.lavande_agenda_none, View.VISIBLE)
+        return views
+      }
+
+      val now = System.currentTimeMillis() / 1000
+      val next = summary.optJSONObject("next")
+      if (summary.optBoolean("free_today", false)) {
+        views.setViewVisibility(R.id.lavande_agenda_free, View.VISIBLE)
+        val cal = Calendar.getInstance()
+        views.setTextViewText(R.id.lavande_agenda_fd_num, cal.get(Calendar.DAY_OF_MONTH).toString())
+        views.setTextViewText(R.id.lavande_agenda_fd_wd, capitalize(SimpleDateFormat("EEEE", Locale.FRANCE).format(Date())))
+        views.setTextViewText(R.id.lavande_agenda_fd_month, SimpleDateFormat("MMMM yyyy", Locale.FRANCE).format(Date()))
+        if (next != null) {
+          views.setViewVisibility(R.id.lavande_agenda_fd_next, View.VISIBLE)
+          views.setTextViewText(R.id.lavande_agenda_fd_next, "Prochain · " + SimpleDateFormat("EEE d MMM · HH:mm", Locale.FRANCE).format(Date(next.optLong("start", 0) * 1000)))
+          views.setTextViewText(R.id.lavande_agenda_fd_nexttitle, next.optString("title"))
+          views.setTextColor(R.id.lavande_agenda_fd_next, toneColor(context, next.optInt("tone", 0)))
+        } else {
+          views.setViewVisibility(R.id.lavande_agenda_fd_next, View.GONE)
+          views.setTextViewText(R.id.lavande_agenda_fd_nexttitle, "")
+        }
+        return views
+      }
+
+      views.setViewVisibility(R.id.lavande_agenda_date, View.VISIBLE)
+      views.setTextViewText(R.id.lavande_agenda_date, SimpleDateFormat("EEE d MMM", Locale.FRANCE).format(Date()))
+      views.setViewVisibility(R.id.lavande_agenda_normal, View.VISIBLE)
+      if (next != null) {
+        val start = next.optLong("start", 0)
+        views.setTextViewText(R.id.lavande_agenda_next_time, SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(start * 1000)))
+        views.setTextViewText(R.id.lavande_agenda_next_title, next.optString("title"))
+        val location = next.optString("location", "")
+        val meta = next.optString("calendar", "") + (if (location.isNotEmpty()) " · " + location else "")
+        views.setTextViewText(R.id.lavande_agenda_next_meta, meta)
+        views.setTextColor(R.id.lavande_agenda_next_meta, toneColor(context, next.optInt("tone", 0)))
+        views.setTextViewText(R.id.lavande_agenda_countdown, countdown(start, now))
+      }
+      return views
+    }
+
+    private fun countdown(start: Long, now: Long): String {
+      val delta = start - now
+      if (delta <= 0) return "en cours"
+      val minutes = delta / 60
+      val hours = minutes / 60
+      val rest = minutes % 60
+      return when {
+        hours > 0 -> "dans " + hours + " h " + rest.toString().padStart(2, '0')
+        minutes > 0 -> "dans " + minutes + " min"
+        else -> " imminent"
+      }
+    }
+
+    private fun toneColor(context: Context, tone: Int): Int {
+      val res = when (tone % 5) {
+        2 -> R.color.lavande_widget_cal_perso
+        3 -> R.color.lavande_widget_cal_clients
+        else -> R.color.lavande_widget_accent
+      }
+      return ContextCompat.getColor(context, res)
+    }
+
+    private fun capitalize(text: String): String =
+      text.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.FRANCE) else it.toString() }
+
+    private fun stored(context: Context): JSONObject? {
+      val raw = LavandeBgPrefs.agendaSummary(context)
+      if (raw.isEmpty()) return null
+      return try {
+        JSONObject(raw)
+      } catch (e: JSONException) {
+        android.util.Log.e("LavandeSync", "résumé agenda illisible : \${e.message}")
+        null
+      }
+    }
+  }
+}
+`;
+
+const BG_AGENDA_LAYOUT_XML = `<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/lavande_agenda_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/lavande_widget_bg"
+    android:orientation="vertical"
+    android:padding="14dp">
+
+    <TextView
+        android:id="@+id/lavande_agenda_date"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="@color/lavande_widget_ink_muted"
+        android:textSize="10sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:id="@+id/lavande_agenda_normal"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center_vertical"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/lavande_agenda_next_time"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/lavande_widget_accent_ink"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/lavande_agenda_next_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:textColor="@color/lavande_widget_ink"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/lavande_agenda_next_meta"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="@color/lavande_widget_ink_soft"
+            android:textSize="10sp" />
+
+        <TextView
+            android:id="@+id/lavande_agenda_countdown"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:textColor="@color/lavande_widget_accent_ink"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/lavande_agenda_free"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center_vertical"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/lavande_agenda_fd_num"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/lavande_widget_accent_ink"
+                android:textSize="30sp"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/lavande_agenda_fd_wd"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/lavande_widget_ink"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/lavande_agenda_fd_month"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/lavande_widget_ink_muted"
+                    android:textSize="10sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="5dp"
+            android:text="Journée libre"
+            android:textColor="@color/lavande_widget_ink_soft"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/lavande_agenda_fd_next"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="@color/lavande_widget_ink_soft"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/lavande_agenda_fd_nexttitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="1dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="@color/lavande_widget_ink"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/lavande_agenda_none"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Aucun calendrier"
+            android:textColor="@color/lavande_widget_ink"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="Ouvrir Lavande"
+            android:textColor="@color/lavande_widget_ink_muted"
+            android:textSize="11sp" />
+    </LinearLayout>
+</LinearLayout>
+`;
+
+const BG_AGENDA_INFO_XML = `<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:initialLayout="@layout/lavande_agenda_widget"
+    android:minHeight="110dp"
+    android:minWidth="110dp"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellHeight="2"
+    android:targetCellWidth="2"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />
+`;
+
+const WIDGET_DOT_XML = `<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="@color/lavande_widget_accent" />
+    <size android:width="7dp" android:height="7dp" />
+</shape>
+`;
+
+const WIDGET_DOT_READ_XML = `<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="@android:color/transparent" />
+    <stroke android:width="1.5dp" android:color="@color/lavande_widget_ink_muted" />
+    <size android:width="7dp" android:height="7dp" />
+</shape>
+`;
+
+// Couleurs sémantiques du widget : clair Lavande, sombre Orchidée, Material You (API 31+).
+// Seul le ton 0 (Pro) suit l'accent ; Perso (émeraude) et Clients (ambre) restent fixes.
+const WIDGET_COLORS_LIGHT = `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="lavande_widget_surface">#FFFFFF</color>
+    <color name="lavande_widget_ink">#1B1523</color>
+    <color name="lavande_widget_ink_soft">#6B6478</color>
+    <color name="lavande_widget_ink_muted">#726C7F</color>
+    <color name="lavande_widget_line">#ECE8F5</color>
+    <color name="lavande_widget_accent">#8B7CF6</color>
+    <color name="lavande_widget_accent_soft">#EDEAFB</color>
+    <color name="lavande_widget_accent_ink">#5A4FB8</color>
+    <color name="lavande_widget_accent_ring">#C9C2F9</color>
+    <color name="lavande_widget_cal_perso">#10B981</color>
+    <color name="lavande_widget_cal_clients">#F59E0B</color>
+    <color name="lavande_widget_warn">#D97706</color>
+</resources>
+`;
+
+const WIDGET_COLORS_DARK = `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="lavande_widget_surface">#16131F</color>
+    <color name="lavande_widget_ink">#F4F1FA</color>
+    <color name="lavande_widget_ink_soft">#A8A1B8</color>
+    <color name="lavande_widget_ink_muted">#8C8699</color>
+    <color name="lavande_widget_line">#2A2438</color>
+    <color name="lavande_widget_accent">#8B7CF6</color>
+    <color name="lavande_widget_accent_soft">#232035</color>
+    <color name="lavande_widget_accent_ink">#B3A9F9</color>
+    <color name="lavande_widget_accent_ring">#4A4370</color>
+    <color name="lavande_widget_cal_perso">#34D399</color>
+    <color name="lavande_widget_cal_clients">#FBBF24</color>
+    <color name="lavande_widget_warn">#FBBF24</color>
+</resources>
+`;
+
+const WIDGET_COLORS_V31 = `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="lavande_widget_surface">@android:color/system_neutral1_50</color>
+    <color name="lavande_widget_ink">@android:color/system_neutral1_900</color>
+    <color name="lavande_widget_ink_soft">@android:color/system_neutral2_600</color>
+    <color name="lavande_widget_ink_muted">@android:color/system_neutral2_500</color>
+    <color name="lavande_widget_line">@android:color/system_neutral1_200</color>
+    <color name="lavande_widget_accent">@android:color/system_accent1_400</color>
+    <color name="lavande_widget_accent_soft">@android:color/system_accent1_100</color>
+    <color name="lavande_widget_accent_ink">@android:color/system_accent1_700</color>
+    <color name="lavande_widget_accent_ring">@android:color/system_accent1_200</color>
+</resources>
+`;
+
+const WIDGET_COLORS_NIGHT_V31 = `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="lavande_widget_surface">@android:color/system_neutral1_800</color>
+    <color name="lavande_widget_ink">@android:color/system_neutral1_100</color>
+    <color name="lavande_widget_ink_soft">@android:color/system_neutral2_300</color>
+    <color name="lavande_widget_ink_muted">@android:color/system_neutral2_400</color>
+    <color name="lavande_widget_line">@android:color/system_neutral1_700</color>
+    <color name="lavande_widget_accent">@android:color/system_accent1_200</color>
+    <color name="lavande_widget_accent_soft">@android:color/system_accent1_700</color>
+    <color name="lavande_widget_accent_ink">@android:color/system_accent1_100</color>
+    <color name="lavande_widget_accent_ring">@android:color/system_accent1_500</color>
+</resources>
+`;
+
+const WIDGET_STRINGS_LIGHT = `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="lavande_widget_brand">Lavande</string>
+</resources>
+`;
+
+const WIDGET_STRINGS_DARK = `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="lavande_widget_brand">Orchidée</string>
+</resources>
 `;
 
 const BG_NOTIFICATION_ICON_XML = `<?xml version="1.0" encoding="utf-8"?>
@@ -1062,6 +1642,53 @@ await writeStatic(
   BG_WIDGET_BG_XML,
   "res/drawable/lavande_widget_bg.xml",
 );
+await writeStatic(
+  path.join(kotlinDir, "LavandeAgendaWidgetProvider.kt"),
+  BG_AGENDA_WIDGET_KT,
+  "java/mail/lavande/app/LavandeAgendaWidgetProvider.kt",
+);
+await writeStatic(
+  path.join(appDir, "res", "layout", "lavande_agenda_widget.xml"),
+  BG_AGENDA_LAYOUT_XML,
+  "res/layout/lavande_agenda_widget.xml",
+);
+await writeStatic(
+  path.join(resXmlDir, "lavande_agenda_widget_info.xml"),
+  BG_AGENDA_INFO_XML,
+  "res/xml/lavande_agenda_widget_info.xml",
+);
+await writeStatic(
+  path.join(appDir, "res", "drawable", "lavande_widget_dot.xml"),
+  WIDGET_DOT_XML,
+  "res/drawable/lavande_widget_dot.xml",
+);
+await writeStatic(
+  path.join(appDir, "res", "drawable", "lavande_widget_dot_read.xml"),
+  WIDGET_DOT_READ_XML,
+  "res/drawable/lavande_widget_dot_read.xml",
+);
+for (const [qualifier, colors] of [
+  ["values", WIDGET_COLORS_LIGHT],
+  ["values-night", WIDGET_COLORS_DARK],
+  ["values-v31", WIDGET_COLORS_V31],
+  ["values-night-v31", WIDGET_COLORS_NIGHT_V31],
+]) {
+  await writeStatic(
+    path.join(appDir, "res", qualifier, "lavande_widget_colors.xml"),
+    colors,
+    `res/${qualifier}/lavande_widget_colors.xml`,
+  );
+}
+for (const [qualifier, strings] of [
+  ["values", WIDGET_STRINGS_LIGHT],
+  ["values-night", WIDGET_STRINGS_DARK],
+]) {
+  await writeStatic(
+    path.join(appDir, "res", qualifier, "lavande_widget_strings.xml"),
+    strings,
+    `res/${qualifier}/lavande_widget_strings.xml`,
+  );
+}
 await writeStatic(
   path.join(appDir, "res", "drawable", "ic_lavande_notification.xml"),
   BG_NOTIFICATION_ICON_XML,

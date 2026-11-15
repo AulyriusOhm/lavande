@@ -19,6 +19,7 @@ pub mod state;
 pub mod sync_secrets;
 pub mod token;
 pub mod widget;
+pub mod widget_agenda;
 
 use std::path::PathBuf;
 use std::sync::Arc;

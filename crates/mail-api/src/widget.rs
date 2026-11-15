@@ -27,6 +27,7 @@ pub struct WidgetAccount {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WidgetMail {
+    pub id: String,
     pub account: String,
     pub label: String,
     pub subject: String,
@@ -102,6 +103,7 @@ pub fn summarize(
         };
         for thread in threads {
             summary.mails.push(WidgetMail {
+                id: thread.id.clone(),
                 account: id.clone(),
                 label: label.clone(),
                 subject: thread.subject.clone(),
@@ -396,6 +398,7 @@ mod tests {
             serde_json::json!({
                 "accounts": [{"id": "perso", "label": "Perso", "unread": 1}],
                 "mails": [{
+                    "id": "t1",
                     "account": "perso",
                     "label": "Perso",
                     "subject": "Planning",
