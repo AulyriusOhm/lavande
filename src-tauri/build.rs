@@ -14,6 +14,7 @@ fn main() {
                         "set_background_sync",
                         "background_sync_state",
                         "set_muted_accounts",
+                        "set_widget_agenda_summary",
                         "sync_now",
                     ])
                     .default_permission(tauri_build::DefaultPermissionRule::AllowAllCommands),
