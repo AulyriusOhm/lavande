@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useMailStore } from "@/lib/store";
+import { useGoogleCalendarAutoAttach } from "@/lib/ics";
 import { usePrefs } from "@/lib/prefs";
 import { Notice } from "@/components/ui/notice";
 import { AccountRemoveDialog, BackendBanner, BackendLoading, ReadOnlyBanner } from "@/components/backend-status";
@@ -31,6 +32,7 @@ export function DesktopApp() {
 function DesktopMain() {
   const {
     notices,
+    notify,
     readOnly,
     dismissNotice,
     openComposer,
@@ -58,6 +60,8 @@ function DesktopMain() {
   const [pgpOpen, setPgpOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const mailNav = useRef<MailNavigation | null>(null);
+
+  useGoogleCalendarAutoAttach(notify);
 
   const openMailId = openMail?.id ?? null;
   useEffect(() => {

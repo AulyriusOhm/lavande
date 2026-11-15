@@ -31,10 +31,11 @@ import {
   isGoogleCalendar,
   isIcsCalendar,
   loadCalendars,
+  saveCalendars,
   useCalendarDefinitions,
   type CalendarDef,
 } from "@/lib/calendars";
-import { GOOGLE_REFRESH_MS, googleAccounts, googleWindow } from "@/lib/gcal";
+import { GOOGLE_REFRESH_MS, googleAccounts, googleAutoAttachTarget, googleWindow } from "@/lib/gcal";
 import { storedPerimeters } from "@/lib/prefs";
 import { READ_ONLY_NOTICE, demoReadOnly } from "@/lib/mail-backend";
 
@@ -396,6 +397,24 @@ export type ExternalCalendarRefresh = {
   refresh: (targets: CalendarDef[]) => Promise<void>;
 };
 
+const GOOGLE_AUTO_ATTACH_KEY = "lavande.gcal.autoattach.v1";
+
+function loadGoogleAutoAttached(): Set<string> {
+  try {
+    return new Set(JSON.parse(window.localStorage.getItem(GOOGLE_AUTO_ATTACH_KEY) ?? "[]") as string[]);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveGoogleAutoAttached(ids: Set<string>): void {
+  try {
+    window.localStorage.setItem(GOOGLE_AUTO_ATTACH_KEY, JSON.stringify([...ids]));
+  } catch {
+    /* stockage indisponible : l'auto-ajout retentera au prochain démarrage */
+  }
+}
+
 export function useExternalCalendarRefresh(
   calendars: CalendarDef[],
   notify: (message: string) => void,
@@ -439,6 +458,75 @@ export function useExternalCalendarRefresh(
   }, [calendars, refresh]);
 
   return { ics, setIcs, syncing, refresh };
+}
+
+/**
+ * Auto-ajout de l'agenda Google à la connexion d'un compte : au démarrage de la
+ * coquille, attache le calendrier principal de chaque compte Google qui n'a aucun
+ * calendrier dans l'agenda. Monté dans l'app (pas dans le refresh des sources,
+ * testé séparément). Garde persistante par compte : pas de réajout après
+ * suppression ; un échec de lecture n'est pas marqué (réessai au prochain démarrage).
+ */
+export function useGoogleCalendarAutoAttach(notify: (message: string) => void): void {
+  const done = useRef(false);
+  useEffect(() => {
+    if (done.current || demoReadOnly) return;
+    done.current = true;
+    let cancelled = false;
+    void (async () => {
+      let accounts: ApiAccount[];
+      try {
+        accounts = await mailApi.accounts();
+      } catch {
+        return;
+      }
+      if (cancelled) return;
+      const google = googleAccounts(Array.isArray(accounts) ? accounts : []);
+      if (google.length === 0) return;
+      const processed = loadGoogleAutoAttached();
+      let next = loadIcsState();
+      let added = false;
+      for (const account of google) {
+        if (processed.has(account.id)) continue;
+        let list: GoogleCalendar[];
+        try {
+          list = await mailApi.googleCalendars(account.id);
+        } catch {
+          continue;
+        }
+        if (cancelled) return;
+        processed.add(account.id);
+        const existing = loadCalendars();
+        const primary = googleAutoAttachTarget(account.id, Array.isArray(list) ? list : [], existing);
+        if (!primary) continue;
+        const name = primary.summary.trim() || primary.id;
+        const def: CalendarDef = {
+          id: calendarId(name, existing),
+          name,
+          tone: 3,
+          source: { kind: "google", accountId: account.id, calendarId: primary.id },
+        };
+        saveCalendars([...loadCalendars(), def]);
+        added = true;
+        try {
+          next = setIcsCalendarEvents(next, def.id, await fetchGoogleCalendar(def));
+        } catch {
+          next = markIcsSynced(next, def.id);
+        }
+        if (cancelled) return;
+        notify(`Calendrier Google ajouté · ${name}`);
+      }
+      saveGoogleAutoAttached(processed);
+      if (added && !cancelled) {
+        saveIcsState(next);
+        window.dispatchEvent(new StorageEvent("storage"));
+        window.dispatchEvent(new Event(ICS_CHANGE_EVENT));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [notify]);
 }
 
 /** Gestion des sources partagée par les réglages PC et mobile : une seule implémentation. */

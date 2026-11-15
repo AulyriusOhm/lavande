@@ -1,95 +1,55 @@
 import { describe, expect, it } from "vitest";
-import type { ApiAccount } from "@/lib/api";
-import {
-  GOOGLE_WINDOW_FUTURE_DAYS,
-  GOOGLE_WINDOW_PAST_DAYS,
-  googleAccounts,
-  googleWindow,
-  isGoogleAccount,
-} from "@/lib/gcal";
+import type { GoogleCalendar } from "@/lib/api";
+import type { CalendarDef } from "@/lib/calendars";
+import { googleAutoAttachTarget } from "@/lib/gcal";
 
-const account = (over: Partial<ApiAccount> = {}): ApiAccount => ({
-  id: "a1",
-  label: "Perso",
-  email: "roman@lavande.mail",
-  username: "roman",
-  imap: { host: "imap.lavande.mail", port: 993, encryption: "tls" },
-  smtp: { host: "smtp.lavande.mail", port: 465, encryption: "tls" },
-  folders: 2,
+const cal = (over: Partial<GoogleCalendar> = {}): GoogleCalendar => ({
+  id: "primary@gmail.com",
+  summary: "Mon agenda",
+  primary: false,
   ...over,
 });
 
-const gmail = (over: Partial<ApiAccount> = {}): ApiAccount =>
-  account({
-    id: "gmail",
-    label: "Gmail",
-    email: "roman.lanro@gmail.com",
-    imap: { host: "imap.gmail.com", port: 993, encryption: "tls" },
-    smtp: { host: "smtp.gmail.com", port: 465, encryption: "tls" },
-    ...over,
-  });
-
-describe("gcal · détection d'un compte Google", () => {
-  it("reconnaît un compte dont les hôtes sont ceux de Gmail", () => {
-    expect(isGoogleAccount(gmail())).toBe(true);
-    expect(isGoogleAccount(gmail({ email: "contact@studio-lilas.fr" }))).toBe(true);
-  });
-
-  it("reconnaît un hôte Workspace sur un domaine qui n'est pas gmail.com", () => {
-    expect(
-      isGoogleAccount(
-        account({
-          email: "roman@studio-lilas.fr",
-          imap: { host: "imap.gmail.com", port: 993, encryption: "tls" },
-        }),
-      ),
-    ).toBe(true);
-  });
-
-  it("se fie au point d'échange OAuth2 Google quand la configuration le donne", () => {
-    expect(
-      isGoogleAccount({
-        email: "roman@studio-lilas.fr",
-        imap: { host: "imap.studio-lilas.fr" },
-        auth: { kind: "oauth2", token_endpoint: "https://oauth2.googleapis.com/token" },
-      }),
-    ).toBe(true);
-  });
-
-  it("ne prend pas un point d'échange OAuth2 étranger pour Google", () => {
-    expect(
-      isGoogleAccount({
-        email: "roman@studio-lilas.fr",
-        imap: { host: "outlook.office365.com" },
-        smtp: { host: "smtp.office365.com" },
-        auth: { kind: "oauth2", token_endpoint: "https://login.microsoftonline.com/token" },
-      }),
-    ).toBe(false);
-  });
-
-  it("garde l'adresse Gmail comme dernier indice", () => {
-    expect(isGoogleAccount({ email: "roman.lanro@googlemail.com" })).toBe(true);
-  });
-
-  it("laisse un compte IMAP ordinaire de côté", () => {
-    expect(isGoogleAccount(account())).toBe(false);
-    expect(isGoogleAccount(account({ email: "roman@ovh.tld" }))).toBe(false);
-    expect(isGoogleAccount({})).toBe(false);
-  });
-
-  it("ne garde que les comptes Google d'une liste", () => {
-    expect(googleAccounts([account(), gmail()]).map((entry) => entry.id)).toEqual(["gmail"]);
-  });
+const googleDef = (accountId: string, calendarId: string): CalendarDef => ({
+  id: `google:${accountId}:${calendarId}`,
+  name: "Google",
+  tone: 3,
+  source: { kind: "google", accountId, calendarId },
 });
 
-describe("gcal · fenêtre relue", () => {
-  it("borne la demande à trois mois passés et un an à venir", () => {
-    const now = new Date(2026, 2, 15, 18, 30);
-    const window = googleWindow(now);
+describe("googleAutoAttachTarget", () => {
+  it("attache le calendrier principal quand aucun calendrier du compte n'est présent", () => {
+    const list = [cal({ id: "autres", summary: "Autres" }), cal({ id: "main", summary: "Principal", primary: true })];
+    expect(googleAutoAttachTarget("acc1", list, [])?.id).toBe("main");
+  });
 
-    expect(window.time_min).toBe(new Date(2025, 11, 15).toISOString());
-    expect(window.time_max).toBe(new Date(2027, 2, 15).toISOString());
-    const span = Date.parse(window.time_max) - Date.parse(window.time_min);
-    expect(Math.round(span / 86_400_000)).toBe(GOOGLE_WINDOW_PAST_DAYS + GOOGLE_WINDOW_FUTURE_DAYS);
+  it("préfère le principal au premier de la liste", () => {
+    const list = [cal({ id: "first", summary: "Premier" }), cal({ id: "main", summary: "Principal", primary: true })];
+    expect(googleAutoAttachTarget("acc1", list, [])?.id).toBe("main");
+  });
+
+  it("retombe sur le premier calendrier sans principal", () => {
+    const list = [cal({ id: "first", summary: "Premier" }), cal({ id: "second", summary: "Second" })];
+    expect(googleAutoAttachTarget("acc1", list, [])?.id).toBe("first");
+  });
+
+  it("n'attache rien si un calendrier du compte est déjà dans l'agenda", () => {
+    const list = [cal({ primary: true })];
+    expect(googleAutoAttachTarget("acc1", list, [googleDef("acc1", "primary@gmail.com")])).toBeUndefined();
+  });
+
+  it("n'attache rien si le nom entre en conflit avec un calendrier existant", () => {
+    const list = [cal({ summary: "Mon agenda", primary: true })];
+    const existing: CalendarDef[] = [{ id: "local", name: "mon agenda", tone: 0 }];
+    expect(googleAutoAttachTarget("acc1", list, existing)).toBeUndefined();
+  });
+
+  it("n'attache rien sur une liste vide", () => {
+    expect(googleAutoAttachTarget("acc1", [], [])).toBeUndefined();
+  });
+
+  it("ignore les calendriers d'un autre compte déjà attachés", () => {
+    const list = [cal({ id: "main", primary: true })];
+    expect(googleAutoAttachTarget("acc1", list, [googleDef("acc2", "autre")])?.id).toBe("main");
   });
 });

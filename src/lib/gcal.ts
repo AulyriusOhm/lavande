@@ -5,7 +5,8 @@
  * domaine de l'adresse.
  */
 
-import type { ApiAccount } from "@/lib/api";
+import type { ApiAccount, GoogleCalendar } from "@/lib/api";
+import { googleRefOf, type CalendarDef } from "@/lib/calendars";
 
 /** Un agenda Google répond vite : son cache se périme comme celui d'un serveur CalDAV. */
 export const GOOGLE_REFRESH_MS = 15 * 60 * 1000;
@@ -48,4 +49,24 @@ export function googleWindow(now = new Date()): { time_min: string; time_max: st
   const start = new Date(day.getFullYear(), day.getMonth(), day.getDate() - GOOGLE_WINDOW_PAST_DAYS);
   const end = new Date(day.getFullYear(), day.getMonth(), day.getDate() + GOOGLE_WINDOW_FUTURE_DAYS);
   return { time_min: start.toISOString(), time_max: end.toISOString() };
+}
+
+/**
+ * Calendrier Google à attacher automatiquement quand un compte est connecté :
+ * le principal (agenda par défaut), à défaut le premier. Rien si un calendrier
+ * du compte est déjà dans l'agenda, si la liste est vide, ou si le nom entre en
+ * conflit avec un calendrier existant. Pur : la décision se teste sans React.
+ */
+export function googleAutoAttachTarget(
+  accountId: string,
+  list: GoogleCalendar[],
+  existing: CalendarDef[],
+): GoogleCalendar | undefined {
+  if (existing.some((entry) => googleRefOf(entry)?.accountId === accountId)) return undefined;
+  const primary = list.find((calendar) => calendar.primary) ?? list[0];
+  if (!primary) return undefined;
+  const name = primary.summary.trim() || primary.id;
+  if (!name) return undefined;
+  if (existing.some((entry) => entry.name.toLowerCase() === name.toLowerCase())) return undefined;
+  return primary;
 }

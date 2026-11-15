@@ -295,6 +295,8 @@ export type GoogleCalendar = {
   id: string;
   summary: string;
   description?: string | null;
+  /** Calendrier principal du compte (agenda par défaut) : auto-ajouté à la connexion. */
+  primary?: boolean;
 };
 
 /** Fenêtre demandée à Google, en RFC 3339 ; absente, c'est Google qui la choisit. */
