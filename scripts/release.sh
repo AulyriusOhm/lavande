@@ -164,6 +164,12 @@ apk_source="$UPDATER_DIR/Lavande.apk"
 [ -f "$apk_source" ] || apk_source=artifacts/apk/Lavande.apk
 [ -f "$apk_source" ] || die "APK introuvable (ni $UPDATER_DIR/Lavande.apk ni artifacts/apk/Lavande.apk)"
 cp "$apk_source" "$STAGING_DIR/"
+# Rebuild vitrine + démo embarquée après le bump : le dist sur disque peut dater
+# d'un build « aperçu portail » (base /lavande/vitrine-preview/) qui casse le site
+# en production (assets 404 → écran noir/blanc). La démo est rebuildée avec --base
+# /demo/, puis la vitrine (base /) la copie dans dist/demo et inclut la version bumpée.
+bash scripts/build-vitrine-demo.sh
+npm --prefix site-vitrine run build
 tar -czf "$STAGING_DIR/vitrine.tar.gz" -C site-vitrine/dist .
 gpg --batch --yes --armor --export "$LAVANDE_GPG_KEY_ID" >"$STAGING_DIR/lavande-release.asc"
 
