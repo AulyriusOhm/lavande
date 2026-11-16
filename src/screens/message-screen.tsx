@@ -44,7 +44,8 @@ export function MessageScreen({
   onNotSpam,
   onRestore,
   onOpenPgp,
-  bodyLoading = false,
+  onFetchBody,
+  bodyFetching = null,
   readOnly = false,
 }: {
   thread: Thread;
@@ -58,7 +59,10 @@ export function MessageScreen({
   onNotSpam?: (mail: Mail) => void;
   onRestore?: (mail: Mail) => void;
   onOpenPgp?: () => void;
-  bodyLoading?: boolean;
+  /** Lit le corps d'un message antérieur déplié, resté en-têtes seuls. */
+  onFetchBody?: (mail: Mail) => void;
+  /** Message dont le corps est en cours de lecture sur le serveur. */
+  bodyFetching?: string | null;
   /** Démo vitrine : le lecteur affiche, il ne modifie rien. */
   readOnly?: boolean;
 }) {
@@ -70,6 +74,7 @@ export function MessageScreen({
   const [hint, setHint] = useState<{ mailId: string; text: string } | null>(null);
 
   const mail = thread.primary;
+  const bodyLoading = bodyFetching === mail.id;
   const previous = thread.messages.slice(0, -1);
   const oldest = thread.messages[0];
   const folderMail = thread.messages.find((message) => message.folder !== "sent") ?? mail;
@@ -273,7 +278,10 @@ export function MessageScreen({
                         >
                           <button
                             type="button"
-                            onClick={() => setExpandedId(expanded ? null : message.id)}
+                            onClick={() => {
+                              setExpandedId(expanded ? null : message.id);
+                              if (!expanded) onFetchBody?.(message);
+                            }}
                             aria-expanded={expanded}
                             aria-label={
                               expanded
@@ -308,9 +316,22 @@ export function MessageScreen({
                               >
                                 <div className="px-3 pb-3">
                                   {pgpBanner(message)}
-                                  <p className="mt-2 text-[13px] leading-[1.7] font-medium whitespace-pre-line text-ink-soft">
-                                    {message.body.join("\n")}
-                                  </p>
+                                  {bodyFetching === message.id ? (
+                                    <MailBodyLoading className="mt-2" />
+                                  ) : message.body.length > 0 || message.html ? (
+                                    <MailBody
+                                      className="mt-2 text-[13px] leading-[1.7] font-medium text-ink-soft"
+                                      html={message.html}
+                                      paragraphs={message.body}
+                                      source={message.source}
+                                      encrypted={message.pgp === "encrypted"}
+                                    />
+                                  ) : message.pgp === "encrypted" &&
+                                    !resolvePgp(prefs, message.account).enabled ? (
+                                    <p className="mt-2 text-[12.5px] leading-snug font-medium text-ink-muted">
+                                      Message chiffré · PGP désactivé pour ce compte
+                                    </p>
+                                  ) : null}
                                   {attachmentList(message)}
                                 </div>
                               </motion.div>

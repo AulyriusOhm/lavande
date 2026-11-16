@@ -141,7 +141,7 @@ describe("corps à la demande", () => {
       <PrefsProvider>
         <MessageScreen
           thread={THREAD}
-          bodyLoading
+          bodyFetching={MAIL.id}
           onClose={() => {}}
           onToggleStar={() => {}}
           onReply={() => {}}
@@ -158,6 +158,76 @@ describe("corps à la demande", () => {
 
     expect(screen.queryByText("Chargement du message…")).toBeNull();
     expect(screen.getByText("Les factures du mois.")).toBeTruthy();
+  });
+
+  it("demande le corps d'un message antérieur déplié", () => {
+    const onFetchBody = vi.fn();
+    const older: Mail = {
+      ...MAIL,
+      id: "perso:INBOX:9",
+      source: { accountId: "perso", folderPath: "INBOX", uid: 9 },
+      name: "Marc Delaunay",
+      preview: "Aperçu sans corps",
+      body: [],
+      bodyFetched: false,
+      attachments: [],
+    };
+    const thread: Thread = {
+      ...THREAD,
+      messages: [older, MAIL],
+      count: 2,
+      participants: ["Marc Delaunay", "Camille Rousseau"],
+    };
+    render(
+      <PrefsProvider>
+        <MessageScreen
+          thread={thread}
+          onFetchBody={onFetchBody}
+          onClose={() => {}}
+          onToggleStar={() => {}}
+          onReply={() => {}}
+        />
+      </PrefsProvider>,
+    );
+
+    fireEvent.click(screen.getByLabelText("Déplier les 1 message antérieur"));
+    fireEvent.click(screen.getByLabelText("Afficher le message de Marc Delaunay"));
+
+    expect(onFetchBody).toHaveBeenCalledWith(older);
+  });
+
+  it("montre le chargement du message antérieur en cours de lecture", () => {
+    const older: Mail = {
+      ...MAIL,
+      id: "perso:INBOX:9",
+      source: { accountId: "perso", folderPath: "INBOX", uid: 9 },
+      name: "Marc Delaunay",
+      body: [],
+      bodyFetched: false,
+      attachments: [],
+    };
+    const thread: Thread = {
+      ...THREAD,
+      messages: [older, MAIL],
+      count: 2,
+      participants: ["Marc Delaunay", "Camille Rousseau"],
+    };
+    render(
+      <PrefsProvider>
+        <MessageScreen
+          thread={thread}
+          bodyFetching={older.id}
+          onClose={() => {}}
+          onToggleStar={() => {}}
+          onReply={() => {}}
+        />
+      </PrefsProvider>,
+    );
+
+    fireEvent.click(screen.getByLabelText("Déplier les 1 message antérieur"));
+    fireEvent.click(screen.getByLabelText("Afficher le message de Marc Delaunay"));
+
+    expect(screen.getByText("Chargement du message…")).toBeTruthy();
   });
 });
 

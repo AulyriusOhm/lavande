@@ -701,57 +701,111 @@ impl Store {
 
         let mut threads = Vec::new();
         for id in ids {
-            let Some(mut messages) = groups.remove(&id) else {
+            let Some(messages) = groups.remove(&id) else {
                 continue;
             };
-            messages.sort_by(|a, b| b.date.cmp(&a.date).then(b.uid.cmp(&a.uid)));
-            let Some(primary) = messages.first().cloned() else {
-                continue;
-            };
-            let subject = messages
-                .last()
-                .map(|message| message.subject.clone())
-                .unwrap_or_default();
-            let preview = if sent {
-                primary.preview.clone()
-            } else {
-                format!("{} : {}", sender_label(&primary), primary.preview)
-            };
-            let mut participants: Vec<String> = Vec::new();
-            if !sent {
-                for message in &messages {
-                    let name = sender_name(message);
-                    if !name.is_empty() && !participants.contains(&name) {
-                        participants.push(name);
-                    }
-                }
+            if let Some(thread) = build_thread(account_id, id, messages, sent) {
+                threads.push(thread);
             }
-            threads.push(Thread {
-                account_id: account_id.to_string(),
-                id,
-                count: messages.len(),
-                unread: messages
-                    .iter()
-                    .filter(|message| message.flags.unread)
-                    .count(),
-                starred: messages.iter().any(|message| message.flags.starred),
-                encrypted: messages
-                    .iter()
-                    .filter(|message| message.pgp == PgpState::Encrypted)
-                    .count(),
-                attachments: messages
-                    .iter()
-                    .map(|message| message.attachments.len())
-                    .sum(),
-                subject,
-                preview,
-                participants,
-                messages,
-                primary,
-            });
         }
         Ok(threads)
     }
+
+    /// Every message of one thread, whatever its folder: the reader's
+    /// conversation view. The aggregate is the one of `threads_in_folder`
+    /// (newest first, `primary` = most recent), read like the inbox: sender
+    /// prefix and participants. Bodies come from the base only, the lazy body
+    /// contract is untouched.
+    pub fn thread_full(
+        &self,
+        account_id: &str,
+        thread_id: &str,
+    ) -> Result<Option<Thread>, MailError> {
+        let conn = self.conn()?;
+        let sql = format!(
+            "SELECT {MESSAGE_COLUMNS} FROM messages \
+             WHERE account_id = ?1 AND thread_id = ?2 ORDER BY date ASC, uid ASC"
+        );
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(params![account_id, thread_id], MessageRow::read)?;
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row?.into_message()?);
+        }
+        if messages.is_empty() {
+            return Ok(None);
+        }
+        let folders: HashSet<String> = messages
+            .iter()
+            .map(|message| message.folder_path.clone())
+            .collect();
+        for folder in folders {
+            let mut attachments = attachments_of_on(&conn, account_id, &folder, None)?;
+            for message in messages.iter_mut().filter(|m| m.folder_path == folder) {
+                message.attachments = attachments.remove(&message.uid).unwrap_or_default();
+            }
+        }
+        Ok(build_thread(
+            account_id,
+            thread_id.to_string(),
+            messages,
+            false,
+        ))
+    }
+}
+
+/// Aggregates one thread's messages, newest first, around its most recent
+/// message. `sent` is the role of the folder the thread is listed in: a sent
+/// listing shows no sender prefix and no participants.
+fn build_thread(
+    account_id: &str,
+    id: String,
+    mut messages: Vec<Message>,
+    sent: bool,
+) -> Option<Thread> {
+    messages.sort_by(|a, b| b.date.cmp(&a.date).then(b.uid.cmp(&a.uid)));
+    let primary = messages.first().cloned()?;
+    let subject = messages
+        .last()
+        .map(|message| message.subject.clone())
+        .unwrap_or_default();
+    let preview = if sent {
+        primary.preview.clone()
+    } else {
+        format!("{} : {}", sender_label(&primary), primary.preview)
+    };
+    let mut participants: Vec<String> = Vec::new();
+    if !sent {
+        for message in &messages {
+            let name = sender_name(message);
+            if !name.is_empty() && !participants.contains(&name) {
+                participants.push(name);
+            }
+        }
+    }
+    Some(Thread {
+        account_id: account_id.to_string(),
+        id,
+        count: messages.len(),
+        unread: messages
+            .iter()
+            .filter(|message| message.flags.unread)
+            .count(),
+        starred: messages.iter().any(|message| message.flags.starred),
+        encrypted: messages
+            .iter()
+            .filter(|message| message.pgp == PgpState::Encrypted)
+            .count(),
+        attachments: messages
+            .iter()
+            .map(|message| message.attachments.len())
+            .sum(),
+        subject,
+        preview,
+        participants,
+        messages,
+        primary,
+    })
 }
 
 fn get_folder_on(

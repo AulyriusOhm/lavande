@@ -559,6 +559,7 @@ export function DesktopInbox({
     summaryMails,
     refreshSummary,
     bodyFetching,
+    fetchBody,
     hiddenFolderOptions,
     folderOrder,
     setFolderOrder,
@@ -800,6 +801,20 @@ export function DesktopInbox({
     );
   const toggleAllPrevious = () =>
     setCollapsedPrevious(allExpanded ? previous.map((message) => message.id) : []);
+
+  // Les antérieurs sont dépliés par défaut : leur corps se lit dès qu'ils sont
+  // visibles. La clé est la liste des corps manquants, pas `previous` (nouveau
+  // tableau à chaque rendu) : une lecture ratée n'est pas rejouée en boucle.
+  const pendingBodies = previous
+    .filter((message) => !collapsedPrevious.includes(message.id) && !message.bodyFetched)
+    .map((message) => message.id)
+    .join(",");
+  useEffect(() => {
+    for (const id of pendingBodies.split(",").filter(Boolean)) {
+      const message = previous.find((entry) => entry.id === id);
+      if (message) fetchBody(message);
+    }
+  }, [pendingBodies]);
 
   const readerActions: QuickAction[] = mail && !readOnly
     ? [
@@ -1490,14 +1505,22 @@ export function DesktopInbox({
 
                               {expanded ? (
                                 <div className="max-w-[78ch] space-y-2.5 px-4 pb-4">
-                                  {message.body.map((paragraph, index) => (
-                                    <p
-                                      key={index}
-                                      className="text-[13.5px] leading-[1.7] font-medium whitespace-pre-line text-ink-soft"
-                                    >
-                                      {paragraph}
+                                  {bodyFetching === message.id ? (
+                                    <MailBodyLoading className="text-[13.5px] leading-[1.7]" />
+                                  ) : message.body.length > 0 || message.html ? (
+                                    <MailBody
+                                      className="text-[13.5px] leading-[1.7]"
+                                      html={message.html}
+                                      paragraphs={message.body}
+                                      source={message.source}
+                                      encrypted={message.pgp === "encrypted"}
+                                    />
+                                  ) : message.pgp === "encrypted" &&
+                                    !resolvePgp(prefs, message.account).enabled ? (
+                                    <p className="text-[12.5px] leading-snug font-medium text-ink-muted">
+                                      Message chiffré · PGP désactivé pour ce compte
                                     </p>
-                                  ))}
+                                  ) : null}
                                 </div>
                               ) : null}
                             </div>

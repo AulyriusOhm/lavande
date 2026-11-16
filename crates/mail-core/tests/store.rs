@@ -387,6 +387,69 @@ fn sent_folder_threads_have_no_sender_prefix() {
 }
 
 #[test]
+fn full_thread_spans_every_folder() {
+    let store = open();
+    let mut question = message(1, "t1", "Marc Delaunay", "Planning", 10);
+    question.flags.unread = true;
+    let mut answer = message(2, "t1", "Roman", "Re: Planning", 11);
+    answer.folder_path = "Sent".to_string();
+    answer.flags.starred = true;
+    answer.attachments.push(AttachmentMeta {
+        filename: "planning.pdf".to_string(),
+        mime: "application/pdf".to_string(),
+        size: 42,
+        inline: false,
+    });
+    let mut archived = message(3, "t1", "Lea Petit", "Re: Planning", 12);
+    archived.folder_path = "Archive".to_string();
+    archived.pgp = PgpState::Encrypted;
+    let other = message(4, "t2", "Lea Petit", "Contrastes", 13);
+    for mail in [&question, &answer, &archived, &other] {
+        store.upsert_message(mail).expect("insert");
+    }
+
+    let thread = store
+        .thread_full("perso", "t1")
+        .expect("thread")
+        .expect("fil trouvé");
+    assert_eq!(
+        thread
+            .messages
+            .iter()
+            .map(|message| (message.folder_path.as_str(), message.uid))
+            .collect::<Vec<_>>(),
+        vec![("Archive", 3), ("Sent", 2), ("INBOX", 1)]
+    );
+    assert_eq!(thread.id, "t1");
+    assert_eq!(thread.account_id, "perso");
+    assert_eq!(thread.count, 3);
+    assert_eq!(thread.primary.uid, 3);
+    assert_eq!(thread.primary.folder_path, "Archive");
+    assert_eq!(thread.unread, 1);
+    assert!(thread.starred);
+    assert_eq!(thread.encrypted, 1);
+    assert_eq!(thread.attachments, 1);
+    assert_eq!(thread.messages[1].attachments.len(), 1);
+    assert!(thread.messages[0].attachments.is_empty());
+    assert_eq!(thread.subject, "Planning");
+    assert_eq!(thread.preview, "Lea : preview 3");
+    assert_eq!(
+        thread.participants,
+        vec![
+            "Lea Petit".to_string(),
+            "Roman".to_string(),
+            "Marc Delaunay".to_string()
+        ]
+    );
+
+    assert!(store
+        .thread_full("perso", "absent")
+        .expect("absent")
+        .is_none());
+    assert!(store.thread_full("autre", "t1").expect("compte").is_none());
+}
+
+#[test]
 fn migration_is_replayable_on_existing_database() {
     let path = std::env::temp_dir().join(format!("lavande-mail-{}.db", std::process::id()));
     let _ = std::fs::remove_file(&path);

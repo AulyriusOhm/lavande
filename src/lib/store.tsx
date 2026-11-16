@@ -175,6 +175,8 @@ export type MailStoreValue = {
   openThread: Thread | undefined;
   /** Message dont le corps est en cours de lecture sur le serveur. */
   bodyFetching: string | null;
+  /** Lit le corps d'un message du fil resté en-têtes seuls (messages antérieurs). */
+  fetchBody: (mail: Mail) => void;
   notices: NoticeData[];
   composeOpen: boolean;
   composeDraft: ComposeDraft | null;
@@ -276,6 +278,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const [removeTarget, setRemoveTarget] = useState<Account | null>(null);
   const [selectedDate, setSelectedDate] = useState(TODAY_ISO);
   const [openMail, setOpenMail] = useState<Mail | null>(null);
+  /** Fil complet du message ouvert, tous dossiers du compte : `null` tant que
+   * le démon n'a pas répondu, le fil local fait alors foi. */
+  const [fullThread, setFullThread] = useState<Mail[] | null>(null);
   const [bodyFetching, setBodyFetching] = useState<string | null>(null);
   const [searchResults, setSearchResults] = useState<Mail[]>([]);
   const [notices, setNotices] = useState<NoticeData[]>([]);
@@ -964,6 +969,40 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     [adjustCounts, flagsFor, mails, mode, moveTo, notify, readOnlyBlocked],
   );
 
+  const fetchBody = useCallback(
+    (mail: Mail) => {
+      if (mode !== "api" || !mail.source || mail.bodyFetched) return;
+      if (mail.pgp === "encrypted" && !resolvePgp(pgpPrefs, mail.account).enabled) {
+        return;
+      }
+      const source = mail.source;
+      setBodyFetching(mail.id);
+      mailApi
+        .message(source.accountId, source.folderPath, source.uid)
+        .then((message) => {
+          const fetched = messageToMail(message, folderRecords, mail.folder);
+          setMails((current) =>
+            current.map((entry) =>
+              entry.id === fetched.id ? { ...fetched, folder: entry.folder, unread: entry.unread } : entry,
+            ),
+          );
+          setOpenMail((current) =>
+            current && current.id === fetched.id
+              ? { ...fetched, folder: current.folder, unread: current.unread }
+              : current,
+          );
+          setFullThread((current) =>
+            current?.map((entry) =>
+              entry.id === fetched.id ? { ...fetched, folder: entry.folder, unread: entry.unread } : entry,
+            ) ?? null,
+          );
+        })
+        .catch((error: unknown) => notify(`Corps du message indisponible · ${errorText(error)}`))
+        .finally(() => setBodyFetching((current) => (current === mail.id ? null : current)));
+    },
+    [folderRecords, mode, notify, pgpPrefs],
+  );
+
   const openMessage = useCallback(
     (target: Mail | string) => {
       const mail = typeof target === "string" ? liveMails.current.find((entry) => entry.id === target) : target;
@@ -988,31 +1027,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           notify(errorText(error)),
         );
       }
-      if (mail.bodyFetched) return;
-      if (mail.pgp === "encrypted" && !resolvePgp(pgpPrefs, mail.account).enabled) {
-        return;
-      }
-      const source = mail.source;
-      setBodyFetching(mail.id);
-      mailApi
-        .message(source.accountId, source.folderPath, source.uid)
-        .then((message) => {
-          const fetched = messageToMail(message, folderRecords, mail.folder);
-          setMails((current) =>
-            current.map((entry) =>
-              entry.id === fetched.id ? { ...fetched, folder: entry.folder, unread: false } : entry,
-            ),
-          );
-          setOpenMail((current) =>
-            current && current.id === fetched.id
-              ? { ...fetched, folder: current.folder, unread: false }
-              : current,
-          );
-        })
-        .catch((error: unknown) => notify(`Corps du message indisponible · ${errorText(error)}`))
-        .finally(() => setBodyFetching((current) => (current === mail.id ? null : current)));
+      fetchBody(mail);
     },
-    [adjustCounts, flagsFor, folderRecords, mode, notify, pgpPrefs],
+    [adjustCounts, fetchBody, flagsFor, mode, notify],
   );
 
   const closeMessage = useCallback(() => setOpenMail(null), []);
@@ -2088,14 +2105,39 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     void refreshEventSuggestionsRef.current();
   }, [inboxMails.length, phase]);
 
+  const openMailId = openMail?.id ?? null;
+  const openMailThreadId = openMail?.threadId ?? null;
+  const openMailAccount = openMail?.source?.accountId ?? null;
+  useEffect(() => {
+    setFullThread(null);
+    if (mode !== "api" || !openMailId || !openMailThreadId || !openMailAccount) return;
+    let cancelled = false;
+    mailApi
+      .thread(openMailAccount, openMailThreadId)
+      .then((thread) => {
+        if (cancelled) return;
+        const local = new Map(liveMails.current.map((entry) => [entry.id, entry]));
+        setFullThread(
+          threadToMails(thread, folderRecords, "inbox").map((entry) => local.get(entry.id) ?? entry),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setFullThread(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [folderRecords, mode, openMailAccount, openMailId, openMailThreadId]);
+
   const resolvedOpenMail = useMemo(
     () => (openMail ? (mails.find((entry) => entry.id === openMail.id) ?? openMail) : null),
     [mails, openMail],
   );
-  const openThread = useMemo(
-    () => (resolvedOpenMail ? threadOf(mails, resolvedOpenMail) : undefined),
-    [mails, resolvedOpenMail],
-  );
+  const openThread = useMemo(() => {
+    if (!resolvedOpenMail) return undefined;
+    const enriched = fullThread ? threadOf(fullThread, resolvedOpenMail) : undefined;
+    return enriched ?? threadOf(mails, resolvedOpenMail);
+  }, [fullThread, mails, resolvedOpenMail]);
 
   const value = useMemo<MailStoreValue>(
     () => ({
@@ -2130,6 +2172,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       openMail: resolvedOpenMail,
       openThread,
       bodyFetching,
+      fetchBody,
       notices,
       composeOpen,
       composeDraft,
@@ -2220,6 +2263,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       resolvedOpenMail,
       openThread,
       bodyFetching,
+      fetchBody,
       notices,
       composeOpen,
       composeDraft,

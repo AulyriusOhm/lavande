@@ -163,6 +163,7 @@ function PhoneApp({ native }: { native?: boolean }) {
     openMessage,
     closeMessage,
     bodyFetching,
+    fetchBody,
     resumeDraft,
     openComposer,
     minimizeCompose,
@@ -549,7 +550,8 @@ function PhoneApp({ native }: { native?: boolean }) {
               <MessageScreen
                 thread={openThread}
                 readOnly={readOnly}
-                bodyLoading={bodyFetching === openMail.id}
+                bodyFetching={bodyFetching}
+                onFetchBody={fetchBody}
                 onClose={() => closeMessage()}
                 onToggleStar={() => toggleStar(openMail.id)}
                 onReply={replyTo}

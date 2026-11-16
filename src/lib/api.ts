@@ -534,6 +534,10 @@ export const mailApi = {
       `${accountPath(id)}/folders/${encodeURIComponent(folderPath)}/threads?limit=${limit}&offset=${offset}`,
     ),
 
+  /** Le fil complet, tous dossiers du compte confondus : corps compris en base seulement. */
+  thread: (id: string, threadId: string) =>
+    request<ApiThread>(`${accountPath(id)}/threads/${encodeURIComponent(threadId)}`),
+
   search: (id: string, query: string, limit = 50) =>
     request<ApiMessage[]>(
       `${accountPath(id)}/search?q=${encodeURIComponent(query)}&limit=${limit}`,

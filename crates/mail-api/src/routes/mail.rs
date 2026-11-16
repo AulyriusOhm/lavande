@@ -36,6 +36,7 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/accounts/{id}/sync", post(sync))
         .route("/api/accounts/{id}/folders/{path}/threads", get(threads))
+        .route("/api/accounts/{id}/threads/{thread_id}", get(thread))
         .route(
             "/api/accounts/{id}/folders/{path}/messages/{uid}",
             get(message),
@@ -136,6 +137,25 @@ async fn threads(
             .store()
             .threads_in_folder(&id, &folder_path, limit as i64, offset as i64)?;
     Ok(Json(threads))
+}
+
+/// One thread with every one of its messages, all folders included: the
+/// reader's conversation view. Bodies stay in the base, nothing is read from
+/// IMAP here.
+async fn thread(
+    Path((id, thread_id)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Thread>, ApiError> {
+    state.ensure_account(&id)?;
+    state
+        .store()
+        .thread_full(&id, &thread_id)?
+        .map(Json)
+        .ok_or_else(|| {
+            ApiError::not_found(format!(
+                "fil « {thread_id} » introuvable pour le compte « {id} »"
+            ))
+        })
 }
 
 async fn message(
