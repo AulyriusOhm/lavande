@@ -24,11 +24,14 @@ const response = (payload: unknown, status = 200): Response =>
     text: async () => JSON.stringify(payload),
   }) as unknown as Response;
 
-function stubFetch(chat: () => Response) {
+const MODELS = { data: [{ id: "qwen3-coder" }, { id: "gpt-4o-mini" }] };
+
+function stubFetch(chat: () => Response, models: () => Response = () => response(MODELS)) {
   const fetchMock = vi.fn(async (input: unknown) => {
     const url = String(input);
     if (url.endsWith("/pgp/keys")) return response({ keys: [] });
     if (url.endsWith("/chat/completions")) return chat();
+    if (url.endsWith("/models")) return models();
     return response([]);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -113,6 +116,74 @@ describe("Réglages · section IA", () => {
       await screen.findByText(/Échec · Le modèle a répondu 401 · \{"error":"MissingSessionID"\}/),
     ).toBeTruthy();
     expect(screen.getAllByText("échec").length).toBeGreaterThan(0);
+  });
+});
+
+describe("Réglages · modèles et consommation", () => {
+  const withUsage = () =>
+    response({
+      choices: [{ message: { content: "OK" } }],
+      usage: { prompt_tokens: 1200, completion_tokens: 300 },
+    });
+
+  it("charge la liste des modèles dans une datalist sans bloquer la saisie libre", async () => {
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ llm: LLM }));
+    const fetchMock = stubFetch(() => response({}));
+    const view = mount();
+
+    fireEvent.click(await screen.findByText("Charger les modèles"));
+
+    await waitFor(() => expect(view.container.querySelectorAll("#llm-models option")).toHaveLength(2));
+    const options = [...view.container.querySelectorAll("#llm-models option")].map((node) =>
+      node.getAttribute("value"),
+    );
+    expect(options).toEqual(["gpt-4o-mini", "qwen3-coder"]);
+    expect(screen.getByText("2 modèle(s) disponible(s)")).toBeTruthy();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/models"))).toBe(true);
+
+    const field = screen.getByLabelText("Nom du modèle") as HTMLInputElement;
+    expect(field.getAttribute("list")).toBe("llm-models");
+    fireEvent.change(field, { target: { value: "modele-maison" } });
+    await waitFor(() =>
+      expect(
+        (JSON.parse(window.localStorage.getItem("lavande.prefs") ?? "{}") as { llm?: { model?: string } }).llm
+          ?.model,
+      ).toBe("modele-maison"),
+    );
+  });
+
+  it("affiche une erreur propre quand l'endpoint n'expose pas /models", async () => {
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ llm: LLM }));
+    stubFetch(() => response({}), () => response({ error: "not_found" }, 404));
+    mount();
+
+    fireEvent.click(await screen.findByText("Charger les modèles"));
+
+    expect(await screen.findByText(/Liste indisponible · Liste des modèles indisponible \(404\)/)).toBeTruthy();
+    expect(screen.getByText("Tester la connexion")).toBeTruthy();
+  });
+
+  it("affiche la consommation, le total et le bouton de remise à zéro", async () => {
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ llm: LLM }));
+    stubFetch(withUsage);
+    mount();
+
+    expect(await screen.findByText("Consommation")).toBeTruthy();
+    expect(screen.getByText("cet appareil")).toBeTruthy();
+    expect(screen.getByText("Aucun appel enregistré · les tokens sont comptés à chaque réponse du modèle.")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Tester la connexion"));
+    await screen.findByText("Réponse du modèle · OK");
+
+    await waitFor(() => expect(screen.getByText(/1 appel\(s\) · 1\s500 tokens/)).toBeTruthy());
+    expect(screen.getByText("1 200")).toBeTruthy();
+    expect(screen.getByText("300")).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("Réinitialiser la consommation"));
+    await waitFor(() =>
+      expect(screen.getByText("Aucun appel enregistré · les tokens sont comptés à chaque réponse du modèle.")).toBeTruthy(),
+    );
+    expect(window.localStorage.getItem("lavande.ai.stats")).toBeNull();
   });
 });
 

@@ -28,6 +28,7 @@ import type { CalendarEvent } from "@/lib/calendar";
 import { useCalendars, isExternalCalendar } from "@/lib/calendars";
 import { externalCalendarEvents, useExternalCalendarRefresh, useGoogleCalendarAutoAttach } from "@/lib/ics";
 import { useWidgetAgendaSync } from "@/lib/background-sync";
+import { useAiSync } from "@/lib/ai-sync";
 import { shellLayout } from "@/lib/native";
 import { AccountRemoveDialog, BackendBanner, BackendLoading, ReadOnlyBanner } from "@/components/backend-status";
 import { ConnectScreen } from "@/screens/connect-screen";
@@ -351,6 +352,7 @@ function PhoneApp({ native }: { native?: boolean }) {
   const widgetEvents = useMemo(() => [...events, ...externalEvents], [events, externalEvents]);
   useWidgetAgendaSync(widgetEvents, calendars);
   useGoogleCalendarAutoAttach(notify);
+  useAiSync();
 
   const shortcutActions = useMemo(
     () => ({

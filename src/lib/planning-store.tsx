@@ -388,12 +388,13 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
     const kinds: EntityKind[] = [];
     if (kanbanSync) kinds.push("task", "suggestion");
     if (calendarSync) kinds.push("event");
+    if (syncPrefs.enabled) kinds.push("ai");
     engine.setEnabledKinds(kinds);
     const anySync = kanbanSync || calendarSync;
     engine.setPaused(!anySync);
     if (!anySync || !vaulted) return;
     return engine.start();
-  }, [engine, kanbanSync, calendarSync, vaulted]);
+  }, [engine, kanbanSync, calendarSync, syncPrefs.enabled, vaulted]);
 
   const seeded = useRef(false);
   useEffect(() => {

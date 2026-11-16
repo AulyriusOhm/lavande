@@ -236,9 +236,13 @@ async fn poll(app: &Router, code: &str, poll_secret: &str) -> (StatusCode, Value
 }
 
 fn op(op_id: &str, schema_version: i32) -> Value {
+    op_of_kind(op_id, "task", schema_version)
+}
+
+fn op_of_kind(op_id: &str, kind: &str, schema_version: i32) -> Value {
     json!({
         "opId": op_id,
-        "kind": "task",
+        "kind": kind,
         "entityRef": random_key(22),
         "hlc": "000001234567890-00003-ab12cd",
         "schemaVersion": schema_version,
@@ -480,6 +484,41 @@ async fn push_is_idempotent_and_the_pull_cursor_advances() {
     assert_eq!(body["serverSchemaVersion"], 1);
     assert_eq!(body["minClientSchema"], 1);
     assert_eq!(body["headSeq"], latest_seq);
+
+    cleanup(&state, &account.email, &[]).await;
+}
+
+#[tokio::test]
+async fn event_and_ai_ops_are_really_stored() {
+    let state = database!();
+    let app = routes::router(state.clone());
+
+    let account = create_account(&app).await;
+    create_device(&app, &account.token, "MacBook", "desktop").await;
+
+    let event = op_of_kind("macbook:1", "event", 1);
+    let ai = op_of_kind("macbook:2", "ai", 1);
+    let (status, body) = push(&app, &account.token, json!([event, ai])).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["acked"].as_array().expect("acked").len(), 2);
+
+    let stored: Vec<(String, String)> = sqlx::query_as(
+        "select o.kind, o.entity_ref from ops o join users u on u.id = o.user_id where u.email = $1 order by o.seq",
+    )
+    .bind(&account.email)
+    .fetch_all(&state.pool)
+    .await
+    .expect("lignes ops lisibles");
+    assert_eq!(stored.len(), 2, "deux lignes insérées");
+    assert_eq!(stored[0].0, "event");
+    assert_eq!(stored[1].0, "ai");
+
+    let (status, body) = pull(&app, &account.token, "since=0").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let ops = body["ops"].as_array().expect("ops");
+    assert_eq!(ops.len(), 2);
+    assert_eq!(ops[0]["kind"], "event");
+    assert_eq!(ops[1]["kind"], "ai");
 
     cleanup(&state, &account.email, &[]).await;
 }

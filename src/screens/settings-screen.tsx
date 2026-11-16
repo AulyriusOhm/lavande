@@ -32,7 +32,9 @@ import {
   Users,
 } from "lucide-react";
 import { ACCENT_PRESETS, accentContrast, useTheme, type ThemeMode } from "@/lib/theme";
-import { llmProbe, llmReady, type LlmConfig } from "@/lib/llm";
+import { llmModels, llmProbe, llmReady, type LlmConfig } from "@/lib/llm";
+import { formatTokens, lastDays, resetAiStats, topModels } from "@/lib/ai-stats";
+import { useAiUsage } from "@/lib/ai-sync";
 import {
   SWIPE_ACTIONS,
   CALENDAR_LEAD_MINUTES,
@@ -144,6 +146,13 @@ export function SettingsScreen({
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [probing, setProbing] = useState(false);
   const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(null);
+  const [models, setModels] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const aiUsage = useAiUsage();
+  const aiDays = lastDays(aiUsage.combined);
+  const aiPeak = Math.max(...aiDays.map((day) => day.usage.calls), 1);
+  const aiModels = topModels(aiUsage.combined);
   const [backgroundSync, setBackgroundSync] = useState(false);
   const [backgroundSyncError, setBackgroundSyncError] = useState<string | null>(null);
   const backgroundSyncOn = backgroundSyncSupported();
@@ -193,7 +202,24 @@ export function SettingsScreen({
 
   const updateLlm = (key: keyof LlmConfig, value: string) => {
     setProbe(null);
+    if (key !== "model") {
+      setModels([]);
+      setModelsError(null);
+    }
     setLlm({ ...llm, [key]: value });
+  };
+
+  const loadModels = async () => {
+    setLoadingModels(true);
+    setModelsError(null);
+    try {
+      setModels(await llmModels(llm));
+    } catch (failure) {
+      setModels([]);
+      setModelsError(failure instanceof Error ? failure.message : "échec inconnu");
+    } finally {
+      setLoadingModels(false);
+    }
   };
 
   const runProbe = async () => {
@@ -811,6 +837,7 @@ export function SettingsScreen({
                   <input
                     aria-label={field.aria}
                     type={field.password ? "password" : "text"}
+                    list={field.key === "model" ? "llm-models" : undefined}
                     autoComplete="off"
                     autoCapitalize="none"
                     spellCheck={false}
@@ -821,6 +848,11 @@ export function SettingsScreen({
                   />
                 </label>
               ))}
+              <datalist id="llm-models">
+                {models.map((model) => (
+                  <option key={model} value={model} />
+                ))}
+              </datalist>
               <button
                 type="button"
                 disabled={!llmReady(llm) || probing}
@@ -829,6 +861,19 @@ export function SettingsScreen({
               >
                 {probing ? "Test en cours…" : "Tester la connexion"}
               </button>
+              <button
+                type="button"
+                disabled={!llm.endpoint.trim() || !llm.apiKey.trim() || loadingModels}
+                onClick={() => void loadModels()}
+                className="focus-ring min-h-11 w-full rounded-full border border-line bg-surface px-4 text-[12.5px] font-bold text-ink-soft transition-colors disabled:opacity-40"
+              >
+                {loadingModels ? "Chargement…" : "Charger les modèles"}
+              </button>
+              {modelsError ? (
+                <p className="rounded-2xl bg-rose-500/10 px-3 py-2 text-[12px] leading-relaxed font-semibold break-words text-rose-600 dark:text-rose-300">
+                  {`Liste indisponible · ${modelsError}`}
+                </p>
+              ) : null}
               {probe ? (
                 <p
                   className={cn(
@@ -846,6 +891,77 @@ export function SettingsScreen({
                   ? "IA active · les propositions utilisent le modèle configuré."
                   : "IA inactive · propositions locales uniquement."}
               </p>
+            </Card>
+          </BlurFade>
+
+          <BlurFade delay={0.1}>
+            <Card className="mx-5 mt-3 space-y-3 p-3.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                  Consommation
+                </span>
+                <span className="rounded-md bg-surface-2 px-1.5 py-0.5 text-[10px] font-bold text-ink-muted">
+                  {aiUsage.devices > 1 ? `tous appareils · ${aiUsage.devices}` : "cet appareil"}
+                </span>
+              </div>
+              <dl className="grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-xl bg-surface-2 px-2 py-2">
+                  <dt className="text-[10px] font-bold tracking-[0.1em] text-ink-muted uppercase">Appels</dt>
+                  <dd className="text-[15px] font-extrabold text-ink">{formatTokens(aiUsage.combined.total.calls)}</dd>
+                </div>
+                <div className="rounded-xl bg-surface-2 px-2 py-2">
+                  <dt className="text-[10px] font-bold tracking-[0.1em] text-ink-muted uppercase">Entrée</dt>
+                  <dd className="text-[15px] font-extrabold text-ink">{formatTokens(aiUsage.combined.total.prompt)}</dd>
+                </div>
+                <div className="rounded-xl bg-surface-2 px-2 py-2">
+                  <dt className="text-[10px] font-bold tracking-[0.1em] text-ink-muted uppercase">Sortie</dt>
+                  <dd className="text-[15px] font-extrabold text-ink">
+                    {formatTokens(aiUsage.combined.total.completion)}
+                  </dd>
+                </div>
+              </dl>
+              {aiModels.length > 0 ? (
+                <ul className="space-y-1">
+                  {aiModels.map((entry) => (
+                    <li
+                      key={entry.model}
+                      className="flex items-center justify-between gap-2 text-[12px] font-semibold text-ink-soft"
+                    >
+                      <span className="truncate">{entry.model}</span>
+                      <span className="shrink-0 text-ink-muted">
+                        {`${formatTokens(entry.usage.calls)} appel(s) · ${formatTokens(entry.usage.prompt + entry.usage.completion)} tokens`}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-[12px] leading-relaxed font-medium text-ink-muted">
+                  Aucun appel enregistré · les tokens sont comptés à chaque réponse du modèle.
+                </p>
+              )}
+              <div className="flex items-end justify-between gap-1.5">
+                {aiDays.map((entry) => (
+                  <div key={entry.day} className="flex flex-1 flex-col items-center gap-1">
+                    <div
+                      className="w-full rounded-t-md bg-accent/70"
+                      style={{ height: `${Math.max(3, (entry.usage.calls / aiPeak) * 40)}px` }}
+                      title={`${entry.day} · ${entry.usage.calls} appel(s)`}
+                    />
+                    <span className="text-[9.5px] font-bold text-ink-muted">{entry.day.slice(8)}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-semibold text-ink-muted">7 derniers jours · 90 jours conservés</span>
+                <button
+                  type="button"
+                  aria-label="Réinitialiser la consommation"
+                  onClick={() => resetAiStats()}
+                  className="focus-ring rounded-full border border-line px-3 py-1.5 text-[11.5px] font-bold text-ink-soft"
+                >
+                  Réinitialiser
+                </button>
+              </div>
             </Card>
           </BlurFade>
 

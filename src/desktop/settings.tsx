@@ -79,7 +79,9 @@ import {
 } from "@/lib/prefs";
 import { requestNotifications } from "@/lib/notify";
 import { APP_VERSION, phaseLabel, useUpdater } from "@/lib/updater";
-import { llmProbe, llmReady } from "@/lib/llm";
+import { llmModels, llmProbe, llmReady } from "@/lib/llm";
+import { formatTokens, lastDays, resetAiStats, topModels } from "@/lib/ai-stats";
+import { useAiUsage } from "@/lib/ai-sync";
 import type { SummaryConfig } from "@/lib/summary";
 import { ACCENT_PRESETS, accentContrast, useTheme, type ThemeMode } from "@/lib/theme";
 import { useMailStore } from "@/lib/store";
@@ -835,6 +837,13 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   const [savingRename, setSavingRename] = useState(false);
   const [probing, setProbing] = useState(false);
   const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(null);
+  const [models, setModels] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const aiUsage = useAiUsage();
+  const aiDays = lastDays(aiUsage.combined);
+  const aiPeak = Math.max(...aiDays.map((day) => day.usage.calls), 1);
+  const aiModels = topModels(aiUsage.combined);
   const mod = detectModKey();
   const shortcutList = shortcutCatalog();
 
@@ -926,7 +935,24 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
 
   const updateLlm = (patch: { endpoint?: string; model?: string; apiKey?: string }) => {
     setProbe(null);
+    if (patch.endpoint !== undefined || patch.apiKey !== undefined) {
+      setModels([]);
+      setModelsError(null);
+    }
     setLlm(patch);
+  };
+
+  const loadModels = async () => {
+    setLoadingModels(true);
+    setModelsError(null);
+    try {
+      setModels(await llmModels(llm));
+    } catch (failure) {
+      setModels([]);
+      setModelsError(failure instanceof Error ? failure.message : "échec inconnu");
+    } finally {
+      setLoadingModels(false);
+    }
   };
 
   const runProbe = async () => {
@@ -1790,10 +1816,16 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                       <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Modèle</span>
                       <TextInput
                         aria-label="Nom du modèle"
+                        list="llm-models"
                         placeholder="gpt-4o-mini"
                         value={llm.model}
                         onChange={(event) => updateLlm({ model: event.target.value })}
                       />
+                      <datalist id="llm-models">
+                        {models.map((model) => (
+                          <option key={model} value={model} />
+                        ))}
+                      </datalist>
                     </label>
                     <label className="grid gap-1">
                       <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Clé API</span>
@@ -1820,12 +1852,33 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                       )}
                       {probing ? "Test en cours…" : "Tester la connexion"}
                     </DButton>
+                    <DButton
+                      variant="soft"
+                      size="sm"
+                      disabled={!llm.endpoint.trim() || !llm.apiKey.trim() || loadingModels}
+                      onClick={() => void loadModels()}
+                    >
+                      {loadingModels ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="size-3.5" />
+                      )}
+                      {loadingModels ? "Chargement…" : "Charger les modèles"}
+                    </DButton>
                     {probe ? (
                       <Badge tone={probe.ok ? "green" : "rose"}>
                         {probe.ok ? "connexion établie" : "échec"}
                       </Badge>
                     ) : null}
+                    {models.length > 0 ? (
+                      <Badge tone="sky">{`${models.length} modèle(s) disponible(s)`}</Badge>
+                    ) : null}
                   </div>
+                  {modelsError ? (
+                    <p className="mt-2 rounded-xl bg-rose-500/10 px-2.5 py-2 text-[12.5px] leading-relaxed font-semibold break-words text-rose-600 dark:text-rose-300">
+                      {`Liste indisponible · ${modelsError}`}
+                    </p>
+                  ) : null}
                   {probe ? (
                     <p
                       className={cn(
@@ -1843,6 +1896,75 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                       ? "IA active · les propositions utilisent le modèle configuré."
                       : "IA inactive · propositions locales uniquement."}
                   </p>
+                </Surface>
+
+                <Surface className="mt-3 p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Consommation</p>
+                    <Badge tone={aiUsage.devices > 1 ? "accent" : "neutral"}>
+                      {aiUsage.devices > 1 ? `tous appareils · ${aiUsage.devices}` : "cet appareil"}
+                    </Badge>
+                  </div>
+                  <dl className="mt-3 grid grid-cols-3 gap-2 text-center">
+                    <div className="rounded-xl bg-surface-2 px-2 py-2">
+                      <dt className="text-[10px] font-bold tracking-[0.1em] text-ink-muted uppercase">Appels</dt>
+                      <dd className="text-[15px] font-extrabold text-ink">
+                        {formatTokens(aiUsage.combined.total.calls)}
+                      </dd>
+                    </div>
+                    <div className="rounded-xl bg-surface-2 px-2 py-2">
+                      <dt className="text-[10px] font-bold tracking-[0.1em] text-ink-muted uppercase">Entrée</dt>
+                      <dd className="text-[15px] font-extrabold text-ink">
+                        {formatTokens(aiUsage.combined.total.prompt)}
+                      </dd>
+                    </div>
+                    <div className="rounded-xl bg-surface-2 px-2 py-2">
+                      <dt className="text-[10px] font-bold tracking-[0.1em] text-ink-muted uppercase">Sortie</dt>
+                      <dd className="text-[15px] font-extrabold text-ink">
+                        {formatTokens(aiUsage.combined.total.completion)}
+                      </dd>
+                    </div>
+                  </dl>
+                  {aiModels.length > 0 ? (
+                    <ul className="mt-3 space-y-1">
+                      {aiModels.map((entry) => (
+                        <li key={entry.model} className="flex items-center justify-between gap-2 text-[12px] font-semibold text-ink-soft">
+                          <span className="truncate">{entry.model}</span>
+                          <span className="shrink-0 text-ink-muted">
+                            {`${formatTokens(entry.usage.calls)} appel(s) · ${formatTokens(entry.usage.prompt + entry.usage.completion)} tokens`}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-3 text-[12px] font-semibold text-ink-muted">
+                      Aucun appel enregistré · les tokens sont comptés à chaque réponse du modèle.
+                    </p>
+                  )}
+                  <div className="mt-3 flex items-end justify-between gap-1.5">
+                    {aiDays.map((entry) => (
+                      <div key={entry.day} className="flex flex-1 flex-col items-center gap-1">
+                        <div
+                          className="w-full rounded-t-md bg-accent/70"
+                          style={{ height: `${Math.max(3, (entry.usage.calls / aiPeak) * 40)}px` }}
+                          title={`${entry.day} · ${entry.usage.calls} appel(s)`}
+                        />
+                        <span className="text-[9.5px] font-bold text-ink-muted">{entry.day.slice(8)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-3 flex items-center justify-between gap-2">
+                    <span className="text-[11.5px] font-semibold text-ink-muted">7 derniers jours · 90 jours conservés</span>
+                    <DButton
+                      variant="ghost"
+                      size="sm"
+                      aria-label="Réinitialiser la consommation"
+                      onClick={() => resetAiStats()}
+                    >
+                      <RotateCcw className="size-3.5" />
+                      Réinitialiser
+                    </DButton>
+                  </div>
                 </Surface>
 
                 <Surface className="mt-3 divide-y divide-line overflow-hidden">

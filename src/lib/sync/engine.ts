@@ -142,7 +142,7 @@ export function createSyncEngine(storage: SyncStorage, options: SyncEngineOption
   let attempts = 0;
   let started = false;
   let paused = false;
-  let enabledKinds = new Set<EntityKind>(["task", "suggestion", "event"]);
+  let enabledKinds = new Set<EntityKind>(["task", "suggestion", "event", "ai"]);
 
   function notify(): void {
     for (const listener of [...listeners]) listener();

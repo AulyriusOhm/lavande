@@ -149,6 +149,25 @@ describe("createLocalStorageSyncStorage", () => {
     expect(storage.read()).toEqual(state);
   });
 
+  it("garde un doc de kind ai à l'aller-retour", () => {
+    const storage = createLocalStorageSyncStorage(KEY);
+    const base = emptyState(createDevice("Portable", "tauri"));
+    const doc: Doc = {
+      id: "usage:appareil-1",
+      kind: "ai",
+      v: 1,
+      raw: { usage: { prompt: 12, completion: 3, calls: 1 }, byDay: { "2026-01-01": { prompt: 12, completion: 3, calls: 1 } } },
+      fields: { usage: "001700000000000-00000-abc123" },
+      readOnly: false,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    storage.write({ ...base, docs: { [docKey("ai", doc.id)]: doc } });
+
+    const reread = createLocalStorageSyncStorage(KEY).read();
+
+    expect(reread.docs[docKey("ai", "usage:appareil-1")]).toEqual(doc);
+  });
+
   it("notifie les abonnés et se désabonne", () => {
     const storage = createLocalStorageSyncStorage(KEY);
     const state = emptyState(createDevice("Portable", "web"));

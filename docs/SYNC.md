@@ -5,7 +5,8 @@ format des opérations, fusion, schéma PostgreSQL, API HTTP, appairage, cycle d
 La source de vérité est le code : `server/src/**` (Rust, axum + sqlx + PostgreSQL) et `src/lib/sync/*.ts`
 (TypeScript, `@noble/*`). Tout écart entre ce document et le code est un défaut du document.
 
-Portée : entités `task` et `suggestion` du kanban de planification. Serveur : zéro connaissance du clair.
+Portée : entités `task` et `suggestion` du kanban, `event` de l'agenda et `ai` (consommation de tokens et
+réglages du modèle). Serveur : zéro connaissance du clair — il ne voit que le `kind` en clair.
 
 ## 0. Carte du code
 
@@ -24,13 +25,15 @@ Portée : entités `task` et `suggestion` du kanban de planification. Serveur : 
 | `src/lib/sync/vault.ts` | coffre des secrets du front : clé privée d'appareil et jetons, gardés par le démon (§9.1) |
 | `src/lib/sync/client.ts` | client HTTP (`fetch`, timeout 15 s) |
 | `src/lib/sync/engine.ts` | moteur : comptes, appairage, push/pull, backoff, états |
-| `src/lib/planning-store.tsx` | projection `Doc` → `Task`/`MailSuggestion`, émission locale hors ligne |
+| `src/lib/planning-store.tsx` | projection `Doc` → `Task`/`MailSuggestion`/`CalendarEvent`, émission locale hors ligne |
+| `src/lib/ai-stats.ts` | agrégat local de consommation (`lavande.ai.stats`), purge à 90 jours |
+| `src/lib/ai-sync.ts` | `useAiSync()` : docs `ai` (`usage:<deviceId>`, `settings`), `useAiUsage()` : total local + autres appareils |
 
 ## 1. Objectifs et non-objectifs
 
 | # | Objectif |
 | --- | --- |
-| O1 | Convergence du kanban `task` + `suggestion` entre desktop Tauri et mobile. |
+| O1 | Convergence du kanban `task` + `suggestion`, de l'agenda `event` et des docs `ai` entre desktop Tauri et mobile. |
 | O2 | Hors ligne complet : mutation locale immédiate, envoi différé (outbox persistée). |
 | O3 | Zéro connaissance serveur : aucun titre, description, sous-tâche, mail lié lisible. |
 | O4 | Un build ancien ne peut pas détruire les données d'un build récent (§5). |
@@ -39,7 +42,8 @@ Portée : entités `task` et `suggestion` du kanban de planification. Serveur : 
 | Non-objectif | Raison |
 | --- | --- |
 | Mail (boîte, dossiers, lus/archivés) | Autre chantier ; `mailId` n'est qu'une référence opaque. |
-| Calendrier / événements | Hors périmètre ; reste local. |
+| Rendez-vous d'un calendrier externe (ICS, Google, CalDAV) | Hors périmètre : seuls les `event` créés dans Lavande sont synchronisés. |
+| Clé API du modèle (`prefs.llm.apiKey`) | Jamais synchronisée, jamais chiffrée dans un doc (§2.5). |
 | Collaboration temps réel (présence, OT, CRDT texte) | Grain de conflit = champ ; latence de synchro tolérée. |
 | Rotation de DEK, keystore natif, ACL par entité, partage entre utilisateurs | Absents du code (§6.6, §10). Un `user_id` = un espace. |
 
@@ -49,7 +53,7 @@ Portée : entités `task` et `suggestion` du kanban de planification. Serveur : 
 
 ```ts
 export const LOCAL_SCHEMA_VERSION = 1;
-export type DocKind = "task" | "suggestion";
+export type DocKind = "task" | "suggestion" | "event" | "ai";
 export type Doc = {
   id: string;                        // identifiant d'entité (§2.3)
   kind: DocKind;
@@ -75,6 +79,8 @@ Les patches sont produits par `taskPatch` (`src/lib/planning-store.tsx`) : un ch
 | --- | --- |
 | `task` | `title`, `meta`, `state`, `due`, `dueTone`, `dueDate`, `progress`, `description`, `subtasks`, `mailId` |
 | `suggestion` | `status` (`pending`/`accepted`/`dismissed`), `taskId`, `mailId`, `account`, `from`, `subject`, `proposal`, `due`, `dueTone`, `tone`, `description` |
+| `event` | `date`, `start`, `end`, `title`, `location`, `description`, `tone`, `fromMail`, `mailId`, `attendees`, `calendar` |
+| `ai` | `usage`, `byDay`, `byModel`, `byDomain` (doc `usage:<deviceId>`) ; `endpoint`, `model` (doc `settings`) |
 
 `subtasks` (`{title, done}[]`) est **un seul champ**. Un seul `state` parmi
 `todo|doing|waiting|review|done`, un seul `dueTone` parmi `late|soon|soft|none`.
@@ -116,6 +122,25 @@ Côté état local, `refs` associe `entityRef` → clé de doc (`${kind}:${id}`)
 - dès la première synchro, `engine.emitLocal` émet les nouvelles ops avec la référence HMAC, qui est
   ajoutée à `refs` ; l'ancienne entrée en clair devient inerte (elle ne matche plus aucune op serveur).
 
+### 2.5 Documents `ai`
+
+Deux familles de docs, toutes deux de kind `ai` :
+
+| Doc | `id` | `patch` | Écrit par |
+| --- | --- | --- | --- |
+| consommation | `usage:<deviceId>` | `usage` `{prompt, completion, calls}`, `byDay` `Record<"YYYY-MM-DD", usage>`, `byModel` `Record<modèle, usage>`, `byDomain` `Record<hôte, usage>` | un seul appareil (le sien) : valeurs **absolues** de cet appareil, réémises à chaque appel LLM |
+| réglages | `settings` | `endpoint`, `model` | tous les appareils (LWW par champ) |
+
+`usage` est la consommation de l'appareil, `byDay` la même répartie par jour (purgée au-delà de 90 jours),
+`byModel` par modèle et `byDomain` par hôte d'endpoint. Le sink de `src/lib/llm.ts` (`setUsageSink`) alimente
+`src/lib/ai-stats.ts` (`recordUsage`), et `src/lib/ai-sync.ts` réémet le doc à chaque changement : le flush
+du moteur (800 ms) absorbe la fréquence. L'affichage additionne le doc local et les docs `usage:*` reçus
+(« tous appareils »).
+
+**La clé API n'est jamais synchronisée** : `prefs.llm.apiKey` reste dans `lavande.prefs` sur l'appareil, le
+doc `settings` ne porte que `endpoint` et `model`. À la réception d'un doc `settings` plus récent, le client
+applique `setLlm({endpoint, model})` et n'émet pas d'écho (garde sur `updatedAt` du doc).
+
 ## 3. Journal d'opérations
 
 Le journal serveur est append-only ; une op est immuable et idempotente.
@@ -126,7 +151,7 @@ Le journal serveur est append-only ; une op est immuable et idempotente.
 type SyncOp = {                       // src/lib/sync/storage.ts — forme envoyée au serveur
   opId: string;                       // `${deviceId}:${compteur}` (≤ 128 car.)
   deviceId: string;                   // UUID v4 ; recopié localement, NON envoyé (déduit de la session)
-  kind: "task" | "suggestion";        // en clair
+  kind: "task" | "suggestion" | "event" | "ai";   // en clair
   entityRef: string;                  // base64url, 1..64 car. (§2.4)
   hlc: string;                        // `0000019a4f2b8c1-00003-2e7421` (§3.2)
   schemaVersion: number;              // >= 1 ; > SERVER_MAX_SCHEMA → 426
@@ -135,7 +160,7 @@ type SyncOp = {                       // src/lib/sync/storage.ts — forme envoy
 };
 type OpPayload = {                    // clair, avant chiffrement
   id: string;
-  kind: "task" | "suggestion";
+  kind: "task" | "suggestion" | "event" | "ai";
   v: number;                          // version de schéma du document produit
   op: "upsert" | "delete";
   patch?: Record<string, unknown>;    // absent pour "delete"
@@ -327,7 +352,7 @@ qui permet de retirer le résultat : deviner le code ne suffit pas. Aucun compte
 | Visible | Invisible |
 | --- | --- |
 | `userId`, `email`, `deviceId` (uuid), nom et plateforme de l'appareil, clé publique X25519, `fingerprint` | titres, `meta`, `description`, `due`, `state`, `progress`, `subtasks`, `account` |
-| `kind` (`task`/`suggestion`) | `id` d'entité, `mailId` |
+| `kind` (`task`/`suggestion`/`event`/`ai`) | `id` d'entité, `mailId`, `endpoint`/`model` du doc `settings` |
 | `entityRef` (HMAC non réversible sans `indexKey`) | `from`, `subject`, `proposal`, `status`/`taskId` d'une suggestion |
 | `hlc`, `schemaVersion`, `seq`, horodatages serveur, tailles | mot de passe, `masterKey`, `authKey`, `kek`, `dek`, `indexKey`, clés privées X25519 |
 | nombre d'ops par entité, fréquence de synchro, liste des appareils | contenu de `pairing_sessions.wrapped_key` et de `users.key_envelope` (enveloppes chiffrées, opaques pour lui) |
@@ -397,7 +422,7 @@ create table ops (
     op_id text not null,
     device_id uuid not null,              -- émetteur (session), sans clé étrangère
     entity_ref text not null,
-    kind text not null constraint ops_kind_valid check (kind in ('task', 'suggestion')),
+    kind text not null constraint ops_kind_valid check (kind in ('task', 'suggestion')),  -- élargi par 0004
     hlc text not null,
     schema_version int not null,
     nonce bytea not null constraint ops_nonce_len check (octet_length(nonce) = 24),
@@ -430,6 +455,10 @@ create table pairing_sessions (
 );
 create index pairing_sessions_expiry_idx on pairing_sessions (expires_at);
 create unique index devices_user_pubkey_unique on devices (user_id, pub_key) where revoked_at is null;
+
+-- 0004_ops_kinds.sql  (kind `event` passait `validate` puis violait la contrainte en base → 500)
+alter table ops drop constraint ops_kind_valid;
+alter table ops add constraint ops_kind_valid check (kind in ('task', 'suggestion', 'event', 'ai'));
 ```
 
 Ce qui **n'existe pas** malgré ce que décrivait une version antérieure de ce document : `server_salt`,
@@ -471,7 +500,7 @@ Erreurs de désérialisation levées par axum (corps non JSON, `Content-Type` ab
 | GET | `/api/v1/status` | oui | — | `200 {serverSchemaVersion, minClientSchema, headSeq}` |
 
 Contraintes de validation (`server/src/routes/ops.rs`), dans l'ordre : `opId` 1..128 car. ; `kind ∈
-{task,suggestion}` ; `entityRef` 1..64 car. du jeu `[A-Za-z0-9_-]` (aucun décodage base64) ; `hlc` regex
+{task,suggestion,event,ai}` (même liste que la contrainte `ops_kind_valid`, migration 0004) ; `entityRef` 1..64 car. du jeu `[A-Za-z0-9_-]` (aucun décodage base64) ; `hlc` regex
 ci-dessus ; `schemaVersion ≥ 1` ; `nonce` 24 octets ; `ciphertext` 1..65536 octets ; ≤ 200 ops par requête.
 `since` par défaut `0` (négatif refusé), `limit` par défaut et maximum `500` (`<1` ou `>500` refusé).
 
@@ -651,9 +680,9 @@ serveur. `pending` = longueur de l'outbox.
 
 | Cible | Commande | Couverture |
 | --- | --- | --- |
-| Serveur (unitaires + intégration) | `cargo test` dans `server/`, base PostgreSQL de dev accessible | 31 tests : dérivation, erreurs, auth/sessions/rate-limit, devices, appairage complet, push/pull, idempotence, pagination, isolation, enveloppe (a) |
+| Serveur (unitaires + intégration) | `cargo test` dans `server/`, base PostgreSQL de dev accessible | 32 tests : dérivation, erreurs, auth/sessions/rate-limit, devices, appairage complet, push/pull, idempotence, pagination, isolation, enveloppe (a), INSERT réel des kinds `event` et `ai` |
 | Client (crypto, HLC, fusion, stockage, transport, moteur) | `npm test` | 110 tests |
-| Contrat HTTP réel | `npm run e2e` (serveur démarré) | 27 vérifications : inscription, sessions, devices, push/pull/tri, appairage complet, codes d'erreur, nettoyage |
+| Contrat HTTP réel | `npm run e2e` (serveur démarré) | 28 vérifications : inscription, sessions, devices, push/pull/tri, kinds `event` et `ai`, appairage complet, codes d'erreur, nettoyage |
 | Chaîne complète client ↔ serveur | `SYNC_LIVE_URL=http://127.0.0.1:8787 npx vitest run src/lib/sync/live-integration.test.ts` | création de compte, push, connexion d'un 2e appareil par mot de passe (enveloppe (a) serveur), propagation d'édition dans les deux sens, appairage d'un 3e appareil, déconnexion |
 | Types et bundle | `npm run build` | `tsc --noEmit` + `vite build` |
 
@@ -670,6 +699,8 @@ serveur. `pending` = longueur de l'outbox.
 | `pairing_sessions` jamais purgée | lignes expirées accumulées, `wrapped_key` conservé côté serveur | tâche de purge (`delete … where expires_at < now()`) |
 | aucune rotation de DEK / d'`indexKey` | DEK compromise = historique lisible ; `entityRef` figé | nouvelle DEK + réémission (nouveaux `entityRef`) |
 | `subtasks` = un champ | deux coches simultanées : une perdue | id stable par sous-tâche, `subtasks.<id>` |
+| `byDay` du doc `ai` purgé à 90 jours | l'historique quotidien au-delà de 90 jours disparaît (le total, `byModel` et `byDomain` restent cumulés) | agrégats mensuels persistés |
+| doc `ai` `settings` sans `apiKey` | un appareil neuf doit saisir sa clé API à la main | coffre de secrets partagé (hors périmètre) |
 | documents déchiffrés dans `localStorage` | XSS ⇒ lecture du carnet | stockage chiffré côté client |
 | `MIN_CLIENT_SCHEMA` global, appliqué seulement à `/devices` et `/pairing/start` | un vieux build peut encore pousser des ops `schemaVersion` obsolète après appairage | contrôle en tête de `/ops`, seuil par appareil |
 | limitations de débit en mémoire | non partagées entre instances, perdues au redémarrage | limiteur en base/Redis |

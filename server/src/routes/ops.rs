@@ -213,9 +213,9 @@ fn validate(op: OpInput) -> Result<ValidOp, ApiError> {
         )));
     }
 
-    if op.kind != "task" && op.kind != "suggestion" && op.kind != "event" {
+    if !matches!(op.kind.as_str(), "task" | "suggestion" | "event" | "ai") {
         return Err(ApiError::BadRequest(
-            "kind invalide : task, suggestion ou event attendu".to_string(),
+            "kind invalide : task, suggestion, event ou ai attendu".to_string(),
         ));
     }
 
@@ -339,6 +339,10 @@ mod tests {
         let mut event_kind = base();
         event_kind.kind = "event".to_string();
         assert!(validate(event_kind).is_ok());
+
+        let mut ai_kind = base();
+        ai_kind.kind = "ai".to_string();
+        assert!(validate(ai_kind).is_ok());
 
         let mut wrong_kind = base();
         wrong_kind.kind = "delete".to_string();

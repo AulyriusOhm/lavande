@@ -13,7 +13,8 @@ export const SWIPE_ACTIONS: { id: SwipeActionId; label: string }[] = [
 
 const STORAGE_KEY = "lavande.prefs";
 
-import { EMPTY_LLM, type LlmConfig } from "@/lib/llm";
+import { endpointHost, recordUsage } from "@/lib/ai-stats";
+import { EMPTY_LLM, setUsageSink, type LlmConfig } from "@/lib/llm";
 import { demoReadOnly } from "@/lib/mail-backend";
 import { setMcpRights } from "@/lib/mcp";
 import { DEFAULT_AI_TASKS, DEFAULT_SUMMARY, type AiTasksConfig, type SummaryConfig } from "@/lib/summary";
@@ -418,6 +419,11 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       confirmSend: prefs.mcpConfirmSend,
     });
   }, [prefs.mcpEnabled, prefs.mcpAlwaysAllow, prefs.mcpConfirmSend]);
+
+  useEffect(() => {
+    setUsageSink((usage) => recordUsage(prefs.llm.model, endpointHost(prefs.llm.endpoint), usage));
+    return () => setUsageSink(null);
+  }, [prefs.llm.model, prefs.llm.endpoint]);
 
   /** Démo vitrine : les réglages s'affichent mais ne s'écrivent pas. */
   const write = useCallback((update: (current: Prefs) => Prefs) => {

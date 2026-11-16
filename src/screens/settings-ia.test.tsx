@@ -13,22 +13,37 @@ const LLM = {
   model: "gpt-4o-mini",
 };
 
-const response = (payload: unknown): Response =>
+const response = (payload: unknown, status = 200): Response =>
   ({
-    ok: true,
-    status: 200,
+    ok: status < 400,
+    status,
     json: async () => payload,
     text: async () => JSON.stringify(payload),
   }) as unknown as Response;
 
-function stubFetch() {
+const MODELS = { data: [{ id: "qwen3-coder" }, { id: "gpt-4o-mini" }] };
+
+function stubFetch(models: () => Response = () => response(MODELS)) {
   const fetchMock = vi.fn(async (input: unknown) => {
     const url = String(input);
-    if (url.endsWith("/chat/completions")) return response({ choices: [{ message: { content: "OK" } }] });
+    if (url.endsWith("/chat/completions")) {
+      return response({
+        choices: [{ message: { content: "OK" } }],
+        usage: { prompt_tokens: 1200, completion_tokens: 300 },
+      });
+    }
+    if (url.endsWith("/models")) return models();
     return response([]);
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+async function configure() {
+  fireEvent.change(screen.getByLabelText("Endpoint du modèle"), { target: { value: LLM.endpoint } });
+  fireEvent.change(screen.getByLabelText("Nom du modèle"), { target: { value: LLM.model } });
+  fireEvent.change(screen.getByLabelText("Clé API"), { target: { value: LLM.apiKey } });
+  await waitFor(() => expect(stored().llm).toMatchObject(LLM));
 }
 
 function mount() {
@@ -113,6 +128,60 @@ describe("Réglages mobile · section IA accessible sur Android", () => {
 
     fireEvent.click(screen.getByRole("switch", { name: /^Studio/ }));
     await waitFor(() => expect(stored().aiTasks).toMatchObject({ excludedAccounts: [] }));
+  });
+
+  it("charge les modèles de l'endpoint et les propose sans bloquer la saisie libre", async () => {
+    const fetchMock = stubFetch();
+    vi.stubEnv("VITE_PLATFORM", "android");
+    const view = mount();
+    await configure();
+
+    fireEvent.click(screen.getByText("Charger les modèles"));
+
+    await waitFor(() => expect(view.container.querySelectorAll("#llm-models option")).toHaveLength(2));
+    const options = [...view.container.querySelectorAll("#llm-models option")].map((node) =>
+      node.getAttribute("value"),
+    );
+    expect(options).toEqual(["gpt-4o-mini", "qwen3-coder"]);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/models"))).toBe(true);
+
+    fireEvent.change(screen.getByLabelText("Nom du modèle"), { target: { value: "modele-maison" } });
+    await waitFor(() => expect(stored().llm).toMatchObject({ model: "modele-maison" }));
+  });
+
+  it("affiche une erreur propre quand la liste des modèles échoue", async () => {
+    stubFetch(() => response({ error: "invalid_api_key" }, 401));
+    vi.stubEnv("VITE_PLATFORM", "android");
+    const view = mount();
+    await configure();
+
+    fireEvent.click(screen.getByText("Charger les modèles"));
+
+    expect(await screen.findByText(/Liste indisponible · Liste des modèles indisponible \(401\)/)).toBeTruthy();
+    expect(view.container.querySelectorAll("#llm-models option")).toHaveLength(0);
+    expect(screen.getByText("Tester la connexion")).toBeTruthy();
+  });
+
+  it("affiche la consommation de tokens et la réinitialise", async () => {
+    stubFetch();
+    vi.stubEnv("VITE_PLATFORM", "android");
+    mount();
+    await configure();
+
+    expect(screen.getByText("Consommation")).toBeTruthy();
+    expect(screen.getByText("Aucun appel enregistré · les tokens sont comptés à chaque réponse du modèle.")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Tester la connexion"));
+    await screen.findByText("Réponse du modèle · OK");
+
+    await waitFor(() => expect(screen.getByText("1")).toBeTruthy());
+    expect(screen.getByText(/1 appel\(s\) · 1\s500 tokens/)).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("Réinitialiser la consommation"));
+    await waitFor(() =>
+      expect(screen.getByText("Aucun appel enregistré · les tokens sont comptés à chaque réponse du modèle.")).toBeTruthy(),
+    );
+    expect(window.localStorage.getItem("lavande.ai.stats")).toBeNull();
   });
 
   it("bascule les options IA et les persiste", async () => {

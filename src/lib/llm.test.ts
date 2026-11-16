@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { llmChat, llmProbe, llmReady } from "@/lib/llm";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { llmChat, llmModels, llmProbe, llmReady, setUsageSink } from "@/lib/llm";
 
 const CONFIG = {
   endpoint: "https://opencode.ai/inference/go/openai/v1/",
@@ -85,6 +85,94 @@ describe("llmProbe", () => {
     vi.stubGlobal("fetch", vi.fn(async () => response({ error: "quotas" }, 429)));
 
     await expect(llmProbe(CONFIG)).rejects.toThrow(/Le modèle a répondu 429/);
+  });
+});
+
+describe("llmModels", () => {
+  it("lit { data: [{ id }] }, dédoublonne et trie", async () => {
+    const fetchMock = vi.fn(async () =>
+      response({ data: [{ id: "qwen3-coder" }, { id: "gpt-4o-mini" }, { id: "qwen3-coder" }] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(llmModels(CONFIG)).resolves.toEqual(["gpt-4o-mini", "qwen3-coder"]);
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://opencode.ai/inference/go/openai/v1/models");
+    expect(init.method).toBe("GET");
+    expect(init.headers).toMatchObject({
+      authorization: "Bearer sk-test",
+      "x-opencode-session": expect.stringMatching(/^lavande-/) as unknown as string,
+    });
+  });
+
+  it("explique un refus d'authentification", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => response({ error: "invalid_api_key" }, 401)));
+
+    await expect(llmModels(CONFIG)).rejects.toThrow(
+      'Liste des modèles indisponible (401) · {"error":"invalid_api_key"}',
+    );
+  });
+
+  it("refuse un format de réponse inattendu", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => response({ models: ["gpt-4o-mini"] })));
+
+    await expect(llmModels(CONFIG)).rejects.toThrow(
+      "Réponse inattendue de l'endpoint : { data: [{ id }] } attendu",
+    );
+  });
+
+  it("refuse une liste vide", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => response({ data: [] })));
+
+    await expect(llmModels(CONFIG)).rejects.toThrow("Aucun modèle proposé par cet endpoint");
+  });
+});
+
+describe("consommation de tokens", () => {
+  afterEach(() => setUsageSink(null));
+
+  it("publie l'usage de la réponse au sink", async () => {
+    const seen: { prompt: number; completion: number }[] = [];
+    setUsageSink((usage) => seen.push(usage));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        response({
+          choices: [{ message: { content: "ok" } }],
+          usage: { prompt_tokens: 128, completion_tokens: 42 },
+        }),
+      ),
+    );
+
+    await llmChat(CONFIG, "s", "u");
+
+    expect(seen).toEqual([{ prompt: 128, completion: 42 }]);
+  });
+
+  it("compte aussi le test de connexion", async () => {
+    const seen: { prompt: number; completion: number }[] = [];
+    setUsageSink((usage) => seen.push(usage));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        response({ choices: [{ message: { content: "OK" } }], usage: { prompt_tokens: 9, completion_tokens: 1 } }),
+      ),
+    );
+
+    await llmProbe(CONFIG);
+
+    expect(seen).toEqual([{ prompt: 9, completion: 1 }]);
+  });
+
+  it("ignore une réponse sans usage", async () => {
+    const seen: unknown[] = [];
+    setUsageSink((usage) => seen.push(usage));
+    vi.stubGlobal("fetch", vi.fn(async () => response({ choices: [{ message: { content: "ok" } }] })));
+
+    await llmChat(CONFIG, "s", "u");
+
+    expect(seen).toEqual([]);
   });
 });
 

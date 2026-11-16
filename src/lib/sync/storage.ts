@@ -76,7 +76,7 @@ function counter(value: unknown): number {
 }
 
 function asKind(value: unknown): DocKind | null {
-  return value === "task" || value === "suggestion" || value === "event" ? value : null;
+  return value === "task" || value === "suggestion" || value === "event" || value === "ai" ? value : null;
 }
 
 function createNotifier(): { subscribe(listener: () => void): () => void; notify(): void } {

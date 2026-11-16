@@ -251,6 +251,19 @@ async function main() {
     return "1 op, hasMore=true";
   });
 
+  await check("push des kinds event et ai (INSERT réel)", async () => {
+    const batch = [op(aliceDeviceA, 4, "event"), op(aliceDeviceA, 5, "ai")];
+    const pushed = await request("POST", "/ops", { token: alice.token, body: { ops: batch } });
+    expectStatus(pushed, 200, "push event+ai");
+    expectEqual(pushed.json?.acked?.length, 2, "push event+ai acked");
+    const pulled = await request("GET", "/ops?since=0", { token: alice.token });
+    expectStatus(pulled, 200, "pull event+ai");
+    const kinds = pulled.json.ops.map((entry) => entry.kind);
+    expectTrue(kinds.includes("event"), "op event absente du journal");
+    expectTrue(kinds.includes("ai"), "op ai absente du journal");
+    return `kinds=${[...new Set(kinds)].sort().join(",")}`;
+  });
+
   await check("push du 2e appareil puis pull partagé (même compte)", async () => {
     const second = [op(aliceDeviceB, 1, "task")];
     const pushed = await request("POST", "/ops", { token: alice.secondToken, body: { ops: second } });
@@ -258,10 +271,10 @@ async function main() {
     expectEqual(pushed.json?.acked?.length, 1, "push A2 acked");
     const pulled = await request("GET", "/ops?since=0", { token: alice.secondToken });
     expectStatus(pulled, 200, "pull A2");
-    expectEqual(pulled.json?.ops?.length, 4, "pull A2 ops.length");
+    expectEqual(pulled.json?.ops?.length, 6, "pull A2 ops.length");
     const devices_seen = new Set(pulled.json.ops.map((entry) => entry.deviceId));
     expectEqual(devices_seen.size, 2, "nombre d'appareils émetteurs");
-    return "4 ops, 2 appareils émetteurs";
+    return "6 ops, 2 appareils émetteurs";
   });
 
   let bobSeq = null;
@@ -279,13 +292,13 @@ async function main() {
     const bobPull = await request("GET", "/ops?since=0", { token: bob.token });
     expectStatus(bobPull, 200, "pull B");
     expectEqual(bobPull.json?.ops?.length, 1, "pull B ops.length");
-    expectEqual(alicePull.json?.ops?.length, 4, "pull A ops.length");
+    expectEqual(alicePull.json?.ops?.length, 6, "pull A ops.length");
     const bobIds = new Set(bobPull.json.ops.map((entry) => entry.opId));
     expectTrue(
       alicePull.json.ops.every((entry) => !bobIds.has(entry.opId)),
       "une op de B apparaît chez A",
     );
-    return "A=4 ops, B=1 op, aucun recouvrement";
+    return "A=6 ops, B=1 op, aucun recouvrement";
   });
 
   const pollSecret = rand(24);
