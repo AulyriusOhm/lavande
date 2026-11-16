@@ -10,7 +10,7 @@ import type { Account } from "@/lib/accounts";
 import type { ComposeDraft } from "@/lib/draft";
 import { formatBytes } from "@/lib/draft";
 import type { FolderId, Mail, MailSource } from "@/lib/mail";
-import { TONES, folderLabel } from "@/lib/mail";
+import { TONES, UNIFIED_FOLDERS, folderLabel } from "@/lib/mail";
 import { ensureHtml, htmlToText } from "@/lib/rich-text";
 
 export { demoReadOnly, mailMode, READ_ONLY_NOTICE } from "@/lib/demo-mode";
@@ -117,6 +117,20 @@ export function folderTargets(
   role: FolderId,
   path?: string,
 ): { accountId: string; path: string }[] {
+  if (role === "unified") {
+    const seen = new Set<string>();
+    const targets: { accountId: string; path: string }[] = [];
+    for (const accountId of accountIds) {
+      for (const record of records) {
+        if (record.accountId !== accountId || !UNIFIED_FOLDERS.includes(record.role)) continue;
+        const key = `${record.accountId}:${record.path}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        targets.push({ accountId, path: record.path });
+      }
+    }
+    return targets;
+  }
   return accountIds.flatMap((accountId) => {
     const target = records.find(
       (record) =>

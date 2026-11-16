@@ -17,7 +17,7 @@ import { notifyNewMail, setUnreadBadge } from "@/lib/notify";
 import type { NoticeData } from "@/components/ui/notice";
 import { ACCOUNTS, ALL_ACCOUNTS } from "@/lib/accounts";
 import type { Account } from "@/lib/accounts";
-import { MAILS, folderLabel, mailMatches, normalize } from "@/lib/mail";
+import { MAILS, UNIFIED_FOLDERS, folderLabel, mailMatches, normalize } from "@/lib/mail";
 import type { FolderId, Mail, MailSource } from "@/lib/mail";
 import { threadOf } from "@/lib/threads";
 import type { Thread } from "@/lib/threads";
@@ -338,6 +338,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     [accounts, prefs.perimeters],
   );
 
+  const accountRef = useRef(account);
+  accountRef.current = account;
+
   const bootstrap = useCallback(async () => {
     setPhase("loading");
     setBackendError(null);
@@ -351,11 +354,15 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         setPhase("empty");
         return;
       }
-      setAccountState((current) => {
-        if (current === ALL_ACCOUNTS) return loaded.length > 1 ? ALL_ACCOUNTS : loaded[0].id;
-        if (loaded.some((entry) => entry.id === current)) return current;
-        return loaded.length > 1 ? ALL_ACCOUNTS : loaded[0].id;
-      });
+      const current = accountRef.current;
+      const nextAccount =
+        current !== ALL_ACCOUNTS && loaded.some((entry) => entry.id === current)
+          ? current
+          : loaded.length > 1
+            ? ALL_ACCOUNTS
+            : loaded[0].id;
+      setAccountState(nextAccount);
+      if (nextAccount === ALL_ACCOUNTS && current !== ALL_ACCOUNTS) setFolderState("unified");
       setPhase("ready");
     } catch (error) {
       setBackendError(errorText(error));
@@ -461,22 +468,22 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     setRemoveTarget(null);
   }, []);
 
-  const targets = useMemo(
-    () =>
-      mode === "api"
-        ? folderTargets(
-            folderRecords,
-            account === ALL_ACCOUNTS
-              ? mailAccounts.map((entry) => entry.id)
-              : account
-                ? [account]
-                : [],
-            folder,
-            folderPath ?? undefined,
-          )
-        : [],
-    [mode, folderRecords, account, mailAccounts, folder, folderPath],
-  );
+  const targets = useMemo(() => {
+    if (mode !== "api") return [];
+    const loaded = folderTargets(
+      folderRecords,
+      account === ALL_ACCOUNTS
+        ? mailAccounts.map((entry) => entry.id)
+        : account
+          ? [account]
+          : [],
+      folder,
+      folderPath ?? undefined,
+    );
+    return folder === "unified"
+      ? loaded.filter((target) => !isFolderHidden(prefs.hiddenFolders, target.accountId, target.path))
+      : loaded;
+  }, [mode, folderRecords, account, mailAccounts, folder, folderPath, prefs.hiddenFolders]);
 
   useEffect(() => {
     if (mode !== "api" || phase !== "ready" || isComposeWindow()) return;
@@ -527,24 +534,33 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   }, [mode, phase, targets, pages, folder, folderRecords, revision, notify]);
 
   const folderOptions = useMemo<FolderOption[]>(() => {
+    const unified: FolderOption = {
+      id: "unified",
+      label: folderLabel("unified"),
+      path: "unified",
+      delimiter: null,
+    };
     if (mode !== "api") {
-      return [
-        { id: "inbox" as const, label: folderLabel("inbox"), path: "inbox" },
-        { id: "sent" as const, label: folderLabel("sent"), path: "sent" },
-        { id: "drafts" as const, label: folderLabel("drafts"), path: "drafts" },
-        { id: "archive" as const, label: folderLabel("archive"), path: "archive" },
-        { id: "spam" as const, label: folderLabel("spam"), path: "spam" },
-        { id: "trash" as const, label: folderLabel("trash"), path: "trash" },
+      const demo: FolderOption[] = [
+        { id: "inbox", label: folderLabel("inbox"), path: "inbox" },
+        { id: "sent", label: folderLabel("sent"), path: "sent" },
+        { id: "drafts", label: folderLabel("drafts"), path: "drafts" },
+        { id: "archive", label: folderLabel("archive"), path: "archive" },
+        { id: "spam", label: folderLabel("spam"), path: "spam" },
+        { id: "trash", label: folderLabel("trash"), path: "trash" },
       ];
+      return account === ALL_ACCOUNTS ? [unified, ...demo] : demo;
     }
     const visible = folderRecords.filter(
       (record) =>
         record.role !== "other" ||
         !isFolderHidden(prefs.hiddenFolders, record.accountId, record.path),
     );
-    return account === ALL_ACCOUNTS
-      ? folderOptionsForAll(visible, mailAccounts.map((entry) => entry.id))
-      : optionsOf(visible, account);
+    const options =
+      account === ALL_ACCOUNTS
+        ? folderOptionsForAll(visible, mailAccounts.map((entry) => entry.id))
+        : optionsOf(visible, account);
+    return account === ALL_ACCOUNTS ? [unified, ...options] : options;
   }, [mode, folderRecords, account, mailAccounts, prefs.hiddenFolders]);
 
   const folderOrder = useMemo<string[]>(() => {
@@ -565,10 +581,15 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     (value: string) => {
       setAccountState(value);
       setFolderPath(null);
-      if (mode !== "api" || value === ALL_ACCOUNTS) return;
-      setFolderState((current) =>
-        folderPathOf(folderRecords, value, current) ? current : "inbox",
-      );
+      if (value === ALL_ACCOUNTS) {
+        if (mode === "api") setFolderState("unified");
+        return;
+      }
+      setFolderState((current) => {
+        if (current === "unified") return "inbox";
+        if (mode !== "api") return current;
+        return folderPathOf(folderRecords, value, current) ? current : "inbox";
+      });
     },
     [folderRecords, mode],
   );
@@ -622,11 +643,22 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
   // Première visite d'un dossier : synchro automatique en arrière-plan, pour ne
   // pas avoir à cliquer sur « Synchroniser ». Une seule fois par portée
-  // (compte + dossier) ; revision recharge ensuite fils et compteurs.
+  // (compte + dossier) ; revision recharge ensuite fils et compteurs. En boîte
+  // unifiée, seule la réception est auto-synchronisée : le démarrage reste léger,
+  // les autres dossiers suivent à leur première visite ou via « Synchroniser ».
   const autoSyncedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (mode !== "api" || !mailSyncOn || phase !== "ready" || isComposeWindow()) return;
-    const due = targets.filter((target) => mailsInPerimeter(target.accountId));
+    const scoped =
+      folder === "unified"
+        ? targets.filter(
+            (target) =>
+              folderRecords.find(
+                (record) => record.accountId === target.accountId && record.path === target.path,
+              )?.role === "inbox",
+          )
+        : targets;
+    const due = scoped.filter((target) => mailsInPerimeter(target.accountId));
     if (due.length === 0) return;
     const key = due.map((t) => `${t.accountId}:${t.path}`).sort().join("|");
     if (autoSyncedRef.current.has(key)) return;
@@ -647,7 +679,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [mailsInPerimeter, mailSyncOn, mode, phase, targets]);
+  }, [mailsInPerimeter, mailSyncOn, mode, phase, targets, folder, folderRecords]);
 
   const demoCounts = useMemo(() => {
     const next: Record<string, { total: number; unread: number }> = {};
@@ -665,18 +697,21 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const statsFor = useCallback(
     (id: FolderId, path: string | undefined, scopeAccounts: string[]) => {
       const counts = mode === "demo" ? demoCounts : folderCounts;
+      const roles: FolderId[] = id === "unified" ? UNIFIED_FOLDERS : [id];
       let total = 0;
       let unread = 0;
       for (const accountId of scopeAccounts) {
         const paths =
           mode === "demo"
-            ? [id as string]
+            ? roles.map(String)
             : folderRecords
                 .filter(
-                  (record) =>
-                    record.accountId === accountId &&
-                    record.role === id &&
-                    (id !== "other" || record.path === path),
+                  (record) => record.accountId === accountId && roles.includes(record.role),
+                )
+                .filter((record) =>
+                  id === "unified"
+                    ? !isFolderHidden(prefs.hiddenFolders, record.accountId, record.path)
+                    : record.role !== "other" || record.path === path,
                 )
                 .map((record) => record.path);
         for (const folderPath of paths) {
@@ -689,7 +724,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       }
       return { total, unread };
     },
-    [demoCounts, folderCounts, folderRecords, mode],
+    [demoCounts, folderCounts, folderRecords, mode, prefs.hiddenFolders],
   );
 
   const folderStats = useCallback(
@@ -738,10 +773,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     setHasMore(false);
   }
 
-  const setFolder = useCallback((value: FolderId, path?: string | null) => {
-    setFolderState(value);
-    setFolderPath(path ?? null);
-  }, []);
+  const setFolder = useCallback(
+    (value: FolderId, path?: string | null) => {
+      if (value === "unified" && account !== ALL_ACCOUNTS) return;
+      setFolderState(value);
+      setFolderPath(path ?? null);
+    },
+    [account],
+  );
 
   const loadMore = useCallback(() => {
     if (!hasMore) return;
@@ -1660,7 +1699,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         setOpenMail(null);
         setComposeDraft(null);
         setComposeOpen(false);
-        setFolderState("inbox");
+        const remaining = accounts.filter((entry) => entry.id !== target.id);
+        const nextAccount =
+          account && account !== ALL_ACCOUNTS && account !== target.id
+            ? account
+            : remaining.length > 1
+              ? ALL_ACCOUNTS
+              : (remaining[0]?.id ?? "");
+        setFolderState(mode === "api" && nextAccount === ALL_ACCOUNTS ? "unified" : "inbox");
         setFolderPath(null);
         await bootstrap();
       })
@@ -1668,7 +1714,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         setRemoveTarget(target);
         notify(errorText(error));
       });
-  }, [bootstrap, notify, readOnlyBlocked, removeTarget]);
+  }, [account, accounts, bootstrap, mode, notify, readOnlyBlocked, removeTarget]);
 
   /**
    * Supprime un dossier personnalisé : le serveur d'abord, le cache local

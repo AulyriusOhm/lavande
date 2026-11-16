@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { animate, motion, useMotionValue, useSpring, useTransform } from "motion/react";
-import { Archive, ChevronDown, ChevronUp, Inbox, Loader2, Paperclip, PenLine, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2, type LucideIcon } from "lucide-react";
+import { Archive, ChevronDown, ChevronUp, Inbox, Layers, Loader2, Paperclip, PenLine, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2, type LucideIcon } from "lucide-react";
 import type { FolderId, Mail } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
 import { threadsInFolder } from "@/lib/threads";
@@ -751,6 +751,7 @@ export function AccountSwitchSheet({
 
 const FOLDER_ICONS = {
   inbox: Inbox,
+  unified: Layers,
   sent: Send,
   drafts: PenLine,
   archive: Archive,

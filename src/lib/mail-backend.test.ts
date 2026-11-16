@@ -110,6 +110,32 @@ describe("folderTargets", () => {
     expect(folderTargets(RECORDS, [], "inbox")).toEqual([]);
     expect(folderTargets(RECORDS, ["perso", "pro"], "drafts")).toEqual([]);
   });
+
+  it("unified rassemble tous les dossiers sauf corbeille et spam", () => {
+    expect(folderTargets(RECORDS, ["perso", "pro"], "unified")).toEqual([
+      { accountId: "perso", path: "INBOX" },
+      { accountId: "perso", path: "Archive/2024" },
+      { accountId: "perso", path: "Voyages" },
+      { accountId: "pro", path: "Sent" },
+      { accountId: "pro", path: "INBOX" },
+      { accountId: "pro", path: "Archive/2024" },
+      { accountId: "pro", path: "Projets" },
+    ]);
+  });
+
+  it("unified dédoublonne un même chemin et ignore un chemin demandé", () => {
+    const records: FolderRecord[] = [
+      record("a", "inbox", "INBOX", "Boîte de réception"),
+      record("a", "inbox", "INBOX", "Doublon"),
+      record("a", "spam", "Junk", "Spam"),
+      record("a", "trash", "Trash", "Corbeille"),
+    ];
+
+    expect(folderTargets(records, ["a"], "unified", "INBOX")).toEqual([
+      { accountId: "a", path: "INBOX" },
+    ]);
+    expect(folderTargets(records, ["b"], "unified")).toEqual([]);
+  });
 });
 
 describe("sendInputOf", () => {

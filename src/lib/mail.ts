@@ -2,11 +2,20 @@ import type { ApiPgpDetail } from "@/lib/api";
 
 export type PgpState = "none" | "signed" | "encrypted";
 
-export type FolderId = "inbox" | "spam" | "sent" | "drafts" | "archive" | "trash" | "other";
+export type FolderId =
+  | "inbox"
+  | "spam"
+  | "sent"
+  | "drafts"
+  | "archive"
+  | "trash"
+  | "other"
+  | "unified";
 
 /** Libellés par rôle IMAP : le serveur ne renvoie que des rôles. */
 export const FOLDER_LABELS: Record<FolderId, string> = {
   inbox: "Boîte de réception",
+  unified: "Boîte unifiée",
   sent: "Envoyés",
   drafts: "Brouillons",
   archive: "Archives",
@@ -14,6 +23,9 @@ export const FOLDER_LABELS: Record<FolderId, string> = {
   trash: "Corbeille",
   other: "Autres",
 };
+
+/** Dossiers que la boîte unifiée rassemble : tout sauf la corbeille et le spam. */
+export const UNIFIED_FOLDERS: FolderId[] = ["inbox", "sent", "drafts", "archive", "other"];
 
 export const FOLDERS: { id: FolderId; label: string }[] = [
   { id: "inbox", label: FOLDER_LABELS.inbox },

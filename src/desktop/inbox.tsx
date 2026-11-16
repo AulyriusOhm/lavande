@@ -12,6 +12,7 @@ import {
   Download,
   Forward,
   Inbox,
+  Layers,
   Loader2,
   Lock,
   Mail as MailIcon,
@@ -119,6 +120,7 @@ function useInboxTier(): InboxTier {
 
 const FOLDER_ICONS: Record<FolderId, LucideIcon> = {
   inbox: Inbox,
+  unified: Layers,
   sent: Forward,
   drafts: PenLine,
   archive: Archive,

@@ -143,7 +143,7 @@ function mockBackend(options: { withGamma?: boolean; withTrash?: boolean } = {})
       return reply(folders.filter((entry) => entry.account_id === accountId));
     }
     calls.threads.push(`${accountId}:${folderPath}`);
-    return reply([apiThread(accountId)]);
+    return reply(folderPath === "INBOX" ? [apiThread(accountId)] : []);
   });
   return calls;
 }

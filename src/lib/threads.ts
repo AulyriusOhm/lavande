@@ -1,4 +1,5 @@
 import type { FolderId, Mail } from "@/lib/mail";
+import { UNIFIED_FOLDERS } from "@/lib/mail";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
 
 export type Thread = {
@@ -48,8 +49,6 @@ export function buildThreads(mails: Mail[]): Thread[] {
         participants.push(message.name);
       });
 
-      const firstName = primary.name.split(" ")[0];
-
       return {
         id,
         messages: chronological,
@@ -61,7 +60,7 @@ export function buildThreads(mails: Mail[]): Thread[] {
         attachments: chronological.reduce((total, message) => total + (message.attachments?.length ?? 0), 0),
         participants,
         subject: oldest.subject,
-        preview: primary.folder === "sent" ? primary.preview : `${firstName} : ${primary.preview}`,
+        preview: previewOf(primary),
         time: primary.time,
         order: entries.reduce((best, entry) => Math.min(best, entry.index), Number.MAX_SAFE_INTEGER),
       };
@@ -70,10 +69,46 @@ export function buildThreads(mails: Mail[]): Thread[] {
 }
 
 export function threadsInFolder(mails: Mail[], folder: FolderId, account?: string): Thread[] {
-  return buildThreads(mails)
-    .filter((thread) => !account || account === ALL_ACCOUNTS || thread.primary.account === account)
+  const threads = buildThreads(mails).filter(
+    (thread) => !account || account === ALL_ACCOUNTS || thread.primary.account === account,
+  );
+  if (folder === "unified") return unifiedThreads(threads);
+  return threads
     .filter((thread) => thread.messages.some((message) => message.folder === folder))
     .map((thread) => anchorOn(thread, folder));
+}
+
+function activity(messages: Mail[]): number {
+  return messages.reduce((best, message) => Math.max(best, message.timestamp ?? 0), 0);
+}
+
+function unifiedThreads(threads: Thread[]): Thread[] {
+  return threads
+    .map((thread) => ({
+      thread,
+      messages: thread.messages
+        .filter((message) => UNIFIED_FOLDERS.includes(message.folder))
+        .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0)),
+    }))
+    .filter((entry) => entry.messages.length > 0)
+    .sort((a, b) => activity(b.messages) - activity(a.messages))
+    .map((entry) => withMessages(entry.thread, entry.messages));
+}
+
+function withMessages(thread: Thread, messages: Mail[]): Thread {
+  const primary = messages[messages.length - 1];
+  return {
+    ...thread,
+    messages,
+    primary,
+    count: messages.length,
+    unread: messages.filter((message) => message.unread).length,
+    starred: messages.some((message) => message.starred),
+    encrypted: messages.filter((message) => message.pgp === "encrypted").length,
+    attachments: messages.reduce((total, message) => total + (message.attachments?.length ?? 0), 0),
+    time: primary.time,
+    preview: previewOf(primary),
+  };
 }
 
 function anchorOn(thread: Thread, folder: FolderId): Thread {
@@ -84,8 +119,12 @@ function anchorOn(thread: Thread, folder: FolderId): Thread {
     primary,
     unread: inFolder.filter((message) => message.unread).length,
     time: primary.time,
-    preview: primary.folder === "sent" ? primary.preview : `${primary.name.split(" ")[0]} : ${primary.preview}`,
+    preview: previewOf(primary),
   };
+}
+
+function previewOf(mail: Mail): string {
+  return mail.folder === "sent" ? mail.preview : `${mail.name.split(" ")[0]} : ${mail.preview}`;
 }
 
 export function threadOf(mails: Mail[], mail: Mail): Thread | undefined {
