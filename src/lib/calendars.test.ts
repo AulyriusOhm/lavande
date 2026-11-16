@@ -104,6 +104,13 @@ describe("calendars · calendriers utilisés", () => {
     expect(calendarsInUse(events, DEFAULT_CALENDARS)).toEqual(DEFAULT_CALENDARS);
     expect(calendarsInUse(events, DEFAULT_CALENDARS)).toEqual(calendarsInUse(events, DEFAULT_CALENDARS));
   });
+
+  it("n'invente aucun calendrier pour un événement sans calendrier", () => {
+    expect(calendarsInUse([event(), event({ id: "e1", calendar: "" })], DEFAULT_CALENDARS)).toEqual(
+      DEFAULT_CALENDARS,
+    );
+    expect(calendarsInUse([event(), event({ id: "e1", calendar: "" })], [])).toEqual([]);
+  });
 });
 
 describe("calendars · sources Google", () => {

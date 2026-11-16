@@ -1194,7 +1194,7 @@ export function DesktopCalendar({
     const names = new Set(
       calendarList.filter((def) => !hiddenCalendars.has(def.name)).map((def) => def.name),
     );
-    if (allEvents.some((event) => !event.calendar)) names.add("");
+    if (!hiddenCalendars.has("") && allEvents.some((event) => !event.calendar)) names.add("");
     return names;
   }, [calendarList, hiddenCalendars, allEvents]);
 
@@ -1234,12 +1234,21 @@ export function DesktopCalendar({
   };
 
   const periodEvents = visible.filter((event) => inPeriod(event.date));
-  const calendarPeriodEvents = periodEvents.filter((event) =>
-    calendarList.some((def) => def.name === event.calendar),
+  const calendarPeriodEvents = periodEvents.filter(
+    (event) => !event.calendar || calendarList.some((def) => def.name === event.calendar),
   );
+  const orphanPeriodCount = allEvents.filter((event) => !event.calendar && inPeriod(event.date)).length;
   const filterPeriodEvents = periodEvents.filter(
     (event) => event.fromMail || conflicts.has(event.id) || Boolean(event.attendees?.length),
   );
+  const mailPeriodEvents = filterPeriodEvents.filter((event) => event.fromMail);
+  const conflictPeriodEvents = filterPeriodEvents.filter(
+    (event) => !event.fromMail && conflicts.has(event.id),
+  );
+  const attendeePeriodEvents = filterPeriodEvents.filter(
+    (event) => !event.fromMail && !conflicts.has(event.id) && Boolean(event.attendees?.length),
+  );
+  const filterCount = mailPeriodEvents.length + conflictPeriodEvents.length + attendeePeriodEvents.length;
   const hasFilters =
     Boolean(query.trim()) || fromMail || conflictsOnly || attendeesOnly || hiddenCalendars.size > 0;
 
@@ -1524,6 +1533,14 @@ export function DesktopCalendar({
                 onChange={() => toggleCalendar(def.name)}
               />
             ))}
+            {orphanPeriodCount > 0 ? (
+              <RailCheck
+                label="Sans calendrier"
+                checked={!hiddenCalendars.has("")}
+                count={orphanPeriodCount}
+                onChange={() => toggleCalendar("")}
+              />
+            ) : null}
           </FilterGroup>
 
           {icsSubscriptions.length > 0 ? (
@@ -1556,23 +1573,23 @@ export function DesktopCalendar({
             />
           ) : null}
 
-          <FilterGroup label="Filtres" count={filterPeriodEvents.length}>
+          <FilterGroup label="Filtres" count={filterCount}>
             <RailCheck
               label="Depuis un mail"
               checked={fromMail}
-              count={filterPeriodEvents.filter((event) => event.fromMail).length}
+              count={mailPeriodEvents.length}
               onChange={() => setFromMail((current) => !current)}
             />
             <RailCheck
               label="Conflits"
               checked={conflictsOnly}
-              count={filterPeriodEvents.filter((event) => conflicts.has(event.id)).length}
+              count={conflictPeriodEvents.length}
               onChange={() => setConflictsOnly((current) => !current)}
             />
             <RailCheck
               label="Avec invités"
               checked={attendeesOnly}
-              count={filterPeriodEvents.filter((event) => event.attendees?.length).length}
+              count={attendeePeriodEvents.length}
               onChange={() => setAttendeesOnly((current) => !current)}
             />
           </FilterGroup>

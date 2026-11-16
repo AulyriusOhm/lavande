@@ -180,6 +180,19 @@ describe("calendar-views · filtres", () => {
     expect(list.map((entry) => entry.id)).toEqual(["pro", "conflit"]);
   });
 
+  it("ne garde que les événements sans calendrier avec la sentinelle vide", () => {
+    const list = filterEvents(
+      [...events, event({ id: "orphelin", title: "Sans agenda" })],
+      { calendars: new Set([""]) },
+      conflicts,
+    );
+    expect(list.map((entry) => entry.id)).toEqual(["orphelin"]);
+  });
+
+  it("ne garde rien quand aucun calendrier n'est actif", () => {
+    expect(filterEvents(events, { calendars: new Set() }, conflicts)).toEqual([]);
+  });
+
   it("filtre les événements issus d'un mail", () => {
     const list = filterEvents(events, { fromMail: true }, conflicts);
     expect(list.map((entry) => entry.id)).toEqual(["mail"]);

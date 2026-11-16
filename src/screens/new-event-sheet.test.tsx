@@ -1,8 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { NewEventSheet } from "@/screens/new-event-sheet";
 import type { CalendarEvent } from "@/lib/calendar";
 import type { NewEventDraft } from "@/screens/new-event-sheet";
+
+const CALENDARS_KEY = "lavande.calendars.v1";
+
+beforeEach(() => {
+  window.localStorage.clear();
+});
 
 const DRAFT: NewEventDraft = {
   title: "Point maquettes v3",
@@ -62,5 +68,43 @@ describe("Nouveau rendez-vous mobile · préremplissage par une suggestion", () 
     expect(titleInput().value).toBe("Sans créneau");
     expect(dateInput().value).toBe("2026-12-01");
     expect(screen.getByText("→ 11:00")).toBeTruthy();
+  });
+});
+
+describe("Nouveau rendez-vous mobile · calendriers réels", () => {
+  const seed = () =>
+    window.localStorage.setItem(
+      CALENDARS_KEY,
+      JSON.stringify([
+        { id: "boulot", name: "Boulot", tone: 1 },
+        { id: "famille", name: "Famille", tone: 2 },
+      ]),
+    );
+
+  it("affiche les calendriers enregistrés et présélectionne le premier", () => {
+    seed();
+    const onCreate = vi.fn<(event: CalendarEvent) => void>();
+    render(<NewEventSheet onClose={() => {}} onCreate={onCreate} />);
+
+    expect(screen.queryByRole("button", { name: "Gmail" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Boulot" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Famille" }).getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.change(titleInput(), { target: { value: "Point" } });
+    fireEvent.click(screen.getByRole("button", { name: "Créer le rendez-vous" }));
+
+    expect(onCreate.mock.calls[0][0].calendar).toBe("Boulot");
+  });
+
+  it("crée dans le calendrier choisi", () => {
+    seed();
+    const onCreate = vi.fn<(event: CalendarEvent) => void>();
+    render(<NewEventSheet onClose={() => {}} onCreate={onCreate} />);
+
+    fireEvent.change(titleInput(), { target: { value: "Déjeuner" } });
+    fireEvent.click(screen.getByRole("button", { name: "Famille" }));
+    fireEvent.click(screen.getByRole("button", { name: "Créer le rendez-vous" }));
+
+    expect(onCreate.mock.calls[0][0].calendar).toBe("Famille");
   });
 });

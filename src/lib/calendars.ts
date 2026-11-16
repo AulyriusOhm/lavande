@@ -85,7 +85,7 @@ export const TONE_PILL = [
 
 export const TONE_DOT = ["bg-accent", "bg-sky-500", "bg-emerald-500", "bg-amber-500", "bg-rose-500"];
 
-export const DEFAULT_CALENDARS: CalendarDef[] = [
+export const DEFAULT_CALENDARS: CalendarDef[] = import.meta.env.VITE_DISTRIBUTION === "1" ? [] : [
   { id: "pro", name: "Pro", tone: 0 },
   { id: "perso", name: "Perso", tone: 2 },
   { id: "clients", name: "Clients", tone: 3 },

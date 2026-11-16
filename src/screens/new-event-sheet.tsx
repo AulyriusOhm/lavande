@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AlertTriangle, CalendarPlus } from "lucide-react";
 import type { CalendarEvent } from "@/lib/calendar";
 import { TODAY_ISO, isoInDays, overlappingEvents } from "@/lib/calendar";
+import { useCalendars } from "@/lib/calendars";
 import type { EventDraft } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
@@ -18,8 +19,6 @@ const DURATIONS = [
   { label: "1 h 30", minutes: 90 },
   { label: "2 h", minutes: 120 },
 ];
-
-const CALENDARS = ["Perso", "Pro", "Gmail"];
 
 const DATE_FMT = new Intl.DateTimeFormat("fr-FR", { weekday: "short", day: "numeric", month: "long" });
 
@@ -57,6 +56,7 @@ export function NewEventSheet({
   events?: CalendarEvent[];
   draft?: NewEventDraft;
 }) {
+  const [calendars] = useCalendars();
   const draftDate = draft?.date && ISO_DAY.test(draft.date) ? draft.date : null;
   const draftStart = draft?.start && CLOCK.test(draft.start) ? draft.start : "";
   const draftEnd = draft?.end && CLOCK.test(draft.end) ? draft.end : "";
@@ -72,7 +72,7 @@ export function NewEventSheet({
       (draftMinutes ? { label: `${draftMinutes} min`, minutes: draftMinutes } : DURATIONS[1]),
   );
   const [location, setLocation] = useState(draft?.location ?? "");
-  const [calendar, setCalendar] = useState(CALENDARS[0]);
+  const [calendar, setCalendar] = useState<string | undefined>(calendars[0]?.name);
   const [confirmed, setConfirmed] = useState(false);
 
   const end = start ? addMinutes(start, duration.minutes) : "--:--";
@@ -115,7 +115,7 @@ export function NewEventSheet({
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto no-scrollbar px-4">
+      <div className="flex-1 overflow-y-auto no-scrollbar px-4 pb-4">
         <label className="block text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase" htmlFor="event-title">
           Titre
         </label>
@@ -234,28 +234,32 @@ export function NewEventSheet({
           })}
         </div>
 
-        <p className="mt-4 mb-2 text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Calendrier</p>
-        <div className="flex flex-wrap gap-1.5 pb-4">
-          {CALENDARS.map((entry) => {
-            const active = entry === calendar;
-            return (
-              <button
-                key={entry}
-                type="button"
-                aria-pressed={active}
-                onClick={() => setCalendar(entry)}
-                className={cn(
-                  "min-h-11 rounded-full px-3 text-[11.5px] font-bold transition-all",
-                  active
-                    ? "bg-accent text-accent-contrast shadow-[0_6px_16px_-8px_var(--accent)]"
-                    : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
-                )}
-              >
-                {entry}
-              </button>
-            );
-          })}
-        </div>
+        {calendars.length > 0 ? (
+          <>
+            <p className="mt-4 mb-2 text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Calendrier</p>
+            <div className="flex flex-wrap gap-1.5">
+              {calendars.map((def) => {
+                const active = def.name === calendar;
+                return (
+                  <button
+                    key={def.id}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setCalendar(def.name)}
+                    className={cn(
+                      "min-h-11 rounded-full px-3 text-[11.5px] font-bold transition-all",
+                      active
+                        ? "bg-accent text-accent-contrast shadow-[0_6px_16px_-8px_var(--accent)]"
+                        : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
+                    )}
+                  >
+                    {def.name}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        ) : null}
       </div>
 
       <div className="border-t border-line/80 px-4 py-3 glass safe-bottom sm:pb-5">

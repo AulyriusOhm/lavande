@@ -131,6 +131,11 @@ const todayButton = () => screen.getByRole("button", { name: "Aujourd'hui" }) as
 const groupToggle = (label: string) => screen.getByRole("button", { name: new RegExp(`^${label}`) });
 const probeTitles = () =>
   Array.from(screen.getByTestId("probe").querySelectorAll("li")).map((item) => item.textContent ?? "");
+const countOf = (label: string) =>
+  Number(((screen.getByLabelText(label).closest("label")?.textContent ?? "").match(/\d+/g) ?? []).join(""));
+const groupCount = (label: string) => Number((groupToggle(label).textContent ?? "").replace(/\D/g, ""));
+const seedEvents = (events: CalendarEvent[]) =>
+  window.localStorage.setItem("lavande.events.v1", JSON.stringify(events));
 
 afterEach(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -334,6 +339,62 @@ describe("Agenda PC · navigation entre les vues", () => {
     expect(text.toLowerCase()).toContain(new Intl.DateTimeFormat("fr-FR", { weekday: "long" }).format(new Date()));
     expect(text).toContain(monthLabel(CURRENT_MONTH).toLowerCase());
     expect(text).toContain(String(CURRENT_YEAR));
+  });
+});
+
+describe("Agenda PC · événements sans calendrier", () => {
+  it("masque puis réaffiche les événements sans calendrier", () => {
+    seedEvents([
+      { id: "orphan", date: TODAY_ISO, start: "09:00", end: "09:30", title: "Sans agenda" },
+      { id: "pro", date: TODAY_ISO, start: "11:00", end: "11:30", title: "Avec agenda", calendar: "Pro" },
+    ]);
+    mount(1440);
+
+    const filters = screen.getByTestId("calendar-filters");
+    expect(within(dayPanel()).getByText("Sans agenda")).toBeTruthy();
+    expect(groupCount("Mes calendriers")).toBe(2);
+    expect(countOf("Sans calendrier")).toBe(1);
+
+    fireEvent.click(within(filters).getByLabelText("Sans calendrier"));
+
+    expect(within(dayPanel()).queryByText("Sans agenda")).toBeNull();
+    expect(within(dayPanel()).getByText("Avec agenda")).toBeTruthy();
+    expect(countOf("Sans calendrier")).toBe(1);
+
+    fireEvent.click(within(filters).getByLabelText("Sans calendrier"));
+
+    expect(within(dayPanel()).getByText("Sans agenda")).toBeTruthy();
+  });
+
+  it("cache la case quand la période n'a aucun orphelin", () => {
+    mount(1440);
+
+    expect(screen.queryByLabelText("Sans calendrier")).toBeNull();
+  });
+});
+
+describe("Agenda PC · compteurs de filtres", () => {
+  it("partitionne les cases : leur somme égale l'en-tête", () => {
+    seedEvents([
+      {
+        id: "mail",
+        date: TODAY_ISO,
+        start: "10:00",
+        end: "11:00",
+        title: "Depuis un mail",
+        fromMail: true,
+        attendees: ["Camille"],
+        calendar: "Pro",
+      },
+      { id: "conflit", date: TODAY_ISO, start: "10:30", end: "11:30", title: "En conflit", attendees: ["Léa"], calendar: "Pro" },
+      { id: "invites", date: TODAY_ISO, start: "14:00", end: "15:00", title: "Avec invités", attendees: ["Marie"], calendar: "Pro" },
+    ]);
+    mount(1440);
+
+    expect(countOf("Depuis un mail")).toBe(1);
+    expect(countOf("Conflits")).toBe(1);
+    expect(countOf("Avec invités")).toBe(1);
+    expect(countOf("Depuis un mail") + countOf("Conflits") + countOf("Avec invités")).toBe(groupCount("Filtres"));
   });
 });
 
