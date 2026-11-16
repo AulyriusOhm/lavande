@@ -182,11 +182,15 @@ async fn sync(client: &Client, daemon: &Daemon, folder_path: Option<&str>) -> Va
 }
 
 async fn send(client: &Client, daemon: &Daemon, subject: &str) {
+    send_with_body(client, daemon, subject, "corps du message").await;
+}
+
+async fn send_with_body(client: &Client, daemon: &Daemon, subject: &str, text: &str) {
     let payload = json!({
         "to": [{ "name": "Live", "email": account().email }],
         "cc": [], "bcc": [],
         "subject": subject,
-        "text": "corps du message",
+        "text": text,
         "html": null,
         "references": [],
         "attachments": [
@@ -237,6 +241,19 @@ fn find(messages: &[Value], subject: &str) -> u32 {
         .find(|message| message["subject"] == subject)
         .map(|message| message["uid"].as_u64().expect("uid") as u32)
         .unwrap_or_else(|| panic!("« {subject} » est absent du dossier"))
+}
+
+async fn search(client: &Client, daemon: &Daemon, query: &str) -> Vec<Value> {
+    let response = client
+        .get(daemon.url(&format!("/api/accounts/{ACCOUNT}/search")))
+        .query(&[("q", query)])
+        .send()
+        .await
+        .expect("GET search");
+    let status = response.status();
+    let body = response.text().await.expect("corps");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    serde_json::from_str(&body).expect("résultats")
 }
 
 fn subjects(messages: &[Value]) -> Vec<String> {
@@ -885,4 +902,60 @@ async fn a_composition_saved_as_a_draft_lands_in_the_drafts_folder() {
     let uid = find(&threads(&client, &daemon, &drafts).await, &subject);
     let stored = message(&client, &daemon, &drafts, uid).await;
     assert_eq!(stored["subject"], subject, "{stored}");
+}
+
+/// Le mot n'existe que dans le corps, au-delà des 1 024 premiers octets : ni le
+/// sujet, ni l'aperçu, ni le corps stocké ne le portent. Seul `UID SEARCH TEXT`
+/// côté serveur peut le trouver, et le message revient sans corps.
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn a_word_only_in_the_body_is_found_by_the_server_search() {
+    let daemon = Daemon::start().await;
+    let client = daemon.client();
+    add_account(&client, &daemon).await;
+
+    let word = unique("zebre").replace(' ', "");
+    let subject = unique("[live-api-search] sujet neutre");
+    let mut body = "remplissage ".repeat(300);
+    body.push_str(&format!("\n\n{word}\n"));
+    send_with_body(&client, &daemon, &subject, &body).await;
+    sync(&client, &daemon, Some(INBOX)).await;
+
+    let inbox = threads(&client, &daemon, INBOX).await;
+    let uid = find(&inbox, &subject);
+    let stored = message(&client, &daemon, INBOX, uid).await;
+    assert!(stored["body_text"].is_null(), "{stored}");
+    assert!(stored["body_html"].is_null(), "{stored}");
+    assert!(
+        !stored["preview"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(&word),
+        "l'aperçu porte déjà le mot, la recherche locale le trouverait : {stored}"
+    );
+
+    let found = search(&client, &daemon, &word).await;
+    let hit = found
+        .iter()
+        .find(|message| message["subject"] == subject)
+        .unwrap_or_else(|| panic!("« {subject} » absent de la recherche {found:?}"));
+    assert_eq!(hit["uid"], uid);
+    assert_eq!(hit["folder_path"], INBOX);
+    assert!(
+        hit["body_text"].is_null(),
+        "le repli serveur a chargé un corps : {hit}"
+    );
+}
+
+/// Guillemets et barre oblique inverse partent dans une chaîne IMAP entre
+/// guillemets : la requête ne doit ni casser la session ni remonter en erreur.
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn a_search_query_with_quotes_and_backslashes_does_not_break() {
+    let daemon = Daemon::start().await;
+    let client = daemon.client();
+    add_account(&client, &daemon).await;
+
+    let found = search(&client, &daemon, "a\"b\\c").await;
+    assert!(found.is_empty(), "{found:?}");
 }

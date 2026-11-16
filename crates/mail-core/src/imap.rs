@@ -3,7 +3,7 @@
 //! Every network operation takes an already authenticated session: the caller
 //! opens and closes it, there is no pool and no automatic reconnection.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -605,6 +605,61 @@ struct Target<'a> {
     uidvalidity: u32,
 }
 
+/// Writes one envelope read from the server: headers only, never a body. `false`
+/// when the headers are unreadable — the message is skipped, not fatal.
+fn store_header(
+    store: &Store,
+    target: &Target<'_>,
+    uid: u32,
+    flags: Flags,
+    size: u32,
+    raw: &[u8],
+) -> Result<bool, MailError> {
+    let account_id = target.account_id;
+    let folder_path = target.folder_path;
+    let parsed = match mime::parse_headers(raw) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            tracing::warn!(account = account_id, folder = folder_path, uid, %error, "message illisible, ignoré");
+            return Ok(false);
+        }
+    };
+    let message = Message {
+        account_id: account_id.to_string(),
+        folder_path: folder_path.to_string(),
+        uid,
+        uidvalidity: target.uidvalidity,
+        thread_id: threading::thread_id(
+            account_id,
+            &parsed.subject,
+            parsed.message_id.as_deref(),
+            parsed.in_reply_to.as_deref(),
+            &parsed.references,
+        ),
+        message_id: parsed.message_id,
+        in_reply_to: parsed.in_reply_to,
+        references: parsed.references,
+        from: parsed.from,
+        to: parsed.to,
+        cc: parsed.cc,
+        subject: parsed.subject,
+        date: parsed.date,
+        flags,
+        size,
+        pgp: parsed.pgp,
+        pgp_detail: parsed.pgp_detail,
+        preview: parsed.preview,
+        body_text: parsed.body_text,
+        body_html: parsed.body_html,
+        attachments: parsed.attachments,
+    };
+    store.upsert_message(&message)?;
+    if let Some(message_id) = &message.message_id {
+        store.relink_replies(account_id, message_id, &message.thread_id)?;
+    }
+    Ok(true)
+}
+
 /// Reads and stores the metadata of `uids` only: `BODY.PEEK[HEADER]`, never the
 /// body. The body, the preview and the attachments arrive with `fetch_body`
 /// when the message is opened. A uid the server answers without headers is
@@ -616,21 +671,7 @@ async fn import_metadata(
     uids: &[u32],
     server: &HashMap<u32, (Flags, u32)>,
 ) -> Result<usize, MailError> {
-    let account_id = target.account_id;
-    let folder_path = target.folder_path;
-    let selector = uids
-        .iter()
-        .map(u32::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
-    let fetches: Vec<Fetch> = session
-        .uid_fetch(selector, "(UID BODY.PEEK[HEADER])")
-        .await
-        .map_err(imap_error)?
-        .try_collect()
-        .await
-        .map_err(imap_error)?;
-
+    let fetches = fetch_headers(session, uids).await?;
     let mut inserted = 0;
     for fetch in fetches {
         let (Some(uid), Some(raw)) = (fetch.uid, fetch.header()) else {
@@ -639,49 +680,120 @@ async fn import_metadata(
         let Some((flags, size)) = server.get(&uid) else {
             continue;
         };
-        let parsed = match mime::parse_headers(raw) {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                tracing::warn!(account = account_id, folder = folder_path, uid, %error, "message illisible, ignoré");
-                continue;
-            }
-        };
-        let message = Message {
-            account_id: account_id.to_string(),
-            folder_path: folder_path.to_string(),
-            uid,
-            uidvalidity: target.uidvalidity,
-            thread_id: threading::thread_id(
-                account_id,
-                &parsed.subject,
-                parsed.message_id.as_deref(),
-                parsed.in_reply_to.as_deref(),
-                &parsed.references,
-            ),
-            message_id: parsed.message_id,
-            in_reply_to: parsed.in_reply_to,
-            references: parsed.references,
-            from: parsed.from,
-            to: parsed.to,
-            cc: parsed.cc,
-            subject: parsed.subject,
-            date: parsed.date,
-            flags: *flags,
-            size: *size,
-            pgp: parsed.pgp,
-            pgp_detail: parsed.pgp_detail,
-            preview: parsed.preview,
-            body_text: parsed.body_text,
-            body_html: parsed.body_html,
-            attachments: parsed.attachments,
-        };
-        store.upsert_message(&message)?;
-        if let Some(message_id) = &message.message_id {
-            store.relink_replies(account_id, message_id, &message.thread_id)?;
+        if store_header(store, target, uid, *flags, *size, raw)? {
+            inserted += 1;
         }
-        inserted += 1;
     }
     Ok(inserted)
+}
+
+/// The `uid1,uid2,…` set a `UID FETCH` selector takes.
+fn uid_selector(uids: &[u32]) -> String {
+    uids.iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+async fn fetch_headers(session: &mut ImapSession, uids: &[u32]) -> Result<Vec<Fetch>, MailError> {
+    session
+        .uid_fetch(uid_selector(uids), "(UID BODY.PEEK[HEADER])")
+        .await
+        .map_err(imap_error)?
+        .try_collect()
+        .await
+        .map_err(imap_error)
+}
+
+/// Imports the headers of `uids` a server-side search just found, with the flags
+/// the same fetch carries: `UID FETCH … (UID FLAGS RFC822.SIZE BODY.PEEK[HEADER])`, never a
+/// body. Same contract as the sync import: envelope, flags and threading only.
+pub async fn import_headers(
+    session: &mut ImapSession,
+    store: &Store,
+    account_id: &str,
+    folder_path: &str,
+    uidvalidity: u32,
+    uids: &[u32],
+) -> Result<usize, MailError> {
+    if uids.is_empty() {
+        return Ok(0);
+    }
+    let target = Target {
+        account_id,
+        folder_path,
+        uidvalidity,
+    };
+    let fetches: Vec<Fetch> = session
+        .uid_fetch(
+            uid_selector(uids),
+            "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER])",
+        )
+        .await
+        .map_err(imap_error)?
+        .try_collect()
+        .await
+        .map_err(imap_error)?;
+    let mut inserted = 0;
+    for fetch in fetches {
+        let (Some(uid), Some(raw)) = (fetch.uid, fetch.header()) else {
+            continue;
+        };
+        let size = fetch.size.unwrap_or_default();
+        if store_header(store, &target, uid, flags_of(&fetch), size, raw)? {
+            inserted += 1;
+        }
+    }
+    Ok(inserted)
+}
+
+/// `SELECT` then `UID SEARCH TEXT` on one folder: the server matches bodies and
+/// headers, which the local store cannot do for a message whose body was never
+/// downloaded. The uids come back newest first.
+pub async fn select_and_search(
+    session: &mut ImapSession,
+    folder_path: &str,
+    query: &str,
+) -> Result<Vec<u32>, MailError> {
+    session.select(folder_path).await.map_err(imap_error)?;
+    let escaped = escape_search(query);
+    let uids = session
+        .uid_search(format!("CHARSET UTF-8 TEXT \"{escaped}\""))
+        .await
+        .map_err(imap_error)?;
+    // Un serveur qui refuse CHARSET rend une réponse vide, pas une erreur :
+    // async-imap avale le BAD/NO étiqueté. Une requête ASCII vide repart donc
+    // sans le préfixe avant d'être tenue pour « aucun résultat ».
+    let uids = if uids.is_empty() && query.is_ascii() {
+        session
+            .uid_search(format!("TEXT \"{escaped}\""))
+            .await
+            .map_err(imap_error)?
+    } else {
+        uids
+    };
+    Ok(descending(uids))
+}
+
+fn descending(uids: HashSet<u32>) -> Vec<u32> {
+    let mut uids: Vec<u32> = uids.into_iter().collect();
+    uids.sort_unstable_by(|left, right| right.cmp(left));
+    uids
+}
+
+/// A quoted IMAP string escapes `\` and `"`; CR and LF cannot appear in a quoted
+/// string at all and become spaces.
+fn escape_search(query: &str) -> String {
+    let mut escaped = String::with_capacity(query.len());
+    for character in query.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\r' | '\n' => escaped.push(' '),
+            other => escaped.push(other),
+        }
+    }
+    escaped
 }
 
 /// The uids that get an aperçu: the newest `SNIPPET_BATCH` of a descending list.
@@ -704,13 +816,11 @@ async fn import_previews(
     if uids.is_empty() {
         return;
     }
-    let selector = uids
-        .iter()
-        .map(u32::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
     let fetches: Vec<Fetch> = match session
-        .uid_fetch(&selector, "(UID BODY.PEEK[HEADER] BODY.PEEK[TEXT]<0.1024>)")
+        .uid_fetch(
+            uid_selector(uids),
+            "(UID BODY.PEEK[HEADER] BODY.PEEK[TEXT]<0.1024>)",
+        )
         .await
     {
         Ok(stream) => match stream.try_collect().await {
@@ -1377,5 +1487,19 @@ mod tests {
         assert_eq!(resumable_modseq(None, false), None);
         assert_eq!(resumable_modseq(Some(&folder), true), None);
         assert_eq!(resumable_modseq(Some(&folder), false), Some(9));
+    }
+
+    #[test]
+    fn a_search_query_escapes_the_quoted_string() {
+        assert_eq!(escape_search("facture"), "facture");
+        assert_eq!(escape_search("a\"b"), "a\\\"b");
+        assert_eq!(escape_search("a\\b"), "a\\\\b");
+        assert_eq!(escape_search("ligne\nsuivante"), "ligne suivante");
+        assert_eq!(escape_search("héllo"), "héllo");
+    }
+
+    #[test]
+    fn search_uids_come_back_newest_first() {
+        assert_eq!(descending([3, 1, 7].into_iter().collect()), vec![7, 3, 1]);
     }
 }

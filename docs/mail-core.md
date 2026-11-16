@@ -16,7 +16,7 @@ contrat des commandes à écrire.
 | Envoi SMTP (lettre) avec pièces jointes, texte + HTML ; PGP réel (signature/chiffrement) | Pas de décompression bzip2 des payloads OpenPGP ; voir « PGP & rédaction » |
 | Parsing MIME complet (encodage de transfert, RFC 2047, pièces jointes, aperçu) ; flux OAuth2 navigateur (PKCE) | Pas de `client_id` d'application embarqué (Google/Microsoft) : à enregistrer ou fournir au service |
 | Threading déterministe par `References` / `In-Reply-To` / sujet normalisé ; IDLE sur INBOX + push SSE | Pas de CONDSTORE/QRESYNC : chaque synchro refait une passe métadonnées complète du dossier |
-| Store SQLite (WAL, `user_version`), threads agrégés en Rust à la lecture ; recherche côté démon sur tous les dossiers | Recherche sur l'index local, pas de `SEARCH` IMAP distant |
+| Store SQLite (WAL, `user_version`), threads agrégés en Rust à la lecture ; recherche côté démon sur tous les dossiers, complétée par un `UID SEARCH TEXT` serveur quand l'index local ne remplit pas la limite | Le repli serveur n'importe que des en-têtes : jamais de corps, jamais de déchiffrement PGP |
 
 ## Arborescence
 
@@ -371,6 +371,15 @@ pub async fn move_message(
 ) -> Result<(), MailError>;
 
 pub async fn create_folder(session: &mut ImapSession, path: &str) -> Result<(), MailError>;
+
+pub async fn import_headers(
+    session: &mut ImapSession, store: &Store, account_id: &str,
+    folder_path: &str, uidvalidity: u32, uids: &[u32],
+) -> Result<usize, MailError>;
+
+pub async fn select_and_search(
+    session: &mut ImapSession, folder_path: &str, query: &str,
+) -> Result<Vec<u32>, MailError>;
 ```
 
 Comportements à connaître :
@@ -440,6 +449,15 @@ Comportements à connaître :
   connu. Serveur d'abord, store ensuite : un échec IMAP laisse la base intacte.
 - `create_folder` : un dossier déjà existant n'est pas une erreur (détection par le mot `exist` dans
   le message d'erreur).
+- `import_headers` : `UID FETCH uid1,…,uidN (UID FLAGS RFC822.SIZE BODY.PEEK[HEADER])` — les flags viennent du
+  même fetch, pas d'une passe métadonnées — puis le même contrat que l'import de synchro
+  (`parse_headers`, `upsert_message`, `relink_replies`) : en-têtes seuls, **jamais de corps**. Sert
+  au repli serveur de la recherche ; `&[]` → `0`, aucune requête.
+- `select_and_search` : `SELECT` puis `UID SEARCH CHARSET UTF-8 TEXT "…"`, UID du plus récent au plus
+  ancien. La requête est échappée pour la chaîne entre guillemets (`\` → `\\`, `"` → `\"`, CR/LF →
+  espace) ; l'UTF-8 passe tel quel. async-imap **avale le `BAD`/`NO` étiqueté** et rend un ensemble
+  vide : une réponse vide à une requête ASCII est donc rejouée sans `CHARSET UTF-8` avant d'être
+  tenue pour « aucun résultat ».
 
 ### SMTP (`smtp.rs`)
 
@@ -760,9 +778,9 @@ Côté front : `src/lib/mail.ts` (`Mail`, `FolderId`, `PgpState`, `TONES`) et `s
 - Un type compte issu de `AccountConfig` : `accounts.ts` porte `provider`, `color`, `tone`, `synced`
   que le crate ne connaît pas (pur affichage).
 - L'affichage HTML (`body_html`) et les pièces jointes binaires : aujourd'hui rien ne les consomme.
-- La recherche : `mailMatches` filtre en mémoire sur `MAILS`. Avec le backend il n'y a **aucune**
-  recherche serveur ; il faudra soit charger puis filtrer (comportement actuel), soit ajouter un
-  `SEARCH` IMAP au crate.
+- La recherche : `mailMatches` filtre en mémoire sur `MAILS`. Le démon, lui, expose
+  `/api/accounts/{id}/search` (locale + repli `UID SEARCH TEXT`), mais le front n'a pas encore
+  branché `searchMails` dessus.
 
 ## Contrat HTTP du démon local (implémenté)
 
@@ -841,6 +859,7 @@ jamais un reset silencieux.
 | GET | `/api/accounts/{id}/folders` | — | `[Folder]` |
 | POST | `/api/accounts/{id}/sync` | `{ "folder_path"? }` | `{ "reports": [{ folder_path, inserted, flags_updated, removed, uidvalidity_changed, uidnext }] }` |
 | GET | `/api/accounts/{id}/folders/{path}/threads?limit=50&offset=0` | — | `[Thread]` (limit plafonné à 200) |
+| GET | `/api/accounts/{id}/search?q=…&limit=50` | — | `[Message]` : recherche locale, complétée par le serveur si elle ne remplit pas la limite (limit plafonné à 200) |
 | GET | `/api/accounts/{id}/folders/{path}/messages/{uid}?fetch_body=true` | — | `Message` (corps rapatrié à la demande) |
 | POST | `/api/accounts/{id}/flags` | `{ folder_path, uid, unread, starred }` | 204 (serveur d'abord, store ensuite) |
 | POST | `/api/accounts/{id}/move` | `{ from_path, uid, to_path }` | 204 (UID local réaligné sur celui du serveur) |
@@ -857,6 +876,44 @@ jamais un reset silencieux.
 rien n'est persisté si le serveur refuse. Les corps et réponses sont les types de
 `crates/mail-core/src/model.rs` sérialisés tels quels (`folder_path`, `uid`, `flags.unread`, etc.) ;
 `{path}` doit être percent-encodé.
+
+### Recherche (`GET /api/accounts/{id}/search`)
+
+`?q=…&limit=50` (limit plafonné à 200) → `[Message]`. Le front n'a rien à faire de particulier :
+son debounce de 250 ms appelle la même route.
+
+1. **Locale d'abord** : `store.search_messages` filtre `subject`, `preview`, `body_text` et
+   `from_json` (LIKE échappé, `ORDER BY date DESC, uid DESC`).
+2. **Repli serveur** seulement si `messages.len() < limit` **et** `q` fait au moins 3 caractères
+   (comptés en `chars`, pas en octets) : un motif d'un ou deux caractères ramènerait la moitié de
+   la boîte.
+3. Une **seule** session (`imap::connect_with`), puis pour chaque dossier **connu en base**
+   (`store.list_folders`, donc le périmètre déjà synchronisé) : `SELECT` puis
+   `UID SEARCH CHARSET UTF-8 TEXT "…"` (`imap::select_and_search`). Aucun `LIST` : un dossier jamais
+   vu par la synchro n'est pas cherché.
+4. **Échappement** de la requête pour la chaîne entre guillemets IMAP : `\` → `\\`, `"` → `\"`,
+   CR/LF → espace (une chaîne entre guillemets ne peut pas les porter) ; l'UTF-8 passe tel quel.
+5. **Repli CHARSET** : async-imap avale le `BAD`/`NO` étiqueté et rend un ensemble **vide**, pas une
+   erreur. Une réponse vide à une requête ASCII est donc rejouée sans `CHARSET UTF-8`
+   (`TEXT "…"`) avant d'être tenue pour « aucun résultat » ; une requête non ASCII n'a pas ce repli.
+6. **Bornes** : au plus `2 × limit` UID serveur traités au total, dossiers parcourus dans l'ordre de
+   `list_folders` (par chemin) ; le budget s'épuise, la boucle s'arrête.
+7. **Import des inconnus seulement** : pour chaque UID trouvé, `store.flags_in_folder` dit s'il est
+   déjà en base. Les absents passent par `imap::import_headers`
+   (`UID FETCH … (UID FLAGS RFC822.SIZE BODY.PEEK[HEADER])` → `parse_headers` → `upsert_message` +
+   `relink_replies`) : **en-têtes seuls, jamais de corps**, même contrat que la synchro. Puis
+   `fetch_previews` (best-effort) sur ces UID, pour que les résultats aient un aperçu.
+8. **Fusion** : chaque UID trouvé est relu en base (`store.get_message`) et fusionné avec les
+   résultats locaux — dédoublonnage par `(folder_path, uid)` (la ligne locale gagne, elle porte son
+   corps et ses pièces jointes), tri `date DESC, uid DESC`, troncature à `limit`.
+9. **Best-effort de bout en bout** : compte illisible, connexion impossible, `SELECT`/`SEARCH` refusé,
+   dossier en erreur → `tracing::warn` et les résultats locaux sont rendus tels quels ; jamais
+   d'erreur HTTP pour ça. Un dossier en échec laisse la session désalignée : le suivant repart d'une
+   connexion neuve (même pattern que `sync_account`).
+10. **Aucun corps, aucun déchiffrement** : ce chemin ne télécharge que des en-têtes, donc le gate PGP
+    reste intact et les résultats du repli arrivent avec `body_text: null` — le corps se relit à
+    l'ouverture (`?fetch_body=true`). Un mot qui ne vit que dans un corps chiffré reste introuvable,
+    comme avant.
 
 ### Découverte des serveurs (`GET /api/discover`)
 
@@ -1069,7 +1126,7 @@ n'écoutant que sur la boucle locale.
 
 ## Tests
 
-### Hors-ligne (370 tests, `cargo test --workspace`)
+### Hors-ligne (374 tests, `cargo test --workspace`)
 
 Presque tout est dans `tests/`, sans réseau ; les `#[cfg(test)] mod tests` de `src/` couvrent le
 store (pièces jointes emportées par `delete_messages`, `Store: Send + Sync`, migrations de colonnes),
@@ -1087,7 +1144,7 @@ le MIME (assainissement HTML), `sync::auto_syncs` et le `Content-Disposition` de
 | `crates/mail-api/tests/http.rs` | 43 | routeur sans socket : `/api/health`, 400 config/JSON invalide, 409 id déjà pris, aucun secret dans `GET /api/accounts`, connexion échouée n'écrit rien, 404 inconnus, chemin de dossier percent-encodé, mapping `MailError` → statut, sélection de dossiers, `PATCH /api/accounts/{id}/pgp` (défaut ouvert, bascule par compte, corps chiffrés déjà déchiffrés effacés, 404 compte inconnu) |
 | `crates/mail-api/tests/pgp_gate.rs` | 3 | gate du trousseau, hors réseau : compte ouvert → `keyring_for` complet et corps déchiffré ; compte fermé → trousseau vide, corps/HTML/aperçu/pièces jointes fermés (`Clé secrète manquante`), `html_with_images` → `None` ; l'interrupteur est lu par compte |
 | `crates/mail-api/tests/discovery.rs` | 10 (+2 réseau) | parsing ISPDB Gmail/LaPoste et autoconfig lanro.eu, `SSL`/`STARTTLS`, `%EMAILADDRESS%`/`%EMAILLOCALPART%`, chaîne HTTP avec serveur local (`source: ispdb`), adresse invalide, domaine inconnu |
-| `tests/live.rs` (mail-core + mail-api) | 25 | réseau GreenMail, `#[ignore]` (voir ci-dessous) |
+| `tests/live.rs` (mail-core + mail-api) | 27 | réseau GreenMail, `#[ignore]` (voir ci-dessous) |
 
 Sur cette machine (pas de compilateur C système, `rusqlite`/`ring` en ont besoin) :
 
@@ -1098,7 +1155,7 @@ export CXX=/home/roman/.local/opt/lavande-cc/c++
 npm run mail:test          # cargo test --workspace
 ```
 
-### Réseau (`tests/live.rs`, 25 scénarios ignorés par défaut)
+### Réseau (`tests/live.rs`, 27 scénarios ignorés par défaut)
 
 ```sh
 scripts/mail-test-server.sh start      # conteneur lavande-mail-test (GreenMail)
@@ -1126,6 +1183,8 @@ généré par le script dans `$LAVANDE_MAIL_TEST_DIR` (défaut `~/.cache/lavande
 | `move_keeps_store_in_step_with_server` | `create_folder` deux fois (idempotent), `move_message` INBOX → Archive (capacité `MOVE`) : la ligne INBOX disparaît, la ligne Archive réapparaît **avec l'UID réattribué par le serveur** et son corps, `fetch_body` fonctionne dessus, et une session neuve confirme que tous les UID locaux d'Archive existent côté serveur |
 | `reply_joins_the_thread` | une réponse (`In-Reply-To` + `References` = `Message-ID` du parent) rejoint le thread du parent : `thread_id` identique, un seul thread de `count == 2` |
 | `xoauth2_authenticates_with_refresh_token` | échange refresh token contre un endpoint HTTP local (mock), puis `AUTHENTICATE XOAUTH2` (SASL-IR) sur GreenMail |
+| `a_word_only_in_the_body_is_found_by_the_server_search` (mail-api) | mot unique **uniquement dans le corps**, au-delà des 1 024 premiers octets : après un sync INBOX (en-têtes seuls, `body_text`/`body_html` à `null`), `GET /api/accounts/{id}/search?q=<mot>` le trouve par le repli `UID SEARCH TEXT` (GreenMail honore `TEXT` et `CHARSET UTF-8`, insensible à la casse) et le message revient **sans corps** |
+| `a_search_query_with_quotes_and_backslashes_does_not_break` (mail-api) | requête `a"b\c` : l'échappement de la chaîne IMAP ne casse ni la session ni la réponse (200, tableau vide) |
 | `the_pgp_gate_closes_and_reopens_an_encrypted_body_on_the_server` (mail-api) | envoi chiffré + signé, `sync` INBOX, puis `GET …/messages/{uid}?fetch_body=true` : corps en clair, `pgp_detail.decrypted` et `verified` à `true` ; `PATCH /api/accounts/{id}/pgp {enabled:false}` puis lecture **sans** `fetch_body` : `body_text`/`body_html` à `null`, `preview` vide et `pgp_detail` à `null` (la purge a vidé la ligne, pas seulement bloqué le déchiffrement) ; `PATCH {enabled:true}` puis `fetch_body=true` : le corps revient déchiffré ; `GET /api/accounts` : l'autre compte du démon garde son interrupteur ouvert |
 
 **État de l'environnement (GreenMail 2.1.15, image `greenmail/standalone:latest`)** : l'IMAP
@@ -1137,6 +1196,12 @@ littéral) — illisible par `async-imap`, mais sans effet sur la synchro depuis
 par une connexion dédiée (aperçus vides sur ce serveur) ; et aucun dossier n'est marqué `\Drafts`
 (SPECIAL-USE), ce qui fait échouer `a_composition_saved_as_a_draft_lands_in_the_drafts_folder`
 (scénario mail-api, limité par le serveur de test).
+
+Côté recherche, GreenMail **honore** `UID SEARCH TEXT` (sous-chaîne, insensible à la casse, corps et
+en-têtes) et `CHARSET UTF-8` (aucun `BAD`) : le repli sans `CHARSET` n'est donc pas exercé en réseau, seul le
+côté unitaire le couvre. Une requête accentuée ne rend rien : le corps est stocké encodé
+(quoted-printable/base64) et le serveur ne décode pas le charset MIME avant de chercher — d'où le
+choix d'un mot ASCII dans le scénario live.
 
 Variables lues par `tests/live.rs` :
 
@@ -1194,9 +1259,13 @@ Variables lues par `scripts/mail-test-server.sh` : `LAVANDE_MAIL_TEST_DIR`, `…
   en-têtes : `preview` reste vide et `attachments` vide tant qu'`fetch_body` n'a pas relu le message
   (l'endpoint `?fetch_body=true` le fait à l'ouverture). Un message sans corps texte ni HTML
   (pièces jointes seules) est donc relu à chaque ouverture.
-- **Pas de pool, pas de PGP réel, pas de flux navigateur OAuth2, pas de recherche serveur.** Voir
-  la vue d'ensemble. Le trousseau système existe (desktop Linux) ; Android utilise le fichier
-  chiffré en attendant un Keystore matériel.
+- **Pas de pool, pas de PGP réel, pas de flux navigateur OAuth2.** Voir la vue d'ensemble. Le
+  trousseau système existe (desktop Linux) ; Android utilise le fichier chiffré en attendant un
+  Keystore matériel.
+- **La recherche serveur est un enrichissement, pas un index.** Elle ne couvre que les dossiers déjà
+  connus en base, elle est bornée (`2 × limit` UID) et elle ne voit pas dans un corps chiffré :
+  `UID SEARCH TEXT` cherche dans le texte que le serveur stocke, donc le ciphertext PGP. Un mot
+  présent seulement dans un corps déchiffré reste introuvable une fois ce corps évincé.
 - **`Store` incomplet pour l'IPC** : ni `list_accounts`, ni liste des dossiers d'un compte, ni
   suppression de compte.
 - **`OutgoingMessage`/`OutgoingAttachment` ne sont pas `Deserialize`** : le DTO Tauri est à écrire
