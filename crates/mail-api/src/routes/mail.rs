@@ -199,7 +199,9 @@ async fn html_images(
         .store()
         .get_message(&id, &folder_path, uid)?
         .ok_or_else(|| unknown(&id, &folder_path, uid))?;
-    if stored.body_html.is_none() {
+    // Un corps lu sans HTML n'en a pas sur le serveur non plus ; un corps évincé
+    // (`body_text` et `body_html` nuls) est relu depuis le serveur.
+    if stored.body_html.is_none() && stored.body_text.is_some() {
         return Err(no_html(&folder_path, uid));
     }
 

@@ -218,18 +218,29 @@ impl Store {
         Ok(deleted)
     }
 
-    /// Inserts or replaces a message and its attachments. Idempotent per
-    /// `(account_id, folder_path, uid)`.
+    /// Inserts a message and its attachments, or refreshes the envelope and the
+    /// flags of a known one. Idempotent per `(account_id, folder_path, uid)`.
+    /// A re-sync carries headers only: it never overwrites the body, the
+    /// aperçu or the PGP detail `set_body` wrote, and it leaves the stored
+    /// attachments alone when it brings none.
     pub fn upsert_message(&self, message: &Message) -> Result<(), MailError> {
         let conn = self.conn()?;
         let tx = conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT OR REPLACE INTO messages (account_id, folder_path, uid, uidvalidity, \
+            "INSERT INTO messages (account_id, folder_path, uid, uidvalidity, \
              thread_id, message_id, in_reply_to, references_json, from_json, to_json, cc_json, \
              subject, date, unread, starred, answered, size, pgp, preview, body_text, body_html, \
              pgp_detail) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, \
-             ?17, ?18, ?19, ?20, ?21, ?22)",
+             ?17, ?18, ?19, ?20, ?21, ?22) \
+             ON CONFLICT(account_id, folder_path, uid) DO UPDATE SET \
+             uidvalidity = excluded.uidvalidity, thread_id = excluded.thread_id, \
+             message_id = excluded.message_id, in_reply_to = excluded.in_reply_to, \
+             references_json = excluded.references_json, from_json = excluded.from_json, \
+             to_json = excluded.to_json, cc_json = excluded.cc_json, \
+             subject = excluded.subject, date = excluded.date, unread = excluded.unread, \
+             starred = excluded.starred, answered = excluded.answered, \
+             size = excluded.size, pgp = excluded.pgp",
             params![
                 message.account_id,
                 message.folder_path,
@@ -255,19 +266,55 @@ impl Store {
                 to_json_option(&message.pgp_detail)?,
             ],
         )?;
-        tx.execute(
-            "DELETE FROM attachments WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
-            params![message.account_id, message.folder_path, message.uid],
-        )?;
-        insert_attachments(
-            &tx,
-            &message.account_id,
-            &message.folder_path,
-            message.uid,
-            &message.attachments,
-        )?;
+        if !message.attachments.is_empty() {
+            tx.execute(
+                "DELETE FROM attachments WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
+                params![message.account_id, message.folder_path, message.uid],
+            )?;
+            insert_attachments(
+                &tx,
+                &message.account_id,
+                &message.folder_path,
+                message.uid,
+                &message.attachments,
+            )?;
+        }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Writes the aperçu of one message, leaving its body alone: it comes from
+    /// the first bytes the sync pulled, not from a stored body.
+    pub fn set_preview(
+        &self,
+        account_id: &str,
+        folder_path: &str,
+        uid: u32,
+        preview: &str,
+    ) -> Result<(), MailError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE messages SET preview = ?4 \
+             WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
+            params![account_id, folder_path, uid, preview],
+        )?;
+        Ok(())
+    }
+
+    /// Drops the bodies loaded before `cutoff` (an RFC 3339 instant), keeping
+    /// the aperçu and the drafts, and never touching a starred message: opening
+    /// the message again re-reads its body from the server. Returns how many
+    /// messages were emptied.
+    pub fn evict_bodies_before(&self, account_id: &str, cutoff: &str) -> Result<usize, MailError> {
+        let conn = self.conn()?;
+        Ok(conn.execute(
+            "UPDATE messages SET body_text = NULL, body_html = NULL, pgp_detail = NULL \
+             WHERE account_id = ?1 AND date < ?2 AND starred = 0 \
+             AND (body_text IS NOT NULL OR body_html IS NOT NULL) \
+             AND folder_path NOT IN \
+             (SELECT path FROM folders WHERE account_id = ?1 AND role = ?3)",
+            params![account_id, cutoff, FolderRole::Drafts.as_str()],
+        )?)
     }
 
     pub fn get_message(

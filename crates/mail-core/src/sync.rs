@@ -1,11 +1,17 @@
 //! Account-level sync: one connection, folder discovery, then mapped folders.
 
+use chrono::{Duration, SecondsFormat, Utc};
+
 use crate::config::{AccountConfig, FolderMapping};
 use crate::error::MailError;
 use crate::imap::{self, SyncReport};
 use crate::model::{Folder, FolderRole};
 use crate::store::Store;
 use crate::tls::TlsOptions;
+
+/// Bodies older than this leave the store: opening the message re-reads them
+/// from the server.
+const EVICT_BODY_DAYS: u32 = 30;
 
 /// Connects once against the webpki roots, stores the account and its folders,
 /// syncs every folder with a known role (inbox, sent, drafts, archive, spam,
@@ -70,14 +76,32 @@ pub async fn sync_account_selected(
             Ok(report) => reports.push((folder.path.clone(), report)),
             Err(error) => {
                 tracing::warn!(account = %cfg.id, folder = %folder.path, %error, "dossier non synchronisé");
+                // Une réponse que le client n'a pas su lire laisse la session
+                // désalignée : les dossiers suivants repartent d'une connexion
+                // neuve plutôt que d'échouer en cascade.
+                session = imap::connect_with(cfg, tls_options).await?;
+                imap::enable_condstore(&mut session).await;
             }
         }
     }
+
+    evict_bodies(store, &cfg.id);
 
     if let Err(error) = session.logout().await {
         tracing::warn!(%error, "fermeture de la session imap");
     }
     Ok(reports)
+}
+
+/// Drops the bodies loaded more than `EVICT_BODY_DAYS` ago. A failure leaves the
+/// store as it was and never fails the sync that just succeeded.
+fn evict_bodies(store: &Store, account_id: &str) {
+    let cutoff = (Utc::now() - Duration::days(i64::from(EVICT_BODY_DAYS)))
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
+    match store.evict_bodies_before(account_id, &cutoff) {
+        Ok(evicted) => tracing::debug!(account = account_id, evicted, "corps évincés"),
+        Err(error) => tracing::warn!(account = account_id, %error, "éviction des corps impossible"),
+    }
 }
 
 /// `true` when the automatic pass of the account covers `folder`: the explicit

@@ -47,6 +47,10 @@ pub struct SyncReport {
 
 const IMPORT_BATCH: usize = 500;
 
+/// Combien des messages les plus récents d'un dossier reçoivent un aperçu dès
+/// la synchronisation, sans que leur corps soit stocké.
+const SNIPPET_BATCH: usize = 50;
+
 /// Un serveur qui ne répond pas ne doit pas retenir la requête indéfiniment.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -85,20 +89,23 @@ pub async fn connect_with(
     cfg: &AccountConfig,
     tls_options: &TlsOptions,
 ) -> Result<ImapSession, MailError> {
-    let tcp = timeout(CONNECT_TIMEOUT, TcpStream::connect((cfg.imap.host.as_str(), cfg.imap.port)))
-        .await
-        .map_err(|_| {
-            MailError::Imap(format!(
-                "délai dépassé en contactant {}:{}",
-                cfg.imap.host, cfg.imap.port
-            ))
-        })?
-        .map_err(|error| {
-            MailError::Imap(format!(
-                "cannot reach {}:{}: {error}",
-                cfg.imap.host, cfg.imap.port
-            ))
-        })?;
+    let tcp = timeout(
+        CONNECT_TIMEOUT,
+        TcpStream::connect((cfg.imap.host.as_str(), cfg.imap.port)),
+    )
+    .await
+    .map_err(|_| {
+        MailError::Imap(format!(
+            "délai dépassé en contactant {}:{}",
+            cfg.imap.host, cfg.imap.port
+        ))
+    })?
+    .map_err(|error| {
+        MailError::Imap(format!(
+            "cannot reach {}:{}: {error}",
+            cfg.imap.host, cfg.imap.port
+        ))
+    })?;
 
     let client = match cfg.imap.encryption {
         Encryption::Tls => {
@@ -329,7 +336,7 @@ async fn reconcile(
         }
     }
     changed.sort_unstable_by_key(|(uid, _)| *uid);
-    new_uids.sort_unstable();
+    new_uids.sort_unstable_by(|a, b| b.cmp(a));
 
     let mut report = SyncReport {
         uidvalidity_changed,
@@ -342,6 +349,7 @@ async fn reconcile(
     for batch in new_uids.chunks(IMPORT_BATCH) {
         report.inserted += import_metadata(session, store, &target, batch, &server).await?;
     }
+    import_previews(session, store, &target, newest(&new_uids)).await;
 
     record_sync(
         store,
@@ -501,6 +509,7 @@ async fn incremental(
     for batch in plan.new_uids.chunks(IMPORT_BATCH) {
         report.inserted += import_metadata(session, store, target, batch, &touched).await?;
     }
+    import_previews(session, store, target, newest(&plan.new_uids)).await;
     Ok(Some(report))
 }
 
@@ -531,7 +540,7 @@ fn diff_since(
             None => new_uids.push(*uid),
         }
     }
-    new_uids.sort_unstable();
+    new_uids.sort_unstable_by(|a, b| b.cmp(a));
     changed.sort_unstable_by_key(|(uid, _)| *uid);
 
     (local.len() + new_uids.len() == exists as usize)
@@ -671,6 +680,65 @@ async fn import_metadata(
         inserted += 1;
     }
     Ok(inserted)
+}
+
+/// The uids that get an aperçu: the newest `SNIPPET_BATCH` of a descending list.
+fn newest(uids: &[u32]) -> &[u32] {
+    &uids[..uids.len().min(SNIPPET_BATCH)]
+}
+
+/// Fills the aperçu of `uids` from the first kilobyte of their body, which is
+/// never stored: the body itself still arrives with `fetch_body`. Best-effort
+/// by design — a server that refuses the partial fetch, or answers it in a
+/// shape this client cannot read, leaves the aperçus empty and the sync that
+/// already wrote the headers untouched.
+async fn import_previews(
+    session: &mut ImapSession,
+    store: &Store,
+    target: &Target<'_>,
+    uids: &[u32],
+) {
+    if uids.is_empty() {
+        return;
+    }
+    let selector = uids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let fetches: Vec<Fetch> = match session
+        .uid_fetch(&selector, "(UID BODY.PEEK[HEADER] BODY.PEEK[TEXT]<0.1024>)")
+        .await
+    {
+        Ok(stream) => match stream.try_collect().await {
+            Ok(fetches) => fetches,
+            Err(error) => {
+                tracing::warn!(%error, "aperçus illisibles, synchronisation sans aperçu");
+                return;
+            }
+        },
+        Err(error) => {
+            tracing::warn!(%error, "aperçu refusé par le serveur, synchronisation sans aperçu");
+            return;
+        }
+    };
+    for fetch in fetches {
+        let (Some(uid), Some(raw), Some(snippet)) = (fetch.uid, fetch.header(), fetch.text())
+        else {
+            continue;
+        };
+        let Ok(parsed) = mime::parse_headers_with_snippet(raw, snippet) else {
+            continue;
+        };
+        if parsed.preview.is_empty() {
+            continue;
+        }
+        if let Err(error) =
+            store.set_preview(target.account_id, target.folder_path, uid, &parsed.preview)
+        {
+            tracing::warn!(uid, %error, "aperçu non enregistré");
+        }
+    }
 }
 
 /// Re-reads one message and stores its body, its preview, its attachments and
@@ -1184,6 +1252,18 @@ mod tests {
                 changed: Vec::new(),
             })
         );
+    }
+
+    /// Les plus récents passent en premier : le premier lot est celui qui
+    /// reçoit un aperçu, et le plus ancien n'arrive qu'après.
+    #[test]
+    fn new_uids_are_imported_newest_first() {
+        let plan = diff_since(
+            &local(&[(1, unread())]),
+            &touched(&[(2, unread()), (3, unread()), (4, unread())]),
+            4,
+        );
+        assert_eq!(plan.expect("plan").new_uids, vec![4, 3, 2]);
     }
 
     #[test]

@@ -276,7 +276,14 @@ async fn smtp_send_then_sync_parses_message() {
     let message = find(&store, INBOX, &subject);
     assert_eq!(message.from.email, cfg.email);
     assert!(message.flags.unread);
-    assert!(!message.preview.is_empty());
+    // L'aperçu vient des premiers octets du corps : un serveur qui refuse le
+    // fetch partiel le laisse vide, et il ne porte jamais autre chose que le
+    // début du corps.
+    assert!(
+        message.preview.is_empty() || message.preview.starts_with("corps du message"),
+        "aperçu inattendu : {:?}",
+        message.preview
+    );
     assert!(!message.thread_id.is_empty());
 
     let report = checked(

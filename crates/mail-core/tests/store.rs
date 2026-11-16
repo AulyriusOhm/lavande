@@ -1047,3 +1047,135 @@ const RAW_BODY: &[u8] = concat!(
     "--coupe--\r\n",
 )
 .as_bytes();
+
+#[test]
+fn a_headers_upsert_keeps_the_body_the_preview_and_the_attachments() {
+    let store = open();
+    store
+        .upsert_message(&message(1, "t1", "Marc", "Planning", 10))
+        .expect("en-têtes");
+    let parsed = mime::parse_message(RAW_BODY).expect("parse");
+    store.set_body("perso", "INBOX", 1, &parsed).expect("corps");
+
+    let mut headers = message(1, "t1", "Marc", "Planning", 10);
+    headers.preview = String::new();
+    headers.body_text = None;
+    headers.body_html = None;
+    headers.flags.unread = false;
+    store.upsert_message(&headers).expect("re-synchronisation");
+
+    let stored = store
+        .get_message("perso", "INBOX", 1)
+        .expect("lecture")
+        .expect("message");
+    assert_eq!(stored.body_text.as_deref(), Some("Le planning avance."));
+    assert!(stored
+        .body_html
+        .as_deref()
+        .is_some_and(|html| html.contains("Le planning avance.")));
+    assert_eq!(stored.preview, "Le planning avance.");
+    assert_eq!(stored.attachments, parsed.attachments);
+    assert!(
+        !stored.flags.unread,
+        "les drapeaux suivent la synchronisation"
+    );
+}
+
+#[test]
+fn eviction_drops_old_bodies_but_keeps_the_preview() {
+    let store = open();
+    store
+        .upsert_folder(&Folder {
+            account_id: "perso".to_string(),
+            path: "Drafts".to_string(),
+            name: "Brouillons".to_string(),
+            role: FolderRole::Drafts,
+            uidvalidity: 7,
+            uidnext: 10,
+            last_sync_at: None,
+            modseq: None,
+            delimiter: None,
+        })
+        .expect("brouillons");
+
+    let parsed = mime::parse_message(RAW_BODY).expect("parse");
+    for (uid, folder_path, day, starred) in [
+        (1, "INBOX", 1, false),
+        (2, "INBOX", 1, true),
+        (3, "INBOX", 29, false),
+        (4, "Drafts", 1, false),
+    ] {
+        let mut mail = message(uid, &format!("t{uid}"), "Marc", "Planning", day);
+        mail.folder_path = folder_path.to_string();
+        mail.flags.starred = starred;
+        store.upsert_message(&mail).expect("en-têtes");
+        store
+            .set_body("perso", folder_path, uid, &parsed)
+            .expect("corps");
+    }
+    let mut without_body = message(5, "t5", "Marc", "Sans corps", 1);
+    without_body.body_text = None;
+    without_body.preview = String::new();
+    store.upsert_message(&without_body).expect("en-têtes");
+
+    assert_eq!(
+        store
+            .evict_bodies_before("perso", "2026-11-15T00:00:00Z")
+            .expect("éviction"),
+        1
+    );
+
+    let evicted = store
+        .get_message("perso", "INBOX", 1)
+        .expect("lecture")
+        .expect("message");
+    assert!(evicted.body_text.is_none());
+    assert!(evicted.body_html.is_none());
+    assert!(evicted.pgp_detail.is_none());
+    assert_eq!(evicted.preview, "Le planning avance.", "l'aperçu survit");
+    assert_eq!(evicted.attachments.len(), 1, "les pièces jointes restent");
+
+    for (folder_path, uid) in [("INBOX", 2), ("INBOX", 3), ("Drafts", 4)] {
+        let kept = store
+            .get_message("perso", folder_path, uid)
+            .expect("lecture")
+            .expect("message");
+        assert_eq!(
+            kept.body_text.as_deref(),
+            Some("Le planning avance."),
+            "{folder_path} {uid}"
+        );
+    }
+    let untouched = store
+        .get_message("perso", "INBOX", 5)
+        .expect("lecture")
+        .expect("message");
+    assert!(untouched.body_text.is_none());
+}
+
+#[test]
+fn a_preview_lands_without_a_body_and_survives_a_resync() {
+    let store = open();
+    let mut headers = message(1, "t1", "Marc", "Planning", 10);
+    headers.body_text = None;
+    headers.preview = String::new();
+    store.upsert_message(&headers).expect("en-têtes");
+    store
+        .set_preview("perso", "INBOX", 1, "Le planning avance.")
+        .expect("aperçu");
+
+    let stored = store
+        .get_message("perso", "INBOX", 1)
+        .expect("lecture")
+        .expect("message");
+    assert_eq!(stored.preview, "Le planning avance.");
+    assert!(stored.body_text.is_none());
+    assert!(stored.body_html.is_none());
+
+    store.upsert_message(&headers).expect("re-synchronisation");
+    let stored = store
+        .get_message("perso", "INBOX", 1)
+        .expect("lecture")
+        .expect("message");
+    assert_eq!(stored.preview, "Le planning avance.");
+}

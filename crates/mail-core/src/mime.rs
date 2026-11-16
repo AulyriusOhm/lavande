@@ -84,6 +84,80 @@ pub fn parse_headers(raw: &[u8]) -> Result<ParsedMessage, MailError> {
     Ok(parsed)
 }
 
+/// Parses the headers of a message and derives an aperçu from the first bytes
+/// of its body: `body_text`, `body_html` and the attachments stay empty, the
+/// body itself is never kept. `snippet` is the raw `BODY[TEXT]` fragment the
+/// server sent, which can be a MIME part of its own; anything that does not
+/// read like prose leaves the aperçu empty.
+pub fn parse_headers_with_snippet(raw: &[u8], snippet: &[u8]) -> Result<ParsedMessage, MailError> {
+    let mut parsed = parse_headers(raw)?;
+    parsed.preview = snippet_preview(raw, snippet);
+    Ok(parsed)
+}
+
+fn snippet_preview(headers: &[u8], snippet: &[u8]) -> String {
+    if snippet.is_empty() {
+        return String::new();
+    }
+    let Ok(envelope) = parse(headers) else {
+        return String::new();
+    };
+    if pgp_state(&envelope) == PgpState::Encrypted {
+        return String::new();
+    }
+    let Some(raw) = headers_with_snippet(headers, snippet) else {
+        return String::new();
+    };
+    let Ok(message) = parse(&raw) else {
+        return String::new();
+    };
+    let body_html = html_source(&message).and_then(|html| sanitize_html(&html));
+    let Some(body) = text_body_of(&message, body_html.as_deref()) else {
+        return String::new();
+    };
+    if !reads_like_prose(&body) || leaks_a_boundary(&envelope, &body) {
+        return String::new();
+    }
+    preview_of(&body)
+}
+
+/// The headers followed by the fragment the server sent as the body:
+/// `mail-parser` then decodes the transfer encoding and the charset of the part
+/// the fragment starts with, as it would for the whole message.
+fn headers_with_snippet(headers: &[u8], snippet: &[u8]) -> Option<Vec<u8>> {
+    let end = headers
+        .iter()
+        .rposition(|byte| !matches!(byte, b'\r' | b'\n'))?
+        + 1;
+    let mut raw = Vec::with_capacity(end + 4 + snippet.len());
+    raw.extend_from_slice(&headers[..end]);
+    raw.extend_from_slice(b"\r\n\r\n");
+    raw.extend_from_slice(snippet);
+    Some(raw)
+}
+
+/// A fragment cut inside an encoded part or a PGP armor reads as noise.
+fn reads_like_prose(text: &str) -> bool {
+    !text.contains("-----BEGIN PGP")
+        && !text.split_whitespace().any(|word| {
+            word.chars().count() > 40
+                && word.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '+' | '/' | '=')
+                })
+        })
+}
+
+fn leaks_a_boundary(envelope: &mail_parser::Message<'_>, text: &str) -> bool {
+    envelope
+        .parts
+        .iter()
+        .filter_map(|part| part.content_type())
+        .filter_map(|content_type| content_type.attributes.as_ref())
+        .flatten()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("boundary"))
+        .any(|(_, boundary)| text.contains(boundary.as_ref()))
+}
+
 /// Replaces the body of `parsed` with the one of the decrypted MIME entity.
 fn clear_body(parsed: &mut ParsedMessage, entity: &[u8]) {
     let Ok(inner) = parse_message(entity) else {

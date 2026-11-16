@@ -1,3 +1,4 @@
+use lavande_mail::mime;
 use lavande_mail::model::PgpState;
 use lavande_mail::parse_message;
 
@@ -366,4 +367,106 @@ fn table_markup_survives_sanitizing() {
     assert!(text.contains("Poste"), "{text}");
     assert!(!text.contains("PosteTotal"), "cellules collées : {text}");
     assert!(!text.contains("TotalTVA"), "cellules collées : {text}");
+}
+
+const SNIPPET_PLAIN: &[u8] = b"From: marc@mail.fr\r\n\
+Subject: Apercu\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n";
+
+const SNIPPET_HTML: &[u8] = b"From: marc@mail.fr\r\n\
+Subject: HTML\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n";
+
+const SNIPPET_MULTIPART: &[u8] = b"From: marc@mail.fr\r\n\
+Subject: Multipart\r\n\
+Content-Type: multipart/mixed; boundary=\"sep\"\r\n\
+\r\n";
+
+const SNIPPET_BASE64: &[u8] = b"From: marc@mail.fr\r\n\
+Subject: B64\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+Content-Transfer-Encoding: base64\r\n\
+\r\n";
+
+const SNIPPET_PGP: &[u8] = b"From: marc@mail.fr\r\n\
+Subject: Scelle\r\n\
+Content-Type: multipart/encrypted; protocol=\"application/pgp-encrypted\"; boundary=\"pgp\"\r\n\
+\r\n";
+
+#[test]
+fn a_snippet_fills_the_preview_and_nothing_else() {
+    let parsed =
+        mime::parse_headers_with_snippet(SNIPPET_PLAIN, b"Bonjour,\r\nvoici les maquettes.\r\n")
+            .expect("parse");
+    assert_eq!(parsed.preview, "Bonjour, voici les maquettes.");
+    assert_eq!(parsed.subject, "Apercu");
+    assert!(parsed.body_text.is_none());
+    assert!(parsed.body_html.is_none());
+    assert!(parsed.attachments.is_empty());
+}
+
+#[test]
+fn an_html_snippet_gives_its_text() {
+    let parsed = mime::parse_headers_with_snippet(
+        SNIPPET_HTML,
+        b"<html><body><p>Contrastes</p><p>revus</p></body></html>",
+    )
+    .expect("parse");
+    assert_eq!(parsed.preview, "Contrastes revus");
+    assert!(parsed.body_html.is_none());
+}
+
+#[test]
+fn a_multipart_snippet_gives_its_first_text_part() {
+    let fragment: &[u8] = b"--sep\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+Le planning avance.\r\n\
+--sep\r\n\
+Content-Type: application/pdf; name=\"p.pdf\"\r\n\
+Content-Transfer-Encoding: base64\r\n\
+\r\n\
+JVBERi0xLjQK";
+    let parsed = mime::parse_headers_with_snippet(SNIPPET_MULTIPART, fragment).expect("parse");
+    assert_eq!(parsed.preview, "Le planning avance.");
+    assert!(!parsed.preview.contains("--sep"), "{}", parsed.preview);
+    assert!(parsed.body_text.is_none());
+    assert!(parsed.body_html.is_none());
+    assert!(parsed.attachments.is_empty());
+}
+
+#[test]
+fn an_encoded_snippet_is_decoded_before_the_preview() {
+    let parsed = mime::parse_headers_with_snippet(SNIPPET_BASE64, b"UGhhc2UgMiBkw6hzIGx1bmRpLg==")
+        .expect("parse");
+    assert_eq!(parsed.preview, "Phase 2 dès lundi.");
+}
+
+#[test]
+fn an_encrypted_snippet_never_leaks_into_the_preview() {
+    let fragment: &[u8] = b"--pgp\r\n\
+Content-Type: application/pgp-encrypted\r\n\
+\r\n\
+Version: 1\r\n\
+--pgp\r\n\
+Content-Type: application/octet-stream\r\n\
+\r\n\
+-----BEGIN PGP MESSAGE-----\r\n\
+hQEMA0vTk3HhKzXBAQf+J1mS\r\n\
+-----END PGP MESSAGE-----";
+    let parsed = mime::parse_headers_with_snippet(SNIPPET_PGP, fragment).expect("parse");
+    assert_eq!(parsed.preview, "");
+    assert_eq!(parsed.pgp, PgpState::Encrypted);
+}
+
+#[test]
+fn an_undecodable_snippet_leaves_the_preview_empty() {
+    let garbage: &[u8] = b"aGVsbG8gd29ybGQgdGhpcyBpcyBhIHZlcnkgbG9uZyBiYXNlNjQgcGF5bG9hZA==";
+    let parsed = mime::parse_headers_with_snippet(SNIPPET_PLAIN, garbage).expect("parse");
+    assert_eq!(parsed.preview, "");
+
+    let parsed = mime::parse_headers_with_snippet(SNIPPET_PLAIN, b"").expect("parse");
+    assert_eq!(parsed.preview, "");
 }
