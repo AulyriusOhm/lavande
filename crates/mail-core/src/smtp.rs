@@ -11,6 +11,7 @@ use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
 use crate::config::{AccountConfig, AuthConfig, Encryption, Endpoint};
 use crate::error::MailError;
+use crate::mime::{attribute_span, data_url_parts, image_tags, MAX_INLINE_IMAGE_BYTES};
 use crate::model::Address;
 use crate::oauth::OAuth2Provider;
 use crate::tls::TlsOptions;
@@ -20,17 +21,6 @@ pub struct OutgoingAttachment {
     pub mime: String,
     pub data: Vec<u8>,
 }
-
-/// Largest inline image accepted from the body, decoded. Past it the image is
-/// dropped instead of turning one mail into a multi-megabyte upload.
-const MAX_INLINE_IMAGE_BYTES: usize = 10 * 1024 * 1024;
-
-/// The only image types turned into `cid:` parts: those every mail client
-/// renders without asking.
-const INLINE_IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
-
-/// Prefix of a `data:` URL the daemon inlines.
-const DATA_PREFIX: &str = "data:image/";
 
 /// One `data:` image of the body, lifted into a MIME part of its own.
 struct InlineImage {
@@ -343,74 +333,20 @@ fn attachment_part(attachment: &OutgoingAttachment) -> Result<SinglePart, MailEr
 /// inline one and belongs to neither pass.
 fn body_images(html: &str) -> Vec<BodyImage> {
     let lower = html.to_ascii_lowercase();
-    let mut images = Vec::new();
-    let mut cursor = 0;
-    while let Some(offset) = lower[cursor..].find("<img") {
-        let start = cursor + offset;
-        let Some(close) = lower[start..].find('>') else {
-            break;
-        };
-        let end = start + close + 1;
-        cursor = end;
-        let Some(src) = attribute_span(&lower, start, end, "src") else {
-            continue;
-        };
-        if data_url_parts(&html[src.clone()]).is_none() {
-            continue;
-        }
-        images.push(BodyImage {
-            tag: start..end,
-            src,
-            alt: attribute_span(&lower, start, end, "alt").map(|alt| html[alt].to_string()),
-        });
-    }
-    images
-}
-
-/// The value span of one quoted attribute of the tag `from..to`.
-fn attribute_span(
-    lower: &str,
-    from: usize,
-    to: usize,
-    name: &str,
-) -> Option<std::ops::Range<usize>> {
-    let needle = format!("{name}=");
-    let mut cursor = from;
-    while cursor < to {
-        let offset = lower[cursor..to].find(&needle)?;
-        let at = cursor + offset;
-        cursor = at + needle.len();
-        if !lower[from..at].ends_with(char::is_whitespace) {
-            continue;
-        }
-        let quote = lower[cursor..to].chars().next()?;
-        if quote != '"' && quote != '\'' {
-            continue;
-        }
-        let value = cursor + 1;
-        let close = lower[value..to].find(quote)?;
-        return Some(value..value + close);
-    }
-    None
-}
-
-/// Splits a `data:` image URL into its MIME type and its base64 payload. Only
-/// the types of `INLINE_IMAGE_TYPES` and a payload that cannot leave the
-/// attribute are accepted.
-fn data_url_parts(src: &str) -> Option<(String, &str)> {
-    let (meta, payload) = src.strip_prefix(DATA_PREFIX)?.split_once(',')?;
-    let mut fields = meta.split(';');
-    let mime = format!("image/{}", fields.next()?.trim().to_ascii_lowercase());
-    if !INLINE_IMAGE_TYPES.contains(&mime.as_str()) {
-        return None;
-    }
-    if !fields.any(|field| field.trim().eq_ignore_ascii_case("base64")) {
-        return None;
-    }
-    let plain = payload.chars().all(|c| {
-        c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=') || c.is_ascii_whitespace()
-    });
-    plain.then_some((mime, payload))
+    image_tags(html)
+        .into_iter()
+        .filter_map(|image| {
+            let src = image.src?;
+            data_url_parts(&html[src.clone()])?;
+            let alt = attribute_span(&lower, image.tag.start, image.tag.end, "alt")
+                .map(|alt| html[alt].to_string());
+            Some(BodyImage {
+                tag: image.tag,
+                src,
+                alt,
+            })
+        })
+        .collect()
 }
 
 enum Decoded {

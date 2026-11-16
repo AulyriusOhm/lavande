@@ -78,6 +78,22 @@ fn an_inline_png_becomes_a_related_cid_part() {
 }
 
 #[test]
+fn the_related_part_comes_back_as_a_data_url_on_reception() {
+    let raw = raw_of(&message(Some(image(&data_url("image/png", &PNG)))));
+    let parsed = lavande_mail::parse_message(raw.as_bytes()).expect("parse");
+    let html = parsed.body_html.as_deref().expect("corps html");
+    assert!(
+        html.contains(&format!(
+            r#"<img src="data:image/png;base64,{}">"#,
+            STANDARD.encode(PNG)
+        )),
+        "{html}"
+    );
+    assert!(!html.contains("cid:"), "{html}");
+    assert_eq!(parsed.body_text.as_deref(), Some("Bonjour"));
+}
+
+#[test]
 fn each_inline_image_gets_its_own_content_id() {
     let second = [0x47, 0x49, 0x46, 0x38];
     let html = format!(

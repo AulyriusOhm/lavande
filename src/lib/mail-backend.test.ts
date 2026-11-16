@@ -156,6 +156,16 @@ describe("sendInputOf", () => {
     expect(input.text).toBe("Merci\n\nLe 9 novembre, Support a écrit :\nBonjour");
   });
 
+  it("garde l'URL entre chevrons dans le texte envoyé", () => {
+    const input = sendInputOf(
+      draft({ body: "<p>Suivi : <https://example.com/x></p>" }),
+      null,
+    );
+
+    expect(input.text).toBe("Suivi : https://example.com/x");
+    expect(input.text).not.toContain("<https");
+  });
+
   it("sans citation, la signature clôt le message", () => {
     const input = sendInputOf(draft({ body: "<p>Merci</p>" }), "<p>Cordialement</p>");
 

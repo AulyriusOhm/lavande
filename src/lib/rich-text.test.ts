@@ -58,6 +58,21 @@ describe("htmlToText", () => {
     );
     expect(htmlToText('<p><img src="x.png" alt="capture"></p>')).toBe("[capture]");
   });
+
+  it("garde une URL entre chevrons au lieu de la prendre pour une balise", () => {
+    expect(htmlToText("<p>Suivi : <https://example.com/x></p>")).toBe(
+      "Suivi : https://example.com/x",
+    );
+    expect(htmlToText("<p>Écrire à <mailto:a@b.fr> ou <ftp://ftp.example/pub></p>")).toBe(
+      "Écrire à mailto:a@b.fr ou ftp://ftp.example/pub",
+    );
+  });
+
+  it("laisse les entités &lt; &gt; intactes", () => {
+    expect(htmlToText("<p>Voir &lt;https://example.com/x&gt;</p>")).toBe(
+      "Voir <https://example.com/x>",
+    );
+  });
 });
 
 describe("extractImageTokens / restoreImageTokens", () => {

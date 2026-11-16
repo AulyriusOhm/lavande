@@ -34,9 +34,12 @@ function imageLabel(tag: string): string {
   return label ? `[${label}]` : "[image]";
 }
 
+const AUTOLINK = /<((?:https?|mailto|ftp):[^<>\s]+)>/gi;
+
 export function htmlToText(html: string): string {
   if (!html || !html.trim()) return "";
   const withBreaks = html
+    .replace(AUTOLINK, "$1")
     .replace(IMAGE_TAG, imageLabel)
     .replace(/<\s*(br|\/p|\/div|\/h[1-6]|\/li|\/blockquote|\/pre|\/tr)\s*\/?>/gi, "\n")
     .replace(/<\s*hr\s*\/?>/gi, "\n");

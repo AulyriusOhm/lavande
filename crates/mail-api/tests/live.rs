@@ -360,7 +360,7 @@ async fn sent_message_is_found_by_a_sync() {
 
     let inbox = threads(&client, &daemon, INBOX).await;
     let uid = find(&inbox, &subject);
-    let stored = message(&client, &daemon, INBOX, uid).await;
+    let stored = message_fetching_body(&client, &daemon, INBOX, uid).await;
     assert_eq!(stored["subject"], subject);
     assert_eq!(stored["from"]["email"], account().email);
     assert_eq!(stored["flags"]["unread"], true);
@@ -385,7 +385,7 @@ async fn an_attachment_comes_back_from_the_server() {
     send(&client, &daemon, &subject).await;
     sync(&client, &daemon, Some(INBOX)).await;
     let uid = find(&threads(&client, &daemon, INBOX).await, &subject);
-    let stored = message(&client, &daemon, INBOX, uid).await;
+    let stored = message_fetching_body(&client, &daemon, INBOX, uid).await;
     assert_eq!(stored["attachments"][0]["filename"], "note.txt", "{stored}");
 
     let uri = format!("/api/accounts/{ACCOUNT}/folders/{INBOX}/messages/{uid}/attachments/0");
@@ -449,7 +449,7 @@ async fn an_encrypted_attachment_comes_back_cleartext() {
 
     sync(&client, &daemon, Some(INBOX)).await;
     let uid = find(&threads(&client, &daemon, INBOX).await, &subject);
-    let stored = message(&client, &daemon, INBOX, uid).await;
+    let stored = message_fetching_body(&client, &daemon, INBOX, uid).await;
     assert_eq!(stored["pgp"], "encrypted", "{stored}");
     assert_eq!(stored["attachments"][0]["filename"], "note.txt", "{stored}");
 
@@ -466,6 +466,40 @@ async fn an_encrypted_attachment_comes_back_cleartext() {
         b"hello",
         "la pièce jointe d'un message chiffré n'est pas rendue en clair"
     );
+}
+
+/// The same message, asked with `fetch_body`: a body emptied by the PGP gate is
+/// re-read from the server instead of being served as it is.
+async fn message_fetching_body(
+    client: &Client,
+    daemon: &Daemon,
+    folder_path: &str,
+    uid: u32,
+) -> Value {
+    let uri =
+        format!("/api/accounts/{ACCOUNT}/folders/{folder_path}/messages/{uid}?fetch_body=true");
+    let response = client
+        .get(daemon.url(&uri))
+        .send()
+        .await
+        .expect("GET message");
+    let status = response.status();
+    let body = response.text().await.expect("corps");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    serde_json::from_str(&body).expect("message")
+}
+
+async fn set_pgp_gate(client: &Client, daemon: &Daemon, account_id: &str, enabled: bool) -> Value {
+    let response = client
+        .patch(daemon.url(&format!("/api/accounts/{account_id}/pgp")))
+        .json(&json!({ "enabled": enabled }))
+        .send()
+        .await
+        .expect("PATCH pgp");
+    let status = response.status();
+    let body = response.text().await.expect("corps");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    serde_json::from_str(&body).expect("compte")
 }
 
 async fn generate_key(client: &Client, daemon: &Daemon, email: &str) -> Value {
@@ -521,13 +555,103 @@ async fn a_pgp_message_is_decrypted_and_verified_by_the_daemon() {
     sync(&client, &daemon, Some(INBOX)).await;
     let inbox = threads(&client, &daemon, INBOX).await;
     let uid = find(&inbox, &subject);
-    let stored = message(&client, &daemon, INBOX, uid).await;
+    let stored = message_fetching_body(&client, &daemon, INBOX, uid).await;
     assert_eq!(stored["pgp"], "encrypted", "{stored}");
     assert_eq!(stored["body_text"], "corps chiffre", "{stored}");
     let detail = &stored["pgp_detail"];
     assert_eq!(detail["decrypted"], true, "{stored}");
     assert_eq!(detail["verified"], true, "{stored}");
     assert_eq!(detail["signer"], key["key"]["user_id"].clone(), "{stored}");
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn the_pgp_gate_closes_and_reopens_an_encrypted_body_on_the_server() {
+    let daemon = Daemon::start().await;
+    let client = daemon.client();
+    add_account(&client, &daemon).await;
+
+    let mut other = account();
+    other.id = "live-api-bis".to_string();
+    other.label = "GreenMail bis".to_string();
+    let response = client
+        .post(daemon.url("/api/accounts"))
+        .json(&other)
+        .send()
+        .await
+        .expect("POST /api/accounts");
+    let status = response.status();
+    let body = response.text().await.expect("corps");
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    generate_key(&client, &daemon, &account().email).await;
+
+    let subject = unique("[live-api-pgp-gate] scelle");
+    let response = client
+        .post(daemon.url(&format!("/api/accounts/{ACCOUNT}/send")))
+        .json(&json!({
+            "to": [{ "email": account().email }],
+            "cc": [], "bcc": [],
+            "subject": subject,
+            "text": "corps chiffre",
+            "pgp_sign": true,
+            "pgp_encrypt": true,
+        }))
+        .send()
+        .await
+        .expect("POST send");
+    let status = response.status();
+    let body = response.text().await.expect("corps");
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    sync(&client, &daemon, Some(INBOX)).await;
+    let uid = find(&threads(&client, &daemon, INBOX).await, &subject);
+
+    let opened = message_fetching_body(&client, &daemon, INBOX, uid).await;
+    assert_eq!(opened["pgp"], "encrypted", "{opened}");
+    assert_eq!(opened["body_text"], "corps chiffre", "{opened}");
+    assert_eq!(opened["pgp_detail"]["decrypted"], true, "{opened}");
+    assert_eq!(opened["pgp_detail"]["verified"], true, "{opened}");
+
+    let closed_account = set_pgp_gate(&client, &daemon, ACCOUNT, false).await;
+    assert_eq!(closed_account["pgp"], false, "{closed_account}");
+
+    let closed = message(&client, &daemon, INBOX, uid).await;
+    assert!(closed["body_text"].is_null(), "{closed}");
+    assert!(closed["body_html"].is_null(), "{closed}");
+    assert_eq!(closed["preview"], "", "{closed}");
+    assert!(
+        closed["pgp_detail"].is_null(),
+        "le détail déchiffré survit à la fermeture : {closed}"
+    );
+    assert_eq!(closed["pgp"], "encrypted", "{closed}");
+
+    let listed = client
+        .get(daemon.url("/api/accounts"))
+        .send()
+        .await
+        .expect("GET /api/accounts")
+        .json::<Value>()
+        .await
+        .expect("comptes");
+    let summaries = listed.as_array().expect("liste de comptes");
+    let gate = |id: &str| {
+        summaries
+            .iter()
+            .find(|summary| summary["id"] == id)
+            .unwrap_or_else(|| panic!("compte {id} absent de {listed}"))
+            .clone()
+    };
+    assert_eq!(gate(ACCOUNT)["pgp"], false, "{listed}");
+    assert_eq!(gate("live-api-bis")["pgp"], true, "{listed}");
+
+    let reopened_account = set_pgp_gate(&client, &daemon, ACCOUNT, true).await;
+    assert_eq!(reopened_account["pgp"], true, "{reopened_account}");
+
+    let reopened = message_fetching_body(&client, &daemon, INBOX, uid).await;
+    assert_eq!(reopened["body_text"], "corps chiffre", "{reopened}");
+    assert_eq!(reopened["pgp_detail"]["decrypted"], true, "{reopened}");
+    assert_eq!(reopened["pgp_detail"]["verified"], true, "{reopened}");
 }
 
 #[tokio::test]

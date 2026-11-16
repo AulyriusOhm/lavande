@@ -3,6 +3,8 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use cssparser::{
     parse_important, AtRuleParser, BasicParseErrorKind, CowRcStr, DeclarationParser, ParseError,
@@ -16,6 +18,18 @@ use crate::model::{Address, AttachmentMeta, PgpState};
 use crate::pgp::{self, PgpDetail, PgpKeyring};
 
 const PREVIEW_LEN: usize = 200;
+
+/// Largest inline image rendered from a body, decoded. Past it the image is
+/// dropped instead of turning one mail into a multi-megabyte body.
+pub(crate) const MAX_INLINE_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+
+/// The only image types rendered inline: those every mail client shows without
+/// asking.
+pub(crate) const INLINE_IMAGE_TYPES: [&str; 4] =
+    ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// Prefix of a `data:` URL the daemon renders.
+const DATA_PREFIX: &str = "data:image/";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParsedMessage {
@@ -210,7 +224,8 @@ fn parse(raw: &[u8]) -> Result<mail_parser::Message<'_>, MailError> {
 pub fn parse_message(raw: &[u8]) -> Result<ParsedMessage, MailError> {
     let message = parse(raw)?;
 
-    let body_html = html_source(&message).and_then(|html| sanitize_html(&html));
+    let body_html =
+        html_source(&message).and_then(|html| sanitize_html(&inline_cid_images(&html, &message)));
     let body_text = text_body_of(&message, body_html.as_deref());
     let preview = body_text.as_deref().map(preview_of).unwrap_or_default();
 
@@ -482,7 +497,59 @@ pub fn html_with_images(raw: &[u8], keyring: &PgpKeyring) -> Result<Option<Strin
         Some(entity) => parse(entity)?,
         None => message,
     };
-    Ok(html_source(&source).and_then(|html| sanitize_html_with_images(&html)))
+    Ok(html_source(&source)
+        .and_then(|html| sanitize_html_with_images(&inline_cid_images(&html, &source))))
+}
+
+/// Remplace les `src="cid:…"` d'un corps HTML par l'image de la part qui porte
+/// ce `Content-ID`, en `data:` URL : l'image collée par l'expéditeur s'affiche
+/// sans clic et sans requête. Un `cid:` sans part, un type hors
+/// `INLINE_IMAGE_TYPES` ou une image au-delà de `MAX_INLINE_IMAGE_BYTES` laisse
+/// la balise telle quelle, et le sanitizer la retire alors entièrement.
+fn inline_cid_images(html: &str, message: &mail_parser::Message<'_>) -> String {
+    let mut images: HashMap<&str, String> = HashMap::new();
+    for part in &message.parts {
+        let Some(content_id) = part.content_id() else {
+            continue;
+        };
+        let mime = mime_of(part);
+        let data = part.contents();
+        if !INLINE_IMAGE_TYPES.contains(&mime.as_str())
+            || data.is_empty()
+            || data.len() > MAX_INLINE_IMAGE_BYTES
+        {
+            continue;
+        }
+        images.insert(
+            content_id.trim_matches(|c| c == '<' || c == '>'),
+            format!("data:{mime};base64,{}", STANDARD.encode(data)),
+        );
+    }
+    if images.is_empty() {
+        return html.to_string();
+    }
+    let mut out = String::with_capacity(html.len());
+    let mut cursor = 0;
+    for image in image_tags(html) {
+        let Some(span) = image.src else {
+            continue;
+        };
+        let src = html[span.clone()].trim();
+        let Some(scheme) = src.get(..4) else {
+            continue;
+        };
+        if !scheme.eq_ignore_ascii_case("cid:") {
+            continue;
+        }
+        let Some(data) = images.get(src[4..].trim()) else {
+            continue;
+        };
+        out.push_str(&html[cursor..span.start]);
+        out.push_str(data);
+        cursor = span.end;
+    }
+    out.push_str(&html[cursor..]);
+    out
 }
 
 /// Strips everything a mail can use to break out of the message view and keeps
@@ -491,29 +558,162 @@ pub fn html_with_images(raw: &[u8], keyring: &PgpKeyring) -> Result<Option<Strin
 /// (`width`, `align`, `valign`, `bgcolor`, `cellpadding`, `cellspacing`,
 /// `border`) and a `style` attribute / `<style>` blocks filtered by
 /// `sanitize_declarations`. `script`/`iframe`/`form`/`on*`/`srcset` and unknown
-/// tags lose their tag but keep their text, images (tracking pixels) are
-/// dropped, links get `rel="noopener noreferrer"` and `target="_blank"`.
-/// Returns `None` when no visible text is left.
+/// tags lose their tag but keep their text, remote images (tracking pixels) are
+/// dropped, the `data:` images of `INLINE_IMAGE_TYPES` are kept (the content the
+/// sender pasted, not a pixel that calls home), links get
+/// `rel="noopener noreferrer"` and `target="_blank"`. Returns `None` when no
+/// visible text is left.
 pub fn sanitize_html(html: &str) -> Option<String> {
     sanitize(html, false)
 }
 
 /// Same allow-list as `sanitize_html`, plus `img` with an absolute http(s)
 /// `src`: the reader opted in for this message, showing its remote images is
-/// what they asked for. `script`, `on*`, `srcset`, `javascript:`/`data:`/
-/// `mailto:` sources and every `url()` in a CSS value are still dropped, and the
-/// markup is sanitized here, on the server, never on the client.
+/// what they asked for. `script`, `on*`, `srcset`, `javascript:`/`mailto:`
+/// sources, `data:` links and every `url()` in a CSS value are still dropped,
+/// and the markup is sanitized here, on the server, never on the client.
 pub fn sanitize_html_with_images(html: &str) -> Option<String> {
     sanitize(html, true)
 }
 
 fn sanitize(html: &str, images: bool) -> Option<String> {
-    let (markup, styles) = extract_style_blocks(html);
-    let cleaned = html_sanitizer(images).clean(&markup).to_string();
-    if visible_text(&cleaned).is_empty() && !(images && cleaned.contains("<img")) {
+    let html = unwrap_autolinks(html);
+    let (markup, styles) = extract_style_blocks(&html);
+    let cleaned = html_sanitizer(images)
+        .clean(&drop_refused_images(&markup, images))
+        .to_string();
+    if visible_text(&cleaned).is_empty() && !cleaned.contains("<img") {
         return None;
     }
     Some(with_style_blocks(&styles, open_in_new_tab(cleaned)))
+}
+
+/// One `<img>` of a body: the tag span and the span of its quoted `src`.
+pub(crate) struct ImageTag {
+    pub tag: std::ops::Range<usize>,
+    pub src: Option<std::ops::Range<usize>>,
+}
+
+/// The `<img>` tags of a body, in document order.
+pub(crate) fn image_tags(html: &str) -> Vec<ImageTag> {
+    let lower = html.to_ascii_lowercase();
+    let mut tags = Vec::new();
+    let mut cursor = 0;
+    while let Some(offset) = lower[cursor..].find("<img") {
+        let start = cursor + offset;
+        let Some(close) = lower[start..].find('>') else {
+            break;
+        };
+        let end = start + close + 1;
+        cursor = end;
+        tags.push(ImageTag {
+            tag: start..end,
+            src: attribute_span(&lower, start, end, "src"),
+        });
+    }
+    tags
+}
+
+/// The value span of one quoted attribute of the tag `from..to`.
+pub(crate) fn attribute_span(
+    lower: &str,
+    from: usize,
+    to: usize,
+    name: &str,
+) -> Option<std::ops::Range<usize>> {
+    let needle = format!("{name}=");
+    let mut cursor = from;
+    while cursor < to {
+        let offset = lower[cursor..to].find(&needle)?;
+        let at = cursor + offset;
+        cursor = at + needle.len();
+        if !lower[from..at].ends_with(char::is_whitespace) {
+            continue;
+        }
+        let quote = lower[cursor..to].chars().next()?;
+        if quote != '"' && quote != '\'' {
+            continue;
+        }
+        let value = cursor + 1;
+        let close = lower[value..to].find(quote)?;
+        return Some(value..value + close);
+    }
+    None
+}
+
+/// Splits a `data:` image URL into its MIME type and its base64 payload. Only
+/// the types of `INLINE_IMAGE_TYPES` and a payload that cannot leave the
+/// attribute are accepted.
+pub(crate) fn data_url_parts(src: &str) -> Option<(String, &str)> {
+    let (meta, payload) = src.strip_prefix(DATA_PREFIX)?.split_once(',')?;
+    let mut fields = meta.split(';');
+    let mime = format!("image/{}", fields.next()?.trim().to_ascii_lowercase());
+    if !INLINE_IMAGE_TYPES.contains(&mime.as_str()) {
+        return None;
+    }
+    if !fields.any(|field| field.trim().eq_ignore_ascii_case("base64")) {
+        return None;
+    }
+    let plain = payload.chars().all(|c| {
+        c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=') || c.is_ascii_whitespace()
+    });
+    plain.then_some((mime, payload))
+}
+
+/// `<img>` whose source will be rendered: a `data:` image of
+/// `INLINE_IMAGE_TYPES`, plus the http(s) URLs once the reader asked for the
+/// remote images of this message.
+fn is_image_source(value: &str, images: bool) -> bool {
+    data_url_parts(value.trim()).is_some() || (images && is_remote_url(value))
+}
+
+/// Drops the `<img>` the render would refuse anyway: a tracking pixel
+/// (http/https) while the reader has not asked for images, a source that is not
+/// a known `data:` image, a tag without `src`.
+fn drop_refused_images(html: &str, images: bool) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut cursor = 0;
+    for image in image_tags(html) {
+        let kept = image
+            .src
+            .is_some_and(|src| is_image_source(&html[src], images));
+        if kept {
+            continue;
+        }
+        out.push_str(&html[cursor..image.tag.start]);
+        cursor = image.tag.end;
+    }
+    out.push_str(&html[cursor..]);
+    out
+}
+
+/// `<https://example.com/x>` n'est pas une balise mais une URL entre chevrons :
+/// le lecteur HTML la prendrait pour une balise inconnue et la supprimerait avec
+/// son texte, le corps garde donc l'URL nue. Les entités `&lt;` ne sont pas
+/// touchées.
+fn unwrap_autolinks(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(start) = rest.find('<') {
+        let Some(end) = rest[start..].find('>').map(|offset| start + offset) else {
+            break;
+        };
+        let inner = &rest[start + 1..end];
+        let link = !inner.is_empty()
+            && !inner.contains(char::is_whitespace)
+            && ["https:", "http:", "mailto:", "ftp:"]
+                .iter()
+                .any(|scheme| inner.starts_with(scheme));
+        out.push_str(&rest[..start]);
+        if link {
+            out.push_str(inner);
+        } else {
+            out.push_str(&rest[start..=end]);
+        }
+        rest = &rest[end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Links leave the message view: they open in a new tab, never in the app's.
@@ -521,10 +721,13 @@ fn open_in_new_tab(cleaned: String) -> String {
     cleaned.replace("<a ", "<a target=\"_blank\" ")
 }
 
-/// `images` adds `img` to the allow-list and restricts its `src` further.
+/// `img` is always in the allow-list: its `src` decides, and
+/// `drop_refused_images` has already removed the tags the filter would refuse.
+/// `images` only opens the http(s) sources, for the reader who asked for them.
 fn html_sanitizer(images: bool) -> ammonia::Builder<'static> {
     let mut tags: HashSet<&str> = HTML_TAGS.into_iter().collect();
-    let mut attributes = HashMap::from([
+    tags.insert("img");
+    let attributes = HashMap::from([
         ("a", HashSet::from(["href"])),
         (
             "td",
@@ -540,30 +743,37 @@ fn html_sanitizer(images: bool) -> ammonia::Builder<'static> {
             HashSet::from(["width", "align", "cellpadding", "cellspacing", "border"]),
         ),
         ("font", HashSet::from(["color", "face", "size"])),
+        ("img", HashSet::from(["src", "alt", "width", "height"])),
     ]);
-    if images {
-        tags.insert("img");
-        attributes.insert("img", HashSet::from(["src", "alt", "width", "height"]));
-    }
 
     let mut builder = ammonia::Builder::default();
     builder
         .tags(tags)
         .tag_attributes(attributes)
         .generic_attributes(HashSet::from(["title", "style", "class"]))
-        .url_schemes(HashSet::from(["http", "https", "mailto"]))
+        .url_schemes(HashSet::from(["http", "https", "mailto", "data"]))
         .link_rel(Some("noopener noreferrer"))
-        .attribute_filter(filter_attribute);
+        .attribute_filter(move |element, attribute, value| {
+            filter_attribute(element, attribute, value, images)
+        });
     builder
 }
 
-/// Second line of defence, element by element: an image `src` is an absolute
-/// http(s) URL, a `style` attribute is filtered down to `sanitize_declarations`,
-/// the geometry attributes are checked against their own grammar (a length, an
-/// enumeration, a colour) and everything else passes untouched.
-fn filter_attribute<'a>(element: &str, attribute: &str, value: &'a str) -> Option<Cow<'a, str>> {
+/// Second line of defence, element by element: an image `src` is a `data:`
+/// image of `INLINE_IMAGE_TYPES` or, for a reader who asked for them, an
+/// absolute http(s) URL; a link never carries a `data:` URL; a `style`
+/// attribute is filtered down to `sanitize_declarations`; the geometry
+/// attributes are checked against their own grammar (a length, an enumeration,
+/// a colour) and everything else passes untouched.
+fn filter_attribute<'a>(
+    element: &str,
+    attribute: &str,
+    value: &'a str,
+    images: bool,
+) -> Option<Cow<'a, str>> {
     match (element, attribute) {
-        ("img", "src") => is_remote_url(value).then(|| value.into()),
+        ("img", "src") => is_image_source(value, images).then(|| value.into()),
+        ("a", "href") => (!is_data_url(value)).then(|| value.into()),
         (_, "style") => {
             let cleaned = sanitize_declarations(value);
             (!cleaned.is_empty()).then_some(Cow::Owned(cleaned))
@@ -595,9 +805,15 @@ fn in_enumeration<'a>(value: &'a str, allowed: &[&str]) -> Option<Cow<'a, str>> 
         .then(|| value.into())
 }
 
-/// `src` of an image: an absolute http(s) URL, nothing else. Ammonia already
-/// refuses unknown schemes, but `mailto:` is allowed for `href` and must not
-/// reach an image.
+/// A `data:` URL: the scheme is open for the images of a body, never for a
+/// link.
+fn is_data_url(value: &str) -> bool {
+    value.trim_start().to_ascii_lowercase().starts_with("data:")
+}
+
+/// `src` of a remote image: an absolute http(s) URL, nothing else. Ammonia
+/// already refuses unknown schemes, but `mailto:` is allowed for `href` and
+/// must not reach an image.
 fn is_remote_url(value: &str) -> bool {
     let head = value.trim_start().to_ascii_lowercase();
     head.starts_with("http://") || head.starts_with("https://")
@@ -1592,19 +1808,52 @@ mod tests {
     }
 
     #[test]
-    fn an_image_source_is_http_or_https_only() {
+    fn an_image_source_is_a_data_image_or_an_http_url() {
         let html = sanitize_html_with_images(
             "<p>Bonjour</p>\
              <img src=\"javascript:alert(1)\">\
              <img src=\"data:image/gif;base64,AAAA\">\
+             <img src=\"data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==\">\
+             <img src=\"data:image/png,notbase64\">\
              <img src=\"mailto:pix@example.org\">\
              <img src=\"/relative/pixel.gif\">",
         )
         .expect("corps");
-        assert!(!html.contains("src"), "{html}");
+        assert!(
+            html.contains(r#"<img src="data:image/gif;base64,AAAA">"#),
+            "{html}"
+        );
+        assert_eq!(html.matches("<img").count(), 1, "{html}");
         assert!(!html.contains("javascript"), "{html}");
-        assert!(!html.contains("data:"), "{html}");
+        assert!(!html.contains("data:text/html"), "{html}");
+        assert!(!html.contains("notbase64"), "{html}");
         assert!(!html.contains("mailto:"), "{html}");
+        assert!(!html.contains("relative"), "{html}");
+    }
+
+    #[test]
+    fn a_data_image_survives_the_default_body_and_an_http_one_does_not() {
+        let html = sanitize_html(
+            "<p>Capture</p><img src=\"data:image/png;base64,iVBORw==\" alt=\"capture\">\
+             <img src=\"https://track.test/p.gif\" width=\"1\" height=\"1\">",
+        )
+        .expect("corps");
+        assert!(
+            html.contains(r#"<img src="data:image/png;base64,iVBORw==" alt="capture">"#),
+            "{html}"
+        );
+        assert_eq!(html.matches("<img").count(), 1, "{html}");
+        assert!(!html.contains("track.test"), "{html}");
+    }
+
+    #[test]
+    fn a_link_never_carries_a_data_url() {
+        let html = sanitize_html_with_images(
+            r#"<p><a href="data:text/html;base64,PHNjcmlwdD4=">lien</a></p>"#,
+        )
+        .expect("corps");
+        assert!(!html.contains("data:"), "{html}");
+        assert!(html.contains(">lien</a>"), "{html}");
     }
 
     #[test]

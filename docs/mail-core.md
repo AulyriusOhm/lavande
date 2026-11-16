@@ -179,7 +179,8 @@ pub fn parse_message(raw: &[u8]) -> Result<ParsedMessage, MailError>;
 ```
 
 - `body_text` : premier `text/plain` réel, sinon repli sur le texte extrait du HTML.
-- `body_html` : premier `text/html`.
+- `body_html` : premier `text/html`, les `src="cid:…"` remplacés par l'image de la part qui porte
+  ce `Content-ID` (voir plus bas).
 - `preview` : `body_text` compacté (espaces normalisés) puis tronqué aux **200 premiers
   caractères** (`PREVIEW_LEN`), sans points de suspension.
 - `attachments` : `filename` = nom de pièce jointe ou `"attachment"`, `mime` reconstruit depuis le
@@ -194,14 +195,23 @@ pub fn parse_message(raw: &[u8]) -> Result<ParsedMessage, MailError>;
 ### Contrat d'assainissement HTML (`mime.rs`)
 
 `sanitize_html(html) -> Option<String>` (corps stocké) et `sanitize_html_with_images(html)`
-(relu à la demande du lecteur) partagent le **même** filtre, à une différence près : les images.
-`None` quand plus aucun texte visible n'est laissé (ou, avec images, aucun `<img>`).
+(relu à la demande du lecteur) partagent le **même** filtre, à une différence près : les images
+**distantes**. `None` quand plus aucun texte visible n'est laissé et qu'aucun `<img>` ne survit.
 
-**Tags** (31) : `p br div span a ul ol li b strong i em u s blockquote code pre h1 h2 h3 h4 table
-thead tbody tr td th hr center font caption` (+ `img` quand `images`). Tout autre tag perd sa
-balise et garde son texte — `script`, `iframe`, `object`, `embed`, `form`, `input`, `meta`, `link`,
-`base`, `svg`, `button`… n'existent pas dans la sortie. Les éléments `<style>` sont retirés du
-markup eux aussi, mais leur CSS est extrait **avant** ammonia et réinjecté assaini (voir plus bas).
+**Tags** (32) : `p br div span a ul ol li b strong i em u s blockquote code pre h1 h2 h3 h4 table
+thead tbody tr td th hr center font caption img`. Tout autre tag perd sa balise et garde son texte
+— `script`, `iframe`, `object`, `embed`, `form`, `input`, `meta`, `link`, `base`, `svg`, `button`…
+n'existent pas dans la sortie. Les éléments `<style>` sont retirés du markup eux aussi, mais leur
+CSS est extrait **avant** ammonia et réinjecté assaini (voir plus bas).
+
+**Images** : `img` est dans la liste dans les deux modes, c'est son `src` qui décide. Une image
+`data:` d'un type de `INLINE_IMAGE_TYPES` (`image/png`, `image/jpeg`, `image/gif`, `image/webp`,
+payload base64) est **toujours** conservée : c'est le contenu que l'expéditeur a collé (ou l'image
+`cid:` rendue en `data:`, voir plus bas), pas un pixel qui appelle la maison. Une source `http(s)`
+n'est conservée qu'avec `images` (opt-in du lecteur). Avant ammonia, `drop_refused_images` retire
+les balises que le filtre refuserait de toute façon (pixel de tracking en lecture par défaut,
+source qui n'est pas une image `data:` connue, `<img>` sans `src`) : le corps stocké ne garde donc
+**aucune** trace d'un pixel de tracking, pas même une balise vide.
 
 **Attributs conservés**, tous validés valeur par valeur (`attribute_filter`) :
 
@@ -213,7 +223,7 @@ markup eux aussi, mais leur CSS est extrait **avant** ammonia et réinjecté ass
 | `td`, `th` | `colspan`, `rowspan`, `width`, `align` (`left`/`center`/`right`/`justify`), `valign` (`top`/`middle`/`bottom`/`baseline`), `bgcolor` |
 | `tr` | `align`, `valign`, `bgcolor` |
 | `font` | `color`, `face` (noms de police), `size` (échelle 1-7) |
-| `img` (`images` seulement) | `src` (URL absolue `http(s)`, jamais `mailto:`/`data:`/relative), `alt`, `width`, `height` |
+| `img` | `src` (image `data:` de `INLINE_IMAGE_TYPES`, ou URL absolue `http(s)` avec `images` ; jamais `mailto:`/relative/`javascript:`), `alt`, `width`, `height` |
 
 `width`/`height`/`cellpadding`/`cellspacing`/`border` : chiffres ou pourcentage de 4 chiffres au
 plus, sinon l'attribut disparaît. `bgcolor`/`font color` : `#rgb`, `#rrggbb`, `rgb()`/`rgba()`
@@ -269,10 +279,21 @@ texte visible).
 **Toujours retirés** : scripts et `on*`, `srcset`, images de tracking (à l'ingestion), `iframe`,
 `form`/`input`/`button`, `meta`/`link`/`base`, `svg`/`object`/`embed`, tout `url()` y compris dans
 `background`, `position`/`z-index`/`overflow` (redressing), et les schémas d'URL autres que
-`http`/`https` (et `mailto` pour les liens).
+`http`/`https` (et `mailto` pour les liens). Le schéma `data:` n'est ouvert que pour le `src` d'une
+image : un `href="data:…"` est refusé dans les deux modes.
+
+**Images `cid:`** : `inline_cid_images(html, message)` tourne **avant** le sanitizer, dans
+`parse_message` comme dans `html_with_images` : chaque part qui porte un `Content-ID` et un type de
+`INLINE_IMAGE_TYPES` (sous `MAX_INLINE_IMAGE_BYTES`, 10 Mio) devient un `data:{mime};base64,…` à la
+place du `src="cid:…"` correspondant. L'image collée par l'expéditeur s'affiche donc sans clic, et
+« Afficher les images » ne la casse pas. Un `cid:` sans part, un type hors liste ou une image trop
+grosse laisse la balise telle quelle, et le sanitizer retire alors son `src`.
 
 **Aperçu** : `html_to_text` ignore le contenu de `style` et `script`, donc le CSS réinjecté ne
-pollue ni `body_text` ni `preview`.
+pollue ni `body_text` ni `preview`. Une URL entre chevrons (`<https://…>`, `<mailto:…>`) n'est pas
+une balise : `unwrap_autolinks` la remet nue **avant** ammonia (sinon le lecteur HTML la prend pour
+une balise inconnue et la supprime avec son texte), donc `body_html`, `body_text` et `preview`
+gardent l'URL. Les entités `&lt;` ne sont pas touchées.
 
 Côté front, `htmlImagesOf(source, encrypted)` ne refuse que le couple *message chiffré + compte dont
 l'interrupteur PGP est fermé* : un message en clair n'a besoin d'aucune clé, sa politique de compte
@@ -375,13 +396,23 @@ Comportements à connaître :
   5. Trois ensembles : *disparus* (local − serveur) → `store.delete_messages` ; *flags différents*
      (présents des deux côtés, `Flags` inégaux) → `store.set_flags_batch` ; *nouveaux UID*
      (serveur − local) → téléchargement.
-  6. La **métadonnée** des nouveaux UID est demandée **par lots de 500** (`IMPORT_BATCH`) :
-     `UID FETCH uid1,…,uidN (UID BODY.PEEK[HEADER])` (en-têtes seuls, **jamais le corps**), puis
-     `mime::parse_headers` (sujet, expéditeur, destinataires, date, `Message-ID`,
-     `In-Reply-To`/`References`, état PGP ; corps, aperçu, pièces jointes et détail PGP vides),
-     `store.upsert_message` et `store.relink_replies` sur le `Message-ID`. Un UID que le serveur
-     rend sans en-têtes est ignoré, pas fatal.
-  7. `store.upsert_folder` avec `uidvalidity`, `uidnext` et `last_sync_at = now()`.
+  6. La **métadonnée** des nouveaux UID est demandée **par lots de 500** (`IMPORT_BATCH`), **du plus
+     récent au plus ancien** : `UID FETCH uid1,…,uidN (UID BODY.PEEK[HEADER])` (en-têtes seuls,
+     **jamais le corps**), puis `mime::parse_headers` (sujet, expéditeur, destinataires, date,
+     `Message-ID`, `In-Reply-To`/`References`, état PGP ; corps, aperçu, pièces jointes et détail PGP
+     vides), `store.upsert_message` et `store.relink_replies` sur le `Message-ID`. Un UID que le
+     serveur rend sans en-têtes est ignoré, pas fatal. L'upsert ne touche **que** l'enveloppe et les
+     flags : un corps, un aperçu ou des pièces jointes déjà chargés survivent à la resynchronisation.
+  7. Les **aperçus** des 50 plus récents (`SNIPPET_BATCH`) sont chargés à part, sur une **connexion
+     dédiée** (`fetch_previews`) : `UID FETCH … (UID BODY.PEEK[HEADER] BODY.PEEK[TEXT]<0.1024>)`,
+     `mime::parse_headers_with_snippet` → `store.set_preview`, sans jamais stocker de corps. Une
+     réponse partielle illisible empoisonne la session qui la reçoit : la connexion dédiée garantit
+     que la synchro principale n'en voit rien. Best-effort : PGP chiffré, base64, boundary MIME ou
+     serveur muet → aperçu vide, jamais d'erreur de synchro.
+  8. `store.upsert_folder` avec `uidvalidity`, `uidnext` et `last_sync_at = now()`.
+  9. En fin de synchro de compte, **éviction** : les corps chargés depuis plus de 30 jours
+     (`EVICT_BODY_DAYS`) repassent à NULL (`store.evict_bodies_before`), aperçu conservé, favoris et
+     brouillons exclus ; les rouvrir les relit du serveur (`fetch_body`).
   Coût réseau : `SELECT` + la passe métadonnées (linéaire en nombre de messages du dossier) +
   ⌈nouveaux / 500⌉ requêtes d'en-têtes ; un dossier inchangé ne coûte que la passe métadonnées, sans
   un octet de corps. `SyncReport` ne compte que les lignes réellement touchées.
@@ -434,6 +465,12 @@ pub async fn send_with(
 - Aucun destinataire (`to` + `cc` + `bcc` vide) → `MailError::Smtp("no recipient")`.
 - `Date` et `Message-ID` sont laissés à `lettre` (`date_now()`, `message_id(None)` ⇒ `<uuid@hostname>`).
 - `in_reply_to` et `references` sont attendus **sans chevrons** : `build()` les ré-emballe en `<>`.
+- **Images collées** : chaque `<img src="data:image/…">` du corps sort de `sanitize_outgoing_html`
+  intact puis devient une part `multipart/related` (`Content-ID`, `Content-Disposition: inline`), le
+  `src` du HTML passant en `cid:<Content-ID>`. Types de `INLINE_IMAGE_TYPES`, plafond
+  `MAX_INLINE_IMAGE_BYTES` (10 Mio) au-delà duquel l'image est retirée du corps. À la relecture,
+  `inline_cid_images` la rend en `data:` : l'image collée revient telle quelle (voir le contrat
+  d'assainissement HTML).
 - **`OutgoingMessage` et `OutgoingAttachment` ne dérivent pas `Serialize`/`Deserialize`** : il faut
   un DTO côté Tauri, ou ajouter les dérivations (voir Contrat des commandes).
 
@@ -1032,7 +1069,7 @@ n'écoutant que sur la boucle locale.
 
 ## Tests
 
-### Hors-ligne (192 tests, `cargo test --workspace`)
+### Hors-ligne (370 tests, `cargo test --workspace`)
 
 Presque tout est dans `tests/`, sans réseau ; les `#[cfg(test)] mod tests` de `src/` couvrent le
 store (pièces jointes emportées par `delete_messages`, `Store: Send + Sync`, migrations de colonnes),
@@ -1041,7 +1078,7 @@ le MIME (assainissement HTML), `sync::auto_syncs` et le `Content-Disposition` de
 | Fichier | Tests | Couverture |
 | --- | --- | --- |
 | `tests/config.rs` | 9 | SPECIAL-USE prioritaire sur le nom, noms anglais/français, `Other`, `path_for`, `validate` (TLS/STARTTLS acceptés, `plain` refusé, champs vides), `Debug` sans secret |
-| `tests/mime.rs` | 17 | message texte simple, quoted-printable, repli HTML → texte, préférence `text/plain`, métadonnées de pièces jointes, `PgpState`, aperçu compacté/tronqué, en-têtes de threading, en-têtes absents |
+| `tests/mime.rs` | 29 | message texte simple, quoted-printable, repli HTML → texte, préférence `text/plain`, métadonnées de pièces jointes, `PgpState`, aperçu compacté/tronqué, en-têtes de threading, en-têtes absents, autolien `<https://…>` conservé dans `body_html`/`body_text`/`preview` (URL seule, entités `&lt;` intactes), image `cid:` d'un `multipart/related` rendue en `src="data:image/png;base64,…"` (et refus : `cid:` sans part, part d'un autre type) |
 | `tests/sanitize.rs` | 18 | `style` inline préservé et normalisé, valeurs qui chargent/exécutent refusées (`url(`, `expression(`, `position`, `behavior`, `-moz-binding`, `javascript:`), obfuscation (échappements CSS, commentaires intercalés, casse mixte, `image-set(url())`), déclarations mal fermées, `display` restreint, blocs `<style>` assainis et hissés avant le corps, `@media` conservé, `@import`/`@font-face`/`@supports` supprimés, évasion `</style>` neutralisée, attributs de table conservés/validés, `center`/`font`/`caption`, fixture « mail marketing » (table 600 px, styles inline, bloc `<style>`, `bgcolor`) et pixel de tracking toujours retiré du corps stocké |
 | `tests/threading.rs` | 7 | `References` prioritaire, repli `In-Reply-To`, repli sujet (préfixes + accents), isolation par compte, `Message-ID` de repli, `split_ids` |
 | `tests/oauth.rs` | 4 | payload XOAUTH2, cache de l'access token, rafraîchissement après expiration, message d'erreur lisible sans secret (serveur HTTP local) |
@@ -1050,7 +1087,7 @@ le MIME (assainissement HTML), `sync::auto_syncs` et le `Content-Disposition` de
 | `crates/mail-api/tests/http.rs` | 43 | routeur sans socket : `/api/health`, 400 config/JSON invalide, 409 id déjà pris, aucun secret dans `GET /api/accounts`, connexion échouée n'écrit rien, 404 inconnus, chemin de dossier percent-encodé, mapping `MailError` → statut, sélection de dossiers, `PATCH /api/accounts/{id}/pgp` (défaut ouvert, bascule par compte, corps chiffrés déjà déchiffrés effacés, 404 compte inconnu) |
 | `crates/mail-api/tests/pgp_gate.rs` | 3 | gate du trousseau, hors réseau : compte ouvert → `keyring_for` complet et corps déchiffré ; compte fermé → trousseau vide, corps/HTML/aperçu/pièces jointes fermés (`Clé secrète manquante`), `html_with_images` → `None` ; l'interrupteur est lu par compte |
 | `crates/mail-api/tests/discovery.rs` | 10 (+2 réseau) | parsing ISPDB Gmail/LaPoste et autoconfig lanro.eu, `SSL`/`STARTTLS`, `%EMAILADDRESS%`/`%EMAILLOCALPART%`, chaîne HTTP avec serveur local (`source: ispdb`), adresse invalide, domaine inconnu |
-| `tests/live.rs` (mail-core + mail-api) | 13 | réseau GreenMail, `#[ignore]` (voir ci-dessous) |
+| `tests/live.rs` (mail-core + mail-api) | 25 | réseau GreenMail, `#[ignore]` (voir ci-dessous) |
 
 Sur cette machine (pas de compilateur C système, `rusqlite`/`ring` en ont besoin) :
 
@@ -1061,7 +1098,7 @@ export CXX=/home/roman/.local/opt/lavande-cc/c++
 npm run mail:test          # cargo test --workspace
 ```
 
-### Réseau (`tests/live.rs`, 15 scénarios ignorés par défaut)
+### Réseau (`tests/live.rs`, 25 scénarios ignorés par défaut)
 
 ```sh
 scripts/mail-test-server.sh start      # conteneur lavande-mail-test (GreenMail)
@@ -1089,6 +1126,17 @@ généré par le script dans `$LAVANDE_MAIL_TEST_DIR` (défaut `~/.cache/lavande
 | `move_keeps_store_in_step_with_server` | `create_folder` deux fois (idempotent), `move_message` INBOX → Archive (capacité `MOVE`) : la ligne INBOX disparaît, la ligne Archive réapparaît **avec l'UID réattribué par le serveur** et son corps, `fetch_body` fonctionne dessus, et une session neuve confirme que tous les UID locaux d'Archive existent côté serveur |
 | `reply_joins_the_thread` | une réponse (`In-Reply-To` + `References` = `Message-ID` du parent) rejoint le thread du parent : `thread_id` identique, un seul thread de `count == 2` |
 | `xoauth2_authenticates_with_refresh_token` | échange refresh token contre un endpoint HTTP local (mock), puis `AUTHENTICATE XOAUTH2` (SASL-IR) sur GreenMail |
+| `the_pgp_gate_closes_and_reopens_an_encrypted_body_on_the_server` (mail-api) | envoi chiffré + signé, `sync` INBOX, puis `GET …/messages/{uid}?fetch_body=true` : corps en clair, `pgp_detail.decrypted` et `verified` à `true` ; `PATCH /api/accounts/{id}/pgp {enabled:false}` puis lecture **sans** `fetch_body` : `body_text`/`body_html` à `null`, `preview` vide et `pgp_detail` à `null` (la purge a vidé la ligne, pas seulement bloqué le déchiffrement) ; `PATCH {enabled:true}` puis `fetch_body=true` : le corps revient déchiffré ; `GET /api/accounts` : l'autre compte du démon garde son interrupteur ouvert |
+
+**État de l'environnement (GreenMail 2.1.15, image `greenmail/standalone:latest`)** : l'IMAP
+n'annonce que `AUTH=XOAUTH2` et répond `NO` à `AUTHENTICATE PLAIN` ; `connect_with` retombe sur la
+commande `LOGIN` sur `BAD` **ou `NO`**, ce qui débloque les scénarios à mot de passe. Aucun tag de
+l'image n'accepte `PLAIN` (1.6.15, 2.0.1, 2.1.8 → 2.1.15 essayés). Deux incompatibilités restent :
+la réponse au fetch partiel des aperçus est non conforme (littéral sans espace, pas de CRLF après le
+littéral) — illisible par `async-imap`, mais sans effet sur la synchro depuis que les aperçus passent
+par une connexion dédiée (aperçus vides sur ce serveur) ; et aucun dossier n'est marqué `\Drafts`
+(SPECIAL-USE), ce qui fait échouer `a_composition_saved_as_a_draft_lands_in_the_drafts_folder`
+(scénario mail-api, limité par le serveur de test).
 
 Variables lues par `tests/live.rs` :
 
@@ -1115,8 +1163,9 @@ Variables lues par `scripts/mail-test-server.sh` : `LAVANDE_MAIL_TEST_DIR`, `…
 - **IDLE sur INBOX seulement.** La veille surveille le dossier de réception de chaque compte ; les
   autres dossiers ne se rafraîchissent qu'à la demande, et il n'y a rien côté serveur pour pousser
   vers un appareil éteint (pas de service de notification type UnifiedPush).
-- **Images des mails retirées à l'ingestion.** Le corps stocké n'a aucun `img` (pixels de
-  tracking) ; elles ne reviennent que sur demande, message par message, via `html-images`. Le
+- **Images distantes retirées à l'ingestion.** Le corps stocké ne garde aucun `img` dont le `src`
+  est `http(s)` (pixels de tracking) ; elles ne reviennent que sur demande, message par message, via
+  `html-images`. Les images `data:` (dont les `cid:` rendues en `data:`) sont conservées. Le
   reste du rendu suit le mail : styles inline et blocs `<style>` filtrés, attributs de table,
   `center`/`font`. Ce qui n'est pas dans la whitelist CSS (positionnements absolus, `url()`,
   `@font-face`) est perdu : un mail qui découpe sa mise en page en `position:absolute` retombe sur

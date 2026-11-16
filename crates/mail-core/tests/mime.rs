@@ -1,6 +1,6 @@
 use lavande_mail::mime;
 use lavande_mail::model::PgpState;
-use lavande_mail::parse_message;
+use lavande_mail::{parse_message, PgpKeyring};
 
 const SIMPLE: &[u8] = b"From: Marc Delaunay <marc@mail.fr>\r\n\
 To: Roman <roman@lavande.fr>\r\n\
@@ -344,12 +344,120 @@ fn html_is_sanitized_at_ingestion() {
 }
 
 #[test]
+fn an_autolink_keeps_its_url_in_the_text_body() {
+    let html = "<p>Suivi : <https://example.com/x/a?b=1></p>\
+        <p>Écrire à <mailto:support@example.org>, archive sur <ftp://ftp.example/pub></p>";
+    let parsed = parse_message(&message_of("text/html", html)).expect("parse");
+    let text = parsed.body_text.as_deref().expect("texte");
+    for url in [
+        "https://example.com/x/a?b=1",
+        "mailto:support@example.org",
+        "ftp://ftp.example/pub",
+    ] {
+        assert!(text.contains(url), "{url} absent de {text}");
+        assert!(
+            parsed.preview.contains(url),
+            "{url} absent de {}",
+            parsed.preview
+        );
+    }
+    assert!(!text.contains('<'), "{text}");
+    let out = parsed.body_html.as_deref().expect("html");
+    assert!(out.contains("https://example.com/x/a?b=1"), "{out}");
+    assert!(!out.contains("<https"), "{out}");
+}
+
+#[test]
+fn an_autolink_only_body_survives() {
+    let parsed = parse_message(&message_of("text/html", "<https://example.com/x>")).expect("parse");
+    assert_eq!(parsed.body_text.as_deref(), Some("https://example.com/x"));
+    assert_eq!(parsed.preview, "https://example.com/x");
+    assert_eq!(parsed.body_html.as_deref(), Some("https://example.com/x\n"));
+}
+
+#[test]
+fn an_escaped_autolink_keeps_its_angle_brackets() {
+    let parsed = parse_message(&message_of(
+        "text/html",
+        "<p>Voir &lt;https://example.com/x&gt;</p>",
+    ))
+    .expect("parse");
+    assert_eq!(
+        parsed.body_text.as_deref(),
+        Some("Voir <https://example.com/x>")
+    );
+}
+
+#[test]
 fn image_only_html_has_no_body() {
     let html = "<img src=\"https://track.test/pixel.gif\" width=\"1\" height=\"1\"><script>var a=1;</script>";
     let parsed = parse_message(&message_of("text/html", html)).expect("parse");
     assert_eq!(parsed.body_html, None);
     assert!(parsed.body_text.as_deref().unwrap_or_default().is_empty());
     assert!(parsed.preview.is_empty());
+}
+
+const RELATED: &[u8] = b"From: camille@studio-lilas.fr\r\n\
+Subject: Capture\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/related; boundary=\"rel\"\r\n\
+\r\n\
+--rel\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<p>Voici la capture <img src=\"cid:abc@lavande\" alt=\"capture\"></p>\r\n\
+--rel\r\n\
+Content-Type: image/png\r\n\
+Content-ID: <abc@lavande>\r\n\
+Content-Transfer-Encoding: base64\r\n\
+Content-Disposition: inline; filename=\"capture.png\"\r\n\
+\r\n\
+iVBORw0KGgo=\r\n\
+--rel--\r\n";
+
+#[test]
+fn an_inline_cid_image_reaches_the_body_as_a_data_url() {
+    let parsed = parse_message(RELATED).expect("parse");
+    let html = parsed.body_html.as_deref().expect("html");
+    assert!(
+        html.contains(r#"<img src="data:image/png;base64,iVBORw0KGgo=" alt="capture">"#),
+        "{html}"
+    );
+    assert!(!html.contains("cid:"), "{html}");
+    assert!(
+        parsed.preview.contains("Voici la capture"),
+        "{}",
+        parsed.preview
+    );
+
+    let on_demand = mime::html_with_images(RELATED, &PgpKeyring::default())
+        .expect("lecture")
+        .expect("corps html");
+    assert_eq!(on_demand, html);
+}
+
+#[test]
+fn a_cid_without_its_part_leaves_no_image() {
+    let raw = String::from_utf8(RELATED.to_vec())
+        .expect("utf8")
+        .replace("<abc@lavande>", "<autre@lavande>");
+    let parsed = parse_message(raw.as_bytes()).expect("parse");
+    let html = parsed.body_html.as_deref().expect("html");
+    assert!(!html.contains("<img"), "{html}");
+    assert!(!html.contains("cid:"), "{html}");
+    assert!(html.contains("Voici la capture"), "{html}");
+}
+
+#[test]
+fn a_cid_part_of_another_type_is_not_inlined() {
+    let raw = String::from_utf8(RELATED.to_vec())
+        .expect("utf8")
+        .replace("Content-Type: image/png", "Content-Type: text/plain");
+    let parsed = parse_message(raw.as_bytes()).expect("parse");
+    let html = parsed.body_html.as_deref().expect("html");
+    assert!(!html.contains("<img"), "{html}");
+    assert!(!html.contains("data:"), "{html}");
+    assert!(!html.contains("cid:"), "{html}");
 }
 
 #[test]
