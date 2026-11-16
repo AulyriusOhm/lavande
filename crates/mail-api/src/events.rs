@@ -125,6 +125,15 @@ async fn sync_and_publish(
     let mapping = FolderMapping::default();
     match imap::sync_folder(session, state.store(), &config.id, folder_path, &mapping).await {
         Ok(report) => {
+            imap::fetch_previews(
+                config,
+                state.tls(),
+                state.store(),
+                &config.id,
+                folder_path,
+                &report.preview_uids,
+            )
+            .await;
             tracing::info!(
                 account = %config.id,
                 inserted = report.inserted,

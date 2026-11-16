@@ -95,6 +95,15 @@ async fn sync(
                 &mapping,
             )
             .await?;
+            imap::fetch_previews(
+                &config,
+                state.tls(),
+                state.store(),
+                &config.id,
+                &folder_path,
+                &report.preview_uids,
+            )
+            .await;
             logout(session).await;
             vec![FolderReport::new(folder_path, report)]
         }

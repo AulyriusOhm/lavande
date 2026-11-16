@@ -813,11 +813,8 @@ async fn move_keeps_store_in_step_with_server() {
 
     let archived = find(&store, "Archive", &subject);
     assert!(
-        archived
-            .body_text
-            .as_deref()
-            .is_some_and(|text| text.contains("corps archive")),
-        "the reconciled Archive copy has no body: {:?}",
+        archived.body_text.is_none(),
+        "la réconciliation ne stocke que les en-têtes : {:?}",
         archived.body_text
     );
     checked(
@@ -831,6 +828,15 @@ async fn move_keeps_store_in_step_with_server() {
             &PgpKeyring::new(),
         )
         .await,
+    );
+    let archived = find(&store, "Archive", &subject);
+    assert!(
+        archived
+            .body_text
+            .as_deref()
+            .is_some_and(|text| text.contains("corps archive")),
+        "the fetched Archive copy has no body: {:?}",
+        archived.body_text
     );
 
     let mut raw = connect(&cfg).await;

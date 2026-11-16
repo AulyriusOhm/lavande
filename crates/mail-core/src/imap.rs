@@ -36,13 +36,15 @@ use crate::tls::TlsOptions;
 
 pub type ImapSession = Session<TlsStream<TcpStream>>;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SyncReport {
     pub inserted: usize,
     pub flags_updated: usize,
     pub removed: usize,
     pub uidvalidity_changed: bool,
     pub uidnext: u32,
+    /// Uids dont l'aperçu reste à charger, du plus récent au plus ancien.
+    pub preview_uids: Vec<u32>,
 }
 
 const IMPORT_BATCH: usize = 500;
@@ -136,7 +138,7 @@ pub async fn connect_with(
                 .await;
             let client = match plain {
                 Ok(session) => return Ok(session),
-                Err((Error::Bad(_), client)) => client,
+                Err((Error::Bad(_) | Error::No(_), client)) => client,
                 Err((error, _)) => return Err(MailError::Auth(error.to_string())),
             };
             client
@@ -349,7 +351,7 @@ async fn reconcile(
     for batch in new_uids.chunks(IMPORT_BATCH) {
         report.inserted += import_metadata(session, store, &target, batch, &server).await?;
     }
-    import_previews(session, store, &target, newest(&new_uids)).await;
+    report.preview_uids = newest(&new_uids).to_vec();
 
     record_sync(
         store,
@@ -509,7 +511,7 @@ async fn incremental(
     for batch in plan.new_uids.chunks(IMPORT_BATCH) {
         report.inserted += import_metadata(session, store, target, batch, &touched).await?;
     }
-    import_previews(session, store, target, newest(&plan.new_uids)).await;
+    report.preview_uids = newest(&plan.new_uids).to_vec();
     Ok(Some(report))
 }
 
@@ -695,7 +697,8 @@ fn newest(uids: &[u32]) -> &[u32] {
 async fn import_previews(
     session: &mut ImapSession,
     store: &Store,
-    target: &Target<'_>,
+    account_id: &str,
+    folder_path: &str,
     uids: &[u32],
 ) {
     if uids.is_empty() {
@@ -733,11 +736,40 @@ async fn import_previews(
         if parsed.preview.is_empty() {
             continue;
         }
-        if let Err(error) =
-            store.set_preview(target.account_id, target.folder_path, uid, &parsed.preview)
-        {
+        if let Err(error) = store.set_preview(account_id, folder_path, uid, &parsed.preview) {
             tracing::warn!(uid, %error, "aperçu non enregistré");
         }
+    }
+}
+
+/// Aperçus sur une connexion dédiée : une réponse partielle que le client ne
+/// sait pas lire empoisonne la session qui l'a reçue, et la synchro principale
+/// n'en voit alors rien. Best-effort : tout échec laisse les aperçus vides.
+pub async fn fetch_previews(
+    cfg: &AccountConfig,
+    tls_options: &TlsOptions,
+    store: &Store,
+    account_id: &str,
+    folder_path: &str,
+    uids: &[u32],
+) {
+    if uids.is_empty() {
+        return;
+    }
+    let mut session = match connect_with(cfg, tls_options).await {
+        Ok(session) => session,
+        Err(error) => {
+            tracing::warn!(%error, "aperçus : connexion impossible");
+            return;
+        }
+    };
+    if let Err(error) = session.select(folder_path).await {
+        tracing::warn!(%error, "aperçus : dossier inaccessible");
+        return;
+    }
+    import_previews(&mut session, store, account_id, folder_path, uids).await;
+    if let Err(error) = session.logout().await {
+        tracing::warn!(%error, "fermeture de la session imap (aperçus)");
     }
 }
 

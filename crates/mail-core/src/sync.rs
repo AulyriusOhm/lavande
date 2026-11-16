@@ -73,7 +73,18 @@ pub async fn sync_account_selected(
             continue;
         }
         match imap::sync_folder(&mut session, store, &cfg.id, &folder.path, mapping).await {
-            Ok(report) => reports.push((folder.path.clone(), report)),
+            Ok(report) => {
+                imap::fetch_previews(
+                    cfg,
+                    tls_options,
+                    store,
+                    &cfg.id,
+                    &folder.path,
+                    &report.preview_uids,
+                )
+                .await;
+                reports.push((folder.path.clone(), report));
+            }
             Err(error) => {
                 tracing::warn!(account = %cfg.id, folder = %folder.path, %error, "dossier non synchronisé");
                 // Une réponse que le client n'a pas su lire laisse la session
