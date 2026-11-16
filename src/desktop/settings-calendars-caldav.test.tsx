@@ -6,7 +6,7 @@ import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { ThemeProvider } from "@/lib/theme";
 import { createMemoryStorage } from "@/lib/sync/storage";
-import type { CaldavSource } from "@/lib/api";
+import type { ApiAccount, CaldavSource } from "@/lib/api";
 import type { CalendarDef } from "@/lib/calendars";
 import type { CalendarEvent } from "@/lib/calendar";
 
@@ -18,6 +18,16 @@ const PASSWORD = "s3cret-cal dav";
 type IcsState = { events: Record<string, CalendarEvent[]>; synced: Record<string, number> };
 
 const SOURCE: CaldavSource = { id: "travail", name: "Travail", url: URL_CALDAV };
+
+const ACCOUNT: ApiAccount = {
+  id: "perso",
+  label: "Perso",
+  email: "roman@exemple.tld",
+  username: "roman@exemple.tld",
+  imap: { host: "mail.exemple.tld", port: 993, encryption: "tls" },
+  smtp: { host: "mail.exemple.tld", port: 465, encryption: "tls" },
+  folders: 1,
+};
 
 const storedCalendars = (): CalendarDef[] =>
   JSON.parse(window.localStorage.getItem(CALENDARS_KEY) ?? "null") as CalendarDef[];
@@ -70,6 +80,7 @@ function stubDaemon(
     eventsStatus?: number;
     listStatus?: number;
     removeStatus?: number;
+    accounts?: ApiAccount[];
   } = {},
 ) {
   let sources = options.sources ?? [];
@@ -77,6 +88,12 @@ function stubDaemon(
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
+    if (url === "/api/accounts") return reply(options.accounts ?? []);
+    if (url.endsWith("/calendars/caldav/sources/from-account")) {
+      const status = options.createStatus ?? 201;
+      if (status < 400) sources = [...sources, created];
+      return reply(options.createPayload ?? created, status);
+    }
     if (url.endsWith("/calendars/caldav/sources")) {
       if (method === "POST") {
         const status = options.createStatus ?? 201;
@@ -312,6 +329,38 @@ describe("Réglages · sources CalDAV", () => {
 
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("500"));
     expect(storedCalendars().map((entry) => entry.name)).toEqual(["Travail"]);
+  });
+
+  it("lie l'agenda d'un compte mail sans ressaisir de mot de passe", async () => {
+    const linked: CaldavSource = {
+      id: "mail-exemple-tld",
+      name: "mail.exemple.tld",
+      url: "https://mail.exemple.tld/dav/",
+      account_id: "perso",
+    };
+    const fetchMock = stubDaemon({ accounts: [ACCOUNT], created: linked });
+    renderSettings();
+
+    fireEvent.change(await screen.findByLabelText("Compte mail pour l'agenda"), { target: { value: "perso" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connecter l'agenda du compte sélectionné" }));
+
+    await waitFor(() => expect(storedIcs().events["mail-exemple-tld"]).toHaveLength(2));
+    const [url, init] = calls(fetchMock, "/calendars/caldav/sources/from-account", "POST")[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    expect(url).toBe("/api/calendars/caldav/sources/from-account");
+    expect(init.body).toBe(JSON.stringify({ account_id: "perso" }));
+    expect(storedCalendars()[3]).toEqual({
+      id: "mail-exemple-tld",
+      name: "mail.exemple.tld",
+      tone: 0,
+      source: { kind: "caldav", sourceId: "mail-exemple-tld", accountId: "perso" },
+    });
+    expect(storedText()).not.toContain("motdepasse");
+    expect(
+      within(section()).getAllByText(/roman@exemple\.tld · https:\/\/mail\.exemple\.tld\/dav\//),
+    ).toHaveLength(1);
   });
 
   it("affiche les trois types et reste utilisable sans liste du démon", async () => {

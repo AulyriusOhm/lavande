@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useMailStore } from "@/lib/store";
-import { useGoogleCalendarAutoAttach } from "@/lib/ics";
+import { useGoogleCalendarAutoAttach, useZimbraCalendarAutoAttach } from "@/lib/ics";
 import { useAiSync } from "@/lib/ai-sync";
 import { usePrefs } from "@/lib/prefs";
 import { Notice } from "@/components/ui/notice";
@@ -63,6 +63,7 @@ function DesktopMain() {
   const mailNav = useRef<MailNavigation | null>(null);
 
   useGoogleCalendarAutoAttach(notify);
+  useZimbraCalendarAutoAttach(notify);
   useAiSync();
 
   const openMailId = openMail?.id ?? null;

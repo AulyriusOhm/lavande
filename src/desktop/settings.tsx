@@ -402,6 +402,7 @@ function CalendarsSection() {
   const [draftTone, setDraftTone] = useState(0);
   const [draftUrl, setDraftUrl] = useState("");
   const [caldav, setCaldav] = useState({ url: "", username: "", password: "" });
+  const [caldavAccount, setCaldavAccount] = useState("");
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [removing, setRemoving] = useState<string | null>(null);
@@ -427,6 +428,15 @@ function CalendarsSection() {
     if (!added) return;
     setDraftName("");
     setCaldav({ url: "", username: "", password: "" });
+  };
+
+  const addAccountCalendar = async () => {
+    const account = sources.accounts.find((entry) => entry.id === caldavAccount);
+    if (!account) return;
+    if (await sources.addCaldavFromAccount(account, { name: draftName, tone: draftTone })) {
+      setDraftName("");
+      setCaldavAccount("");
+    }
   };
 
   const addGoogleCalendar = async (account: ApiAccount, calendar: GoogleCalendar) => {
@@ -564,6 +574,39 @@ function CalendarsSection() {
         </DButton>
       </div>
 
+      {sources.accounts.length > 0 ? (
+        <div className="flex flex-wrap items-end gap-3 border-b border-line bg-surface-2/40 px-3.5 py-3">
+          <label className="grid min-w-[220px] flex-1 gap-1">
+            <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+              Agenda d'un compte mail · Zimbra
+            </span>
+            <select
+              aria-label="Compte mail pour l'agenda"
+              value={caldavAccount}
+              onChange={(event) => setCaldavAccount(event.target.value)}
+              className="h-9 rounded-lg border border-line bg-surface px-2 text-[12px] font-semibold text-ink"
+            >
+              <option value="">Choisir un compte…</option>
+              {sources.accounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.label} — {account.email}
+                </option>
+              ))}
+            </select>
+          </label>
+          <DButton
+            variant="soft"
+            size="sm"
+            aria-label="Connecter l'agenda du compte sélectionné"
+            disabled={sources.busy || !caldavAccount}
+            onClick={() => void addAccountCalendar()}
+          >
+            <PlugZap className="size-3.5" strokeWidth={2.6} />
+            Connecter l'agenda
+          </DButton>
+        </div>
+      ) : null}
+
       {sources.googleConnected.length > 0 ? (
         <div className="border-b border-line bg-surface-2/40">
           {sources.googleConnected.map((account) => {
@@ -650,7 +693,8 @@ function CalendarsSection() {
         Le nom et le ton saisis ci-dessus s'appliquent aussi aux sources externes ; sans nom, l'URL, le fichier ou le
         calendrier fait foi. Les identifiants CalDAV partent une seule fois au démon, qui les garde dans son coffre : ils
         ne sont jamais enregistrés ici. Un agenda Google se lit avec le jeton du compte connecté, aucun identifiant ne
-        passe par ici. Aucun compte mail n'est requis pour CalDAV, ICS ou un agenda Google.
+        passe par ici ; celui d'un compte mail (Zimbra) avec le mot de passe du compte, sans le ressaisir. Aucun compte
+        mail n'est requis pour CalDAV, ICS ou un agenda Google.
       </p>
 
       {sources.error ? (

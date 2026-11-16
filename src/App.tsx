@@ -26,7 +26,12 @@ import { DotPattern, MeshGlow } from "@/components/ui/backdrops";
 import { Notice } from "@/components/ui/notice";
 import type { CalendarEvent } from "@/lib/calendar";
 import { useCalendars, isExternalCalendar } from "@/lib/calendars";
-import { externalCalendarEvents, useExternalCalendarRefresh, useGoogleCalendarAutoAttach } from "@/lib/ics";
+import {
+  externalCalendarEvents,
+  useExternalCalendarRefresh,
+  useGoogleCalendarAutoAttach,
+  useZimbraCalendarAutoAttach,
+} from "@/lib/ics";
 import { useWidgetAgendaSync } from "@/lib/background-sync";
 import { useAiSync } from "@/lib/ai-sync";
 import { shellLayout } from "@/lib/native";
@@ -352,6 +357,7 @@ function PhoneApp({ native }: { native?: boolean }) {
   const widgetEvents = useMemo(() => [...events, ...externalEvents], [events, externalEvents]);
   useWidgetAgendaSync(widgetEvents, calendars);
   useGoogleCalendarAutoAttach(notify);
+  useZimbraCalendarAutoAttach(notify);
   useAiSync();
 
   const shortcutActions = useMemo(

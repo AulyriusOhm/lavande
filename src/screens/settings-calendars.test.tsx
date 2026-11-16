@@ -6,7 +6,7 @@ import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { ThemeProvider } from "@/lib/theme";
 import { createMemoryStorage } from "@/lib/sync/storage";
-import type { CaldavSource } from "@/lib/api";
+import type { ApiAccount, CaldavSource } from "@/lib/api";
 import type { CalendarDef } from "@/lib/calendars";
 import type { CalendarEvent } from "@/lib/calendar";
 
@@ -16,6 +16,16 @@ const URL_CALDAV = "https://caldav.exemple.tld/";
 const PASSWORD = "mot-de-passe-cal dav";
 
 const SOURCE: CaldavSource = { id: "travail", name: "Travail", url: URL_CALDAV };
+
+const ACCOUNT: ApiAccount = {
+  id: "perso",
+  label: "Perso",
+  email: "roman@exemple.tld",
+  username: "roman@exemple.tld",
+  imap: { host: "mail.exemple.tld", port: 993, encryption: "tls" },
+  smtp: { host: "mail.exemple.tld", port: 465, encryption: "tls" },
+  folders: 1,
+};
 
 type IcsState = { events: Record<string, CalendarEvent[]>; synced: Record<string, number> };
 
@@ -47,11 +57,25 @@ const reply = (payload: unknown, status = 200) =>
     text: async () => JSON.stringify(payload),
   }) as unknown as Response;
 
-function stubDaemon(options: { sources?: CaldavSource[]; events?: unknown; createStatus?: number } = {}) {
+function stubDaemon(
+  options: {
+    sources?: CaldavSource[];
+    events?: unknown;
+    createStatus?: number;
+    accounts?: ApiAccount[];
+    created?: CaldavSource;
+  } = {},
+) {
   let sources = options.sources ?? [];
+  const created = options.created ?? SOURCE;
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
+    if (url.endsWith("/calendars/caldav/sources/from-account")) {
+      const status = options.createStatus ?? 201;
+      if (status < 400) sources = [...sources, created];
+      return reply(status < 400 ? created : { error: "compte OAuth", kind: "caldav" }, status);
+    }
     if (url.endsWith("/calendars/caldav/sources")) {
       if (method === "POST") {
         const status = options.createStatus ?? 201;
@@ -66,7 +90,7 @@ function stubDaemon(options: { sources?: CaldavSource[]; events?: unknown; creat
       sources = sources.filter((entry) => !url.endsWith(`/${entry.id}`));
       return reply({}, 204);
     }
-    if (url.endsWith("/accounts")) return reply([]);
+    if (url.endsWith("/accounts")) return reply(options.accounts ?? []);
     return reply([]);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -149,6 +173,37 @@ describe("Réglages mobile · calendriers", () => {
     expect(storedText()).not.toContain(PASSWORD);
     expect(within(source("travail")).getByText("CalDAV")).toBeTruthy();
     expect(within(source("travail")).getByText(/1 événement/)).toBeTruthy();
+  });
+
+  it("lie l'agenda d'un compte mail depuis l'onglet CalDAV, sans mot de passe", async () => {
+    const linked: CaldavSource = {
+      id: "mail-exemple-tld",
+      name: "mail.exemple.tld",
+      url: "https://mail.exemple.tld/dav/",
+      account_id: "perso",
+    };
+    const fetchMock = stubDaemon({ accounts: [ACCOUNT], created: linked });
+    mount();
+
+    fireEvent.click(screen.getByRole("button", { name: "CalDAV" }));
+    fireEvent.change(await screen.findByLabelText("Compte mail pour l'agenda"), { target: { value: "perso" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connecter l'agenda du compte sélectionné" }));
+
+    await waitFor(() => expect(storedIcs().events["mail-exemple-tld"]).toHaveLength(1));
+    const [url, init] = calls(fetchMock, "/calendars/caldav/sources/from-account", "POST")[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    expect(url).toBe("/api/calendars/caldav/sources/from-account");
+    expect(init.body).toBe(JSON.stringify({ account_id: "perso" }));
+    expect(storedCalendars().at(-1)).toEqual({
+      id: "mail-exemple-tld",
+      name: "mail.exemple.tld",
+      tone: 0,
+      source: { kind: "caldav", sourceId: "mail-exemple-tld", accountId: "perso" },
+    });
+    expect(storedText()).not.toContain(PASSWORD);
+    expect(within(source("mail-exemple-tld")).getByText(/roman@exemple\.tld/)).toBeTruthy();
   });
 
   it("importe un fichier .ics et garde les événements analysés", async () => {

@@ -6,7 +6,9 @@
 //! Une source CalDAV persistée garde son URL et son nom dans `calendars.json`
 //! et ses identifiants dans le coffre de secrets : ils ne repassent jamais par
 //! une réponse ni par une ligne de journal. Une écriture vise la collection
-//! nommée par la source, ou son unique calendrier découvert.
+//! nommée par la source, ou son unique calendrier découvert. Une source liée à
+//! un compte mail (`/sources/from-account`) n'a pas de secret propre : elle
+//! emprunte le mot de passe du compte, celui que Zimbra demande en Basic.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,6 +18,8 @@ use axum::http::StatusCode;
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use lavande_mail::caldav::{CaldavClient, CalendarCollection};
+use lavande_mail::config::AuthConfig;
+use lavande_mail::error::MailError;
 use lavande_mail::gcal::{GcalClient, GoogleCalendar};
 use lavande_mail::ics::{event_uid, parse_events, ExternalEvent, MAX_ICS_BYTES};
 use serde::{Deserialize, Serialize};
@@ -38,6 +42,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/calendars/caldav/sources",
             get(list_sources).post(add_source),
+        )
+        .route(
+            "/api/calendars/caldav/sources/from-account",
+            post(add_source_from_account),
         )
         .route("/api/calendars/caldav/sources/{id}", delete(remove_source))
         .route(
@@ -210,6 +218,112 @@ async fn add_source(
         .await?;
     tracing::info!(source = %source.id, "source CalDAV ajoutée");
     Ok((StatusCode::CREATED, Json(source)))
+}
+
+/// Agenda CalDAV d'un compte mail déjà connecté : le mot de passe du compte
+/// sert d'authentification Basic, aucun identifiant ne passe par la requête.
+#[derive(Deserialize)]
+struct AccountSourceRequest {
+    account_id: String,
+    /// Serveur CalDAV du compte ; par défaut `https://<hôte IMAP>/dav/`.
+    #[serde(default)]
+    url: Option<String>,
+}
+
+/// Rien n'est rangé tant que le serveur n'a pas répondu ; la source emprunte
+/// ensuite les identifiants du compte, sans copie dans le coffre.
+async fn add_source_from_account(
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<AccountSourceRequest>,
+) -> Result<(StatusCode, Json<CalendarSource>), ApiError> {
+    let account_id = request.account_id.trim();
+    if account_id.is_empty() {
+        return Err(ApiError::bad_request("caldav", "il manque « account_id »"));
+    }
+    let account = state.account(account_id).await?;
+    let password = match &account.auth {
+        AuthConfig::Password { password } => password.clone(),
+        AuthConfig::OAuth2 { .. } => {
+            return Err(ApiError::bad_request(
+                "caldav",
+                "ce compte utilise OAuth ; ajoutez son agenda via Google",
+            ))
+        }
+    };
+    let username = account.username.trim();
+    let username = if username.is_empty() {
+        account.email.trim()
+    } else {
+        username
+    };
+    let base = match trimmed(request.url) {
+        Some(url) => url,
+        None => format!("https://{}/dav/", account.imap.host.trim()),
+    };
+    let base = reqwest::Url::parse(&base).map_err(|error| {
+        ApiError::bad_request("caldav", format!("URL CalDAV invalide : {error}"))
+    })?;
+    // Le mot de passe du compte ne part que vers son propre serveur mail.
+    let url_host = base.host_str().unwrap_or_default();
+    if !url_host.eq_ignore_ascii_case(account.imap.host.trim()) {
+        return Err(ApiError::bad_request(
+            "caldav",
+            "l'URL doit viser le serveur mail du compte",
+        ));
+    }
+    let loopback = matches!(url_host, "127.0.0.1" | "::1" | "localhost");
+    if base.scheme() != "https" && !(loopback && base.scheme() == "http") {
+        return Err(ApiError::bad_request(
+            "caldav",
+            "HTTPS requis pour l'agenda du compte",
+        ));
+    }
+    let client = CaldavClient::new(base.as_str(), username, &password)?;
+    let calendar_href = match client.discover().await {
+        Ok(collections) => {
+            tracing::debug!(
+                account = %account_id,
+                calendars = collections.len(),
+                "agenda du compte découvert"
+            );
+            None
+        }
+        Err(error @ MailError::Auth(_)) => return Err(error.into()),
+        Err(error) => {
+            let href = zimbra_calendar(&base, &account.email)?;
+            tracing::debug!(
+                %error,
+                account = %account_id,
+                "découverte impossible, calendrier Zimbra essayé"
+            );
+            client.events(Some(href.as_str())).await?;
+            Some(href.to_string())
+        }
+    };
+    let name = host(base.as_str())?;
+    let source =
+        state.add_account_calendar_source(&name, base.as_str(), calendar_href, account_id)?;
+    tracing::info!(source = %source.id, account = %account_id, "agenda du compte lié");
+    Ok((StatusCode::CREATED, Json(source)))
+}
+
+/// `<base>/<email>/Calendar`, le calendrier que Zimbra expose pour le compte.
+fn zimbra_calendar(base: &reqwest::Url, email: &str) -> Result<reqwest::Url, ApiError> {
+    let email = email.trim();
+    if email.is_empty() {
+        return Err(ApiError::bad_request(
+            "caldav",
+            "le compte n'a pas d'adresse pour dériver son calendrier",
+        ));
+    }
+    let mut root = base.clone();
+    if !root.path().ends_with('/') {
+        let path = format!("{}/", root.path());
+        root.set_path(&path);
+    }
+    root.join(&format!("{email}/Calendar")).map_err(|error| {
+        ApiError::bad_request("caldav", format!("URL de calendrier invalide : {error}"))
+    })
 }
 
 async fn remove_source(

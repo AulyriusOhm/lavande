@@ -274,6 +274,18 @@ describe("caldav · routes du démon", () => {
     );
   });
 
+  it("lie l'agenda d'un compte sans aucun identifiant dans le corps", async () => {
+    const account = { ...source, account_id: "perso" };
+    const mock = fetchMock(account, 201);
+
+    await expect(mailApi.addCaldavSourceFromAccount("perso")).resolves.toEqual(account);
+
+    const [url, init] = mock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/calendars/caldav/sources/from-account");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(JSON.stringify({ account_id: "perso" }));
+  });
+
   it("supprime une source par son identifiant", async () => {
     const mock = vi.fn(async () => ({ ok: true, status: 204, json: async () => ({}), text: async () => "" }) as unknown as Response);
     vi.stubGlobal("fetch", mock);

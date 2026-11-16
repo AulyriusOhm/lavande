@@ -12,7 +12,7 @@ use axum::routing::any;
 use axum::Router;
 use lavande_mail::tls::TlsOptions;
 use lavande_mail_api::app;
-use lavande_mail_api::secrets::SecretBackend;
+use lavande_mail_api::secrets::{AccountSecrets, SecretBackend};
 use lavande_mail_api::state::AppState;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -526,6 +526,316 @@ async fn a_stored_source_survives_a_restart() {
     .await;
     assert_eq!(status, StatusCode::OK, "corps : {body:?}");
     assert_eq!(json(&body).as_array().expect("liste").len(), 1);
+}
+
+/// Un compte mail tel que `accounts.json` le range, secrets mis à part.
+fn account(id: &str, host: &str, email: &str) -> Value {
+    json!({
+        "id": id,
+        "label": "Perso",
+        "email": email,
+        "username": "roman",
+        "imap": { "host": host, "port": 993, "encryption": "tls" },
+        "smtp": { "host": host, "port": 465, "encryption": "tls" },
+        "auth": { "kind": "password", "password": "secret" }
+    })
+}
+
+async fn link_account(
+    directory: &TempDir,
+    state: &Arc<AppState>,
+    account: Value,
+    secrets: AccountSecrets,
+) {
+    let id = account["id"].as_str().expect("id").to_string();
+    fs::write(
+        directory.path().join("accounts.json"),
+        serde_json::to_vec_pretty(&[account]).expect("json"),
+    )
+    .expect("accounts.json");
+    state
+        .secrets()
+        .put(&id, &secrets)
+        .await
+        .expect("secret du compte");
+}
+
+fn host_of(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .expect("url")
+        .host_str()
+        .expect("hôte")
+        .to_string()
+}
+
+/// Faux Zimbra : la découverte ne répond pas, seul `/dav/<email>/Calendar` existe.
+async fn dav_zimbra(method: Method, uri: Uri, headers: HeaderMap) -> Response {
+    let authorized = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        == Some(AUTHORIZATION);
+    if !authorized {
+        return (StatusCode::UNAUTHORIZED, "identifiants refusés").into_response();
+    }
+    match (method.as_str(), uri.path()) {
+        ("REPORT", "/dav/roman@exemple.tld/Calendar") => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/xml; charset=utf-8")],
+            TRAVAIL_REPORT,
+        )
+            .into_response(),
+        ("GET", "/dav/roman/travail/reunion.ics") => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/calendar; charset=utf-8")],
+            ICS,
+        )
+            .into_response(),
+        _ => (StatusCode::NOT_FOUND, "introuvable").into_response(),
+    }
+}
+
+/// Sert le faux Zimbra et rend son URL de base (`/dav/`).
+async fn serve_zimbra() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("écoute");
+    let address = listener.local_addr().expect("adresse locale");
+    let server = Router::new()
+        .route("/", any(dav_zimbra))
+        .route("/{*path}", any(dav_zimbra));
+    tokio::spawn(async move {
+        axum::serve(listener, server)
+            .await
+            .expect("serveur de test");
+    });
+    format!("http://{address}/dav/")
+}
+
+#[tokio::test]
+async fn the_calendar_of_a_mail_account_borrows_its_credentials() {
+    let (directory, state) = state().await;
+    let url = serve().await;
+    let host = host_of(&url);
+    link_account(
+        &directory,
+        &state,
+        account("perso", &host, "roman@exemple.tld"),
+        AccountSecrets::Password {
+            password: "secret".to_string(),
+        },
+    )
+    .await;
+
+    let (status, body) = post(
+        &state,
+        "/api/calendars/caldav/sources/from-account",
+        json!({ "account_id": "perso", "url": url }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "corps : {body:?}");
+    let source = json(&body);
+    assert_eq!(source["account_id"], "perso");
+    assert_eq!(source["name"], host);
+    assert_eq!(source["calendar_href"], Value::Null);
+    let answer = String::from_utf8_lossy(&body);
+    assert!(!answer.contains("secret"), "réponse : {answer}");
+    assert!(!answer.contains("roman"), "réponse : {answer}");
+
+    let text = fs::read_to_string(directory.path().join("calendars.json")).expect("calendars.json");
+    assert!(text.contains("perso"), "{text}");
+    assert!(!text.contains("secret"), "{text}");
+
+    let id = source["id"].as_str().expect("id").to_string();
+    assert_eq!(
+        state
+            .secrets()
+            .get(&format!("caldav:{id}"))
+            .await
+            .expect("secret"),
+        None
+    );
+
+    let (status, body) = call(
+        &state,
+        Method::POST,
+        &format!("/api/calendars/caldav/sources/{id}/events"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "corps : {body:?}");
+    assert_eq!(json(&body).as_array().expect("liste").len(), 1);
+}
+
+#[tokio::test]
+async fn an_oauth_account_has_no_caldav_calendar() {
+    let (directory, state) = state().await;
+    let mut oauth = account("gmail", "imap.gmail.com", "roman@gmail.com");
+    oauth["auth"] = json!({
+        "kind": "o_auth2",
+        "client_id": "client",
+        "token_endpoint": "https://oauth2.googleapis.com/token"
+    });
+    link_account(
+        &directory,
+        &state,
+        oauth,
+        AccountSecrets::OAuth2 {
+            client_secret: "secret-client".to_string(),
+            refresh_token: "secret-refresh".to_string(),
+        },
+    )
+    .await;
+
+    let (status, body) = post(
+        &state,
+        "/api/calendars/caldav/sources/from-account",
+        json!({ "account_id": "gmail" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "corps : {body:?}");
+    let error = json(&body);
+    assert_eq!(error["kind"], "caldav");
+    let message = error["error"].as_str().expect("message");
+    assert!(message.contains("Google"), "message : {message}");
+    assert!(!message.contains("secret"), "message : {message}");
+    assert!(state.calendar_sources().expect("sources").is_empty());
+    assert!(!directory.path().join("calendars.json").exists());
+}
+
+#[tokio::test]
+async fn a_silent_server_stores_no_source() {
+    let (directory, state) = state().await;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port libre");
+    let port = listener.local_addr().expect("adresse").port();
+    drop(listener);
+    link_account(
+        &directory,
+        &state,
+        account("perso", "127.0.0.1", "roman@exemple.tld"),
+        AccountSecrets::Password {
+            password: "secret".to_string(),
+        },
+    )
+    .await;
+
+    let (status, body) = post(
+        &state,
+        "/api/calendars/caldav/sources/from-account",
+        json!({ "account_id": "perso", "url": format!("http://127.0.0.1:{port}/dav/") }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "corps : {body:?}");
+    assert!(state.calendar_sources().expect("sources").is_empty());
+    assert!(!directory.path().join("calendars.json").exists());
+}
+
+#[tokio::test]
+async fn the_account_password_never_leaves_its_own_server() {
+    let (directory, state) = state().await;
+    link_account(
+        &directory,
+        &state,
+        account("perso", "mail.exemple.tld", "roman@exemple.tld"),
+        AccountSecrets::Password {
+            password: "secret".to_string(),
+        },
+    )
+    .await;
+
+    let (status, body) = post(
+        &state,
+        "/api/calendars/caldav/sources/from-account",
+        json!({ "account_id": "perso", "url": "https://autre.exemple.tld/dav/" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "corps : {body:?}");
+    assert!(state.calendar_sources().expect("sources").is_empty());
+
+    let (status, body) = post(
+        &state,
+        "/api/calendars/caldav/sources/from-account",
+        json!({ "account_id": "perso", "url": "http://mail.exemple.tld/dav/" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "corps : {body:?}");
+    assert!(state.calendar_sources().expect("sources").is_empty());
+}
+
+#[tokio::test]
+async fn the_zimbra_calendar_is_used_when_discovery_fails() {
+    let (directory, state) = state().await;
+    let url = serve_zimbra().await;
+    link_account(
+        &directory,
+        &state,
+        account("perso", &host_of(&url), "roman@exemple.tld"),
+        AccountSecrets::Password {
+            password: "secret".to_string(),
+        },
+    )
+    .await;
+
+    let (status, body) = post(
+        &state,
+        "/api/calendars/caldav/sources/from-account",
+        json!({ "account_id": "perso", "url": url }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "corps : {body:?}");
+    let source = json(&body);
+    let href = source["calendar_href"].as_str().expect("calendar_href");
+    assert!(
+        href.ends_with("/dav/roman@exemple.tld/Calendar"),
+        "href : {href}"
+    );
+
+    let id = source["id"].as_str().expect("id").to_string();
+    let (status, body) = call(
+        &state,
+        Method::POST,
+        &format!("/api/calendars/caldav/sources/{id}/events"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "corps : {body:?}");
+    let events = json(&body);
+    assert_eq!(events.as_array().expect("liste").len(), 1);
+    assert_eq!(events[0]["title"], "Revue de sprint");
+}
+
+#[tokio::test]
+async fn a_source_of_a_removed_account_says_so() {
+    let (directory, state) = state().await;
+    let url = serve().await;
+    link_account(
+        &directory,
+        &state,
+        account("perso", &host_of(&url), "roman@exemple.tld"),
+        AccountSecrets::Password {
+            password: "secret".to_string(),
+        },
+    )
+    .await;
+    let (status, body) = post(
+        &state,
+        "/api/calendars/caldav/sources/from-account",
+        json!({ "account_id": "perso", "url": url }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "corps : {body:?}");
+    let id = json(&body)["id"].as_str().expect("id").to_string();
+
+    fs::remove_file(directory.path().join("accounts.json")).expect("compte supprimé");
+    let (status, body) = call(
+        &state,
+        Method::POST,
+        &format!("/api/calendars/caldav/sources/{id}/events"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "corps : {body:?}");
+    let message = json(&body)["error"].as_str().expect("message").to_string();
+    assert!(message.contains("n'existe plus"), "message : {message}");
 }
 
 /// Serveur CalDAV réel : `CALDAV_TEST_URL`, `CALDAV_TEST_USER`,

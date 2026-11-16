@@ -2,7 +2,9 @@
 //!
 //! Discovery walks `current-user-principal`, then `calendar-home-set`, then
 //! lists the collections whose `resourcetype` carries `calendar`; a server
-//! handing out a calendar URL directly is used as that single collection.
+//! handing out a calendar URL directly is used as that single collection. A URL
+//! that answers nothing is retried on `<host>/dav/`, where Zimbra publishes its
+//! CalDAV tree.
 //! Events come from a `calendar-query` REPORT listing the resources, each one
 //! fetched and parsed by [`crate::ics::parse_events`]; a server refusing the
 //! REPORT falls back to a `PROPFIND` listing of the collection.
@@ -142,20 +144,54 @@ impl CaldavClient {
     }
 
     /// Calendars of the account, or the single collection the URL points at.
+    ///
+    /// A URL that is not the CalDAV tree (a Zimbra web root, say) is retried on
+    /// `<host>/dav/` before giving up.
     pub async fn discover(&self) -> Result<Vec<CalendarCollection>, MailError> {
-        if let Some(home) = self.calendar_home().await? {
-            let collections = self.collections(&home).await?;
-            if !collections.is_empty() {
-                return Ok(collections);
+        if let Some(collections) = self.discover_at(&self.base).await? {
+            return Ok(collections);
+        }
+        if let Some(root) = self.dav_root() {
+            match self.discover_at(&root).await {
+                Ok(Some(collections)) => return Ok(collections),
+                Ok(None) => {}
+                Err(error @ MailError::Auth(_)) => return Err(error),
+                Err(error) => tracing::debug!(
+                    %error,
+                    root = %address(&root),
+                    "repli /dav/ sans réponse"
+                ),
             }
         }
-        match self.own_collection(&self.base).await? {
-            Some(collection) => Ok(vec![collection]),
-            None => Err(MailError::Caldav(format!(
-                "aucun calendrier CalDAV à {}",
-                address(&self.base)
-            ))),
+        Err(MailError::Caldav(format!(
+            "aucun calendrier CalDAV à {}",
+            address(&self.base)
+        )))
+    }
+
+    /// One discovery pass from `base`: the collections of its calendar home,
+    /// then `base` itself as a single collection.
+    async fn discover_at(&self, base: &Url) -> Result<Option<Vec<CalendarCollection>>, MailError> {
+        if let Some(home) = self.calendar_home(base).await? {
+            let collections = self.collections(&home).await?;
+            if !collections.is_empty() {
+                return Ok(Some(collections));
+            }
         }
+        Ok(self
+            .own_collection(base)
+            .await?
+            .map(|collection| vec![collection]))
+    }
+
+    /// `<host>/dav/`, where Zimbra serves its CalDAV tree, unless the URL is
+    /// already that tree.
+    fn dav_root(&self) -> Option<Url> {
+        if self.base.path().ends_with("/dav/") {
+            return None;
+        }
+        let root = self.base.join("dav/").ok()?;
+        (root != self.base).then_some(root)
     }
 
     /// Every `VEVENT` of `calendar_href`, or of every discovered calendar.
@@ -324,8 +360,8 @@ impl CaldavClient {
         resolve(&collection, &format!("{name}.ics"))
     }
 
-    async fn calendar_home(&self) -> Result<Option<Url>, MailError> {
-        let Some(principal) = self.principal().await? else {
+    async fn calendar_home(&self, base: &Url) -> Result<Option<Url>, MailError> {
+        let Some(principal) = self.principal(base).await? else {
             return Ok(None);
         };
         let answer = self.propfind(&principal, "0", HOME_QUERY).await?;
@@ -340,9 +376,9 @@ impl CaldavClient {
             .and_then(|href| resolve(&principal, href).ok()))
     }
 
-    async fn principal(&self) -> Result<Option<Url>, MailError> {
-        let answer = self.propfind(&self.base, "0", PRINCIPAL_QUERY).await?;
-        ensure_authorized(&answer, &self.base)?;
+    async fn principal(&self, base: &Url) -> Result<Option<Url>, MailError> {
+        let answer = self.propfind(base, "0", PRINCIPAL_QUERY).await?;
+        ensure_authorized(&answer, base)?;
         if !answer.status.is_success() {
             return Ok(None);
         }
@@ -350,7 +386,7 @@ impl CaldavClient {
         Ok(responses
             .iter()
             .find_map(|response| response.nested_href("current-user-principal"))
-            .and_then(|href| resolve(&self.base, href).ok()))
+            .and_then(|href| resolve(base, href).ok()))
     }
 
     async fn collections(&self, home: &Url) -> Result<Vec<CalendarCollection>, MailError> {
@@ -987,6 +1023,110 @@ mod tests {
 
     fn base() -> Url {
         Url::parse("https://caldav.exemple.tld/dav/").expect("URL")
+    }
+
+    const RELATIVE_HOME_ANSWER: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:response>
+    <d:href>/principals/users/roman/</d:href>
+    <d:propstat>
+      <d:prop><c:calendar-home-set><d:href>/dav/roman/</d:href></c:calendar-home-set></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#;
+
+    /// Faux serveur WebDAV : `answers` associe « METHODE chemin » à sa réponse,
+    /// tout le reste répond 404.
+    async fn serve(answers: Vec<(&'static str, &'static str)>) -> Url {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("écoute");
+        let address = listener.local_addr().expect("adresse locale");
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let answers = answers.clone();
+                tokio::spawn(async move {
+                    let mut buffer = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    let mut length = 0usize;
+                    let mut head = None;
+                    while let Ok(read) = socket.read(&mut chunk).await {
+                        if read == 0 {
+                            break;
+                        }
+                        buffer.extend_from_slice(&chunk[..read]);
+                        let text = String::from_utf8_lossy(&buffer).to_string();
+                        if head.is_none() {
+                            if let Some(end) = text.find("\r\n\r\n") {
+                                length = text[..end]
+                                    .lines()
+                                    .find_map(|line| {
+                                        let (name, value) = line.split_once(':')?;
+                                        name.eq_ignore_ascii_case("content-length")
+                                            .then(|| value.trim().parse::<usize>().ok())?
+                                    })
+                                    .unwrap_or(0);
+                                head = Some(end + 4);
+                            }
+                        }
+                        if let Some(start) = head {
+                            if buffer.len() >= start + length {
+                                break;
+                            }
+                        }
+                    }
+                    let request = String::from_utf8_lossy(&buffer).to_string();
+                    let mut parts = request
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .split_whitespace();
+                    let method = parts.next().unwrap_or_default();
+                    let path = parts.next().unwrap_or_default();
+                    let key = format!("{method} {path}");
+                    let response = match answers.iter().find(|(route, _)| *route == key) {
+                        Some((_, body)) => format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/xml; charset=utf-8\r\n\
+                             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        ),
+                        None => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\
+                                 Connection: close\r\n\r\n"
+                            .to_string(),
+                    };
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        Url::parse(&format!("http://{address}/")).expect("URL")
+    }
+
+    #[tokio::test]
+    async fn a_web_root_falls_back_to_the_dav_tree() {
+        let root = serve(vec![
+            ("PROPFIND /dav/", PRINCIPAL_ANSWER),
+            ("PROPFIND /principals/users/roman/", RELATIVE_HOME_ANSWER),
+            ("PROPFIND /dav/roman/", COLLECTIONS_ANSWER),
+        ])
+        .await;
+        let client = CaldavClient::new(root.as_str(), "roman", "secret").expect("client");
+        let collections = client.discover().await.expect("découverte");
+        assert_eq!(collections.len(), 2);
+        assert_eq!(collections[0].name, "Travail");
+        assert!(collections[0].href.ends_with("/dav/roman/travail/"));
+    }
+
+    #[tokio::test]
+    async fn a_silent_server_has_no_calendar() {
+        let root = serve(Vec::new()).await;
+        let client = CaldavClient::new(root.as_str(), "roman", "secret").expect("client");
+        let error = client.discover().await.expect_err("aucun calendrier");
+        assert!(matches!(error, MailError::Caldav(_)));
+        assert!(!error.to_string().contains("secret"), "{error}");
     }
 
     #[test]

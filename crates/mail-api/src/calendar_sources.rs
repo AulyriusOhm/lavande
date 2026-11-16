@@ -2,7 +2,9 @@
 //! Mode 0600, written atomically, never returned as is by the API.
 //!
 //! The username and the password live in the secret store, one entry per
-//! source (`caldav:<id>`): this file only carries what the settings need.
+//! source (`caldav:<id>`): this file only carries what the settings need. A
+//! source tied to a mail account (`account_id`) has no entry of its own: it
+//! borrows the credentials of that account.
 
 use std::fs;
 use std::io::ErrorKind;
@@ -19,7 +21,8 @@ pub const SOURCES_FILE: &str = "calendars.json";
 const SECRET_PREFIX: &str = "caldav:";
 
 /// One CalDAV account of the daemon. `calendar_href` narrows it to a single
-/// collection; absent, every discovered calendar is read.
+/// collection; absent, every discovered calendar is read. `account_id` ties it
+/// to a mail account whose password it borrows.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CalendarSource {
     pub id: String,
@@ -27,6 +30,8 @@ pub struct CalendarSource {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_href: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
 }
 
 /// Identifier of a source: the slug of its name, then `-2`, `-3`… when taken.

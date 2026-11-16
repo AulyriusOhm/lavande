@@ -6,8 +6,11 @@ import { demoReadOnly } from "@/lib/mail-backend";
 export type CalendarSource =
   | { kind: "local" }
   | { kind: "ics"; url?: string }
-  /** `sourceId` désigne la source rangée par le démon : ses identifiants n'existent pas ici. */
-  | { kind: "caldav"; sourceId: string }
+  /**
+   * `sourceId` désigne la source rangée par le démon : ses identifiants n'existent pas ici.
+   * `accountId` : source liée à un compte mail, dont elle emprunte le mot de passe.
+   */
+  | { kind: "caldav"; sourceId: string; accountId?: string }
   /** Un calendrier d'un compte Google connecté, relu par le démon avec son refresh token. */
   | { kind: "google"; accountId: string; calendarId: string };
 
@@ -46,9 +49,10 @@ export function isExternalCalendar(def: CalendarDef): boolean {
   return isIcsCalendar(def) || isCaldavCalendar(def) || isGoogleCalendar(def);
 }
 
-/** Le compte mail dont dépend un calendrier : seul Google en a un. */
+/** Le compte mail dont dépend un calendrier : Google, ou une source CalDAV liée. */
 export function calendarAccountId(def: CalendarDef): string | undefined {
-  return def.source?.kind === "google" ? def.source.accountId : undefined;
+  if (def.source?.kind === "google") return def.source.accountId;
+  return def.source?.kind === "caldav" ? def.source.accountId : undefined;
 }
 
 /** Le type affiché à côté d'un calendrier. */
@@ -109,9 +113,11 @@ function parseSource(raw: unknown): CalendarSource | undefined {
       : undefined;
   }
   if (kind === "caldav") {
-    return typeof sourceId === "string" && sourceId.trim()
-      ? { kind: "caldav", sourceId: sourceId.trim() }
-      : undefined;
+    if (typeof sourceId !== "string" || !sourceId.trim()) return undefined;
+    const owner = typeof accountId === "string" && accountId.trim() ? accountId.trim() : undefined;
+    return owner
+      ? { kind: "caldav", sourceId: sourceId.trim(), accountId: owner }
+      : { kind: "caldav", sourceId: sourceId.trim() };
   }
   if (kind !== "ics") return undefined;
   return typeof url === "string" && url.trim() ? { kind: "ics", url: url.trim() } : { kind: "ics" };

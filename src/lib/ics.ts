@@ -22,6 +22,7 @@ import {
 import type { CalendarEvent } from "@/lib/calendar";
 import {
   caldavSourceIdOf,
+  calendarAccountId,
   calendarActivated,
   calendarId,
   googleRefOf,
@@ -36,6 +37,7 @@ import {
   type CalendarDef,
 } from "@/lib/calendars";
 import { GOOGLE_REFRESH_MS, googleAccounts, googleAutoAttachTarget, googleWindow } from "@/lib/gcal";
+import { accountCalendarAttached, sourceCalendarName } from "@/lib/zimbra";
 import { storedPerimeters } from "@/lib/prefs";
 import { READ_ONLY_NOTICE, demoReadOnly } from "@/lib/mail-backend";
 
@@ -398,18 +400,19 @@ export type ExternalCalendarRefresh = {
 };
 
 const GOOGLE_AUTO_ATTACH_KEY = "lavande.gcal.autoattach.v1";
+const ZIMBRA_AUTO_ATTACH_KEY = "lavande.zimbra.autoattach.v1";
 
-function loadGoogleAutoAttached(): Set<string> {
+function loadAutoAttached(key: string): Set<string> {
   try {
-    return new Set(JSON.parse(window.localStorage.getItem(GOOGLE_AUTO_ATTACH_KEY) ?? "[]") as string[]);
+    return new Set(JSON.parse(window.localStorage.getItem(key) ?? "[]") as string[]);
   } catch {
     return new Set();
   }
 }
 
-function saveGoogleAutoAttached(ids: Set<string>): void {
+function saveAutoAttached(key: string, ids: Set<string>): void {
   try {
-    window.localStorage.setItem(GOOGLE_AUTO_ATTACH_KEY, JSON.stringify([...ids]));
+    window.localStorage.setItem(key, JSON.stringify([...ids]));
   } catch {
     /* stockage indisponible : l'auto-ajout retentera au prochain démarrage */
   }
@@ -483,7 +486,7 @@ export function useGoogleCalendarAutoAttach(notify: (message: string) => void): 
       if (cancelled) return;
       const google = googleAccounts(Array.isArray(accounts) ? accounts : []);
       if (google.length === 0) return;
-      const processed = loadGoogleAutoAttached();
+      const processed = loadAutoAttached(GOOGLE_AUTO_ATTACH_KEY);
       let next = loadIcsState();
       let added = false;
       for (const account of google) {
@@ -516,7 +519,76 @@ export function useGoogleCalendarAutoAttach(notify: (message: string) => void): 
         if (cancelled) return;
         notify(`Calendrier Google ajouté · ${name}`);
       }
-      saveGoogleAutoAttached(processed);
+      saveAutoAttached(GOOGLE_AUTO_ATTACH_KEY, processed);
+      if (added && !cancelled) {
+        saveIcsState(next);
+        window.dispatchEvent(new StorageEvent("storage"));
+        window.dispatchEvent(new Event(ICS_CHANGE_EVENT));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [notify]);
+}
+
+/**
+ * Auto-ajout de l'agenda Zimbra à la connexion d'un compte : le démon lit le
+ * CalDAV du compte avec son mot de passe et range la source. Un échec (compte
+ * OAuth, serveur muet, pas de DAV) reste silencieux et vaut un essai : le compte
+ * est marqué comme Google, pour ne pas réessayer à chaque démarrage.
+ */
+export function useZimbraCalendarAutoAttach(notify: (message: string) => void): void {
+  const done = useRef(false);
+  useEffect(() => {
+    if (done.current || demoReadOnly) return;
+    done.current = true;
+    let cancelled = false;
+    void (async () => {
+      let accounts: ApiAccount[];
+      try {
+        accounts = await mailApi.accounts();
+      } catch {
+        return;
+      }
+      if (cancelled || !Array.isArray(accounts)) return;
+      const processed = loadAutoAttached(ZIMBRA_AUTO_ATTACH_KEY);
+      let next = loadIcsState();
+      let added = false;
+      for (const account of accounts) {
+        if (processed.has(account.id)) continue;
+        if (accountCalendarAttached(account.id, loadCalendars())) {
+          processed.add(account.id);
+          continue;
+        }
+        let source: CaldavSource;
+        try {
+          source = await mailApi.addCaldavSourceFromAccount(account.id);
+        } catch {
+          processed.add(account.id);
+          continue;
+        }
+        if (cancelled) return;
+        processed.add(account.id);
+        if (!source?.id) continue;
+        const name = sourceCalendarName(source);
+        const def: CalendarDef = {
+          id: calendarId(name, loadCalendars()),
+          name,
+          tone: 3,
+          source: { kind: "caldav", sourceId: source.id, accountId: account.id },
+        };
+        saveCalendars([...loadCalendars(), def]);
+        added = true;
+        try {
+          next = setIcsCalendarEvents(next, def.id, await fetchCaldavCalendar(def));
+        } catch {
+          next = markIcsSynced(next, def.id);
+        }
+        if (cancelled) return;
+        notify(`Calendrier ajouté · ${name}`);
+      }
+      saveAutoAttached(ZIMBRA_AUTO_ATTACH_KEY, processed);
       if (added && !cancelled) {
         saveIcsState(next);
         window.dispatchEvent(new StorageEvent("storage"));
@@ -535,12 +607,16 @@ export type CalendarSourcesManager = {
   busy: boolean;
   refreshing: string | null;
   error: string | null;
+  /** Comptes mail connectés : sélecteur de l'agenda d'un compte (Zimbra). */
+  accounts: ApiAccount[];
   googleConnected: ApiAccount[];
   googleCalendars: Record<string, GoogleCalendar[]>;
   googleBusy: Record<string, boolean>;
   googleErrors: Record<string, string | null>;
   loadGoogleCalendars: (accountId: string) => Promise<void>;
   googleAttached: (accountId: string, calendarId: string) => boolean;
+  caldavAttached: (accountId: string) => boolean;
+  addCaldavFromAccount: (account: ApiAccount, input: { name: string; tone: number }) => Promise<boolean>;
   countOf: (id: string) => number;
   detailOf: (def: CalendarDef) => string | undefined;
   paused: (def: CalendarDef) => boolean;
@@ -572,6 +648,7 @@ export function useCalendarSources(notify: (message: string) => void): CalendarS
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [caldavSources, setCaldavSources] = useState<Record<string, CaldavSource>>({});
+  const [accounts, setAccounts] = useState<ApiAccount[]>([]);
   const [googleConnected, setGoogleConnected] = useState<ApiAccount[]>([]);
   const [googleCalendars, setGoogleCalendars] = useState<Record<string, GoogleCalendar[]>>({});
   const [googleBusy, setGoogleBusy] = useState<Record<string, boolean>>({});
@@ -601,6 +678,7 @@ export function useCalendarSources(notify: (message: string) => void): CalendarS
       .accounts()
       .then((list) => {
         if (!alive || !Array.isArray(list)) return;
+        setAccounts(list);
         setGoogleConnected(googleAccounts(list));
       })
       .catch(() => undefined);
@@ -695,6 +773,43 @@ export function useCalendarSources(notify: (message: string) => void): CalendarS
     } catch (failure) {
       const message = errorText(failure);
       notify(`Ajout CalDAV impossible · ${message}`);
+      return fail(message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** L'agenda d'un compte mail (Zimbra) : le démon lit le CalDAV avec le mot de passe du compte. */
+  const addCaldavFromAccount = async (
+    account: ApiAccount,
+    input: { name: string; tone: number },
+  ) => {
+    if (accountCalendarAttached(account.id, loadCalendars())) {
+      return fail(`Agenda déjà lié · ${account.email}`);
+    }
+    const fallback = account.imap?.host?.trim() || account.label;
+    const draft = draftFor(input.name, fallback, input.tone);
+    if (!draft) return false;
+    setBusy(true);
+    setError(null);
+    try {
+      const source = await mailApi.addCaldavSourceFromAccount(account.id);
+      const def: CalendarDef = {
+        ...draft,
+        source: { kind: "caldav", sourceId: source.id, accountId: account.id },
+      };
+      setCalendars([...loadCalendars(), def]);
+      setCaldavSources((current) => ({ ...current, [source.id]: source }));
+      notify(`Calendrier ajouté · ${def.name}`);
+      try {
+        setIcs(setIcsCalendarEvents(loadIcsState(), def.id, await fetchCaldavCalendar(def)));
+      } catch (failure) {
+        setError(`Source ajoutée, événements non lus · ${errorText(failure)}`);
+      }
+      return true;
+    } catch (failure) {
+      const message = errorText(failure);
+      notify(`Ajout de l'agenda impossible · ${message}`);
       return fail(message);
     } finally {
       setBusy(false);
@@ -838,16 +953,20 @@ export function useCalendarSources(notify: (message: string) => void): CalendarS
     }
   };
 
-  /** Ce qui situe une source dans la liste : URL, fichier importé ou compte Google. */
+  /** Ce qui situe une source dans la liste : URL, fichier importé ou compte de l'agenda. */
   const detailOf = (def: CalendarDef) => {
     if (isIcsCalendar(def)) return icsUrlOf(def) ?? "fichier importé";
     const ref = googleRefOf(def);
     if (ref) {
-      const email = googleConnected.find((account) => account.id === ref.accountId)?.email;
+      const email = accounts.find((account) => account.id === ref.accountId)?.email;
       return `${email ?? ref.accountId} · ${ref.calendarId}`;
     }
     const sourceId = caldavSourceIdOf(def);
-    return sourceId ? caldavSources[sourceId]?.url : undefined;
+    const url = sourceId ? caldavSources[sourceId]?.url : undefined;
+    const accountId = calendarAccountId(def);
+    const email = accountId ? accounts.find((account) => account.id === accountId)?.email : undefined;
+    if (url && email) return `${email} · ${url}`;
+    return url ?? email;
   };
 
   return {
@@ -855,6 +974,7 @@ export function useCalendarSources(notify: (message: string) => void): CalendarS
     busy,
     refreshing,
     error,
+    accounts,
     googleConnected,
     googleCalendars,
     googleBusy,
@@ -865,11 +985,13 @@ export function useCalendarSources(notify: (message: string) => void): CalendarS
         const ref = googleRefOf(entry);
         return ref?.accountId === accountId && ref.calendarId === calendarIdValue;
       }),
+    caldavAttached: (accountId) => accountCalendarAttached(accountId, calendars),
     countOf: (id) => (ics.events[id] ?? []).length,
     detailOf,
     paused: (def) => !calendarActivated(def),
     addLocal,
     addCaldav,
+    addCaldavFromAccount,
     subscribeIcs,
     importIcsFile,
     addGoogle,

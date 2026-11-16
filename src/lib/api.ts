@@ -288,6 +288,8 @@ export type CaldavSource = {
   name: string;
   url: string;
   calendar_href?: string;
+  /** Compte mail dont la source emprunte les identifiants (agenda Zimbra). */
+  account_id?: string;
 };
 
 /** Un calendrier du compte Google connecté : le démon le relit avec son refresh token. */
@@ -596,6 +598,14 @@ export const mailApi = {
     request<CaldavSource>("/calendars/caldav/sources", {
       method: "POST",
       body: input,
+      timeout: LONG_TIMEOUT,
+    }),
+
+  /** Agenda d'un compte mail connecté (Zimbra) : le démon lit son CalDAV avec le mot de passe du compte. */
+  addCaldavSourceFromAccount: (accountId: string) =>
+    request<CaldavSource>("/calendars/caldav/sources/from-account", {
+      method: "POST",
+      body: { account_id: accountId },
       timeout: LONG_TIMEOUT,
     }),
 

@@ -4,7 +4,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use lavande_mail::config::AccountConfig;
+use axum::http::StatusCode;
+use lavande_mail::config::{AccountConfig, AuthConfig};
 use lavande_mail::model::Folder;
 use lavande_mail::pgp::PgpKeyring;
 use lavande_mail::store::Store;
@@ -327,6 +328,7 @@ impl AppState {
             name: name.to_string(),
             url: url.to_string(),
             calendar_href,
+            account_id: None,
         };
         let secret_id = calendar_sources::secret_id(&source.id);
         self.secrets.put(&secret_id, &credentials).await?;
@@ -335,6 +337,28 @@ impl AppState {
             let _ = self.secrets.delete(&secret_id).await;
             return Err(error);
         }
+        Ok(source)
+    }
+
+    /// Source whose credentials are those of a mail account: nothing is written
+    /// to the secret store, so removing the source has nothing to delete.
+    pub fn add_account_calendar_source(
+        &self,
+        name: &str,
+        url: &str,
+        calendar_href: Option<String>,
+        account_id: &str,
+    ) -> Result<CalendarSource, ApiError> {
+        let mut sources = self.calendar_sources()?;
+        let source = CalendarSource {
+            id: calendar_sources::unique_id(name, &sources),
+            name: name.to_string(),
+            url: url.to_string(),
+            calendar_href,
+            account_id: Some(account_id.to_string()),
+        };
+        sources.push(source.clone());
+        calendar_sources::save(&self.calendars_path, &sources)?;
         Ok(source)
     }
 
@@ -356,8 +380,13 @@ impl AppState {
     }
 
     /// Credentials of one stored source. A source without a usable secret is
-    /// an error, never an anonymous request.
+    /// an error, never an anonymous request. A source tied to a mail account
+    /// borrows the credentials of that account: the password follows the
+    /// account instead of being copied here.
     pub async fn calendar_credentials(&self, id: &str) -> Result<(String, String), ApiError> {
+        if let Some(account_id) = self.calendar_source(id)?.account_id {
+            return self.account_caldav_credentials(&account_id).await;
+        }
         match self
             .secrets
             .get(&calendar_sources::secret_id(id))
@@ -373,6 +402,38 @@ impl AppState {
                 format!(
                     "identifiants de la source « {id} » absents du coffre : supprimez la source et rajoutez-la"
                 ),
+            )),
+        }
+    }
+
+    /// Identifiants CalDAV du compte mail lié : son nom d'utilisateur et son
+    /// mot de passe, jamais un secret recopié dans le coffre de la source.
+    async fn account_caldav_credentials(
+        &self,
+        account_id: &str,
+    ) -> Result<(String, String), ApiError> {
+        let account = match self.account(account_id).await {
+            Ok(account) => account,
+            Err(error) if error.status() == StatusCode::NOT_FOUND => {
+                return Err(ApiError::not_found(format!(
+                    "le compte mail lié « {account_id} » n'existe plus"
+                )))
+            }
+            Err(error) => return Err(error),
+        };
+        match account.auth {
+            AuthConfig::Password { password } => {
+                let username = account.username.trim();
+                let username = if username.is_empty() {
+                    account.email.trim().to_string()
+                } else {
+                    username.to_string()
+                };
+                Ok((username, password))
+            }
+            AuthConfig::OAuth2 { .. } => Err(ApiError::bad_request(
+                "caldav",
+                "ce compte utilise OAuth ; ajoutez son agenda via Google",
             )),
         }
     }
