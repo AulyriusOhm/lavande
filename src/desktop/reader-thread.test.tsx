@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DesktopInbox } from "@/desktop/inbox";
 import type { ApiAccount, ApiFolder, ApiMessage, ApiThread } from "@/lib/api";
 import { PlanningProvider } from "@/lib/planning-store";
@@ -109,7 +109,7 @@ const apiThread = (messages: ApiMessage[]): ApiThread => {
 const reply = (body: unknown) =>
   ({ ok: true, status: 200, statusText: "", json: async () => body }) as unknown as Response;
 
-function mockBackend() {
+function mockBackend(inboxMessage: ApiMessage = apiMessage()) {
   const calls: string[] = [];
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const url = new URL(String(input), "http://localhost");
@@ -122,11 +122,11 @@ function mockBackend() {
       return reply([apiFolder(INBOX, "inbox"), apiFolder(SENT, "sent")]);
     }
     if (path.startsWith(`/api/accounts/${ACCOUNT}/folders/${INBOX}/threads`)) {
-      return reply([apiThread([apiMessage()])]);
+      return reply([apiThread([inboxMessage])]);
     }
     if (path.startsWith(`/api/accounts/${ACCOUNT}/folders/${SENT}/threads`)) return reply([]);
     if (path === `/api/accounts/${ACCOUNT}/threads/${THREAD}`) {
-      return reply(apiThread([sentMessage, apiMessage()]));
+      return reply(apiThread([sentMessage, inboxMessage]));
     }
     if (path.startsWith(`/api/accounts/${ACCOUNT}/folders/${SENT}/messages/2`)) {
       return reply({ ...sentMessage, body_text: "Corps envoyé" });
@@ -177,5 +177,45 @@ describe("Lecteur PC · fil complet", () => {
     expect(await screen.findByText("Corps envoyé")).toBeTruthy();
     expect(calls).toContain(`/api/accounts/${ACCOUNT}/threads/${THREAD}`);
     expect(calls).toContain(`/api/accounts/${ACCOUNT}/folders/${SENT}/messages/2?fetch_body=true`);
+  });
+});
+
+describe("Lecteur PC · destinataires du message", () => {
+  const openThread = async () => {
+    const row = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>(`[data-mail-row="${ACCOUNT}:${THREAD}"]`);
+      if (!found) throw new Error("fil absent de la liste");
+      return found;
+    });
+    fireEvent.click(row);
+    return within(await screen.findByTestId("mail-recipients"));
+  };
+
+  it("affiche les destinataires À et Cc du message ouvert", async () => {
+    mockBackend(
+      apiMessage({
+        to: [
+          { name: null, email: "roman@test.fr" },
+          { name: "Équipe", email: "equipe@test.fr" },
+        ],
+        cc: [{ name: "Marc", email: "marc@test.fr" }],
+      }),
+    );
+    mount();
+
+    const recipients = await openThread();
+    expect(recipients.getByText("À")).toBeTruthy();
+    expect(recipients.getByText("roman@test.fr, equipe@test.fr")).toBeTruthy();
+    expect(recipients.getByText("Cc")).toBeTruthy();
+    expect(recipients.getByText("marc@test.fr")).toBeTruthy();
+  });
+
+  it("n'affiche pas de ligne Cc quand le message n'a pas de copie", async () => {
+    mockBackend();
+    mount();
+
+    const recipients = await openThread();
+    expect(recipients.getByText("À")).toBeTruthy();
+    expect(recipients.queryByText("Cc")).toBeNull();
   });
 });

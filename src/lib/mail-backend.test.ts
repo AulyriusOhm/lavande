@@ -5,10 +5,12 @@ import {
   folderOptionsForAll,
   folderTargets,
   htmlImagesOf,
+  messageToMail,
   sendInputOf,
   setAccountDecryptPolicy,
 } from "@/lib/mail-backend";
 import type { FolderRecord } from "@/lib/mail-backend";
+import type { ApiMessage } from "@/lib/api";
 import type { ComposeDraft } from "@/lib/draft";
 import { baseDraft } from "@/lib/draft";
 
@@ -135,6 +137,59 @@ describe("folderTargets", () => {
       { accountId: "a", path: "INBOX" },
     ]);
     expect(folderTargets(records, ["b"], "unified")).toEqual([]);
+  });
+});
+
+describe("messageToMail · destinataires", () => {
+  const apiMessage = (over: Partial<ApiMessage> = {}): ApiMessage => ({
+    account_id: "perso",
+    folder_path: "INBOX",
+    uid: 1,
+    uidvalidity: 1,
+    thread_id: "t1",
+    message_id: "<m1@test.fr>",
+    in_reply_to: null,
+    references: [],
+    from: { name: "Camille", email: "camille@test.fr" },
+    to: [{ name: null, email: "roman@test.fr" }],
+    cc: [],
+    subject: "Planning",
+    date: "2026-01-05T10:00:00Z",
+    flags: { unread: false, starred: false, answered: false },
+    size: 512,
+    pgp: "none",
+    preview: "Aperçu",
+    body_text: "Corps reçu",
+    body_html: null,
+    attachments: [],
+    ...over,
+  });
+
+  it("joint les Cc comme les À", () => {
+    const mail = messageToMail(
+      apiMessage({
+        to: [
+          { name: null, email: "roman@test.fr" },
+          { name: "Équipe", email: "equipe@test.fr" },
+        ],
+        cc: [
+          { name: "Marc", email: "marc@test.fr" },
+          { name: null, email: "copie@test.fr" },
+        ],
+      }),
+      RECORDS,
+      "inbox",
+    );
+
+    expect(mail.to).toBe("roman@test.fr, equipe@test.fr");
+    expect(mail.cc).toBe("marc@test.fr, copie@test.fr");
+  });
+
+  it("laisse les destinataires indéfinis quand les listes sont vides", () => {
+    const mail = messageToMail(apiMessage({ to: [], cc: [] }), RECORDS, "inbox");
+
+    expect(mail.to).toBeUndefined();
+    expect(mail.cc).toBeUndefined();
   });
 });
 

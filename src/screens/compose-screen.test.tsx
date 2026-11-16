@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import type { ComposeDraft } from "@/lib/draft";
 import { baseDraft } from "@/lib/draft";
@@ -32,6 +32,8 @@ function Harness({
   body,
   threadId,
   to,
+  cc,
+  cci,
   subject,
 }: {
   onChange?: (draft: ComposeDraft) => void;
@@ -40,6 +42,8 @@ function Harness({
   body?: string;
   threadId?: string;
   to?: string;
+  cc?: string;
+  cci?: string;
   subject?: string;
 }) {
   const [draft, setDraft] = useState<ComposeDraft>({
@@ -47,6 +51,8 @@ function Harness({
     quoted,
     body: body ?? "",
     to: to ?? "",
+    cc: cc ?? "",
+    cci: cci ?? "",
     subject: subject ?? "",
   });
   return (
@@ -409,5 +415,65 @@ describe("conversation dans la rédaction", () => {
       expect(input.text).toContain("Suite du fil");
       expect(input.to).toEqual([{ name: null, email: "camille@lavande.mail" }]);
     }
+  });
+});
+
+describe("récapitulatif des destinataires", () => {
+  it("reste absent sans destinataire", () => {
+    render(<Harness />);
+
+    expect(screen.queryByTestId("compose-recipients")).toBeNull();
+  });
+
+  it("compte les trois champs et ventile par champ", () => {
+    render(
+      <Harness
+        to="camille@lavande.mail, marc@lavande.mail"
+        cc="copie@lavande.mail"
+        cci="secret@lavande.mail"
+      />,
+    );
+
+    const button = screen.getByTestId("compose-recipients");
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(button.textContent).toContain("4 destinataires");
+    expect(button.textContent).toContain("2 À · 1 Cc · 1 Cci");
+    expect(screen.queryByTestId("compose-recipients-detail")).toBeNull();
+  });
+
+  it("déplie les adresses groupées par champ", () => {
+    render(<Harness to="camille@lavande.mail, marc@lavande.mail" cc="copie@lavande.mail" />);
+
+    fireEvent.click(screen.getByTestId("compose-recipients"));
+
+    expect(screen.getByTestId("compose-recipients").getAttribute("aria-expanded")).toBe("true");
+    const detail = within(screen.getByTestId("compose-recipients-detail"));
+    expect(detail.getByText("À")).toBeTruthy();
+    expect(detail.getByText("camille@lavande.mail")).toBeTruthy();
+    expect(detail.getByText("marc@lavande.mail")).toBeTruthy();
+    expect(detail.getByText("Cc")).toBeTruthy();
+    expect(detail.getByText("copie@lavande.mail")).toBeTruthy();
+    expect(detail.queryByText("Cci")).toBeNull();
+  });
+
+  it("suit la saisie des champs", async () => {
+    render(<Harness />);
+
+    fireEvent.change(screen.getByLabelText("À"), { target: { value: "camille@lavande.mail" } });
+    await waitFor(() => expect(screen.getByTestId("compose-recipients").textContent).toContain("1 destinataire"));
+
+    fireEvent.click(screen.getByLabelText("Afficher le champ Cc"));
+    fireEvent.change(screen.getByLabelText("Cc"), { target: { value: "copie@lavande.mail" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("compose-recipients").textContent).toContain("2 destinataires · 1 À · 1 Cc"),
+    );
+
+    fireEvent.change(screen.getByLabelText("À"), { target: { value: "" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("compose-recipients").textContent).toContain("1 destinataire · 1 Cc"),
+    );
+
+    fireEvent.change(screen.getByLabelText("Cc"), { target: { value: "" } });
+    await waitFor(() => expect(screen.queryByTestId("compose-recipients")).toBeNull());
   });
 });

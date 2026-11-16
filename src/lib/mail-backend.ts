@@ -223,6 +223,7 @@ export function messageToMail(
     name: message.from.name?.trim() || message.from.email,
     email: message.from.email,
     to: message.to.map((address) => address.email).join(", ") || undefined,
+    cc: message.cc.map((address) => address.email).join(", ") || undefined,
     subject: message.subject || "(sans objet)",
     preview: message.preview || body[0] || "Aperçu chargé à l'ouverture",
     body,

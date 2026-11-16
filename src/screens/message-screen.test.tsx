@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PrefsProvider } from "@/lib/prefs";
 import type { Mail } from "@/lib/mail";
 import type { Thread } from "@/lib/threads";
@@ -303,5 +303,31 @@ describe("reprise d'un brouillon", () => {
 
     expect(onResume).toHaveBeenCalledWith(draft);
     expect(screen.queryAllByLabelText("Répondre")).toHaveLength(0);
+  });
+});
+
+describe("destinataires du message", () => {
+  it("affiche les À et Cc du message reçu", () => {
+    renderScreen({ ...MAIL, to: "roman@lavande.mail", cc: "marc@test.fr, copie@test.fr" });
+
+    const recipients = within(screen.getByTestId("mail-recipients"));
+    expect(recipients.getByText("À")).toBeTruthy();
+    expect(recipients.getByText("roman@lavande.mail")).toBeTruthy();
+    expect(recipients.getByText("Cc")).toBeTruthy();
+    expect(recipients.getByText("marc@test.fr, copie@test.fr")).toBeTruthy();
+  });
+
+  it("cache la ligne Cc quand le message n'en a pas", () => {
+    renderScreen({ ...MAIL, to: "roman@lavande.mail" });
+
+    const recipients = within(screen.getByTestId("mail-recipients"));
+    expect(recipients.getByText("À")).toBeTruthy();
+    expect(recipients.queryByText("Cc")).toBeNull();
+  });
+
+  it("n'affiche aucun bloc sans destinataire connu", () => {
+    renderScreen();
+
+    expect(screen.queryByTestId("mail-recipients")).toBeNull();
   });
 });

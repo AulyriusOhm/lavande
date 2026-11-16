@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 import { Avatar, IconButton } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { MailBody, MailBodyLoading } from "@/components/mail-body";
+import { MailRecipients } from "@/components/mail-recipients";
 import { PgpNotice, PgpStatusBadge } from "@/components/ui/pgp-badge";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { MeshGlow } from "@/components/ui/backdrops";
@@ -369,7 +370,7 @@ export function MessageScreen({
                 />
               </span>
               <span className="block break-all text-left text-[12px] font-medium text-ink-muted">
-                {mail.folder === "sent" ? `à ${mail.to ?? "destinataire"}` : "à moi"} · {mail.time}
+                {mail.time}
               </span>
             </button>
             {readOnly ? null : (
@@ -382,6 +383,8 @@ export function MessageScreen({
               </IconButton>
             )}
           </div>
+
+          <MailRecipients mail={mail} className="mt-2" />
 
           {detailsOpen && (
             <dl className="mt-2 space-y-1 rounded-2xl bg-surface-2/70 px-3 py-2 text-[11.5px] font-medium text-ink-soft">

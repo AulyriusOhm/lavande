@@ -52,6 +52,7 @@ import { BorderBeam } from "@/components/ui/border-beam";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { MailBody, MailBodyLoading } from "@/components/mail-body";
+import { MailRecipients } from "@/components/mail-recipients";
 import { EmptyTrashButton } from "@/components/empty-trash";
 import { HiddenFoldersRail } from "@/components/folder-row";
 import { useFolderTree } from "@/components/folder-tree";
@@ -1350,11 +1351,14 @@ export function DesktopInbox({
                         ) : null}
                       </div>
                       <p className="mt-0.5 truncate text-[12.5px] font-medium text-ink-muted">
-                        {mail.folder === "sent" ? `à ${mail.to ?? "destinataire"}` : mail.email} ·{" "}
-                        {mail.date ?? mail.time}
+                        {mail.folder === "sent"
+                          ? (mail.date ?? mail.time)
+                          : `${mail.email} · ${mail.date ?? mail.time}`}
                       </p>
                     </div>
                   </div>
+
+                  <MailRecipients mail={mail} className="mt-2" />
 
                   {mail.pgp !== "none" ? (
                     <div className="mt-3.5 flex items-center gap-2.5 rounded-[14px] border border-emerald-500/25 bg-emerald-500/10 px-3.5 py-2.5 text-emerald-700 dark:text-emerald-300">

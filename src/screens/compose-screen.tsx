@@ -4,6 +4,7 @@ import type { ComposeDraft, DraftAttachment } from "@/lib/draft";
 import { MAX_ATTACHMENT_BYTES, attachmentsSize, formatBytes, readAttachment } from "@/lib/draft";
 import {
   Check,
+  ChevronDown,
   Image,
   PenLine,
   Loader2,
@@ -28,19 +29,14 @@ import { ensureHtml, extractImageTokens, htmlToText, restoreImageTokens, textToH
 import { activeSignature, resolvePgp, usePrefs } from "@/lib/prefs";
 import { ConversationPanel } from "@/components/conversation-panel";
 import { QuotedBlock } from "@/components/quoted-block";
+import { splitAddresses } from "@/lib/mail-backend";
 
 export type { ComposeDraft };
 
 const EMAIL = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]{2,}$/;
 
-const recipients = (value: string) =>
-  value
-    .split(/[\s,;]+/)
-    .map((token) => token.trim())
-    .filter(Boolean);
-
 const invalidRecipients = (draft: ComposeDraft) =>
-  [...recipients(draft.to), ...recipients(draft.cc), ...recipients(draft.cci)].filter(
+  [...splitAddresses(draft.to), ...splitAddresses(draft.cc), ...splitAddresses(draft.cci)].filter(
     (token) => !EMAIL.test(token),
   );
 
@@ -77,6 +73,7 @@ export function ComposeScreen({
   const accountSignature = activeSignature(signatures, draft.account);
   const [showCc, setShowCc] = useState(Boolean(draft.cc.trim()));
   const [showCci, setShowCci] = useState(Boolean(draft.cci.trim()));
+  const [recipientsOpen, setRecipientsOpen] = useState(false);
   const [confirmSend, setConfirmSend] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const [suggestOpen, setSuggestOpen] = useState(false);
@@ -127,8 +124,17 @@ export function ComposeScreen({
   };
 
   const invalid = invalidRecipients(draft);
+  const recipientGroups = [
+    { label: "À", addresses: splitAddresses(draft.to) },
+    { label: "Cc", addresses: splitAddresses(draft.cc) },
+    { label: "Cci", addresses: splitAddresses(draft.cci) },
+  ].filter((group) => group.addresses.length > 0);
+  const recipientCount = recipientGroups.reduce((total, group) => total + group.addresses.length, 0);
+  const recipientSummary = recipientGroups
+    .map((group) => `${group.addresses.length} ${group.label}`)
+    .join(" · ");
   const hasRecipient = [draft.to, draft.cc, draft.cci].some((value) =>
-    recipients(value).some((token) => EMAIL.test(token)),
+    splitAddresses(value).some((token) => EMAIL.test(token)),
   );
   const validRecipients = hasRecipient && invalid.length === 0;
   const dirty = Boolean(
@@ -340,6 +346,43 @@ export function ComposeScreen({
           <p role="alert" className="border-b border-line py-2 text-[11.5px] font-semibold text-red-600 dark:text-red-300">
             Adresse{invalid.length > 1 ? "s" : ""} invalide{invalid.length > 1 ? "s" : ""} : {invalid.join(", ")}
           </p>
+        )}
+
+        {recipientCount > 0 && (
+          <div className="border-b border-line">
+            <button
+              type="button"
+              data-testid="compose-recipients"
+              aria-expanded={recipientsOpen}
+              onClick={() => setRecipientsOpen((value) => !value)}
+              className="inline-flex min-h-11 items-center gap-1.5 text-[11.5px] font-semibold text-ink-muted transition-colors hover:text-ink"
+            >
+              <ChevronDown
+                className={cn("size-3.5 shrink-0 transition-transform", recipientsOpen && "rotate-180")}
+              />
+              {`${recipientCount} destinataire${recipientCount > 1 ? "s" : ""}`}
+              <span className="text-ink-soft">{` · ${recipientSummary}`}</span>
+            </button>
+
+            {recipientsOpen && (
+              <dl data-testid="compose-recipients-detail" className="space-y-1.5 pb-2 pl-5">
+                {recipientGroups.map((group) => (
+                  <div key={group.label} className="flex gap-2 text-[11.5px] font-medium">
+                    <dt className="w-5 shrink-0 font-bold text-ink-muted">{group.label}</dt>
+                    <dd className="min-w-0 flex-1">
+                      <ul className="space-y-0.5 text-ink-soft">
+                        {group.addresses.map((address, index) => (
+                          <li key={`${address}-${index}`} className="break-all">
+                            {address}
+                          </li>
+                        ))}
+                      </ul>
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+          </div>
         )}
 
         <div className="border-b border-line py-3">

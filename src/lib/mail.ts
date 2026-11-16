@@ -88,6 +88,7 @@ export type Mail = {
   name: string;
   email: string;
   to?: string;
+  cc?: string;
   subject: string;
   preview: string;
   body: string[];
@@ -156,6 +157,7 @@ export const MAILS: Mail[] = import.meta.env.VITE_DISTRIBUTION === "1" ? [] : [
       "Les contrastes passent mieux en extérieur. Deux remarques : la barre du haut est collée au résumé du matin, et les mois se tronquent dans l'agenda.",
       "Le reste me va, on peut figer la v3 pour la démo.",
     ],
+    cc: "marc.delaunay@mail.fr",
     time: "10:12",
     date: "mardi 10 novembre 2026 · 10:12",
     timestamp: minutesAgo(106),
@@ -199,6 +201,8 @@ export const MAILS: Mail[] = import.meta.env.VITE_DISTRIBUTION === "1" ? [] : [
       "Dis-moi ce que tu en penses avant vendredi, je voudrais figer la v3 pour la démo client.",
       "À très vite,\nCamille",
     ],
+    to: "roman@lavande.mail",
+    cc: "marc.delaunay@mail.fr",
     time: "09:41",
     date: "mardi 10 novembre 2026 · 09:41",
     timestamp: minutesAgo(160),
