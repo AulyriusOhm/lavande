@@ -42,6 +42,7 @@ export function InboxScreen({
   onNotSpam,
   onRestore,
   onForward,
+  onOpenMenu,
 }: {
   mails: Mail[];
   account: string;
@@ -58,6 +59,7 @@ export function InboxScreen({
   onForward?: (mail: Mail) => void;
   onNotSpam?: (mail: Mail) => void;
   onRestore?: (mail: Mail) => void;
+  onOpenMenu?: (mail: Mail) => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [compact, setCompact] = useState(false);
@@ -558,6 +560,7 @@ export function InboxScreen({
                 onReply={() => onReply(thread.primary)}
                 onNotSpam={onNotSpam ? () => onNotSpam(thread.primary) : undefined}
                 onRestore={onRestore ? () => onRestore(thread.primary) : undefined}
+                onLongPress={onOpenMenu ? () => onOpenMenu(thread.primary) : undefined}
               />
             </div>
           ))}

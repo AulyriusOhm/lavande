@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useRef } from "react";
 import { Archive, CornerUpLeft, MailOpen, RotateCcw, ShieldCheck, Star, Trash2 } from "lucide-react";
 import { useMailStore } from "@/lib/store";
 import type { Thread } from "@/lib/threads";
@@ -17,6 +18,9 @@ const ACCOUNT_CHIP_TIERS = [
 
 const ACCOUNT_CHIP_TIGHT = "text-[8px] tracking-[0.01em]";
 
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_SLOP = 10;
+
 export function accountChipFont(label: string) {
   const length = [...label.trim()].length;
   return ACCOUNT_CHIP_TIERS.find((tier) => length <= tier.max)?.classes ?? ACCOUNT_CHIP_TIGHT;
@@ -32,6 +36,7 @@ export function ThreadRow({
   onToggleRead,
   onNotSpam,
   onRestore,
+  onLongPress,
   delay = 0,
   showPreview = true,
   showAccount = false,
@@ -45,6 +50,7 @@ export function ThreadRow({
   onToggleRead?: () => void;
   onNotSpam?: () => void;
   onRestore?: () => void;
+  onLongPress?: () => void;
   delay?: number;
   showPreview?: boolean;
   showAccount?: boolean;
@@ -71,6 +77,21 @@ export function ThreadRow({
         : "";
   const { swipeLeft, swipeRight } = usePrefs();
   const { dark } = useTheme();
+
+  const press = useRef<{ timer: number; x: number; y: number } | null>(null);
+  const held = useRef(false);
+
+  const cancelPress = useCallback(() => {
+    if (press.current) window.clearTimeout(press.current.timer);
+    press.current = null;
+  }, []);
+
+  useEffect(() => {
+    if (!onLongPress) return;
+    const cancel = () => cancelPress();
+    window.addEventListener("scroll", cancel, true);
+    return () => window.removeEventListener("scroll", cancel, true);
+  }, [onLongPress, cancelPress]);
 
   const build = (id: SwipeActionId): SwipeActionDef | null => {
     switch (id) {
@@ -140,13 +161,40 @@ export function ThreadRow({
         aria-label={`${displayName} — ${thread.subject}${thread.count > 1 ? ` · ${thread.count} messages` : ""}${
           unread ? " · non lu" : ""
         }${thread.starred ? " · étoilé" : ""}`}
-        onClick={onOpen}
+        onClick={() => {
+          if (held.current) {
+            held.current = false;
+            return;
+          }
+          onOpen();
+        }}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
             onOpen();
           }
         }}
+        onPointerDown={(event) => {
+          held.current = false;
+          cancelPress();
+          if (!onLongPress || event.button !== 0) return;
+          if ((event.target as HTMLElement).closest("button")) return;
+          const { clientX: x, clientY: y } = event;
+          const timer = window.setTimeout(() => {
+            press.current = null;
+            held.current = true;
+            onLongPress();
+          }, LONG_PRESS_MS);
+          press.current = { timer, x, y };
+        }}
+        onPointerMove={(event) => {
+          const current = press.current;
+          if (!current) return;
+          const moved = Math.hypot(event.clientX - current.x, event.clientY - current.y);
+          if (moved > LONG_PRESS_SLOP) cancelPress();
+        }}
+        onPointerUp={cancelPress}
+        onPointerCancel={cancelPress}
         className={cn(
           "group relative flex cursor-pointer gap-3 rounded-[22px] px-3 py-3 transition-all duration-300",
           unread

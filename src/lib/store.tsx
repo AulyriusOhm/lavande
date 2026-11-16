@@ -63,6 +63,7 @@ import {
   messageToMail,
   sendInputOf,
   setAccountDecryptPolicy,
+  splitAddresses,
   syncNotice,
   threadMails,
   threadToMails,
@@ -138,6 +139,20 @@ function eventSuggestion(event: SummaryEvent, mail: Mail | undefined, label: str
   if (event.location) suggestion.location = event.location;
   if (typeof mail?.timestamp === "number") suggestion.timestamp = mail.timestamp;
   return suggestion;
+}
+
+/** Destinataires d'une réponse à tous : expéditeur + « À », sans soi-même ni doublon. */
+function replyAllRecipients(mail: Mail, self?: string): string {
+  const own = self?.toLowerCase();
+  const seen = new Set<string>();
+  return [mail.email, ...splitAddresses(mail.to ?? "")]
+    .filter((address) => {
+      const key = address.toLowerCase();
+      if (key === own || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .join(", ");
 }
 
 export type MailStoreValue = {
@@ -219,7 +234,7 @@ export type MailStoreValue = {
   detachCompose: () => void;
   dockCompose: () => void;
   detachClosed: () => void;
-  replyTo: (mail: Mail) => void;
+  replyTo: (mail: Mail, all?: boolean) => void;
   forwardMail: (mail: Mail) => void;
   sendDraft: (draft: ComposeDraft) => void;
   retryBackend: () => void;
@@ -1412,7 +1427,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   }, [readOnlyBlocked]);
 
   const replyTo = useCallback(
-    (mail: Mail) => {
+    (mail: Mail, all = false) => {
       if (readOnlyBlocked()) return;
       const start = () => {
         resetDraftSource();
@@ -1423,7 +1438,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         ];
         setComposeDraft({
           ...baseDraft(mail.account, pgp.encrypt, pgp.sign, mail.threadId ?? mail.id),
-          to: mail.email,
+          to: all ? replyAllRecipients(mail, accountById(mail.account)?.email) : mail.email,
+          ...(all ? { cc: mail.cc ?? "" } : {}),
           subject: /^re\s*:/i.test(mail.subject.trim()) ? mail.subject : `Re: ${mail.subject}`,
           body: "",
           quoted: buildQuotedHtml(
@@ -1433,7 +1449,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           inReplyTo: mail.messageId,
           references,
         });
-        setComposeTitle("Répondre");
+        setComposeTitle(all ? "Répondre à tous" : "Répondre");
         setComposeOpen(true);
         if (composeDetached) composeBus.current?.post({ kind: "focus" });
       };
@@ -1443,7 +1459,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       }
       start();
     },
-    [composeDetached, composeDraft, notify, pgpPrefs, readOnlyBlocked, resetDraftSource],
+    [accountById, composeDetached, composeDraft, notify, pgpPrefs, readOnlyBlocked, resetDraftSource],
   );
 
   const forwardMail = useCallback(

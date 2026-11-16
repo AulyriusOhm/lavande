@@ -11,6 +11,7 @@ import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
 import { Dock, TABS, type TabId } from "@/components/dock";
 import { AccountSwitchSheet, InboxScreen as InboxView, MailboxSheet } from "@/screens/inbox-screen";
+import { MailContextMenu } from "@/components/mail-context-menu";
 import { SearchScreen } from "@/screens/search-screen";
 import { CalendarScreen as CalendarView } from "@/screens/calendar-screen";
 import { McpApprovalHost, McpScreen } from "@/screens/mcp-screen";
@@ -25,6 +26,7 @@ import { PgpScreen } from "@/screens/pgp-screen";
 import { DotPattern, MeshGlow } from "@/components/ui/backdrops";
 import { Notice } from "@/components/ui/notice";
 import type { CalendarEvent } from "@/lib/calendar";
+import type { Mail } from "@/lib/mail";
 import { useCalendars, isExternalCalendar } from "@/lib/calendars";
 import {
   externalCalendarEvents,
@@ -194,6 +196,7 @@ function PhoneApp({ native }: { native?: boolean }) {
   const [pgpOpen, setPgpOpen] = useState(false);
   const [accountsOpen, setAccountsOpen] = useState(false);
   const [foldersOpen, setFoldersOpen] = useState(false);
+  const [contextMail, setContextMail] = useState<Mail | null>(null);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [detail, setDetail] = useState<{ task: Task; suggestion?: MailSuggestion } | null>(null);
   const [taskDraftOpen, setTaskDraftOpen] = useState(false);
@@ -469,6 +472,7 @@ function PhoneApp({ native }: { native?: boolean }) {
                   onForward={forwardMail}
                   onNotSpam={moveToInbox}
                   onRestore={restoreMail}
+                  onOpenMenu={setContextMail}
                 />
               )}
               {id === "calendar" && (
@@ -771,6 +775,10 @@ function PhoneApp({ native }: { native?: boolean }) {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {contextMail ? (
+          <MailContextMenu mail={contextMail} onClose={() => setContextMail(null)} />
+        ) : null}
 
         <AnimatePresence>
           {eventDraftOpen && (

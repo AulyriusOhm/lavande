@@ -53,6 +53,7 @@ import { NumberTicker } from "@/components/ui/number-ticker";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { MailBody, MailBodyLoading } from "@/components/mail-body";
 import { MailRecipients } from "@/components/mail-recipients";
+import { MailContextMenu } from "@/components/mail-context-menu";
 import { EmptyTrashButton } from "@/components/empty-trash";
 import { HiddenFoldersRail } from "@/components/folder-row";
 import { useFolderTree } from "@/components/folder-tree";
@@ -379,6 +380,7 @@ function ThreadRow({
   onDelete,
   onRestore,
   onNotSpam,
+  onMenu,
 }: {
   thread: Thread;
   selected: boolean;
@@ -390,6 +392,7 @@ function ThreadRow({
   onDelete: () => void;
   onRestore: () => void;
   onNotSpam: () => void;
+  onMenu: (ancre: { x: number; y: number }) => void;
 }) {
   const mail = thread.primary;
   const { accountById } = useMailStore();
@@ -434,6 +437,10 @@ function ThreadRow({
           "group relative rounded-[16px] transition-colors duration-200",
           selected ? "bg-accent-soft ring-1 ring-accent-ring" : "hover:bg-surface-2",
         )}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onMenu({ x: event.clientX, y: event.clientY });
+        }}
       >
         <button
           type="button"
@@ -574,6 +581,7 @@ export function DesktopInbox({
   const [downloading, setDownloading] = useState<string | null>(null);
   const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
   const [cursor, setCursor] = useState<number | null>(null);
+  const [menu, setMenu] = useState<{ mail: Mail; x: number; y: number } | null>(null);
   const tier = useInboxTier();
   const listRef = useRef<HTMLDivElement>(null);
   const readerRef = useRef<HTMLElement>(null);
@@ -1201,6 +1209,7 @@ export function DesktopInbox({
                 onDelete={() => mailAction("delete", thread.primary)}
                 onRestore={() => restoreMail(thread.primary)}
                 onNotSpam={() => moveToInbox(thread.primary)}
+                onMenu={({ x, y }) => setMenu({ mail: thread.primary, x, y })}
               />
             ))}
 
@@ -1547,6 +1556,14 @@ export function DesktopInbox({
           )}
         </section>
       </div>
+
+      {menu ? (
+        <MailContextMenu
+          mail={menu.mail}
+          ancre={{ x: menu.x, y: menu.y }}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
     </>
   );
 }

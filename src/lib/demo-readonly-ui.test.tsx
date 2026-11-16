@@ -96,4 +96,15 @@ describe("démo lecture seule · coquille PC", () => {
     expect(within(banner()!).getByText(/Démo · données d'exemple/)).toBeTruthy();
     expect(rows().some((row) => row.dataset.mailRow === id)).toBe(true);
   });
+
+  it("ne garde que « Ouvrir » dans le menu contextuel", async () => {
+    await openDesktop();
+    const target = document.querySelector<HTMLElement>('[data-mail-row="perso:t-maquettes"]');
+    expect(target).not.toBeNull();
+
+    fireEvent.contextMenu(target!, { clientX: 100, clientY: 200 });
+
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Ouvrir"]);
+  });
 });
