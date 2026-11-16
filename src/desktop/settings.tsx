@@ -73,6 +73,7 @@ import {
   activeSignature,
   CALENDAR_LEAD_MINUTES,
   CONTACTS_PENDING,
+  isFolderHidden,
   mergeFlags,
   perimeterOf,
   usePrefs,
@@ -210,6 +211,7 @@ function AccountFolderPicker({
   notify: (message: string) => void;
 }) {
   const { deleteFolder } = useMailStore();
+  const { hiddenFolders, setFolderHidden } = usePrefs();
   const [folders, setFolders] = useState<ApiFolder[] | null>(null);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
@@ -306,16 +308,22 @@ function AccountFolderPicker({
                   </span>
                 </label>
               );
-              return folder.role === "other" ? (
+              if (folder.role !== "other") return <div key={folder.path}>{row}</div>;
+              const hidden = isFolderHidden(hiddenFolders, account.id, folder.path);
+              return (
                 <FolderRow
                   key={folder.path}
                   label={folder.name}
                   onDelete={() => remove(folder)}
+                  onHide={
+                    hidden ? undefined : () => setFolderHidden(account.id, folder.path, true)
+                  }
+                  onUnhide={
+                    hidden ? () => setFolderHidden(account.id, folder.path, false) : undefined
+                  }
                 >
                   {row}
                 </FolderRow>
-              ) : (
-                <div key={folder.path}>{row}</div>
               );
             })
           )}

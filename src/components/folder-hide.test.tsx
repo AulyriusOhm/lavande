@@ -6,6 +6,7 @@ import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { createMemoryStorage } from "@/lib/sync/storage";
+import type { FolderId } from "@/lib/mail";
 import type { ApiAccount, ApiFolder, ApiFolderRole } from "@/lib/api";
 
 vi.stubEnv("VITE_MAIL_BACKEND", "api");
@@ -77,8 +78,8 @@ const hiddenStored = () =>
     hiddenFolders?: Record<string, string[]>;
   }).hiddenFolders;
 
-const mountSheet = () =>
-  render(<MailboxSheet folder="inbox" onSelect={() => {}} onClose={() => {}} />, { wrapper });
+const mountSheet = (onSelect: (id: FolderId, path: string | null) => void = () => {}) =>
+  render(<MailboxSheet folder="inbox" onSelect={onSelect} onClose={() => {}} />, { wrapper });
 
 const readyStore = async () => {
   const { result } = renderHook(() => useMailStore(), { wrapper });
@@ -196,43 +197,41 @@ describe("masquage d'un dossier · actions du store", () => {
 });
 
 describe("masquage d'un dossier · UI", () => {
-  it("masque depuis la ligne du dossier puis le réaffiche", async () => {
+  it("n'offre plus de masquage ni de réaffichage dans la feuille", async () => {
     stubBackend();
-    mountSheet();
-
-    fireEvent.click(await screen.findByLabelText("Masquer le dossier Projets"));
-
-    await waitFor(() => expect(screen.queryByLabelText("Masquer le dossier Projets")).toBeNull());
-    const toggle = screen.getByRole("button", { name: /1 masqué/ });
-    expect(toggle.textContent).toContain("Afficher");
-    expect(screen.queryByLabelText("Réafficher le dossier Projets")).toBeNull();
-
-    fireEvent.click(toggle);
-    fireEvent.click(await screen.findByLabelText("Réafficher le dossier Projets"));
-
-    expect(await screen.findByLabelText("Masquer le dossier Projets")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /masqué/ })).toBeNull();
-  });
-
-  it("n'offre pas le masquage en vue tous comptes", async () => {
-    stubBackend([A1, A2]);
     mountSheet();
 
     await screen.findByRole("button", { name: /^Projets/ });
     expect(screen.queryByLabelText(/^Masquer le dossier/)).toBeNull();
+    expect(screen.queryByLabelText(/^Réafficher le dossier/)).toBeNull();
   });
 
-  it("garde un accès pour réafficher un dossier masqué d'avance", async () => {
+  it("garde les dossiers masqués consultables dans le groupe repliable", async () => {
     stubBackend();
+    seedHidden({ a1: ["Projets"] });
+    const onSelect = vi.fn();
+    mountSheet(onSelect);
+
+    const toggle = await screen.findByRole("button", { name: /1 masqué/ });
+    expect(toggle.textContent).toContain("Afficher");
+    expect(screen.queryByRole("button", { name: /^Projets/ })).toBeNull();
+
+    fireEvent.click(toggle);
+
+    const hidden = await screen.findByRole("button", { name: /^Projets/ });
+    expect(screen.queryByLabelText(/^Réafficher le dossier/)).toBeNull();
+
+    fireEvent.click(hidden);
+
+    expect(onSelect).toHaveBeenCalledWith("other", "Projets");
+  });
+
+  it("n'affiche pas le groupe des masqués en vue tous comptes", async () => {
+    stubBackend([A1, A2]);
     seedHidden({ a1: ["Projets"] });
     mountSheet();
 
-    await screen.findByRole("button", { name: /1 masqué/ });
-    expect(screen.queryByLabelText("Masquer le dossier Projets")).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: /1 masqué/ }));
-    fireEvent.click(await screen.findByLabelText("Réafficher le dossier Projets"));
-
-    expect(await screen.findByLabelText("Masquer le dossier Projets")).toBeTruthy();
+    await screen.findByRole("button", { name: /^Projets/ });
+    expect(screen.queryByRole("button", { name: /masqué/ })).toBeNull();
   });
 });

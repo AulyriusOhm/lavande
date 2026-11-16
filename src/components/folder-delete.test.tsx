@@ -176,7 +176,7 @@ describe("suppression d'un dossier · rail", () => {
     stubBackend();
     mountSheet();
 
-    await screen.findByRole("button", { name: "Masquer le dossier Projets" });
+    await screen.findByRole("button", { name: /^Projets/ });
     expect(screen.queryByLabelText(/Supprimer le dossier/)).toBeNull();
   });
 });

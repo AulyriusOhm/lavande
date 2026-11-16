@@ -16,8 +16,9 @@ import { NumberTicker } from "@/components/ui/number-ticker";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { ThreadRow } from "@/components/thread-row";
 import { EmptyTrashButton } from "@/components/empty-trash";
-import { FolderRow, HiddenFoldersRail } from "@/components/folder-row";
+import { HiddenFoldersRail } from "@/components/folder-row";
 import { useFolderTree } from "@/components/folder-tree";
+import { moveFolderPath } from "@/lib/folder-tree";
 
 type Filter = "all" | "unread" | "starred" | "encrypted";
 
@@ -759,6 +760,7 @@ const FOLDER_ICONS = {
 } as const;
 
 function SheetFolderRow({
+  path,
   icon: Icon,
   label,
   total,
@@ -768,8 +770,11 @@ function SheetFolderRow({
   expanded,
   onToggle,
   onSelect,
-  onHide,
+  reorder = false,
+  onMoveUp,
+  onMoveDown,
 }: {
+  path: string;
   icon: LucideIcon;
   label: string;
   total?: number;
@@ -779,7 +784,9 @@ function SheetFolderRow({
   expanded?: boolean;
   onToggle?: () => void;
   onSelect?: () => void;
-  onHide?: () => void;
+  reorder?: boolean;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
 }) {
   const row = onSelect ? (
     <button
@@ -816,6 +823,7 @@ function SheetFolderRow({
 
   return (
     <div
+      data-folder-row={path}
       className="flex items-center"
       style={depth ? { paddingLeft: depth * 18 } : undefined}
     >
@@ -834,16 +842,37 @@ function SheetFolderRow({
       ) : depth ? (
         <span className="size-8 shrink-0" />
       ) : null}
-      <div className="min-w-0 flex-1">
-        {onHide ? (
-          <FolderRow label={label} variant="mobile" onHide={onHide}>
-            {row}
-          </FolderRow>
-        ) : (
-          row
-        )}
-      </div>
+      <div className="min-w-0 flex-1">{row}</div>
+      {reorder ? (
+        <div className="flex shrink-0 items-center">
+          <MoveButton label={`Monter ${label}`} onClick={onMoveUp} icon={ChevronUp} />
+          <MoveButton label={`Descendre ${label}`} onClick={onMoveDown} icon={ChevronDown} />
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+function MoveButton({
+  label,
+  onClick,
+  icon: Icon,
+}: {
+  label: string;
+  onClick?: () => void;
+  icon: LucideIcon;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={!onClick}
+      onClick={onClick}
+      className="focus-ring grid size-10 place-items-center rounded-xl text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
+    >
+      <Icon className="size-4" />
+    </button>
   );
 }
 
@@ -858,101 +887,116 @@ export function MailboxSheet({
 }) {
   const {
     account,
+    mode,
+    readOnly,
     folderOptions,
     folderPath,
     emptyTrash,
     folderStats,
     hiddenFolderOptions,
-    hideFolder,
-    unhideFolder,
+    folderOrder,
+    setFolderOrder,
   } = useMailStore();
   const trashCount = folderStats("trash").total;
-  const roles = folderOptions.filter((entry) => entry.id !== "other");
-  const custom = useMemo(() => folderOptions.filter((entry) => entry.id === "other"), [folderOptions]);
-  const customRows = useFolderTree(custom);
+  const [reordering, setReordering] = useState(false);
+  const reorderable = mode === "api" && account !== ALL_ACCOUNTS && !readOnly;
+  const rows = useFolderTree(folderOptions, folderOrder);
 
+  const siblingsAt = (depth: number, parentPath: string | null) =>
+    rows
+      .filter((row) => row.depth === depth && row.parentPath === parentPath)
+      .map((row) => row.node.path);
+
+  const move = (path: string, depth: number, parentPath: string | null, offset: -1 | 1) => {
+    const siblings = siblingsAt(depth, parentPath);
+    const target = siblings[siblings.indexOf(path) + offset];
+    if (!target) return;
+    setFolderOrder(moveFolderPath(folderOrder, siblings, path, target, offset > 0));
+  };
 
   return (
     <div className="flex h-full flex-col">
       <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-line" />
       <div className="flex items-baseline justify-between px-5 pt-3 pb-2">
         <h2 className="text-[15px] font-bold tracking-tight text-ink">Dossiers</h2>
-        <button type="button" onClick={onClose} className="text-[11.5px] font-bold text-accent-ink">
-          Fermer
-        </button>
+        <div className="flex items-center gap-3">
+          {reorderable ? (
+            <button
+              type="button"
+              onClick={() => setReordering((value) => !value)}
+              aria-pressed={reordering}
+              className="text-[11.5px] font-bold text-ink-muted transition-colors hover:text-ink"
+            >
+              {reordering ? "Terminé" : "Réordonner"}
+            </button>
+          ) : null}
+          <button type="button" onClick={onClose} className="text-[11.5px] font-bold text-accent-ink">
+            Fermer
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 space-y-1 overflow-y-auto no-scrollbar px-3 pb-4">
-        {roles.map((entry) => {
-          const stats = folderStats(entry.id, entry.path);
-          return (
-            <SheetFolderRow
-              key={`${entry.id}:${entry.path}`}
-              icon={FOLDER_ICONS[entry.id]}
-              label={entry.label}
-              total={stats.total}
-              unread={stats.unread}
-              active={entry.id === folder}
-              onSelect={() => {
-                onSelect(entry.id, null);
-                onClose();
-              }}
-            />
-          );
-        })}
-
-        {customRows.map((row) => {
+        {rows.map((row) => {
           const entry = row.node.item;
-          const stats = entry ? folderStats("other", entry.path) : null;
+          const stats = entry ? folderStats(entry.id, entry.path) : null;
+          const siblings = reordering ? siblingsAt(row.depth, row.parentPath) : [];
+          const index = siblings.indexOf(row.node.path);
           return (
             <SheetFolderRow
               key={row.node.path}
-              icon={FOLDER_ICONS.other}
+              path={row.node.path}
+              icon={entry ? FOLDER_ICONS[entry.id] : FOLDER_ICONS.other}
               label={entry?.label ?? row.node.name}
               total={stats?.total}
               unread={stats?.unread ?? 0}
-              active={entry !== null && row.node.path === folderPath && folder === "other"}
+              active={
+                entry !== null &&
+                folder === entry.id &&
+                (entry.id !== "other" || row.node.path === folderPath)
+              }
               depth={row.depth}
               expanded={row.expanded}
               onToggle={row.hasChildren ? row.toggle : undefined}
               onSelect={
                 entry
                   ? () => {
-                      onSelect("other", entry.path);
+                      onSelect(entry.id, entry.id === "other" ? entry.path : null);
                       onClose();
                     }
                   : undefined
               }
-              onHide={
-                entry && account !== ALL_ACCOUNTS ? () => hideFolder(entry.path) : undefined
+              reorder={reordering}
+              onMoveUp={
+                entry && index > 0
+                  ? () => move(row.node.path, row.depth, row.parentPath, -1)
+                  : undefined
+              }
+              onMoveDown={
+                entry && index >= 0 && index < siblings.length - 1
+                  ? () => move(row.node.path, row.depth, row.parentPath, 1)
+                  : undefined
               }
             />
           );
         })}
 
-
         <HiddenFoldersRail count={hiddenFolderOptions.length} variant="mobile">
           {hiddenFolderOptions.map((entry) => (
-            <FolderRow
+            <button
               key={entry.path}
-              label={entry.label}
-              variant="mobile"
-              onUnhide={() => unhideFolder(entry.path)}
+              type="button"
+              onClick={() => {
+                onSelect("other", entry.path);
+                onClose();
+              }}
+              className="flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-ink-soft transition-colors hover:bg-surface-2"
             >
-              <button
-                type="button"
-                onClick={() => {
-                  onSelect("other", entry.path);
-                  onClose();
-                }}
-                className="flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-ink-soft transition-colors hover:bg-surface-2"
-              >
-                <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-surface-2 text-ink-soft">
-                  <FOLDER_ICONS.other className="size-4" />
-                </span>
-                <span className="min-w-0 flex-1 truncate text-[13px] font-bold text-ink">{entry.label}</span>
-              </button>
-            </FolderRow>
+              <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-surface-2 text-ink-soft">
+                <FOLDER_ICONS.other className="size-4" />
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[13px] font-bold text-ink">{entry.label}</span>
+            </button>
           ))}
         </HiddenFoldersRail>
 

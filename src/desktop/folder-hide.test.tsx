@@ -81,6 +81,9 @@ const wrapper = ({ children }: { children: ReactNode }) => (
   </PrefsProvider>
 );
 
+const seedHidden = (hiddenFolders: Record<string, string[]>) =>
+  window.localStorage.setItem("lavande.prefs", JSON.stringify({ hiddenFolders }));
+
 beforeEach(() => {
   window.innerWidth = 1600;
   window.localStorage.clear();
@@ -93,29 +96,53 @@ afterEach(() => {
 });
 
 describe("rail des dossiers · masquage", () => {
-  it("masque un dossier personnalisé puis le réaffiche depuis le lien de récupération", async () => {
+  it("n'offre plus de masquage ni de réaffichage dans le rail", async () => {
     stubBackend();
     render(<DesktopInbox />, { wrapper });
 
-    fireEvent.click(await screen.findByLabelText("Masquer le dossier Projets"));
-
-    await waitFor(() => expect(screen.queryByLabelText("Masquer le dossier Projets")).toBeNull());
-    expect(screen.queryByText("Projets")).toBeNull();
-
-    const toggle = screen.getByRole("button", { name: /1 masqué/ });
-    fireEvent.click(toggle);
-
-    fireEvent.click(await screen.findByLabelText("Réafficher le dossier Projets"));
-
-    expect(await screen.findByLabelText("Masquer le dossier Projets")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /masqué/ })).toBeNull();
+    await screen.findByRole("button", { name: /^Projets/ });
+    expect(screen.queryByLabelText(/^Masquer le dossier/)).toBeNull();
+    expect(screen.queryByLabelText(/^Réafficher le dossier/)).toBeNull();
   });
 
-  it("n'offre pas le masquage en vue tous comptes", async () => {
+  it("garde les dossiers masqués consultables dans le groupe repliable", async () => {
+    stubBackend();
+    seedHidden({ a1: ["Projets"] });
+    render(<DesktopInbox />, { wrapper });
+
+    const toggle = await screen.findByRole("button", { name: /1 masqué/ });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("button", { name: /^Projets/ })).toBeNull();
+
+    fireEvent.click(toggle);
+
+    const hidden = await screen.findByRole("button", { name: /^Projets/ });
+    expect(screen.queryByLabelText(/^Réafficher le dossier/)).toBeNull();
+
+    fireEvent.click(hidden);
+
+    await waitFor(() => expect(hidden.getAttribute("aria-current")).toBe("true"));
+  });
+
+  it("replie le groupe des masqués au second clic", async () => {
+    stubBackend();
+    seedHidden({ a1: ["Projets"] });
+    render(<DesktopInbox />, { wrapper });
+
+    const toggle = await screen.findByRole("button", { name: /1 masqué/ });
+    fireEvent.click(toggle);
+    await screen.findByRole("button", { name: /^Projets/ });
+
+    fireEvent.click(toggle);
+    expect(screen.queryByRole("button", { name: /^Projets/ })).toBeNull();
+  });
+
+  it("n'affiche pas le groupe des masqués en vue tous comptes", async () => {
     stubBackend(ACCOUNTS);
+    seedHidden({ a1: ["Projets"] });
     render(<DesktopInbox />, { wrapper });
 
     await screen.findByText("Projets");
-    expect(screen.queryByLabelText(/^Masquer le dossier/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /masqué/ })).toBeNull();
   });
 });

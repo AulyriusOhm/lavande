@@ -63,3 +63,38 @@ export function buildFolderTree<T extends FolderTreeSpec>(items: T[]): FolderTre
 export function descendantPaths<T extends FolderTreeSpec>(node: FolderTreeNode<T>): string[] {
   return node.children.flatMap((child) => [child.path, ...descendantPaths(child)]);
 }
+
+/**
+ * Ordre d'affichage local : à chaque niveau, les chemins connus passent devant
+ * dans l'ordre voulu, les nouveaux dossiers gardent l'ordre du serveur derrière.
+ */
+export function applyFolderOrder<T extends FolderTreeSpec>(
+  nodes: FolderTreeNode<T>[],
+  order: string[],
+): FolderTreeNode<T>[] {
+  if (order.length === 0) return nodes;
+  const rank = new Map(order.map((path, index) => [path, index]));
+  const placed = (path: string) => rank.get(path) ?? Number.MAX_SAFE_INTEGER;
+  return nodes
+    .map((node) => ({ ...node, children: applyFolderOrder(node.children, order) }))
+    .sort((a, b) => placed(a.path) - placed(b.path));
+}
+
+/**
+ * Déplace un chemin parmi ses frères : le niveau réordonné passe en tête de
+ * l'ordre du compte, les autres niveaux gardent leur ordre relatif.
+ */
+export function moveFolderPath(
+  order: string[],
+  siblings: string[],
+  path: string,
+  target: string,
+  after: boolean,
+): string[] {
+  const rest = siblings.filter((entry) => entry !== path);
+  const index = rest.indexOf(target);
+  if (index < 0) return order;
+  const at = index + (after ? 1 : 0);
+  const level = [...rest.slice(0, at), path, ...rest.slice(at)];
+  return [...level, ...order.filter((entry) => !level.includes(entry))];
+}

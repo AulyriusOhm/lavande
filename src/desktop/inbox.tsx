@@ -52,8 +52,9 @@ import { NumberTicker } from "@/components/ui/number-ticker";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { MailBody, MailBodyLoading } from "@/components/mail-body";
 import { EmptyTrashButton } from "@/components/empty-trash";
-import { FolderRow, HiddenFoldersRail } from "@/components/folder-row";
+import { HiddenFoldersRail } from "@/components/folder-row";
 import { useFolderTree } from "@/components/folder-tree";
+import { moveFolderPath } from "@/lib/folder-tree";
 import {
   Badge,
   DButton,
@@ -557,8 +558,8 @@ export function DesktopInbox({
     refreshSummary,
     bodyFetching,
     hiddenFolderOptions,
-    hideFolder,
-    unhideFolder,
+    folderOrder,
+    setFolderOrder,
   } = useMailStore();
   const { dark, setDark } = useTheme();
   const prefs = usePrefs();
@@ -600,15 +601,30 @@ export function DesktopInbox({
   };
 
   const threads = threadsInFolder(mails, folder, account);
-  const roleOptions = useMemo(
-    () => folderOptions.filter((entry) => entry.id !== "other"),
-    [folderOptions],
-  );
-  const customOptions = useMemo(
-    () => folderOptions.filter((entry) => entry.id === "other"),
-    [folderOptions],
-  );
-  const customRows = useFolderTree(customOptions);
+  const folderRows = useFolderTree(folderOptions, folderOrder);
+  const reorderable = mode === "api" && account !== ALL_ACCOUNTS && !readOnly;
+  const [dragged, setDragged] = useState<{ path: string; depth: number; parentPath: string | null } | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ path: string; after: boolean } | null>(null);
+
+  const siblingsAt = (depth: number, parentPath: string | null) =>
+    folderRows
+      .filter((row) => row.depth === depth && row.parentPath === parentPath)
+      .map((row) => row.node.path);
+
+  const dropOn = (path: string, depth: number, parentPath: string | null, after: boolean) => {
+    if (
+      !dragged ||
+      dragged.depth !== depth ||
+      dragged.parentPath !== parentPath ||
+      dragged.path === path
+    )
+      return;
+    setFolderOrder(
+      moveFolderPath(folderOrder, siblingsAt(depth, parentPath), dragged.path, path, after),
+    );
+    setDragged(null);
+    setDropTarget(null);
+  };
   const heading =
     folderOptions.find((entry) => entry.id === folder && entry.path === folderPath)?.label ??
     folderLabel(folder);
@@ -890,68 +906,102 @@ export function DesktopInbox({
 
               <SectionLabel className="mt-4 mb-1.5 px-2.5">Dossiers</SectionLabel>
               <div className="space-y-0.5">
-                {roleOptions.map((entry) => {
-                  const Icon = FOLDER_ICONS[entry.id];
-                  const stats = folderStats(entry.id, entry.path);
-                  const count =
-                    entry.id === "sent"
-                      ? 0
-                      : entry.id === "drafts" || entry.id === "trash"
-                        ? stats.total
-                        : stats.unread;
-                  return (
-                    <RailItem
-                      key={`${entry.id}:${entry.path}`}
-                      active={folder === entry.id}
-                      onClick={() => setFolder(entry.id, null)}
-                      label={entry.label}
-                      count={count}
-                      icon={<Icon className="size-4" />}
-                    />
-                  );
-                })}
-                {customRows.map((row) => {
+                {folderRows.map((row) => {
                   const entry = row.node.item;
-                  const label = entry?.label ?? row.node.name;
-                  const rail = (
-                    <RailItem
-                      active={entry !== null && folder === "other" && row.node.path === folderPath}
-                      onClick={entry ? () => setFolder("other", entry.path) : undefined}
-                      label={label}
-                      count={entry ? folderStats("other", entry.path).unread : 0}
-                      icon={<FOLDER_ICONS.other className="size-4" />}
-                      depth={row.depth}
-                      expanded={row.expanded}
-                      onToggle={row.hasChildren ? row.toggle : undefined}
-                    />
-                  );
-                  return entry ? (
-                    <FolderRow
+                  const stats = entry ? folderStats(entry.id, entry.path) : null;
+                  const count =
+                    !entry || !stats
+                      ? 0
+                      : entry.id === "sent"
+                        ? 0
+                        : entry.id === "drafts" || entry.id === "trash"
+                          ? stats.total
+                          : stats.unread;
+                  const Icon = entry ? FOLDER_ICONS[entry.id] : FOLDER_ICONS.other;
+                  const dragging = dragged?.path === row.node.path;
+                  const marked = dropTarget?.path === row.node.path ? dropTarget : null;
+                  return (
+                    <div
                       key={row.node.path}
-                      label={label}
-                      onHide={account === ALL_ACCOUNTS ? undefined : () => hideFolder(entry.path)}
+                      data-folder-row={row.node.path}
+                      draggable={reorderable && entry !== null}
+                      onDragStart={(event) => {
+                        event.dataTransfer?.setData("text/plain", row.node.path);
+                        setDragged({ path: row.node.path, depth: row.depth, parentPath: row.parentPath });
+                      }}
+                      onDragOver={(event) => {
+                        if (
+                          !dragged ||
+                          dragged.depth !== row.depth ||
+                          dragged.parentPath !== row.parentPath ||
+                          dragged.path === row.node.path
+                        )
+                          return;
+                        event.preventDefault();
+                        const box = event.currentTarget.getBoundingClientRect();
+                        setDropTarget({
+                          path: row.node.path,
+                          after: event.clientY > box.top + box.height / 2,
+                        });
+                      }}
+                      onDragLeave={() =>
+                        setDropTarget((current) =>
+                          current?.path === row.node.path ? null : current,
+                        )
+                      }
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        const box = event.currentTarget.getBoundingClientRect();
+                        dropOn(
+                          row.node.path,
+                          row.depth,
+                          row.parentPath,
+                          event.clientY > box.top + box.height / 2,
+                        );
+                      }}
+                      onDragEnd={() => {
+                        setDragged(null);
+                        setDropTarget(null);
+                      }}
+                      className={cn("relative", dragging && "opacity-40")}
                     >
-                      {rail}
-                    </FolderRow>
-                  ) : (
-                    <div key={row.node.path}>{rail}</div>
+                      {marked && !marked.after ? (
+                        <span className="pointer-events-none absolute inset-x-1 top-0 h-0.5 rounded-full bg-accent" />
+                      ) : null}
+                      <RailItem
+                        active={
+                          entry !== null &&
+                          folder === entry.id &&
+                          (entry.id !== "other" || row.node.path === folderPath)
+                        }
+                        onClick={
+                          entry
+                            ? () => setFolder(entry.id, entry.id === "other" ? entry.path : null)
+                            : undefined
+                        }
+                        label={entry?.label ?? row.node.name}
+                        count={count}
+                        icon={<Icon className="size-4" />}
+                        depth={row.depth}
+                        expanded={row.expanded}
+                        onToggle={row.hasChildren ? row.toggle : undefined}
+                      />
+                      {marked && marked.after ? (
+                        <span className="pointer-events-none absolute inset-x-1 bottom-0 h-0.5 rounded-full bg-accent" />
+                      ) : null}
+                    </div>
                   );
                 })}
                 <HiddenFoldersRail count={hiddenFolderOptions.length}>
                   {hiddenFolderOptions.map((entry) => (
-                    <FolderRow
+                    <RailItem
                       key={entry.path}
+                      active={folder === "other" && folderPath === entry.path}
+                      onClick={() => setFolder("other", entry.path)}
                       label={entry.label}
-                      onUnhide={() => unhideFolder(entry.path)}
-                    >
-                      <RailItem
-                        active={folder === "other" && folderPath === entry.path}
-                        onClick={() => setFolder("other", entry.path)}
-                        label={entry.label}
-                        count={folderStats("other", entry.path).unread}
-                        icon={<FOLDER_ICONS.other className="size-4" />}
-                      />
-                    </FolderRow>
+                      count={folderStats("other", entry.path).unread}
+                      icon={<FOLDER_ICONS.other className="size-4" />}
+                    />
                   ))}
                 </HiddenFoldersRail>
                 {folder === "trash" && (

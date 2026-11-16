@@ -92,6 +92,8 @@ export type Prefs = {
   sync: SyncPrefs;
   /** Dossiers personnalisés masqués de la liste, par compte (chemins IMAP). */
   hiddenFolders: Record<string, string[]>;
+  /** Ordre d'affichage local des dossiers, par compte (chemins IMAP). */
+  folderOrder: Record<string, string[]>;
   /** Domaines synchronisés de chaque compte ; un compte absent suit les défauts. */
   perimeters: Record<string, AccountPerimeter>;
   /** Notifications système : nouveaux mails et rappels d'agenda. */
@@ -117,6 +119,7 @@ const DEFAULTS: Prefs = {
   aiTasks: DEFAULT_AI_TASKS,
   sync: DEFAULT_SYNC,
   hiddenFolders: {},
+  folderOrder: {},
   perimeters: {},
   notifications: DEFAULT_NOTIFICATIONS,
 };
@@ -137,6 +140,7 @@ type PrefsContextValue = Prefs & {
   setAiTasks: (patch: Partial<AiTasksConfig>) => void;
   setSync: (patch: Partial<SyncPrefs>) => void;
   setFolderHidden: (accountId: string, path: string, hidden: boolean) => void;
+  setFolderOrder: (accountId: string, paths: string[]) => void;
   setAccountPerimeter: (accountId: string, patch: Partial<AccountPerimeter>) => void;
   setNotifications: (patch: Partial<NotificationPrefs>) => void;
   setAccountNotification: (accountId: string, value: boolean) => void;
@@ -305,16 +309,23 @@ export function perimeterOf(
   return (accountId && perimeters[accountId]) || { ...DEFAULT_PERIMETER };
 }
 
-export const asHiddenFolders = (value: unknown): Record<string, string[]> => {
+/** Listes de chemins IMAP par compte : dossiers masqués comme ordre d'affichage. */
+const asPathLists = (value: unknown): Record<string, string[]> => {
   if (!value || typeof value !== "object") return {};
   const out: Record<string, string[]> = {};
   for (const [accountId, paths] of Object.entries(value as Record<string, unknown>)) {
     if (!Array.isArray(paths)) continue;
-    const kept = paths.filter((path): path is string => typeof path === "string" && path !== "");
+    const kept = [
+      ...new Set(paths.filter((path): path is string => typeof path === "string" && path !== "")),
+    ];
     if (kept.length > 0) out[accountId] = kept;
   }
   return out;
 };
+
+export const asHiddenFolders = asPathLists;
+
+export const asFolderOrder = asPathLists;
 
 /** Un dossier masqué l'est pour un compte et un chemin IMAP précis. */
 export function isFolderHidden(
@@ -389,6 +400,7 @@ function read(): Prefs {
     aiTasks: asAiTasks(stored.aiTasks),
     sync: asSync(stored.sync),
     hiddenFolders: asHiddenFolders(stored.hiddenFolders),
+    folderOrder: asFolderOrder(stored.folderOrder),
     perimeters: asPerimeters(stored.perimeters),
     notifications: asNotifications(stored.notifications),
   };
@@ -531,6 +543,17 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const setFolderOrder = useCallback(
+    (accountId: string, paths: string[]) =>
+      write((current) => {
+        const folderOrder = { ...current.folderOrder };
+        if (paths.length === 0) delete folderOrder[accountId];
+        else folderOrder[accountId] = paths;
+        return { ...current, folderOrder };
+      }),
+    [],
+  );
+
   const setAccountPerimeter = useCallback(
     (accountId: string, patch: Partial<AccountPerimeter>) =>
       write((current) => ({
@@ -584,6 +607,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setAiTasks,
       setSync,
       setFolderHidden,
+      setFolderOrder,
       setAccountPerimeter,
       setNotifications,
       setAccountNotification,
@@ -605,6 +629,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setAiTasks,
       setSync,
       setFolderHidden,
+      setFolderOrder,
       setAccountPerimeter,
       setNotifications,
       setAccountNotification,

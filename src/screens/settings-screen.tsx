@@ -116,8 +116,19 @@ export function SettingsScreen({
   onOpenMcp: () => void;
 }) {
   const { accent, mode: themeMode, brand, setAccent, setMode: setThemeMode, reset } = useTheme();
-  const { accounts, mode, readOnly, openConnect, askRemoveAccount, folderOptions, deleteFolder } =
-    useMailStore();
+  const {
+    accounts,
+    mode,
+    readOnly,
+    openConnect,
+    askRemoveAccount,
+    folderOptions,
+    hiddenFolderOptions,
+    hideFolder,
+    unhideFolder,
+    deleteFolder,
+    account: currentAccount,
+  } = useMailStore();
   const {
     swipeLeft,
     swipeRight,
@@ -168,7 +179,11 @@ export function SettingsScreen({
   const mcp = mcpCounts((server) => enabled[server.id]);
   const mod = detectModKey();
   const shortcuts = shortcutCatalog();
-  const customFolders = folderOptions.filter((entry) => entry.id === "other");
+  const customFolders = [
+    ...folderOptions.filter((entry) => entry.id === "other").map((entry) => ({ entry, hidden: false })),
+    ...hiddenFolderOptions.map((entry) => ({ entry, hidden: true })),
+  ];
+  const canHideFolders = currentAccount !== ALL_ACCOUNTS;
   const updater = useUpdater();
   const updateState = phaseLabel(updater.phase);
   const installedVersion = updater.current ?? APP_VERSION;
@@ -449,12 +464,18 @@ export function SettingsScreen({
               <SectionTitle hint="compte sélectionné">Dossiers</SectionTitle>
               <BlurFade delay={0.1}>
                 <Card className="mx-5 divide-y divide-line/80 overflow-hidden">
-                  {customFolders.map((entry) => (
+                  {customFolders.map(({ entry, hidden }) => (
                     <div key={entry.path} className="px-1.5 py-1">
                       <FolderRow
                         label={entry.label}
                         variant="mobile"
                         onDelete={() => void deleteFolder(entry.path, entry.label)}
+                        onHide={
+                          canHideFolders && !hidden ? () => hideFolder(entry.path) : undefined
+                        }
+                        onUnhide={
+                          canHideFolders && hidden ? () => unhideFolder(entry.path) : undefined
+                        }
                       >
                         <div className="flex min-h-11 items-center gap-3 px-2">
                           <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-surface-2 text-ink-soft">
@@ -468,13 +489,20 @@ export function SettingsScreen({
                               {entry.path}
                             </span>
                           </span>
+                          {hidden ? (
+                            <span className="shrink-0 rounded-lg bg-surface-2 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-ink-muted uppercase">
+                              masqué
+                            </span>
+                          ) : null}
                         </div>
                       </FolderRow>
                     </div>
                   ))}
                 </Card>
                 <p className="mt-2 px-5 text-[12px] leading-relaxed font-medium text-ink-muted">
-                  Supprimer un dossier l'efface sur le serveur IMAP, avec les messages qu'il contient.
+                  Masquer un dossier le retire de la liste sans rien effacer sur le serveur ; le
+                  réafficher le remet. Le supprimer l'efface sur le serveur IMAP, avec les messages
+                  qu'il contient.
                 </p>
               </BlurFade>
             </>

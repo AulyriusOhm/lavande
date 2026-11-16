@@ -81,6 +81,8 @@ const PAGE_SIZE = 50;
 const SUMMARY_TICK_MS = 5 * 60_000;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
+const NO_FOLDER_ORDER: string[] = [];
+
 /** Stockage du cache de résumé : absent (SSR, stockage bloqué) = pas de cache. */
 function summaryStorage(): Storage | null {
   try {
@@ -232,6 +234,9 @@ export type MailStoreValue = {
   hiddenFolderOptions: FolderOption[];
   hideFolder: (path: string) => void;
   unhideFolder: (path: string) => void;
+  /** Ordre d'affichage local des dossiers du compte courant (chemins IMAP). */
+  folderOrder: string[];
+  setFolderOrder: (paths: string[]) => void;
 };
 
 const MailStoreContext = createContext<MailStoreValue | null>(null);
@@ -541,6 +546,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       ? folderOptionsForAll(visible, mailAccounts.map((entry) => entry.id))
       : optionsOf(visible, account);
   }, [mode, folderRecords, account, mailAccounts, prefs.hiddenFolders]);
+
+  const folderOrder = useMemo<string[]>(() => {
+    if (mode !== "api" || !account || account === ALL_ACCOUNTS) return NO_FOLDER_ORDER;
+    return prefs.folderOrder[account] ?? NO_FOLDER_ORDER;
+  }, [mode, account, prefs.folderOrder]);
 
   const hiddenFolderOptions = useMemo<FolderOption[]>(() => {
     if (mode !== "api" || !account || account === ALL_ACCOUNTS) return [];
@@ -1730,6 +1740,16 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     [prefs, account, mode, readOnlyBlocked],
   );
 
+  /** Ordre d'affichage des dossiers : local à l'appareil, rien ne part au serveur. */
+  const setFolderOrder = useCallback(
+    (paths: string[]) => {
+      if (readOnlyBlocked()) return;
+      if (mode !== "api" || !account || account === ALL_ACCOUNTS) return;
+      prefs.setFolderOrder(account, paths);
+    },
+    [prefs, account, mode, readOnlyBlocked],
+  );
+
   const inboxMails = useMemo(() => mails.filter((mail) => mail.folder === "inbox"), [mails]);
 
   const inboxIndex = useMemo(
@@ -2120,6 +2140,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       hiddenFolderOptions,
       hideFolder,
       unhideFolder,
+      folderOrder,
+      setFolderOrder,
     }),
     [
       mails,
@@ -2202,6 +2224,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       hiddenFolderOptions,
       hideFolder,
       unhideFolder,
+      folderOrder,
+      setFolderOrder,
       bootstrap,
     ],
   );

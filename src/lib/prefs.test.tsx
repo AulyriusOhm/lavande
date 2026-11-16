@@ -8,6 +8,7 @@ import {
   PERIMETER_EVENT,
   PrefsProvider,
   accountPgp,
+  asFolderOrder,
   asHiddenFolders,
   asNotifications,
   asPerimeters,
@@ -434,6 +435,63 @@ describe("préférences · dossiers masqués", () => {
     act(() => result.current.setFolderHidden("a1", "Projets", false));
     expect(result.current.hiddenFolders).toEqual({ a2: ["Projets"] });
     expect(stored().hiddenFolders).toEqual({ a2: ["Projets"] });
+  });
+});
+
+describe("préférences · ordre des dossiers", () => {
+  it("démarre sans ordre local", () => {
+    expect(mount().result.current.folderOrder).toEqual({});
+  });
+
+  it("relit l'ordre par compte en ignorant les valeurs invalides", () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({
+        folderOrder: {
+          a1: ["Voyages", "Projets", 12, ""],
+          a2: "Projets",
+          a3: [],
+          a4: ["Archives", "Archives"],
+        },
+      }),
+    );
+
+    expect(mount().result.current.folderOrder).toEqual({
+      a1: ["Voyages", "Projets"],
+      a4: ["Archives"],
+    });
+  });
+
+  it("tolère une valeur absente ou d'un autre type", () => {
+    expect(asFolderOrder(undefined)).toEqual({});
+    expect(asFolderOrder("tout")).toEqual({});
+    expect(asFolderOrder({ a1: null })).toEqual({});
+  });
+
+  it("range l'ordre d'un compte sans toucher aux autres et persiste", () => {
+    const { result } = mount();
+
+    act(() => result.current.setFolderOrder("a1", ["Voyages", "Projets"]));
+    expect(result.current.folderOrder).toEqual({ a1: ["Voyages", "Projets"] });
+    expect(stored().folderOrder).toEqual({ a1: ["Voyages", "Projets"] });
+
+    act(() => result.current.setFolderOrder("a2", ["Projets"]));
+    expect(result.current.folderOrder).toEqual({
+      a1: ["Voyages", "Projets"],
+      a2: ["Projets"],
+    });
+
+    act(() => result.current.setFolderOrder("a1", []));
+    expect(result.current.folderOrder).toEqual({ a2: ["Projets"] });
+    expect(stored().folderOrder).toEqual({ a2: ["Projets"] });
+  });
+
+  it("relit l'ordre après un remontage", () => {
+    const first = mount();
+    act(() => first.result.current.setFolderOrder("a1", ["Voyages", "INBOX"]));
+    first.unmount();
+
+    expect(mount().result.current.folderOrder).toEqual({ a1: ["Voyages", "INBOX"] });
   });
 });
 

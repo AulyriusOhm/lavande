@@ -148,7 +148,7 @@ describe("rail des dossiers · suppression retirée", () => {
     stubBackend();
     render(<DesktopInbox />, { wrapper });
 
-    await screen.findByLabelText("Masquer le dossier Projets");
+    await screen.findByRole("button", { name: /^Projets/ });
     expect(screen.queryByLabelText(/Supprimer le dossier/)).toBeNull();
   });
 });

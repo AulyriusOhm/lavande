@@ -134,8 +134,8 @@ function RowAction({
 }
 
 /**
- * Récupération des dossiers masqués : un lien discret compte les dossiers
- * retirés de la liste et les révèle, chacun avec son action de réaffichage.
+ * Dossiers masqués : un lien discret compte les dossiers retirés de la liste et
+ * les révèle en lecture, le masquage se règle dans les réglages.
  */
 export function HiddenFoldersRail({
   count,
