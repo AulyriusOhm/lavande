@@ -253,6 +253,15 @@ export function threadToMails(
   return thread.messages.map((message) => messageToMail(message, records, fallback));
 }
 
+/** Le fil complet d'un message, tous dossiers du compte confondus. */
+export async function threadMails(
+  accountId: string,
+  threadId: string,
+  records: FolderRecord[],
+): Promise<Mail[]> {
+  return threadToMails(await mailApi.thread(accountId, threadId), records, "inbox");
+}
+
 /** Politique PGP poussée par le store : `false` = compte laissé fermé. */
 let decryptPolicy: Record<string, boolean> = {};
 

@@ -39,6 +39,7 @@ import {
   SWIPE_ACTIONS,
   CALENDAR_LEAD_MINUTES,
   CONTACTS_PENDING,
+  THREAD_VIEWS,
   mergeFlags,
   perimeterOf,
   usePrefs,
@@ -151,6 +152,8 @@ export function SettingsScreen({
     setAiTasks,
     perimeters,
     setAccountPerimeter,
+    threadView,
+    setThreadView,
   } = usePrefs();
   const [openGroup, setOpenGroup] = useState<GroupId | null>(null);
   const [preview, setPreview] = useState<PreviewMode>("unlocked");
@@ -651,6 +654,39 @@ export function SettingsScreen({
                 Réinitialiser le thème
               </button>
             </div>
+          </BlurFade>
+
+          <BlurFade delay={0.18}>
+            <Card className="mx-5 mt-3 p-3.5">
+              <p className="text-[12.5px] font-bold text-ink">Affichage des conversations</p>
+              <p className="text-[10.5px] font-medium text-ink-muted">
+                Dans la rédaction d'un brouillon ou d'une réponse
+              </p>
+              <div className="mt-2.5 flex gap-1.5">
+                {THREAD_VIEWS.map((option) => {
+                  const selected = threadView === option.id;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => setThreadView(option.id)}
+                      className={cn(
+                        "focus-ring min-h-11 flex-1 rounded-xl px-1 text-[11.5px] font-bold transition-colors",
+                        selected
+                          ? "bg-accent text-accent-contrast"
+                          : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
+                      )}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-2 text-[12px] leading-relaxed font-medium text-ink-muted">
+                {THREAD_VIEWS.find((option) => option.id === threadView)?.hint}
+              </p>
+            </Card>
           </BlurFade>
         </>
       ) : null}

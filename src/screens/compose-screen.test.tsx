@@ -4,16 +4,22 @@ import { useState } from "react";
 import type { ComposeDraft } from "@/lib/draft";
 import { baseDraft } from "@/lib/draft";
 import { buildQuotedHtml, textToHtml } from "@/lib/rich-text";
+import { sendInputOf } from "@/lib/mail-backend";
+
+const storeMock = vi.hoisted(() => ({ mode: "demo" as "api" | "demo" }));
 
 vi.mock("@/lib/store", () => ({
   useMailStore: () => ({
     mailAccounts: [{ id: "perso", label: "Perso", email: "roman@lavande.mail" }],
+    mode: storeMock.mode,
+    folderRecords: [],
   }),
 }));
 
 const signatureMock = vi.hoisted(() => ({ html: null as string | null }));
+const prefsMock = vi.hoisted(() => ({ threadView: "tidy" as "tidy" | "inline" }));
 vi.mock("@/lib/prefs", () => ({
-  usePrefs: () => ({ signatures: [], llm: { endpoint: "", apiKey: "", model: "" } }),
+  usePrefs: () => ({ signatures: [], llm: { endpoint: "", apiKey: "", model: "" }, threadView: prefsMock.threadView }),
   activeSignature: () => signatureMock.html,
 }));
 
@@ -21,14 +27,28 @@ const { ComposeScreen } = await import("@/screens/compose-screen");
 
 function Harness({
   onChange,
+  onSend,
   quoted,
   body,
+  threadId,
+  to,
+  subject,
 }: {
   onChange?: (draft: ComposeDraft) => void;
+  onSend?: (draft: ComposeDraft) => void;
   quoted?: string;
   body?: string;
+  threadId?: string;
+  to?: string;
+  subject?: string;
 }) {
-  const [draft, setDraft] = useState<ComposeDraft>({ ...baseDraft("perso", false, false), quoted, body: body ?? "" });
+  const [draft, setDraft] = useState<ComposeDraft>({
+    ...baseDraft("perso", false, false, threadId),
+    quoted,
+    body: body ?? "",
+    to: to ?? "",
+    subject: subject ?? "",
+  });
   return (
     <ComposeScreen
       draft={draft}
@@ -36,6 +56,7 @@ function Harness({
         setDraft(next);
         onChange?.(next);
       }}
+      onSend={onSend}
       onClose={() => {}}
     />
   );
@@ -48,6 +69,8 @@ function pick(input: HTMLElement, file: File) {
 
 beforeEach(() => {
   signatureMock.html = null;
+  prefsMock.threadView = "tidy";
+  storeMock.mode = "demo";
 });
 
 describe("pièces jointes de la composition", () => {
@@ -316,5 +339,75 @@ describe("envoi · verrou et retours visuels", () => {
 
     expect(onSend).toHaveBeenCalledTimes(1);
     expect(sendButton().disabled).toBe(true);
+  });
+});
+
+describe("conversation dans la rédaction", () => {
+  const QUOTED = buildQuotedHtml("Le 9 novembre, Support a écrit :", textToHtml("Bonjour\nSuite du fil"));
+
+  it("range le fil dans un panneau repliable et masque la citation", async () => {
+    render(<Harness quoted={QUOTED} threadId="t-maquettes" />);
+
+    expect(await screen.findByRole("button", { name: "Voir la conversation · 4 messages" })).toBeTruthy();
+    expect(screen.getByTestId("conversation-panel")).toBeTruthy();
+    expect(screen.queryByTestId("compose-quoted-block")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Voir la conversation précédente" })).toBeNull();
+  });
+
+  it("place le panneau après l'aperçu de signature", async () => {
+    signatureMock.html = "<p>Cordialement</p>";
+    render(<Harness quoted={QUOTED} threadId="t-maquettes" />);
+
+    const preview = screen.getByTestId("signature-preview");
+    const panel = await screen.findByTestId("conversation-panel");
+    expect(preview.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("garde la citation classique en mode « tout dans le même mail »", () => {
+    prefsMock.threadView = "inline";
+    render(<Harness quoted={QUOTED} threadId="t-maquettes" />);
+
+    expect(screen.queryByTestId("conversation-panel")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Voir la conversation précédente" }));
+    expect(screen.getByTestId("compose-quoted").textContent).toContain("Suite du fil");
+  });
+
+  it("retombe sur la citation quand le fil manque", () => {
+    render(<Harness quoted={QUOTED} />);
+
+    expect(screen.getByTestId("compose-quoted-block")).toBeTruthy();
+    expect(screen.queryByTestId("conversation-panel")).toBeNull();
+  });
+
+  it("n'ajoute rien au payload d'envoi, dans les deux modes", async () => {
+    const sent: ComposeDraft[] = [];
+    const props = {
+      quoted: QUOTED,
+      threadId: "t-maquettes",
+      to: "camille@lavande.mail",
+      subject: "Re: Maquettes",
+      body: "<p>Merci</p>",
+      onSend: (draft: ComposeDraft) => sent.push(draft),
+    };
+
+    const tidy = render(<Harness {...props} />);
+    expect(await screen.findByTestId("conversation-panel")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Envoyer le message"));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    tidy.unmount();
+
+    prefsMock.threadView = "inline";
+    render(<Harness {...props} />);
+    fireEvent.click(screen.getByLabelText("Envoyer le message"));
+    await waitFor(() => expect(sent).toHaveLength(2));
+
+    expect(sent[0].quoted).toBe(QUOTED);
+    expect(sent[1].quoted).toBe(QUOTED);
+    for (const draft of sent) {
+      const input = sendInputOf(draft);
+      expect(input.html).toContain("Suite du fil");
+      expect(input.text).toContain("Suite du fil");
+      expect(input.to).toEqual([{ name: null, email: "camille@lavande.mail" }]);
+    }
   });
 });

@@ -64,6 +64,7 @@ import {
   sendInputOf,
   setAccountDecryptPolicy,
   syncNotice,
+  threadMails,
   threadToMails,
 } from "@/lib/mail-backend";
 import type { FolderOption, FolderRecord, MailMode } from "@/lib/mail-backend";
@@ -149,6 +150,8 @@ export type MailStoreValue = {
   folder: FolderId;
   folderPath: string | null;
   folderOptions: FolderOption[];
+  /** Dossiers connus du démon, avec leur rôle : de quoi classer les messages d'un fil. */
+  folderRecords: FolderRecord[];
   mode: MailMode;
   /** Démo vitrine : lecture seule, aucune mutation ni appel réseau. */
   readOnly: boolean;
@@ -2112,14 +2115,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     setFullThread(null);
     if (mode !== "api" || !openMailId || !openMailThreadId || !openMailAccount) return;
     let cancelled = false;
-    mailApi
-      .thread(openMailAccount, openMailThreadId)
-      .then((thread) => {
+    threadMails(openMailAccount, openMailThreadId, folderRecords)
+      .then((mails) => {
         if (cancelled) return;
         const local = new Map(liveMails.current.map((entry) => [entry.id, entry]));
-        setFullThread(
-          threadToMails(thread, folderRecords, "inbox").map((entry) => local.get(entry.id) ?? entry),
-        );
+        setFullThread(mails.map((entry) => local.get(entry.id) ?? entry));
       })
       .catch(() => {
         if (!cancelled) setFullThread(null);
@@ -2149,6 +2149,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       folder,
       folderPath,
       folderOptions,
+      folderRecords,
       mode,
       readOnly: demoReadOnly,
       phase,
@@ -2241,6 +2242,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       folder,
       folderPath,
       folderOptions,
+      folderRecords,
       mode,
       phase,
       backendError,

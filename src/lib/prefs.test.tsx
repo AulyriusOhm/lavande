@@ -14,6 +14,7 @@ import {
   asPerimeters,
   asPgpAccounts,
   asSync,
+  asThreadView,
   perimeterOf,
   storedPerimeters,
   isFolderHidden,
@@ -613,5 +614,34 @@ describe("prefs · périmètre de synchronisation par compte", () => {
 
     window.localStorage.setItem("lavande.prefs", "pas du json");
     expect(storedPerimeters()).toEqual({});
+  });
+});
+
+describe("préférences · affichage des conversations", () => {
+  it("range la conversation dans un panneau par défaut", () => {
+    expect(mount().result.current.threadView).toBe("tidy");
+  });
+
+  it("retombe sur bien rangé pour une valeur inconnue", () => {
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ threadView: "bulles" }));
+    expect(mount().result.current.threadView).toBe("tidy");
+
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ threadView: "inline" }));
+    expect(mount().result.current.threadView).toBe("inline");
+
+    expect(asThreadView(undefined)).toBe("tidy");
+    expect(asThreadView(42)).toBe("tidy");
+    expect(asThreadView("inline")).toBe("inline");
+  });
+
+  it("enregistre le mode et le persiste, sans toucher aux autres préférences", () => {
+    const { result } = mount();
+
+    act(() => result.current.setThreadView("inline"));
+
+    expect(result.current.threadView).toBe("inline");
+    expect(stored().threadView).toBe("inline");
+    expect(result.current.summary).toEqual(DEFAULT_SUMMARY);
+    expect(result.current.notifications).toEqual(DEFAULT_NOTIFICATIONS);
   });
 });

@@ -13,12 +13,19 @@ const store = vi.hoisted(() => ({
   mailAccounts: [{ id: "perso", label: "Perso", email: "roman@lavande.mail" }],
   mails: [] as unknown[],
   openThread: undefined as unknown,
+  mode: "demo" as "api" | "demo",
+  folderRecords: [] as unknown[],
 }));
 
 vi.mock("@/lib/store", () => ({ useMailStore: () => store }));
 
 vi.mock("@/lib/prefs", () => ({
-  usePrefs: () => ({ signatures: [], llm: prefs.llm, aiReplyEnabled: prefs.aiReplyEnabled }),
+  usePrefs: () => ({
+    signatures: [],
+    llm: prefs.llm,
+    aiReplyEnabled: prefs.aiReplyEnabled,
+    threadView: "tidy" as const,
+  }),
   activeSignature: () => null,
 }));
 

@@ -76,6 +76,7 @@ import {
   isFolderHidden,
   mergeFlags,
   perimeterOf,
+  THREAD_VIEWS,
   usePrefs,
 } from "@/lib/prefs";
 import { requestNotifications } from "@/lib/notify";
@@ -867,6 +868,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     setNotifications,
     setAccountNotification,
     perimeters,
+    threadView,
+    setThreadView,
   } = usePrefs();
   const { notify, accounts, mode, readOnly, openConnect, askRemoveAccount, renameAccount } = useMailStore();
   const [active, setActive] = useState<SectionId>("comptes");
@@ -1408,6 +1411,34 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                     </div>
                   </Surface>
                 </div>
+
+                <Surface className="mt-3 p-4">
+                  <SectionLabel>Affichage des conversations</SectionLabel>
+                  <div className="mt-2 grid grid-cols-2 gap-1.5">
+                    {THREAD_VIEWS.map((option) => {
+                      const selected = threadView === option.id;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => setThreadView(option.id)}
+                          className={cn(
+                            "focus-ring flex h-10 items-center justify-center rounded-[14px] text-[12px] font-bold transition-colors duration-200",
+                            selected
+                              ? "bg-accent-soft text-accent-ink ring-1 ring-accent-ring/60"
+                              : "border border-line bg-surface text-ink-soft hover:text-ink",
+                          )}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1.5 text-[12.5px] leading-snug font-medium text-ink-muted">
+                    {THREAD_VIEWS.find((option) => option.id === threadView)?.hint}
+                  </p>
+                </Surface>
               </Block>
 
               <Block id="modules" label="Modules">

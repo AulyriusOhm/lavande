@@ -11,6 +11,14 @@ export const SWIPE_ACTIONS: { id: SwipeActionId; label: string }[] = [
   { id: "none", label: "Aucune" },
 ];
 
+/** Affichage de la conversation dans la rédaction : panneau repliable ou citation classique. */
+export type ThreadView = "tidy" | "inline";
+
+export const THREAD_VIEWS: { id: ThreadView; label: string; hint: string }[] = [
+  { id: "tidy", label: "Bien rangé", hint: "Le fil repliable dans la rédaction" },
+  { id: "inline", label: "Tout dans le même mail", hint: "La citation classique, repliable" },
+];
+
 const STORAGE_KEY = "lavande.prefs";
 
 import { endpointHost, recordUsage } from "@/lib/ai-stats";
@@ -98,6 +106,8 @@ export type Prefs = {
   perimeters: Record<string, AccountPerimeter>;
   /** Notifications système : nouveaux mails et rappels d'agenda. */
   notifications: NotificationPrefs;
+  /** Conversation dans la rédaction : panneau repliable ou citation dans le mail. */
+  threadView: ThreadView;
 };
 
 const DEFAULTS: Prefs = {
@@ -122,6 +132,7 @@ const DEFAULTS: Prefs = {
   folderOrder: {},
   perimeters: {},
   notifications: DEFAULT_NOTIFICATIONS,
+  threadView: "tidy",
 };
 
 type PrefsContextValue = Prefs & {
@@ -144,6 +155,7 @@ type PrefsContextValue = Prefs & {
   setAccountPerimeter: (accountId: string, patch: Partial<AccountPerimeter>) => void;
   setNotifications: (patch: Partial<NotificationPrefs>) => void;
   setAccountNotification: (accountId: string, value: boolean) => void;
+  setThreadView: (value: ThreadView) => void;
 };
 
 const PrefsContext = createContext<PrefsContextValue | null>(null);
@@ -157,6 +169,8 @@ const asSwipe = (value: unknown, fallback: SwipeActionId): SwipeActionId =>
 
 const asBoolean = (value: unknown, fallback: boolean): boolean =>
   typeof value === "boolean" ? value : fallback;
+
+export const asThreadView = (value: unknown): ThreadView => (value === "inline" ? "inline" : "tidy");
 
 const asFlags = (value: unknown): Record<string, boolean> =>
   value && typeof value === "object"
@@ -403,6 +417,7 @@ function read(): Prefs {
     folderOrder: asFolderOrder(stored.folderOrder),
     perimeters: asPerimeters(stored.perimeters),
     notifications: asNotifications(stored.notifications),
+    threadView: asThreadView(stored.threadView),
   };
 }
 
@@ -588,6 +603,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const setThreadView = useCallback((value: ThreadView) => patch("threadView", value), [patch]);
 
   const value = useMemo<PrefsContextValue>(
     () => ({
@@ -611,6 +627,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setAccountPerimeter,
       setNotifications,
       setAccountNotification,
+      setThreadView,
     }),
     [
       prefs,
@@ -633,6 +650,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setAccountPerimeter,
       setNotifications,
       setAccountNotification,
+      setThreadView,
     ],
   );
 
