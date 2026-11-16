@@ -55,5 +55,7 @@ async fn complete(
     State(state): State<Arc<AppState>>,
     ApiJson(request): ApiJson<CompleteRequest>,
 ) -> Result<Json<StatusResponse>, ApiError> {
-    oauth_flow::complete(&state, &request.session).await.map(Json)
+    oauth_flow::complete(&state, &request.session)
+        .await
+        .map(Json)
 }

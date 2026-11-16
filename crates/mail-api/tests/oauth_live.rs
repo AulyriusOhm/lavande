@@ -137,12 +137,8 @@ async fn the_whole_oauth_flow_creates_a_working_account() {
     let parsed: Value = serde_json::from_str(&status_payload).expect("json");
     assert_eq!(parsed["status"], "code_received", "{parsed}");
 
-    let (status, completed) = post(
-        &state,
-        "/api/oauth/complete",
-        json!({ "session": session }),
-    )
-    .await;
+    let (status, completed) =
+        post(&state, "/api/oauth/complete", json!({ "session": session })).await;
     assert_eq!(status, StatusCode::OK, "{completed}");
     assert_eq!(completed["status"], "done", "{completed}");
     let account_id = completed["account_id"]
@@ -150,15 +146,9 @@ async fn the_whole_oauth_flow_creates_a_working_account() {
         .expect("account_id")
         .to_string();
 
-    let (status, replay) = post(
-        &state,
-        "/api/oauth/complete",
-        json!({ "session": session }),
-    )
-    .await;
+    let (status, replay) = post(&state, "/api/oauth/complete", json!({ "session": session })).await;
     assert_eq!(status, StatusCode::OK, "{replay}");
     assert_eq!(replay["status"], "done", "{replay}");
-
 
     let (_, accounts) = get(&state, "/api/accounts").await;
     let listed: Value = serde_json::from_str(&accounts).expect("json");

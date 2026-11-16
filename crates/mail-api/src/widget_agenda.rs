@@ -65,7 +65,14 @@ mod tests {
     const DAY_END: i64 = DAY + 86_400;
     const NOW: i64 = DAY + 52_320; // 14:32
 
-    fn event(id: &str, title: &str, start: i64, end: i64, calendar: &str, tone: usize) -> WidgetEvent {
+    fn event(
+        id: &str,
+        title: &str,
+        start: i64,
+        end: i64,
+        calendar: &str,
+        tone: usize,
+    ) -> WidgetEvent {
         WidgetEvent {
             id: id.to_string(),
             title: title.to_string(),
@@ -80,7 +87,14 @@ mod tests {
     fn today_events() -> Vec<WidgetEvent> {
         vec![
             event("e3", "Revue PR", DAY + 57_600, DAY + 61_200, "Pro", 0), // 16:00–17:00
-            event("e1", "Point maquettes", DAY + 36_000, DAY + 37_800, "Pro", 0), // 10:00–10:30
+            event(
+                "e1",
+                "Point maquettes",
+                DAY + 36_000,
+                DAY + 37_800,
+                "Pro",
+                0,
+            ), // 10:00–10:30
             event("e2", "Déjeuner", DAY + 45_000, DAY + 50_400, "Perso", 2), // 12:30–14:00
         ]
     }
@@ -97,8 +111,15 @@ mod tests {
 
     #[test]
     fn free_day_keeps_the_next_upcoming_event() {
-        let tomorrow = event("e4", "Daily équipe", DAY_END + 33_300, DAY_END + 35_100, "Pro", 0);
-        let summary = summarize_agenda(&[tomorrow.clone()], NOW, DAY, DAY_END);
+        let tomorrow = event(
+            "e4",
+            "Daily équipe",
+            DAY_END + 33_300,
+            DAY_END + 35_100,
+            "Pro",
+            0,
+        );
+        let summary = summarize_agenda(std::slice::from_ref(&tomorrow), NOW, DAY, DAY_END);
         assert!(summary.free_today);
         assert!(summary.today.is_empty());
         assert_eq!(summary.next.expect("prochain lointain"), tomorrow);
@@ -107,7 +128,7 @@ mod tests {
     #[test]
     fn ongoing_event_is_the_next_one() {
         let ongoing = event("e5", "Atelier", DAY + 50_400, DAY + 54_000, "Pro", 0); // 14:00–15:00
-        let summary = summarize_agenda(&[ongoing.clone()], NOW, DAY, DAY_END);
+        let summary = summarize_agenda(std::slice::from_ref(&ongoing), NOW, DAY, DAY_END);
         assert!(!summary.free_today);
         assert_eq!(summary.next.expect("en cours"), ongoing);
     }

@@ -124,7 +124,9 @@ pub fn summarize(
     }
     // Plusieurs comptes se mêlent : le widget affiche les `mail_limit` plus
     // récents, toutes boîtes confondues.
-    summary.mails.sort_by(|left, right| right.date.cmp(&left.date));
+    summary
+        .mails
+        .sort_by_key(|mail| std::cmp::Reverse(mail.date));
     summary.mails.truncate(mail_limit);
     Ok(summary)
 }
@@ -323,7 +325,11 @@ mod tests {
         }
 
         let summary = summarize(&store, &accounts(), 2).expect("résumé");
-        let subjects: Vec<&str> = summary.mails.iter().map(|mail| mail.subject.as_str()).collect();
+        let subjects: Vec<&str> = summary
+            .mails
+            .iter()
+            .map(|mail| mail.subject.as_str())
+            .collect();
         assert_eq!(subjects, vec!["Récent", "Milieu"]);
         assert_eq!(summary.mails[0].date, Some(1_731_000_180));
         assert!(summary.mails[0].unread);
