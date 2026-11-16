@@ -315,6 +315,48 @@ async fn known_account_delete_rewrites_the_file() {
 }
 
 #[tokio::test]
+async fn a_removed_account_can_be_added_again() {
+    let (directory, state) = state().await;
+    seed(directory.path(), &[account("perso")]);
+    let (status, _) = call(&state, delete("/api/accounts/perso")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port libre");
+    let port = listener.local_addr().expect("adresse").port();
+    drop(listener);
+
+    let mut again = account("perso");
+    again["imap"]["host"] = json!("127.0.0.1");
+    again["imap"]["port"] = json!(port);
+    let (status, body) = call(&state, post("/api/accounts", &again)).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "corps : {body:?}");
+}
+
+#[tokio::test]
+async fn a_failed_account_save_leaves_no_half_created_account() {
+    let (directory, state) = state().await;
+    let config: lavande_mail::config::AccountConfig =
+        serde_json::from_value(account("perso")).expect("config");
+    let blocked = directory
+        .path()
+        .join(format!("accounts.json.{}.tmp", std::process::id()));
+    fs::create_dir(&blocked).expect("répertoire bloquant l'écriture temporaire");
+
+    let error = state
+        .add_account(&config, &[folder("INBOX", None)])
+        .await
+        .expect_err("accounts.json impossible à écrire");
+    assert_eq!(error.kind(), "config");
+    assert!(state.stored_accounts().expect("comptes").is_empty());
+    assert!(state
+        .store()
+        .list_folders("perso")
+        .expect("dossiers")
+        .is_empty());
+    assert_eq!(state.secrets().get("perso").await.expect("secret"), None);
+}
+
+#[tokio::test]
 async fn unknown_account_folders_is_a_404() {
     let (_directory, state) = state().await;
     let (status, body) = call(&state, get("/api/accounts/absent/folders")).await;

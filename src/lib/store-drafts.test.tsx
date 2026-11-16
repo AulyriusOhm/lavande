@@ -69,10 +69,18 @@ type Backend = {
   drafts: unknown[];
   sent: unknown[];
   messageFails: boolean;
+  sendFails: boolean;
 };
 
-function mockBackend(message: ApiMessage = MESSAGE): Backend {
-  const calls: Backend = { attachments: [], deleted: [], drafts: [], sent: [], messageFails: false };
+function mockBackend(message: ApiMessage = MESSAGE, sendGate?: Promise<void>): Backend {
+  const calls: Backend = {
+    attachments: [],
+    deleted: [],
+    drafts: [],
+    sent: [],
+    messageFails: false,
+    sendFails: false,
+  };
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = decodeURIComponent(new URL(String(input), "http://localhost").pathname);
     const method = init?.method ?? "GET";
@@ -93,7 +101,8 @@ function mockBackend(message: ApiMessage = MESSAGE): Backend {
     }
     if (/\/send$/.test(path) && method === "POST") {
       calls.sent.push(JSON.parse(String(init?.body)));
-      return reply({});
+      if (sendGate) await sendGate;
+      return calls.sendFails ? failure("relais SMTP refusé") : reply({});
     }
     if (/\/delete$/.test(path) && method === "POST") {
       calls.deleted.push(JSON.parse(String(init?.body)));
@@ -286,6 +295,64 @@ describe("ancien brouillon effacé après enregistrement ou envoi", () => {
     });
 
     expect(backend.deleted).toEqual([]);
+  });
+});
+
+describe("envoi · un seul départ par brouillon", () => {
+  it("ignore les clics répétés pendant l'envoi", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const backend = mockBackend(MESSAGE, gate);
+    const { result } = mount();
+    act(() => result.current.resumeDraft(draftMail(SOURCE)));
+    await waitFor(() => expect(result.current.composeDraft).not.toBeNull());
+    const draft = result.current.composeDraft!;
+
+    act(() => {
+      for (let index = 0; index < 36; index += 1) result.current.sendDraft(draft);
+    });
+
+    await waitFor(() => expect(backend.sent).toHaveLength(1));
+    expect(result.current.composeSending).toBe(true);
+
+    await act(async () => {
+      release();
+      await gate;
+    });
+
+    await waitFor(() => expect(result.current.composeSending).toBe(false));
+    expect(result.current.composeDraft).toBeNull();
+    expect(result.current.composeOpen).toBe(false);
+    expect(backend.sent).toHaveLength(1);
+  });
+
+  it("un échec réactive l'envoi avec l'erreur du serveur", async () => {
+    const backend = mockBackend();
+    backend.sendFails = true;
+    const { result } = mount();
+    act(() => result.current.resumeDraft(draftMail(SOURCE)));
+    await waitFor(() => expect(result.current.composeDraft).not.toBeNull());
+    const draft = result.current.composeDraft!;
+
+    await act(async () => result.current.sendDraft(draft));
+
+    await waitFor(() => expect(result.current.composeSendError).toContain("Envoi impossible"));
+    expect(result.current.composeSendError).toContain("imap · relais SMTP refusé");
+    expect(result.current.composeSending).toBe(false);
+    expect(result.current.composeOpen).toBe(true);
+    expect(result.current.composeDraft).not.toBeNull();
+    expect(result.current.notices.at(-1)?.message).toContain("Envoi impossible");
+
+    act(() => result.current.setComposeDraft({ ...draft, subject: "Planning phase 2 (bis)" }));
+    expect(result.current.composeSendError).toBeNull();
+
+    backend.sendFails = false;
+    await act(async () => result.current.sendDraft(result.current.composeDraft!));
+
+    await waitFor(() => expect(result.current.composeDraft).toBeNull());
+    expect(backend.sent).toHaveLength(2);
   });
 });
 

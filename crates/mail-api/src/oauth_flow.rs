@@ -348,7 +348,11 @@ async fn finish(
     {
         return Err(ApiError::conflict(
             "config",
-            format!("le compte « {} » existe déjà", config.id),
+            format!(
+                "le compte « {} » est déjà connecté sur cet appareil ; retire-le dans \
+                 Réglages → Comptes avant de le reconfigurer",
+                config.id
+            ),
         ));
     }
     let mut session = imap::connect_with(&config, state.tls()).await?;

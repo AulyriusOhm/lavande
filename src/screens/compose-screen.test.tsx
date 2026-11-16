@@ -229,3 +229,92 @@ describe("confirmations de rédaction · cibles tactiles", () => {
     }
   });
 });
+
+describe("envoi · verrou et retours visuels", () => {
+  const ready = (): ComposeDraft => ({
+    ...baseDraft("perso", false, false),
+    to: "camille@lavande.mail",
+    subject: "Bonjour",
+    body: "<p>Texte</p>",
+  });
+
+  function SendHarness({
+    onSend,
+    sending,
+    sent,
+    sendError,
+  }: {
+    onSend?: () => void;
+    sending?: boolean;
+    sent?: boolean;
+    sendError?: string | null;
+  }) {
+    const [draft, setDraft] = useState<ComposeDraft>(ready);
+    return (
+      <ComposeScreen
+        draft={draft}
+        onDraftChange={setDraft}
+        onClose={() => {}}
+        onSend={() => onSend?.()}
+        sending={sending}
+        sent={sent}
+        sendError={sendError}
+      />
+    );
+  }
+
+  function StoreLikeHarness({ onSend }: { onSend: () => void }) {
+    const [draft, setDraft] = useState<ComposeDraft>(ready);
+    const [sending, setSending] = useState(false);
+    return (
+      <ComposeScreen
+        draft={draft}
+        onDraftChange={setDraft}
+        onClose={() => {}}
+        sending={sending}
+        onSend={() => {
+          setSending(true);
+          onSend();
+        }}
+      />
+    );
+  }
+
+  const sendButton = () => screen.getByLabelText("Envoyer le message") as HTMLButtonElement;
+
+  it("verrouille le bouton et affiche « Envoi… » pendant l'envoi", () => {
+    const onSend = vi.fn();
+    render(<SendHarness sending onSend={onSend} />);
+
+    expect(sendButton().disabled).toBe(true);
+    expect(sendButton().textContent).toContain("Envoi…");
+    fireEvent.click(sendButton());
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("affiche « Envoyé » une fois le message parti", () => {
+    render(<SendHarness sent />);
+
+    expect(sendButton().disabled).toBe(true);
+    expect(sendButton().textContent).toContain("Envoyé");
+  });
+
+  it("réactive le bouton et montre l'erreur quand l'envoi échoue", () => {
+    render(<SendHarness sendError="Envoi impossible · smtp · relais refusé" />);
+
+    expect(screen.getByRole("alert").textContent).toContain("Envoi impossible");
+    expect(sendButton().disabled).toBe(false);
+    expect(sendButton().textContent).toContain("Envoyer");
+  });
+
+  it("n'envoie qu'une fois malgré des clics répétés", () => {
+    const onSend = vi.fn();
+    render(<StoreLikeHarness onSend={onSend} />);
+
+    fireEvent.click(sendButton());
+    for (let index = 0; index < 35; index += 1) fireEvent.click(sendButton());
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(sendButton().disabled).toBe(true);
+  });
+});

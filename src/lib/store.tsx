@@ -178,6 +178,9 @@ export type MailStoreValue = {
   composeDraft: ComposeDraft | null;
   composeTitle: string;
   composeDetached: boolean;
+  /** Envoi en cours : le bouton d'envoi reste verrouillé jusqu'à la réponse du serveur. */
+  composeSending: boolean;
+  composeSendError: string | null;
   /** Brouillon serveur repris, tant qu'il n'a pas été réenregistré ou envoyé. */
   draftSource: MailSource | null;
   setAccount: (value: string) => void;
@@ -273,11 +276,13 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const [notices, setNotices] = useState<NoticeData[]>([]);
   const [composeOpen, setComposeOpen] = useState(false);
   const [persistedCompose] = useState(loadPersistedCompose);
-  const [composeDraft, setComposeDraft] = useState<ComposeDraft | null>(
+  const [composeDraft, setComposeDraftState] = useState<ComposeDraft | null>(
     persistedCompose?.draft ?? null,
   );
   const [composeTitle, setComposeTitle] = useState(persistedCompose?.title ?? "Nouveau message");
   const [composeDetached, setComposeDetached] = useState(false);
+  const [composeSending, setComposeSending] = useState(false);
+  const [composeSendError, setComposeSendError] = useState<string | null>(null);
   const [draftSource, setDraftSource] = useState<MailSource | null>(
     persistedCompose?.draftSource ?? null,
   );
@@ -294,8 +299,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const composeStateRef = useRef<ComposeState>({ draft: null, title: "Nouveau message", detached: false });
   const lastPostedCompose = useRef("");
   const sendDraftRef = useRef<(draft: ComposeDraft) => void>(() => {});
+  const composeSendingRef = useRef(false);
   const resumeDraftRef = useRef<(mail: Mail) => void>(() => {});
   const noticeId = useRef(0);
+
+  const setComposeDraft = useCallback((value: ComposeDraft | null) => {
+    setComposeDraftState(value);
+    setComposeSendError(null);
+  }, []);
 
   const notify = useCallback((message: string, action?: { label: string; run: () => void }) => {
     noticeId.current += 1;
@@ -1400,12 +1411,17 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
   const sendDraft = useCallback(
     (draft: ComposeDraft) => {
-      if (readOnlyBlocked()) return;
+      if (readOnlyBlocked() || composeSendingRef.current) return;
       const source = draftSource;
       if (mode === "api") {
+        composeSendingRef.current = true;
+        setComposeSending(true);
+        setComposeSendError(null);
         mailApi
           .send(draft.account, sendInputOf(draft, activeSignature(prefs.signatures, draft.account)))
           .then(() => {
+            composeSendingRef.current = false;
+            setComposeSending(false);
             setComposeOpen(false);
             setComposeDraft(null);
             if (source) forgetDraftSource(source);
@@ -1415,6 +1431,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           })
           .catch((error: unknown) => {
             const message = `Envoi impossible · ${errorText(error)}`;
+            composeSendingRef.current = false;
+            setComposeSending(false);
+            setComposeSendError(message);
             notify(message);
             composeBus.current?.post({ kind: "send-failed", message });
           });
@@ -1462,7 +1481,16 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       notify("Message envoyé");
       composeBus.current?.post({ kind: "sent" });
     },
-    [accounts, draftSource, forgetDraftSource, mode, notify, prefs.signatures, readOnlyBlocked],
+    [
+      accounts,
+      draftSource,
+      forgetDraftSource,
+      mode,
+      notify,
+      prefs.signatures,
+      readOnlyBlocked,
+      setComposeDraft,
+    ],
   );
   sendDraftRef.current = sendDraft;
 
@@ -1545,9 +1573,17 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     async (input: NewAccount) => {
       if (readOnlyBlocked()) return "";
       const summary = await mailApi.createAccount(input);
-      const { accounts: loaded, folders: records } = await loadMailbox();
-      setAccounts(loaded);
-      setFolderRecords(records);
+      try {
+        const { accounts: loaded, folders: records } = await loadMailbox();
+        setAccounts(loaded);
+        setFolderRecords(records);
+      } catch (error) {
+        notify(`Compte connecté · rechargement impossible · ${errorText(error)}`);
+        setAccountState(summary.id);
+        setConnectOpen(false);
+        setPhase("ready");
+        return summary.id;
+      }
       setAccountState(summary.id);
       setFolderState("inbox");
       setFolderPath(null);
@@ -1618,7 +1654,10 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         setFolderPath(null);
         await bootstrap();
       })
-      .catch((error: unknown) => notify(errorText(error)));
+      .catch((error: unknown) => {
+        setRemoveTarget(target);
+        notify(errorText(error));
+      });
   }, [bootstrap, notify, readOnlyBlocked, removeTarget]);
 
   /**
@@ -2030,6 +2069,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       composeDraft,
       composeTitle,
       composeDetached,
+      composeSending,
+      composeSendError,
       draftSource,
       setAccount,
       setFolder,
@@ -2116,6 +2157,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       composeDraft,
       composeTitle,
       composeDetached,
+      composeSending,
+      composeSendError,
       draftSource,
       setAccount,
       setFolder,

@@ -137,6 +137,8 @@ function PhoneApp({ native }: { native?: boolean }) {
     composeOpen,
     composeDraft,
     composeTitle,
+    composeSending,
+    composeSendError,
     resumeCompose,
     setAccount,
     setFolder,
@@ -858,6 +860,8 @@ function PhoneApp({ native }: { native?: boolean }) {
                   draft={composeDraft}
                   onDraftChange={setComposeDraft}
                   onSend={sendDraft}
+                  sending={composeSending}
+                  sendError={composeSendError}
                   onMinimize={minimizeCompose}
                   onClose={closeCompose}
                 />

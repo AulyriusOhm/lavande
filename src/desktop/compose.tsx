@@ -71,6 +71,8 @@ export function DesktopCompose() {
     composeDraft,
     composeTitle,
     composeDetached,
+    composeSending,
+    composeSendError,
     setComposeDraft,
     sendDraft,
     resumeCompose,
@@ -303,6 +305,8 @@ export function DesktopCompose() {
               draft={composeDraft}
               onDraftChange={setComposeDraft}
               onSend={sendDraft}
+              sending={composeSending}
+              sendError={composeSendError}
               onMinimize={minimizeCompose}
               onClose={closeCompose}
               onHeaderPointerDown={startDrag}

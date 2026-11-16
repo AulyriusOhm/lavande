@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Image,
   PenLine,
+  Loader2,
   Lock,
   Minus,
   Paperclip,
@@ -50,6 +51,7 @@ export function ComposeScreen({
   onMinimize,
   title = "Nouveau message",
   sent = false,
+  sending = false,
   sendError,
   headerActions,
   onHeaderPointerDown,
@@ -62,6 +64,7 @@ export function ComposeScreen({
   onMinimize?: () => void;
   title?: string;
   sent?: boolean;
+  sending?: boolean;
   sendError?: string | null;
   headerActions?: ReactNode;
   onHeaderPointerDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
@@ -138,13 +141,14 @@ export function ComposeScreen({
   );
 
   const send = () => {
+    if (sending || sent) return;
     setConfirmSend(false);
     onSend?.(draft);
     if (!onSend) onClose();
   };
 
   const requestSend = () => {
-    if (!validRecipients || sent) return;
+    if (!validRecipients || sent || sending) return;
     if (!draft.subject.trim() || !draft.body.trim()) {
       setConfirmSend(true);
       return;
@@ -511,7 +515,8 @@ export function ComposeScreen({
             <button
               type="button"
               onClick={send}
-              className="inline-flex min-h-11 items-center rounded-full bg-accent px-3 text-[12px] font-bold text-accent-contrast"
+              disabled={sending}
+              className="inline-flex min-h-11 items-center rounded-full bg-accent px-3 text-[12px] font-bold text-accent-contrast disabled:pointer-events-none disabled:opacity-50"
             >
               Envoyer
             </button>
@@ -554,13 +559,19 @@ export function ComposeScreen({
         <div className="flex items-center gap-2">
           <ShimmerButton
             className="flex-1"
-            disabled={!validRecipients || sent}
+            disabled={!validRecipients || sent || sending}
             aria-label={validRecipients ? "Envoyer le message" : "Envoyer, destinataire valide requis"}
             onMouseDown={(event) => event.preventDefault()}
             onClick={requestSend}
           >
-            {sent ? <Check className="size-4" /> : <Send className="size-4" />}
-            {sent ? "Envoyé" : "Envoyer"}
+            {sent ? (
+              <Check className="size-4" />
+            ) : sending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Send className="size-4" />
+            )}
+            {sent ? "Envoyé" : sending ? "Envoi…" : "Envoyer"}
           </ShimmerButton>
           {isReply && (
             <button

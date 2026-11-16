@@ -24,7 +24,9 @@ export function DesktopComposePage() {
   });
   const [orphan, setOrphan] = useState(() => typeof BroadcastChannel === "undefined");
   const [sent, setSent] = useState(false);
+  const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const sendingRef = useRef(false);
   const busRef = useRef<ComposeBus | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -63,6 +65,8 @@ export function DesktopComposePage() {
           window.setTimeout(closeSelf, 700);
           break;
         case "send-failed":
+          sendingRef.current = false;
+          setSending(false);
           setSendError(message.message);
           break;
         case "focus":
@@ -120,7 +124,10 @@ export function DesktopComposePage() {
   };
 
   const onSend = (draft: ComposeDraft) => {
+    if (sendingRef.current || sent) return;
     setSendError(null);
+    sendingRef.current = true;
+    setSending(true);
     if (orphan || !busRef.current) {
       if (mode === "api") {
         mailApi
@@ -129,7 +136,11 @@ export function DesktopComposePage() {
             setSent(true);
             window.setTimeout(closeSelf, 700);
           })
-          .catch((error: unknown) => setSendError(`Envoi impossible · ${errorText(error)}`));
+          .catch((error: unknown) => {
+            sendingRef.current = false;
+            setSending(false);
+            setSendError(`Envoi impossible · ${errorText(error)}`);
+          });
       } else {
         closeSelf();
       }
@@ -168,6 +179,7 @@ export function DesktopComposePage() {
         onSend={onSend}
         onClose={closeSelf}
         sent={sent}
+        sending={sending}
         sendError={sendError}
         headerActions={
           <DIconButton label="Rattacher à la fenêtre principale" onClick={dock} className="size-8">

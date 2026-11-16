@@ -239,15 +239,24 @@ impl AppState {
         if let Some(secrets) = stored.take_secrets() {
             self.secrets.put(&config.id, &secrets).await?;
         }
+        let indexed = (|| -> Result<(), ApiError> {
+            self.store
+                .upsert_account(&config.id, &config.label, &config.email)?;
+            for folder in folders {
+                self.store.upsert_folder(folder)?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = indexed {
+            let _ = self.secrets.delete(&config.id).await;
+            let _ = self.store.delete_account(&config.id);
+            return Err(error);
+        }
         accounts.push(stored);
         if let Err(error) = self.save_accounts(&mut accounts).await {
             let _ = self.secrets.delete(&config.id).await;
+            let _ = self.store.delete_account(&config.id);
             return Err(error);
-        }
-        self.store
-            .upsert_account(&config.id, &config.label, &config.email)?;
-        for folder in folders {
-            self.store.upsert_folder(folder)?;
         }
         Ok(())
     }
