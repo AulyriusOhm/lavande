@@ -617,6 +617,9 @@ fn store_header(
 ) -> Result<bool, MailError> {
     let account_id = target.account_id;
     let folder_path = target.folder_path;
+    if store.is_tombstoned(account_id, folder_path, uid) {
+        return Ok(false);
+    }
     let parsed = match mime::parse_headers(raw) {
         Ok(parsed) => parsed,
         Err(error) => {
@@ -1012,9 +1015,11 @@ pub async fn set_flags(
 
 /// `UID MOVE` when the server has the capability, `UID COPY` + `\Deleted` +
 /// `UID EXPUNGE` otherwise; the fallback needs `UIDPLUS` and is refused before
-/// the copy when the server does not announce it. The source row is dropped,
-/// then the destination is reconciled so it carries the uid the server actually
-/// gave the message.
+/// the copy when the server does not announce it. The source uid is tombstoned
+/// as soon as the server accepted the move — before the row is dropped — so a
+/// sync that wakes up on the move cannot re-import it, then the source row is
+/// dropped and the destination reconciled so it carries the uid the server
+/// actually gave the message.
 pub async fn move_message(
     session: &mut ImapSession,
     store: &Store,
@@ -1041,6 +1046,7 @@ pub async fn move_message(
         store_flags(session, uid, "+FLAGS", &["\\Deleted"]).await?;
         expunge(session, &uid.to_string(), ExpungeMode::Strict).await?;
     }
+    store.tombstone_uid(account_id, from_path, uid);
     store.delete_messages(account_id, from_path, &[uid])?;
     reconcile(session, store, account_id, to_path, None).await?;
     Ok(())
@@ -1124,6 +1130,7 @@ pub async fn delete_message(
     }
     store_flags(session, uid, "+FLAGS", &["\\Deleted"]).await?;
     expunge(session, &uid.to_string(), ExpungeMode::Strict).await?;
+    store.tombstone_uid(account_id, folder_path, uid);
     store.delete_messages(account_id, folder_path, &[uid])?;
     Ok(())
 }
@@ -1132,7 +1139,8 @@ pub async fn delete_message(
 /// the server reported expunged. Emptying the folder is precisely the intent, so
 /// the folder-wide `EXPUNGE` fallback is used here; the local rows are cleared
 /// without trusting the uids known locally, since a never-synced folder is
-/// emptied on the server too.
+/// emptied on the server too. The uids the server lists are tombstoned before
+/// the expunge, which covers the ones the store never saw.
 pub async fn empty_folder(
     session: &mut ImapSession,
     store: &Store,
@@ -1140,6 +1148,7 @@ pub async fn empty_folder(
     folder_path: &str,
 ) -> Result<usize, MailError> {
     session.select(folder_path).await.map_err(imap_error)?;
+    let uids = session.uid_search("ALL").await.map_err(imap_error)?;
     {
         let stored = session
             .uid_store("1:*", "+FLAGS (\\Deleted)")
@@ -1147,6 +1156,9 @@ pub async fn empty_folder(
             .map_err(imap_error)?;
         let mut stored = Box::pin(stored);
         while stored.try_next().await.map_err(imap_error)?.is_some() {}
+    }
+    for uid in uids {
+        store.tombstone_uid(account_id, folder_path, uid);
     }
     let removed = expunge(session, "1:*", ExpungeMode::FolderWide).await?;
     store.clear_folder(account_id, folder_path)?;

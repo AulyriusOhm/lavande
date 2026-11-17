@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use chrono::{TimeZone, Utc};
 use lavande_mail::mime;
 use lavande_mail::model::{Address, AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState};
@@ -1241,4 +1243,26 @@ fn a_preview_lands_without_a_body_and_survives_a_resync() {
         .expect("lecture")
         .expect("message");
     assert_eq!(stored.preview, "Le planning avance.");
+}
+
+#[test]
+fn a_tombstoned_uid_is_isolated_and_expires() {
+    let store = open();
+    store.tombstone_uid("perso", "INBOX", 4);
+
+    assert!(store.is_tombstoned("perso", "INBOX", 4));
+    assert!(!store.is_tombstoned("perso", "INBOX", 5));
+    assert!(!store.is_tombstoned("perso", "Sent", 4));
+    assert!(!store.is_tombstoned("autre", "INBOX", 4));
+
+    store.prune_tombstones(Instant::now() + Duration::from_secs(601));
+    assert!(!store.is_tombstoned("perso", "INBOX", 4));
+}
+
+#[test]
+fn a_fresh_tombstone_survives_a_prune() {
+    let store = open();
+    store.tombstone_uid("perso", "INBOX", 4);
+    store.prune_tombstones(Instant::now());
+    assert!(store.is_tombstoned("perso", "INBOX", 4));
 }

@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Row, ToSql};
@@ -20,8 +20,19 @@ const MESSAGE_COLUMNS: &str = "account_id, folder_path, uid, uidvalidity, thread
      in_reply_to, references_json, from_json, to_json, cc_json, subject, date, unread, starred, \
      answered, size, pgp, preview, body_text, body_html, pgp_detail";
 
+/// How long a uid the store just dropped stays tombstoned. Exchange applies a
+/// `MOVE` asynchronously: the IDLE watcher of the source folder wakes on the
+/// move and resyncs while the server still lists the old uid, which would
+/// re-import the message the user just moved away. Ten minutes cover that
+/// convergence delay; past it a uid the server still lists is imported again,
+/// because the move did not persist.
+const TOMBSTONE_TTL: Duration = Duration::from_secs(600);
+
+type Tombstones = HashMap<(String, String, u32), Instant>;
+
 pub struct Store {
     conn: Mutex<Connection>,
+    tombstones: Mutex<Tombstones>,
 }
 
 /// Per-folder message totals, as stored locally.
@@ -47,6 +58,7 @@ impl Store {
         conn.busy_timeout(Duration::from_secs(5))?;
         Ok(Self {
             conn: Mutex::new(conn),
+            tombstones: Mutex::new(HashMap::new()),
         })
     }
 
@@ -493,6 +505,37 @@ impl Store {
         insert_attachments(&tx, account_id, folder_path, uid, &parsed.attachments)?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Remembers that `uid` was just dropped from `folder_path`: the import
+    /// paths skip it until the tombstone expires, so a resync that still sees
+    /// the uid on the server does not bring the message back. Memory only, so a
+    /// restart of the daemon forgets every tombstone.
+    pub fn tombstone_uid(&self, account_id: &str, folder_path: &str, uid: u32) {
+        let now = Instant::now();
+        if let Some(mut tombstones) = self.live_tombstones(now) {
+            tombstones.insert(uid_key(account_id, folder_path, uid), now);
+        }
+    }
+
+    /// Whether `uid` was dropped from `folder_path` less than `TOMBSTONE_TTL`
+    /// ago.
+    pub fn is_tombstoned(&self, account_id: &str, folder_path: &str, uid: u32) -> bool {
+        self.live_tombstones(Instant::now())
+            .is_some_and(|tombstones| {
+                tombstones.contains_key(&uid_key(account_id, folder_path, uid))
+            })
+    }
+
+    /// Drops the tombstones older than `TOMBSTONE_TTL` as of `now`.
+    pub fn prune_tombstones(&self, now: Instant) {
+        self.live_tombstones(now);
+    }
+
+    fn live_tombstones(&self, now: Instant) -> Option<MutexGuard<'_, Tombstones>> {
+        let mut tombstones = self.tombstones.lock().ok()?;
+        tombstones.retain(|_, at| now.saturating_duration_since(*at) < TOMBSTONE_TTL);
+        Some(tombstones)
     }
 
     pub fn delete_message(
@@ -1124,6 +1167,10 @@ fn parse_date(raw: Option<&str>) -> Result<Option<DateTime<Utc>>, MailError> {
             .map_err(|error| MailError::InvalidData(format!("invalid date: {error}")))
     })
     .transpose()
+}
+
+fn uid_key(account_id: &str, folder_path: &str, uid: u32) -> (String, String, u32) {
+    (account_id.to_string(), folder_path.to_string(), uid)
 }
 
 fn require_one(changed: usize, what: &str) -> Result<(), MailError> {

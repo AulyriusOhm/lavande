@@ -544,12 +544,17 @@ async fn empty_folder_clears_both_sides() {
         "move to Purge",
         imap::move_message(&mut session, &store, ACCOUNT, INBOX, uid, "Purge").await,
     );
+    let purged = find(&store, "Purge", &subject).uid;
 
     let removed = checked(
         "empty Purge",
         imap::empty_folder(&mut session, &store, ACCOUNT, "Purge").await,
     );
     assert!(removed >= 1, "removed {removed}");
+    assert!(
+        store.is_tombstoned(ACCOUNT, "Purge", purged),
+        "the emptied folder left uid {purged} untombstoned"
+    );
     let left = checked(
         "purge listing",
         store.messages_in_folder(ACCOUNT, "Purge", -1, 0),
@@ -857,6 +862,102 @@ async fn move_keeps_store_in_step_with_server() {
             message.uid
         );
     }
+}
+
+/// Le bug Exchange : le serveur liste encore l'ancien uid après un `MOVE`, et
+/// la resynchro qui suit le réimporte. Un uid tombstoné à la main reproduit
+/// exactement cet état et doit rester absent du store.
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn a_tombstoned_uid_is_not_reimported() {
+    let cfg = account();
+    let store = store(&cfg);
+    let subject = unique("[live-tombstone] reimport");
+    send(&cfg, &subject, "corps fantome", None).await;
+    sync(&cfg, &store, INBOX).await;
+    let uid = find(&store, INBOX, &subject).uid;
+
+    checked(
+        "drop the row",
+        store.delete_messages(ACCOUNT, INBOX, &[uid]),
+    );
+    store.tombstone_uid(ACCOUNT, INBOX, uid);
+
+    let mut raw = connect(&cfg).await;
+    select(&mut raw, INBOX).await;
+    let server = server_uids(&mut raw).await;
+    assert!(
+        server.contains(&uid),
+        "the server no longer lists uid {uid}, the scenario proves nothing: {server:?}"
+    );
+
+    let report = sync(&cfg, &store, INBOX).await;
+    assert_eq!(report.inserted, 0, "inserted {}", report.inserted);
+    assert!(
+        checked("inbox lookup", store.get_message(ACCOUNT, INBOX, uid)).is_none(),
+        "the tombstoned uid {uid} came back"
+    );
+    let inbox = checked(
+        "inbox listing",
+        store.messages_in_folder(ACCOUNT, INBOX, -1, 0),
+    );
+    assert!(
+        inbox.iter().all(|message| message.subject != subject),
+        "'{subject}' is back in the local INBOX"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn move_tombstones_the_source_uid() {
+    let cfg = account();
+    let store = store(&cfg);
+    let subject = unique("[live-tombstone] deplacement");
+    send(&cfg, &subject, "corps deplace", None).await;
+
+    let mut session = connect(&cfg).await;
+    checked(
+        "create Archive",
+        imap::create_folder(&mut session, "Archive").await,
+    );
+    checked(
+        "sync",
+        imap::sync_folder(
+            &mut session,
+            &store,
+            ACCOUNT,
+            INBOX,
+            &FolderMapping::default(),
+        )
+        .await,
+    );
+    let uid = find(&store, INBOX, &subject).uid;
+    assert!(!store.is_tombstoned(ACCOUNT, INBOX, uid));
+
+    checked(
+        "move to Archive",
+        imap::move_message(&mut session, &store, ACCOUNT, INBOX, uid, "Archive").await,
+    );
+    assert!(
+        store.is_tombstoned(ACCOUNT, INBOX, uid),
+        "the move left uid {uid} untombstoned"
+    );
+    let report = checked(
+        "resync INBOX",
+        imap::sync_folder(
+            &mut session,
+            &store,
+            ACCOUNT,
+            INBOX,
+            &FolderMapping::default(),
+        )
+        .await,
+    );
+    assert_eq!(report.inserted, 0, "inserted {}", report.inserted);
+    assert!(
+        checked("inbox lookup", store.get_message(ACCOUNT, INBOX, uid)).is_none(),
+        "uid {uid} came back to INBOX"
+    );
 }
 
 #[tokio::test]
