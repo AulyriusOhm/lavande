@@ -52,6 +52,16 @@ process.env.LAVANDE_MAIL_TEST_PASSWORD2 = SECOND.password;
 let page = null;
 const runner = createRunner(() => page);
 
+// Un scénario en échec arrête la suite : l'état accumulé (comptes, mails, fils)
+// n'est plus fiable pour les suivants.
+const runScenarios = async (scenarios, ctx) => {
+  for (const scenario of scenarios) {
+    const before = runner.failures;
+    await scenario(ctx);
+    if (runner.failures > before) break;
+  }
+};
+
 let daemon = null;
 let vite = null;
 let browser = null;
@@ -89,22 +99,20 @@ try {
       seed: seedSender(api),
       check: runner.check,
     };
-    // Chaque scénario reprend la page et l'état laissés par le précédent ;
-    // un scénario en échec arrête la suite (l'état accumulé n'est plus fiable).
-    for (const scenario of [
-      desktopSmoke,
-      desktopReplySend,
-      desktopComposeSend,
-      desktopFolderActions,
-      desktopSearch,
-      desktopThread,
-      desktopUnified,
-      desktopSettingsPersistence,
-    ]) {
-      const before = runner.failures;
-      await scenario(context2);
-      if (runner.failures > before) break;
-    }
+    // Chaque scénario reprend la page et l'état laissés par le précédent.
+    await runScenarios(
+      [
+        desktopSmoke,
+        desktopReplySend,
+        desktopComposeSend,
+        desktopFolderActions,
+        desktopSearch,
+        desktopThread,
+        desktopUnified,
+        desktopSettingsPersistence,
+      ],
+      context2,
+    );
 
     await context.close();
 
@@ -117,18 +125,17 @@ try {
       page = await mobileContext.newPage();
       page.on("pageerror", (error) => console.log(`     erreur page : ${error.message}`));
       const mobileCtx = { ...context2, page };
-      for (const scenario of [
-        mobileInboxRead,
-        mobileReplySend,
-        mobileLongPressArchive,
-        mobileComposeSend,
-        mobileSettingsPersistence,
-        mobileSummaryCard,
-      ]) {
-        const before = runner.failures;
-        await scenario(mobileCtx);
-        if (runner.failures > before) break;
-      }
+      await runScenarios(
+        [
+          mobileInboxRead,
+          mobileReplySend,
+          mobileLongPressArchive,
+          mobileComposeSend,
+          mobileSettingsPersistence,
+          mobileSummaryCard,
+        ],
+        mobileCtx,
+      );
       await mobileContext.close();
     }
   }

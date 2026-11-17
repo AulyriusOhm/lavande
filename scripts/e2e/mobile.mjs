@@ -2,7 +2,7 @@
 // GreenMail. Même contrat que desktop.mjs : { page, baseUrl, api, token, seed,
 // check }, arrêt au premier échec. La page est un contexte tactile 390×844.
 
-import { accountId, disablePgp, folderThreads, messageBody, syncAccount } from "./lib.mjs";
+import { accountId, disablePgp, folderThreads, inboxMessageBody, messageBody, syncAccount } from "./lib.mjs";
 
 const ACCOUNT_EMAIL = "roman@lavande.test";
 
@@ -348,18 +348,11 @@ export async function mobileComposeSend({ page, api, check }) {
   await check("rédaction mobile : le message envoyé arrive dans la boîte", async () => {
     await syncInbox(page, api);
     await row(page, subject).waitFor({ timeout: 90_000 });
-    const id = await accountId(api, ACCOUNT_EMAIL);
-    const threads = await folderThreads(api, id, "INBOX");
-    const thread = threads.find((entry) =>
-      entry.messages.some((message) => message.subject === subject),
-    );
-    if (!thread) throw new Error(`« ${subject} » absent de INBOX`);
-    const message = thread.messages.find((entry) => entry.subject === subject);
-    const content = await messageBody(api, id, message.folder_path, message.uid);
+    const { uid, content } = await inboxMessageBody(api, ACCOUNT_EMAIL, subject);
     if (!content.includes("e2e-mobile-compose ecrit")) {
       throw new Error(`corps reçu « ${content.slice(0, 120)} »`);
     }
-    return `${subject} · uid ${message.uid}`;
+    return `${subject} · uid ${uid}`;
   });
 }
 

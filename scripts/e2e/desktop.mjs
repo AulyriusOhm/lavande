@@ -2,7 +2,7 @@
 // Chaque scénario reçoit { page, baseUrl, api, token, seed, check } et rend la
 // main sur le premier échec : la suite s'arrête là où elle a cassé.
 
-import { accountId, disablePgp, folderThreads, messageBody, syncAccount } from "./lib.mjs";
+import { accountId, disablePgp, folderThreads, inboxMessageBody, messageBody, syncAccount } from "./lib.mjs";
 
 const ACCOUNT = {
   label: "E2E",
@@ -23,6 +23,8 @@ const SECOND_ACCOUNT = {
   email: "bob@lavande.test",
   username: "bob@lavande.test",
   password: "secret",
+  imap: ACCOUNT.imap,
+  smtp: ACCOUNT.smtp,
 };
 
 const row = (page, subject) =>
@@ -35,6 +37,22 @@ const dockTab = (page, label) =>
   page.getByRole("button", { name: new RegExp(`^${label}( \\d+)?$`) });
 const menuItem = (page, label) =>
   page.getByRole("menuitem", { name: label, exact: true });
+const composePanel = (page) => page.getByTestId("desktop-compose");
+
+// Les hôtes d'abord : le blur de l'adresse déclenche une auto-découverte qui
+// écraserait les serveurs saisis à la main.
+async function fillConnectForm(page, account) {
+  await page.selectOption("#connect-imap-encryption", account.imap.encryption);
+  await page.fill("#connect-imap-host", account.imap.host);
+  await page.fill("#connect-imap-port", account.imap.port);
+  await page.selectOption("#connect-smtp-encryption", account.smtp.encryption);
+  await page.fill("#connect-smtp-host", account.smtp.host);
+  await page.fill("#connect-smtp-port", account.smtp.port);
+  await page.fill("#connect-label", account.label);
+  await page.fill("#connect-username", account.username);
+  await page.fill("#connect-password", account.password);
+  await page.fill("#connect-email", account.email);
+}
 
 /** Attente d'une ligne de la liste, avec le délai que le repli lui donne. */
 const waitRow = (page, subject) => (timeout) => row(page, subject).waitFor({ timeout });
@@ -77,18 +95,7 @@ export async function desktopSmoke({ page, baseUrl, seed, check }) {
 
   if (
     !(await check("smoke : compte GreenMail saisi", async () => {
-      // Les hôtes d'abord : le blur de l'adresse déclenche une auto-découverte
-      // qui écraserait les serveurs saisis à la main.
-      await page.selectOption("#connect-imap-encryption", ACCOUNT.imap.encryption);
-      await page.fill("#connect-imap-host", ACCOUNT.imap.host);
-      await page.fill("#connect-imap-port", ACCOUNT.imap.port);
-      await page.selectOption("#connect-smtp-encryption", ACCOUNT.smtp.encryption);
-      await page.fill("#connect-smtp-host", ACCOUNT.smtp.host);
-      await page.fill("#connect-smtp-port", ACCOUNT.smtp.port);
-      await page.fill("#connect-label", ACCOUNT.label);
-      await page.fill("#connect-username", ACCOUNT.username);
-      await page.fill("#connect-password", ACCOUNT.password);
-      await page.fill("#connect-email", ACCOUNT.email);
+      await fillConnectForm(page, ACCOUNT);
       return `${ACCOUNT.email} · imaps ${ACCOUNT.imap.port} · smtps ${ACCOUNT.smtp.port}`;
     }))
   ) {
@@ -180,7 +187,7 @@ export async function desktopReplySend({ page, api, seed, check }) {
   if (
     !(await check("réponse : « Répondre » ouvre la rédaction préremplie", async () => {
       await reader(page).getByRole("button", { name: "Répondre", exact: true }).click();
-      const compose = page.getByTestId("desktop-compose");
+      const compose = composePanel(page);
       await compose.waitFor({ timeout: 30_000 });
       const to = await compose.locator("#compose-to").inputValue();
       if (to !== ACCOUNT.email) throw new Error(`destinataire « ${to} » au lieu de ${ACCOUNT.email}`);
@@ -194,7 +201,7 @@ export async function desktopReplySend({ page, api, seed, check }) {
 
   if (
     !(await check("réponse : PGP coupé à l'envoi (aucune clé sur ce compte)", async () => {
-      const states = await disablePgp(page.getByTestId("desktop-compose"));
+      const states = await disablePgp(composePanel(page));
       if (states.includes("true")) throw new Error(`interrupteur resté actif : ${states}`);
       return states;
     }))
@@ -204,7 +211,7 @@ export async function desktopReplySend({ page, api, seed, check }) {
 
   if (
     !(await check("réponse : corps saisi puis envoi, la rédaction se referme", async () => {
-      const compose = page.getByTestId("desktop-compose");
+      const compose = composePanel(page);
       await typeBody(page, compose, answer);
       await compose.getByLabel("Envoyer le message").click();
       await compose.waitFor({ state: "detached", timeout: 60_000 });
@@ -269,7 +276,7 @@ export async function desktopComposeSend({ page, api, check }) {
   if (
     !(await check("rédaction : le bouton « Nouveau message » ouvre un brouillon vide", async () => {
       await page.getByLabel("Nouveau message").click();
-      const compose = page.getByTestId("desktop-compose");
+      const compose = composePanel(page);
       await compose.waitFor({ timeout: 30_000 });
       const to = await compose.locator("#compose-to").inputValue();
       const composed = await compose.locator("#compose-subject").inputValue();
@@ -282,7 +289,7 @@ export async function desktopComposeSend({ page, api, check }) {
 
   if (
     !(await check("rédaction : destinataire, objet et corps saisis", async () => {
-      const compose = page.getByTestId("desktop-compose");
+      const compose = composePanel(page);
       await compose.locator("#compose-to").fill(ACCOUNT.email);
       await compose.locator("#compose-subject").fill(subject);
       await disablePgp(compose);
@@ -295,7 +302,7 @@ export async function desktopComposeSend({ page, api, check }) {
 
   if (
     !(await check("rédaction : envoi, la rédaction se referme", async () => {
-      const compose = page.getByTestId("desktop-compose");
+      const compose = composePanel(page);
       await compose.getByLabel("Envoyer le message").click();
       await compose.waitFor({ state: "detached", timeout: 60_000 });
       return "rédaction fermée";
@@ -306,14 +313,9 @@ export async function desktopComposeSend({ page, api, check }) {
 
   await check("rédaction : le message envoyé arrive dans la boîte", async () => {
     await syncThen(page, api, ACCOUNT.email, waitRow(page, subject));
-    const id = await accountId(api, ACCOUNT.email);
-    const threads = await folderThreads(api, id, "INBOX");
-    const thread = threads.find((entry) => entry.messages.some((message) => message.subject === subject));
-    if (!thread) throw new Error(`« ${subject} » absent de INBOX`);
-    const message = thread.messages.find((entry) => entry.subject === subject);
-    const content = await messageBody(api, id, message.folder_path, message.uid);
+    const { uid, content } = await inboxMessageBody(api, ACCOUNT.email, subject);
     if (!content.includes("e2e-compose ecrit")) throw new Error(`corps reçu « ${content.slice(0, 120)} »`);
-    return `${subject} · uid ${message.uid}`;
+    return `${subject} · uid ${uid}`;
   });
 }
 
@@ -568,17 +570,7 @@ export async function desktopUnified({ page, api, seed, check }) {
 
   if (
     !(await check("unifiée : second compte GreenMail saisi", async () => {
-      // Les hôtes d'abord : le blur de l'adresse lance une auto-découverte.
-      await page.selectOption("#connect-imap-encryption", ACCOUNT.imap.encryption);
-      await page.fill("#connect-imap-host", ACCOUNT.imap.host);
-      await page.fill("#connect-imap-port", ACCOUNT.imap.port);
-      await page.selectOption("#connect-smtp-encryption", ACCOUNT.smtp.encryption);
-      await page.fill("#connect-smtp-host", ACCOUNT.smtp.host);
-      await page.fill("#connect-smtp-port", ACCOUNT.smtp.port);
-      await page.fill("#connect-label", SECOND_ACCOUNT.label);
-      await page.fill("#connect-username", SECOND_ACCOUNT.username);
-      await page.fill("#connect-password", SECOND_ACCOUNT.password);
-      await page.fill("#connect-email", SECOND_ACCOUNT.email);
+      await fillConnectForm(page, SECOND_ACCOUNT);
       return `${SECOND_ACCOUNT.email} · imaps ${ACCOUNT.imap.port}`;
     }))
   ) {

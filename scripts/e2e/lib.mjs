@@ -377,6 +377,17 @@ export async function messageBody(api, id, path, uid) {
   return `${response.json?.body_text ?? ""} ${response.json?.body_html ?? ""}`;
 }
 
+/** Message d'un sujet donné dans l'INBOX d'un compte, avec son corps relu. */
+export async function inboxMessageBody(api, email, subject) {
+  const id = await accountId(api, email);
+  const threads = await folderThreads(api, id, "INBOX");
+  const thread = threads.find((entry) => entry.messages.some((message) => message.subject === subject));
+  if (!thread) throw new Error(`« ${subject} » absent de INBOX`);
+  const message = thread.messages.find((entry) => entry.subject === subject);
+  const content = await messageBody(api, id, message.folder_path, message.uid);
+  return { uid: message.uid, content };
+}
+
 /**
  * Chiffrement et signature partent activés par défaut : sans clé PGP le démon
  * refuse l'envoi (« Aucune clé secrète pour signer ce message »). Les deux
