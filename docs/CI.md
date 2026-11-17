@@ -15,9 +15,10 @@ l'édition de liens des tests Rust.
 
 Le job `rust` ne compile que le workspace racine (`crates/mail-core`, `crates/mail-api`) : `src-tauri`
 et `server` sont dans `exclude` du `Cargo.toml` et gardent chacun leur `Cargo.lock`, d'où les trois
-`cargo audit -f`. Le cache `actions/cache@v4` couvre `~/.cargo/registry`, `~/.cargo/git` et `target`,
-clé `${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}` : une montée de dépendance Rust
-invalide le cache.
+`cargo audit -f`. Pas de cache pour l'instant : le service de cache du runner est injoignable depuis
+les jobs (`getCacheEntry … connect ETIMEDOUT`, ~4 min de timeout par tentative, constaté au premier
+run). À réactiver quand l'infra sera corrigée : `actions/cache@v4` sur `~/.cargo/registry`,
+`~/.cargo/git`, `target` (clé sur `hashFiles('**/Cargo.lock')`) et `cache: npm` pour `setup-node`.
 
 ## Reproduire les checks en local
 
@@ -39,9 +40,9 @@ npm audit --omit=dev --audit-level=high
 ```
 
 Écarts avec la CI, tous volontaires : la CI part d'un `npm ci` propre (pas de `node_modules` local),
-utilise le rustup stable du jour au lieu du toolchain installé sur la machine, et son cache
-`~/.cargo` + `target` peut masquer un rebuild complet — un doute sur une régression Rust se tranche
-en local après `cargo clean`. Les tests Rust locaux passent par le wrapper `cc` de cette machine
+utilise le rustup stable du jour au lieu du toolchain installé sur la machine, et repart d'un
+`target/` vide à chaque run (pas de cache) — un doute sur une régression Rust se tranche en local
+après `cargo clean`. Les tests Rust locaux passent par le wrapper `cc` de cette machine
 (voir [`E2E.md`](./E2E.md#distinguer-les-suites)) ; sur le runner, c'est le `cc` de l'image.
 
 ## Politique d'audit
