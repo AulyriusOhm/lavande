@@ -13,10 +13,24 @@ readonly SMTPS_PORT="${LAVANDE_MAIL_TEST_SMTPS_PORT:-3465}"
 
 readonly MAIL_USER="${LAVANDE_MAIL_TEST_USER:-roman@lavande.test}"
 readonly MAIL_PASSWORD="${LAVANDE_MAIL_TEST_PASSWORD:-secret}"
+readonly MAIL_USER2="${LAVANDE_MAIL_TEST_USER2:-}"
+readonly MAIL_PASSWORD2="${LAVANDE_MAIL_TEST_PASSWORD2:-secret}"
 readonly KEYSTORE_PASSWORD="changeit"
 
+# GreenMail prend les comptes en liste séparée par des virgules, chacun rattaché
+# au domaine de son adresse : le second compte est optionnel.
+users_option() {
+    local users="${MAIL_USER}:${MAIL_PASSWORD}@localhost"
+    if [[ -n "$MAIL_USER2" ]]; then
+        local domain="${MAIL_USER2#*@}"
+        [[ "$domain" == "$MAIL_USER2" ]] && domain="localhost"
+        users="${users},${MAIL_USER2}:${MAIL_PASSWORD2}@${domain}"
+    fi
+    echo "-Dgreenmail.users=${users}"
+}
+
 readonly GREENMAIL_OPTS=(
-    "-Dgreenmail.users=${MAIL_USER}:${MAIL_PASSWORD}@localhost"
+    "$(users_option)"
     "-Dgreenmail.hostname=0.0.0.0"
     "-Dgreenmail.setup.test.all"
     "-Dgreenmail.tls.keystore.file=/tls/greenmail.p12"
@@ -96,6 +110,11 @@ greenmail ready (container ${CONTAINER}, state ${DIR})
   smtps    127.0.0.1:${SMTPS_PORT}
   user     ${MAIL_USER}
   password ${MAIL_PASSWORD}
+EOF
+    if [[ -n "$MAIL_USER2" ]]; then
+        printf '  user2    %s\n  password2 %s\n' "$MAIL_USER2" "$MAIL_PASSWORD2"
+    fi
+    cat <<EOF
   ca cert  ${DIR}/cert.pem
 EOF
 }

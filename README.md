@@ -150,6 +150,23 @@ npm run mail:test:live                # 11 tests, --test-threads=1 obligatoire
 scripts/mail-test-server.sh stop      # ou `reset` (stop + start), `status`
 ```
 
+### Tests E2E web (`npm run e2e:ui`)
+
+Chaîne complète dans un chromium headless : l'app web réelle (mode api) pilotée par `playwright-core`
+contre un démon `lavande-maild` jetable et un GreenMail recréé pour le run. Aucun mock — les mails
+partent en SMTP réel et reviennent par IMAP réel.
+
+```bash
+cargo build -p lavande-mail-api     # e2e:ui ne build pas le démon (env de scripts/mail-service.sh)
+npm run e2e:ui                      # scénarios PC (/?desktop) + mobile (/?app), captures dans artifacts/ en échec
+```
+
+Prérequis : `docker` (image `greenmail/standalone`), chromium déjà en cache
+(`~/.cache/ms-playwright/chromium-1254`), binaire `~/.cache/lavande-build/target/debug/lavande-maild`.
+Ports dédiés 8791 (démon) et 1422 (Vite) : le démon réel (8790) et `~/.local/share/lavande` ne sont
+jamais touchés. Architecture, variables, contrat d'un scénario et couverture :
+[`docs/E2E.md`](./docs/E2E.md).
+
 ### Limites (courte liste)
 
 - STARTTLS non testé : seul le TLS implicite est validé (GreenMail ne l'annonce pas).
