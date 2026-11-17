@@ -37,3 +37,7 @@ strip = "debuginfo"
 
 [profile.release]
 strip = true
+
+# Workspace autonome : sans cette table, cargo remonte au workspace parent
+# (faux en worktree imbriqué, le exclude du manifeste parent ne couvre pas ce chemin).
+[workspace]
