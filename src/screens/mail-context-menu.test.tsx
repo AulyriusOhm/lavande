@@ -69,6 +69,15 @@ describe("appui long mobile", () => {
     expect(screen.getByRole("button", { name: "Annuler" })).toBeTruthy();
   });
 
+  it("ne déplace pas le focus vers la feuille, l'arrière-plan ne défile pas", async () => {
+    await openMobile();
+
+    await hold(MAQUETTES);
+
+    expect(menu()).not.toBeNull();
+    expect(menu()!.contains(document.activeElement)).toBe(false);
+  });
+
   it("n'ouvre pas le message au relâchement qui suit l'appui long", async () => {
     await openMobile();
     await hold(MAQUETTES);

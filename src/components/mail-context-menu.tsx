@@ -125,8 +125,8 @@ export function MailContextMenu({
   useEscapeLayer(true, onClose);
 
   useEffect(() => {
-    firstRef.current?.focus();
-  }, []);
+    if (ancre) firstRef.current?.focus({ preventScroll: true });
+  }, [ancre]);
 
   useLayoutEffect(() => {
     if (!ancre || !panelRef.current) return;
