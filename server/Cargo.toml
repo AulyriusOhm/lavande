@@ -53,3 +53,7 @@ sqlx = { version = "0.8", default-features = false, features = [
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
 uuid = { version = "1", features = ["v4"] }
+
+# Workspace autonome : sans cette table, cargo remonte au workspace parent
+# (faux en worktree imbriqué, le exclude du manifeste parent ne couvre pas ce chemin).
+[workspace]

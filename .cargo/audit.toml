@@ -1,0 +1,77 @@
+# Politique d'audit cargo-audit — Lavande
+# Revue du 17/11/2026.
+#
+# Emplacement : cargo-audit 0.23.0 ne lit QUE `.cargo/audit.toml` (pas de flag
+# --config, un audit.toml à la racine est ignoré) — d'où ce fichier unique.
+# `cargo audit` lancé depuis la racine applique cette politique.
+#
+# Trois locks à auditer (src-tauri/ et server/ sont des projets Cargo séparés,
+# exclus du workspace racine) :
+#   cargo audit
+#   cargo audit -f src-tauri/Cargo.lock
+#   cargo audit -f server/Cargo.lock
+#
+# Schéma : cargo-audit 0.23.0. Les clés `vulnerability`/`unmaintained`/`unsound`
+# de la section [advisories] des versions <= 0.22 n'existent plus ; les
+# vulnérabilités sont déniées par défaut (exit 1), et les avertissements
+# informationnels sont rapportés sans échec tant qu'ils ne sont pas listés dans
+# [output] deny. D'où : unmaintained/unsound = warn (ci-dessous), deny vide.
+#
+# Les IDs ignorés ci-dessous sont tous soit sans correctif amont, soit présents
+# uniquement dans un lock (dépendance optionnelle jamais compilée). Aucune
+# vulnérabilité corrigeable n'est ignorée.
+
+[advisories]
+# Avertissements informationnels rapportés (warn, pas deny).
+informational_warnings = ["unmaintained", "unsound"]
+ignore = [
+  # rsa 0.9.10 — Marvin Attack (key recovery par canal temporel).
+  # Tiré par pgp 0.21.1 ; rpgp main est encore sur rsa 0.9.10, donc aucun
+  # correctif upstream disponible (vérifié le 17/11/2026).
+  # Côté server/, rsa n'arrive que par sqlx-mysql, dépendance optionnelle de
+  # sqlx non activée (features postgres uniquement) : jamais compilé
+  # (`cargo tree -i rsa` ne trouve rien).
+  # À re-vérifier quand pgp passera à rsa 0.10.
+  "RUSTSEC-2023-0071",
+
+  # crypto-bigint 0.5.5 — variabilité temporelle dans des opérations censées
+  # être à temps constant. Vient de rsa 0.9 (via pgp). Le correctif (>= 0.7.6)
+  # exige rsa 0.10 : même blocage upstream que RUSTSEC-2023-0071.
+  "RUSTSEC-2026-0387",
+
+  # libsqlite3-sys 0.30.1 — CVE SQLite C (sévérité 6.8). Uniquement dans
+  # server/Cargo.lock, via sqlx-sqlite, dépendance optionnelle de sqlx non
+  # activée (features postgres uniquement) : jamais compilé.
+  # Correctif >= 0.39.0 seulement via sqlx 0.9 (0.8.6 épingle ^0.30) :
+  # à re-vérifier à la montée de sqlx.
+  "RUSTSEC-2026-0459",
+
+  # chrono 0.4.45 — unmaintained, aucun correctif (le crate reste la version
+  # utilisée par tauri/sqlx ; pas d'alternative compatible à ce jour).
+  "RUSTSEC-2026-0543",
+
+  # pin-utils 0.1.1 — unmaintained, aucun correctif.
+  "RUSTSEC-2026-0441",
+
+  # zbus_names — unmaintained, tiré par la pile zbus/tauri (aucun correctif).
+  "RUSTSEC-2026-0371",
+
+  # zvariant — unmaintained, tiré par la pile zbus/tauri (aucun correctif).
+  "RUSTSEC-2026-0370",
+
+  # zvariant_derive — unmaintained, tiré par la pile zbus/tauri (aucun correctif).
+  "RUSTSEC-2026-0372",
+
+  # proc-macro-error 1.0.4 — unmaintained, dépendance de build transitive
+  # (aucun correctif).
+  "RUSTSEC-2024-0370",
+
+  # glib 0.18.5 — unsound (VariantStrIter). Le correctif (>= 0.20) est
+  # incompatible avec le tauri/gtk actuellement utilisé : à traiter lors de la
+  # montée de version de tauri.
+  "RUSTSEC-2024-0429",
+]
+
+# Pas de section [output] : `deny` y vaut [] par défaut, donc aucun avertissement
+# n'est promu en échec (unmaintained/unsound restent des avertissements, politique
+# demandée), et les vulnérabilités échouent déjà par défaut.

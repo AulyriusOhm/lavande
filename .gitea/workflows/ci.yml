@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust:
+    name: Rust — fmt, clippy, tests, audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer rustup (stable, rustfmt, clippy)
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable --component rustfmt clippy
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: Installer cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit — workspace (Cargo.lock)
+        run: cargo audit
+
+      - name: Audit — coquille Tauri (src-tauri/Cargo.lock)
+        run: cargo audit -f src-tauri/Cargo.lock
+
+      - name: Audit — serveur de synchronisation (server/Cargo.lock)
+        run: cargo audit -f server/Cargo.lock
+
+  front:
+    name: Front — build, tests, audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm test
+
+      - run: npm audit --omit=dev --audit-level=high
+
+  vitrine:
+    name: Site vitrine — build, audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site-vitrine
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site-vitrine/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm audit --omit=dev --audit-level=high
