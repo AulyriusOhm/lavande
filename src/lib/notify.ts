@@ -28,6 +28,15 @@ const CHANNELS: Record<NotifyKind, { id: string; name: string; description: stri
 
 let ready: Promise<boolean> | null = null;
 
+// Sans identifiant, le système réutilise la même notification et un second mail
+// écrase le premier : un compteur neuf par envoi les empile.
+let sequence = 0;
+
+function nextId(): number {
+  sequence = (sequence + 1) % 1_000_000;
+  return sequence;
+}
+
 async function prepare(): Promise<boolean> {
   let granted = await isPermissionGranted();
   if (!granted) granted = (await requestPermission()) === "granted";
@@ -58,8 +67,9 @@ async function notify(kind: NotifyKind, title: string, body: string): Promise<vo
   if (!isTauriShell() || document.hasFocus()) return;
   try {
     if (!(await allowed())) return;
+    const id = nextId();
     sendNotification(
-      isNativeShell() ? { title, body, channelId: CHANNELS[kind].id } : { title, body },
+      isNativeShell() ? { id, title, body, channelId: CHANNELS[kind].id } : { id, title, body },
     );
   } catch {
     // notifications indisponibles : silencieux

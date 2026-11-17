@@ -442,19 +442,28 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         try {
           const payload = JSON.parse((event as MessageEvent<string>).data) as LiveEvent;
           const inserted = payload.report?.inserted ?? 0;
+          const notices = payload.new_mails ?? [];
           if (
-            inserted > 0 &&
             payload.folder_path.toUpperCase() === "INBOX" &&
             notifyMailAccounts.current.some((entry) => entry.id === payload.account_id) &&
             notificationsForAccount(notifyPrefs.current, payload.account_id)
           ) {
-            const label = notifyAccounts.current.find((entry) => entry.id === payload.account_id)?.label;
-            void notifyNewMail(
-              label ? `Nouveau message · ${label}` : "Nouveau message",
-              inserted === 1
-                ? "Vous avez reçu un nouveau message."
-                : `${inserted} nouveaux messages dans la boîte de réception.`,
-            );
+            for (const notice of notices) {
+              void notifyNewMail(notice.from, notice.subject);
+            }
+            // Repli : un démon antérieur à la notification par mail ne pousse
+            // pas `new_mails`, et l'arrivée resterait muette.
+            if (notices.length === 0 && inserted > 0) {
+              const label = notifyAccounts.current.find(
+                (entry) => entry.id === payload.account_id,
+              )?.label;
+              void notifyNewMail(
+                label ? `Nouveau message · ${label}` : "Nouveau message",
+                inserted === 1
+                  ? "Vous avez reçu un nouveau message."
+                  : `${inserted} nouveaux messages dans la boîte de réception.`,
+              );
+            }
           }
           if (account === ALL_ACCOUNTS || !account || payload.account_id === account) {
             setRevision((value) => value + 1);

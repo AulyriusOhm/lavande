@@ -51,6 +51,7 @@ async fn a_published_event_reaches_the_stream() {
         account_id: "perso".to_string(),
         folder_path: "INBOX".to_string(),
         report: Some(FolderReport::new("INBOX", Default::default())),
+        new_mails: Vec::new(),
     });
 
     let chunk = tokio::time::timeout(Duration::from_secs(5), body.next())

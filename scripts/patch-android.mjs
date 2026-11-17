@@ -372,7 +372,6 @@ import android.content.Context
 import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONException
-import org.json.JSONObject
 
 /**
  * Préférences de la synchro de fond : interrupteur, comptes muets et dernier
@@ -385,7 +384,8 @@ object LavandeBgPrefs {
   private const val KEY_MUTED = "muted_accounts"
   private const val KEY_SUMMARY = "widget_summary"
   private const val KEY_AGENDA_SUMMARY = "widget_agenda_summary"
-  private const val KEY_UNREAD = "widget_unread"
+  private const val KEY_NOTIFIED = "notified_mails"
+  private const val NOTIFIED_CAP = 200
 
   private fun open(context: Context): SharedPreferences =
     context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -424,27 +424,35 @@ object LavandeBgPrefs {
     open(context).edit().putString(KEY_AGENDA_SUMMARY, summary).apply()
   }
 
-  /** Non lus par compte du dernier résumé rendu : une notification ne part que sur une hausse. */
-  fun unread(context: Context): Map<String, Int> {
-    val raw = open(context).getString(KEY_UNREAD, "{}") ?: "{}"
-    val counts = mutableMapOf<String, Int>()
+  /**
+   * Clés des mails déjà notifiés, dans l'ordre d'arrivée. Un tableau JSON et non
+   * un StringSet : le trim FIFO a besoin de l'ordre.
+   */
+  fun notified(context: Context): List<String> {
+    val raw = open(context).getString(KEY_NOTIFIED, "[]") ?: "[]"
+    val keys = mutableListOf<String>()
     try {
-      val stored = JSONObject(raw)
-      for (id in stored.keys()) counts[id] = stored.optInt(id, 0)
+      val stored = JSONArray(raw)
+      for (index in 0 until stored.length()) keys.add(stored.getString(index))
     } catch (e: JSONException) {
-      android.util.Log.e("LavandeSync", "compteurs mémorisés illisibles : \${e.message}")
+      android.util.Log.e("LavandeSync", "mails notifiés illisibles : \${e.message}")
     }
-    return counts
+    return keys
   }
 
-  fun setUnread(context: Context, counts: JSONObject) {
-    open(context).edit().putString(KEY_UNREAD, counts.toString()).apply()
+  fun setNotified(context: Context, keys: List<String>) {
+    val trimmed = if (keys.size > NOTIFIED_CAP) keys.subList(keys.size - NOTIFIED_CAP, keys.size) else keys
+    open(context).edit().putString(KEY_NOTIFIED, JSONArray(trimmed).toString()).apply()
   }
+
+  /** Faux tant que le worker n'a jamais semé les clés : premier passage, aucune notification. */
+  fun hasNotified(context: Context): Boolean = open(context).contains(KEY_NOTIFIED)
 }
 `;
 
 const BG_WORKER_KT = `package mail.lavande.app
 
+import android.app.ActivityManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -483,7 +491,8 @@ class LavandeSyncWorker(context: Context, params: WorkerParameters) :
     private const val ONE_SHOT_WORK = "lavande-mail-now"
     // Même canal que src/lib/notify.ts : une seule entrée dans les réglages Android.
     private const val CHANNEL_ID = "mails"
-    private const val NOTIFICATION_ID = 1042
+    private const val GROUP_ID = 1042
+    private const val GROUP_KEY = "lavande.mails"
 
     private fun constraints(): Constraints = Constraints.Builder()
       .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -570,49 +579,111 @@ class LavandeSyncWorker(context: Context, params: WorkerParameters) :
     kept.put("unread", total)
     kept.put("updated_at", summary.optLong("updated_at", System.currentTimeMillis() / 1000))
 
-    val previous = LavandeBgPrefs.unread(context)
-    val grown = mutableListOf<String>()
-    for (id in unread.keys()) {
-      val now = unread.optInt(id, 0)
-      if (now <= (previous[id] ?: 0)) continue
-      grown.add(labels[id] + " : " + now + " non lus")
-    }
-
     LavandeBgPrefs.setSummary(context, kept.toString())
-    LavandeBgPrefs.setUnread(context, unread)
     LavandeWidgetProvider.refresh(context)
-    if (grown.isNotEmpty()) notify(context, grown)
+    notifyNewMails(context, mails, labels)
   }
 
-  private fun notify(context: Context, lines: List<String>) {
+  /**
+   * Une notification par mail jamais notifié. Le premier passage sème les clés
+   * sans rien notifier : sinon la première synchro déclenche une rafale pour
+   * toute la boîte de réception.
+   */
+  private fun notifyNewMails(context: Context, mails: JSONArray, labels: Map<String, String>) {
     val manager = NotificationManagerCompat.from(context)
     if (!manager.areNotificationsEnabled()) return
-    if (Build.VERSION.SDK_INT >= 26) {
-      val channel = NotificationChannel(
-        CHANNEL_ID,
-        "Nouveaux mails",
-        NotificationManager.IMPORTANCE_HIGH,
-      )
-      channel.description = "Un message arrive dans la boîte de réception d'un compte"
-      manager.createNotificationChannel(channel)
+    // App au premier plan : le flux SSE (src/lib/notify.ts) notifie déjà.
+    if (foreground(context)) return
+    ensureChannel(manager)
+
+    val keys = mutableListOf<String>()
+    for (index in 0 until mails.length()) {
+      val mail = mails.optJSONObject(index) ?: continue
+      keys.add(keyOf(mail))
     }
-    val open = PendingIntent.getActivity(
-      context,
-      0,
-      Intent(context, MainActivity::class.java)
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
-      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    if (!LavandeBgPrefs.hasNotified(context)) {
+      LavandeBgPrefs.setNotified(context, keys)
+      return
+    }
+
+    val known = LavandeBgPrefs.notified(context).toMutableList()
+    val seen = known.toMutableSet()
+    val open = contentIntent(context)
+    val fresh = mutableListOf<JSONObject>()
+    for (index in 0 until mails.length()) {
+      val mail = mails.optJSONObject(index) ?: continue
+      val key = keyOf(mail)
+      if (!seen.add(key)) continue
+      known.add(key)
+      fresh.add(mail)
+      val account = mail.optString("account")
+      manager.notify(
+        key.hashCode(),
+        NotificationCompat.Builder(context, CHANNEL_ID)
+          .setSmallIcon(R.drawable.ic_lavande_notification)
+          .setContentTitle(mail.optString("from").ifEmpty { "Nouveau message" })
+          .setContentText(mail.optString("subject"))
+          .setSubText(if (labels.size > 1) mail.optString("label") else null)
+          .setPriority(NotificationCompat.PRIORITY_HIGH)
+          .setAutoCancel(true)
+          .setContentIntent(open)
+          .setGroup("$GROUP_KEY.$account")
+          .build(),
+      )
+    }
+    LavandeBgPrefs.setNotified(context, known)
+    if (fresh.size < 2) return
+    manager.notify(
+      GROUP_ID,
+      NotificationCompat.Builder(context, CHANNEL_ID)
+        .setSmallIcon(R.drawable.ic_lavande_notification)
+        .setContentTitle("\${fresh.size} nouveaux mails")
+        .setContentText(fresh.joinToString(" · ") { it.optString("from") })
+        .setStyle(
+          NotificationCompat.BigTextStyle()
+            .bigText(fresh.joinToString("\\n") { it.optString("from") + " — " + it.optString("subject") }),
+        )
+        .setPriority(NotificationCompat.PRIORITY_HIGH)
+        .setAutoCancel(true)
+        .setContentIntent(open)
+        .setGroup(GROUP_KEY)
+        .setGroupSummary(true)
+        .build(),
     )
-    val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-      .setSmallIcon(R.drawable.ic_lavande_notification)
-      .setContentTitle("Nouveaux mails")
-      .setContentText(lines.joinToString(" · "))
-      .setStyle(NotificationCompat.BigTextStyle().bigText(lines.joinToString("\\n")))
-      .setPriority(NotificationCompat.PRIORITY_HIGH)
-      .setAutoCancel(true)
-      .setContentIntent(open)
-      .build()
-    manager.notify(NOTIFICATION_ID, notification)
+  }
+
+  /** \`id\` du fil ne bouge pas quand un nouveau message s'y ajoute : \`message_id\` prime. */
+  private fun keyOf(mail: JSONObject): String {
+    val identity = mail.optString("message_id").ifEmpty { mail.optString("id") }
+    return mail.optString("account") + "|" + identity
+  }
+
+  private fun ensureChannel(manager: NotificationManagerCompat) {
+    if (Build.VERSION.SDK_INT < 26) return
+    val channel = NotificationChannel(
+      CHANNEL_ID,
+      "Nouveaux mails",
+      NotificationManager.IMPORTANCE_HIGH,
+    )
+    channel.description = "Un message arrive dans la boîte de réception d'un compte"
+    manager.createNotificationChannel(channel)
+  }
+
+  private fun contentIntent(context: Context): PendingIntent = PendingIntent.getActivity(
+    context,
+    0,
+    Intent(context, MainActivity::class.java)
+      .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+  )
+
+  private fun foreground(context: Context): Boolean {
+    val activity = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return false
+    val processes = activity.runningAppProcesses ?: return false
+    return processes.any {
+      it.processName == context.packageName &&
+        it.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+    }
   }
 
   /** Un seul réessai (réseau absent, veille) : WorkManager reprend au prochain réveil. */

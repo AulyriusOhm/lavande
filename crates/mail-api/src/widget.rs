@@ -34,6 +34,10 @@ pub struct WidgetMail {
     pub from: String,
     pub date: Option<i64>,
     pub unread: bool,
+    /// Identifiant RFC 5322 du message : `id` (celui du fil) ne bouge pas quand
+    /// un nouveau message arrive dans un fil existant, donc Kotlin ne peut pas
+    /// dédupliquer sur lui.
+    pub message_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +117,7 @@ pub fn summarize(
                 },
                 date: thread.primary.date.map(|date| date.timestamp()),
                 unread: thread.unread > 0,
+                message_id: thread.primary.message_id.clone(),
             });
         }
         summary.accounts.push(WidgetAccount {
@@ -411,6 +416,7 @@ mod tests {
                     "from": "Marc",
                     "date": 1_731_000_000i64,
                     "unread": true,
+                    "message_id": "<m1@x>",
                 }],
                 "unread": 1,
                 "updated_at": value["updated_at"],

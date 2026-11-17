@@ -76,6 +76,22 @@ const arrival = (accountId: string, inserted = 1) => ({
   report: { folder_path: "INBOX", inserted, flags_updated: 0, removed: 0 },
 });
 
+const notice = (accountId: string, uid: number, from: string, subject: string) => ({
+  id: `${accountId}:INBOX:${uid}`,
+  account: accountId,
+  label: accountId === ALPHA ? "Perso" : "Travail",
+  subject,
+  from,
+  date: 1_731_000_000 + uid,
+  unread: true,
+  message_id: `<m${uid}@x>`,
+});
+
+const arrivalWith = (accountId: string, notices: ReturnType<typeof notice>[], inserted = notices.length) => ({
+  ...arrival(accountId, inserted),
+  new_mails: notices,
+});
+
 function mount() {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <PrefsProvider>
@@ -89,6 +105,9 @@ function mount() {
 
 const storedPrefs = (notifications: Record<string, unknown>) =>
   window.localStorage.setItem("lavande.prefs", JSON.stringify({ notifications }));
+
+const storePerimeters = (perimeters: Record<string, unknown>) =>
+  window.localStorage.setItem("lavande.prefs", JSON.stringify({ perimeters }));
 
 async function arrivalListener() {
   await waitFor(() => expect(FakeEventSource.current).not.toBeNull());
@@ -153,6 +172,70 @@ describe("notifications de nouveaux mails · filtrage", () => {
 
     source.emit("mail", { ...arrival(ALPHA, 0) });
     source.emit("mail", { ...arrival(ALPHA), folder_path: "Archive" });
+
+    await waitFor(() => expect(FakeEventSource.current).not.toBeNull());
+    expect(notifyNewMail).not.toHaveBeenCalled();
+  });
+});
+
+describe("notifications de nouveaux mails · une par mail", () => {
+  it("notifie chaque mail reçu, expéditeur en titre et sujet en texte", async () => {
+    mount();
+    const source = await arrivalListener();
+
+    source.emit(
+      "mail",
+      arrivalWith(ALPHA, [
+        notice(ALPHA, 3, "Marc Dupont", "Planning de la semaine"),
+        notice(ALPHA, 2, "Léa", "Facture de mars"),
+      ]),
+    );
+
+    await waitFor(() => expect(notifyNewMail).toHaveBeenCalledTimes(2));
+    expect(notifyNewMail).toHaveBeenNthCalledWith(1, "Marc Dupont", "Planning de la semaine");
+    expect(notifyNewMail).toHaveBeenNthCalledWith(2, "Léa", "Facture de mars");
+  });
+
+  it("se tait pour un compte hors périmètre mails", async () => {
+    storePerimeters({ [BETA]: { mails: false } });
+    mount();
+    const source = await arrivalListener();
+
+    source.emit("mail", arrivalWith(BETA, [notice(BETA, 9, "Marc", "Hors périmètre")]));
+
+    await waitFor(() => expect(FakeEventSource.current).not.toBeNull());
+    expect(notifyNewMail).not.toHaveBeenCalled();
+  });
+
+  it("se tait quand les notifications du compte sont coupées", async () => {
+    storedPrefs({ accounts: { [ALPHA]: false } });
+    mount();
+    const source = await arrivalListener();
+
+    source.emit("mail", arrivalWith(ALPHA, [notice(ALPHA, 4, "Marc", "Silencieux")]));
+
+    await waitFor(() => expect(FakeEventSource.current).not.toBeNull());
+    expect(notifyNewMail).not.toHaveBeenCalled();
+  });
+
+  it("replie sur l'ancien agrégat quand le démon ne pousse pas de mails", async () => {
+    mount();
+    const source = await arrivalListener();
+
+    source.emit("mail", arrival(ALPHA, 2));
+
+    await waitFor(() => expect(notifyNewMail).toHaveBeenCalledTimes(1));
+    expect(notifyNewMail).toHaveBeenCalledWith(
+      "Nouveau message · Perso",
+      "2 nouveaux messages dans la boîte de réception.",
+    );
+  });
+
+  it("ne notifie rien sans message inséré ni mail poussé", async () => {
+    mount();
+    const source = await arrivalListener();
+
+    source.emit("mail", arrival(ALPHA, 0));
 
     await waitFor(() => expect(FakeEventSource.current).not.toBeNull());
     expect(notifyNewMail).not.toHaveBeenCalled();

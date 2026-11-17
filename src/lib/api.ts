@@ -195,11 +195,23 @@ export type OAuthStartInput = {
   auth_endpoint?: string;
 };
 
+export type LiveMail = {
+  id: string;
+  account: string;
+  label: string;
+  subject: string;
+  from: string;
+  date: number | null;
+  unread: boolean;
+  message_id?: string | null;
+};
+
 export type LiveEvent = {
   type: string;
   account_id: string;
   folder_path: string;
   report?: { folder_path: string; inserted: number; flags_updated: number; removed: number };
+  new_mails?: LiveMail[];
 };
 
 export type ApiDiscovery = {

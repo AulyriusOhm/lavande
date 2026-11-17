@@ -15,9 +15,9 @@ use lavande_mail::tls::TlsOptions;
 use lavande_mail_api::state::AppState;
 use lavande_mail_api::widget;
 
-/// Trois mails tiennent dans la mise en page du widget
-/// (`lavande_widget.xml`).
-const MAIL_LIMIT: usize = 3;
+/// Le widget ne rend que le premier mail (`LavandeWidgetProvider`), les autres
+/// servent aux notifications par mail de `LavandeSyncWorker`.
+const MAIL_LIMIT: usize = 10;
 
 fn error_json(message: &str) -> String {
     serde_json::json!({ "error": message }).to_string()
