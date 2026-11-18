@@ -23,6 +23,7 @@ import { aiComposeReply, composeReply, replySuggestions, threadConversation, use
 import { llmReady } from "@/lib/llm";
 import { ReplySuggestSheet, RewriteSheet } from "@/screens/assist-sheet";
 import { IconButton } from "@/components/ui/primitives";
+import { useEscapeLayer } from "@/desktop/escape";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { RichEditor } from "@/components/ui/rich-editor";
 import { ensureHtml, extractImageTokens, htmlToText, restoreImageTokens, textToHtml, isHtmlEmpty, sanitizeHtml } from "@/lib/rich-text";
@@ -76,6 +77,8 @@ export function ComposeScreen({
   const [recipientsOpen, setRecipientsOpen] = useState(false);
   const [confirmSend, setConfirmSend] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [draftSaveError, setDraftSaveError] = useState<string | null>(null);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [rewriteOpen, setRewriteOpen] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
@@ -162,17 +165,38 @@ export function ComposeScreen({
     send();
   };
 
+  const cancelClose = () => {
+    setConfirmClose(false);
+    setDraftSaveError(null);
+  };
+
+  useEscapeLayer(confirmClose, cancelClose);
+
   const requestClose = () => {
     if (dirty && !sent) {
+      setDraftSaveError(null);
       setConfirmClose(true);
       return;
     }
     onClose();
   };
 
+  const minimize = () => {
+    cancelClose();
+    onMinimize?.();
+  };
+
   const handleSaveDraft = async () => {
-    setConfirmClose(false);
-    if (await saveToDrafts(draft)) onClose();
+    if (savingDraft) return;
+    setSavingDraft(true);
+    setDraftSaveError(null);
+    const saved = await saveToDrafts(draft);
+    if (saved) {
+      onClose();
+      return;
+    }
+    setSavingDraft(false);
+    setDraftSaveError("Brouillon non enregistré · réessaie, ou supprime le message.");
   };
 
   const applySuggestion = (suggestion: ReplySuggestion) => {
@@ -184,7 +208,7 @@ export function ComposeScreen({
   };
 
   return (
-    <div className="flex h-full flex-col bg-canvas">
+    <div className="relative flex h-full flex-col bg-canvas">
       <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-line" />
       <div
         className={cn(
@@ -201,7 +225,7 @@ export function ComposeScreen({
         <div className="ml-auto flex items-center gap-1">
           {headerActions}
           {onMinimize && (
-            <IconButton aria-label="Réduire le brouillon" onClick={onMinimize}>
+            <IconButton aria-label="Réduire le brouillon" onClick={minimize}>
               <Minus className="size-4.5" />
             </IconButton>
           )}
@@ -547,39 +571,6 @@ export function ComposeScreen({
           </div>
         )}
 
-        {confirmClose && (
-          <div
-            role="alertdialog"
-            aria-label="Enregistrer ou supprimer le brouillon"
-            className="mb-2 flex flex-wrap items-center gap-2 rounded-2xl bg-surface-2 px-3 py-2"
-          >
-            <p className="min-w-0 flex-1 text-[11.5px] font-semibold text-ink-soft">
-              Enregistrer ce message avant de fermer ?
-            </p>
-            <button
-              type="button"
-              onClick={() => setConfirmClose(false)}
-              className="inline-flex min-h-11 items-center rounded-full px-3 text-[12px] font-bold text-ink-soft"
-            >
-              Annuler
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="inline-flex min-h-11 items-center rounded-full px-3 text-[12px] font-bold text-rose-700 dark:text-rose-300"
-            >
-              Supprimer
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleSaveDraft()}
-              className="inline-flex min-h-11 items-center rounded-full bg-accent px-3 text-[12px] font-bold text-accent-contrast"
-            >
-              Brouillons
-            </button>
-          </div>
-        )}
-
         <div className="flex items-center gap-2">
           <ShimmerButton
             className="flex-1"
@@ -622,6 +613,78 @@ export function ComposeScreen({
           </button>
         </div>
       </div>
+
+      {confirmClose && (
+        <div className="absolute inset-0 z-50 grid place-items-center p-4">
+          <div
+            aria-hidden
+            data-testid="compose-close-backdrop"
+            onClick={cancelClose}
+            className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
+          />
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-label="Enregistrer ou supprimer le brouillon"
+            aria-describedby="compose-close-help"
+            className="relative w-full max-w-[380px] rounded-[26px] border border-line bg-surface p-4 shadow-[0_44px_96px_-48px_var(--accent)]"
+          >
+            <div className="flex items-start gap-3">
+              <span className="grid size-10 shrink-0 place-items-center rounded-2xl bg-accent-soft text-accent-ink">
+                <PenLine className="size-5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h2
+                  id="compose-close-question"
+                  className="text-[15px] leading-tight font-extrabold tracking-[-0.02em] text-ink"
+                >
+                  Enregistrer ce message avant de fermer ?
+                </h2>
+                <p
+                  id="compose-close-help"
+                  className="mt-1 text-[11.5px] leading-relaxed font-semibold text-ink-muted"
+                >
+                  Brouillons garde le message · Supprimer le jette · Annuler revient à la rédaction.
+                </p>
+              </div>
+            </div>
+            {draftSaveError && (
+              <p
+                role="alert"
+                className="mt-3 rounded-2xl bg-red-500/10 px-3 py-2 text-[11.5px] font-semibold text-red-600 dark:text-red-300"
+              >
+                {draftSaveError}
+              </p>
+            )}
+            <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                autoFocus
+                onClick={cancelClose}
+                className="inline-flex min-h-11 items-center rounded-full px-3 text-[12px] font-bold text-ink-soft"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="inline-flex min-h-11 items-center rounded-full px-3 text-[12px] font-bold text-rose-700 dark:text-rose-300"
+              >
+                Supprimer
+              </button>
+              <button
+                type="button"
+                disabled={savingDraft}
+                aria-busy={savingDraft}
+                onClick={() => void handleSaveDraft()}
+                className="inline-flex min-h-11 items-center rounded-full bg-accent px-3 text-[12px] font-bold text-accent-contrast disabled:pointer-events-none disabled:opacity-60"
+              >
+                Brouillons
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <ReplySuggestSheet
         open={suggestOpen}

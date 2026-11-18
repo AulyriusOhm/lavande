@@ -6,13 +6,17 @@ import { baseDraft } from "@/lib/draft";
 import { buildQuotedHtml, textToHtml } from "@/lib/rich-text";
 import { sendInputOf } from "@/lib/mail-backend";
 
-const storeMock = vi.hoisted(() => ({ mode: "demo" as "api" | "demo" }));
+const storeMock = vi.hoisted(() => ({
+  mode: "demo" as "api" | "demo",
+  save: async (_draft: ComposeDraft) => true,
+}));
 
 vi.mock("@/lib/store", () => ({
   useMailStore: () => ({
     mailAccounts: [{ id: "perso", label: "Perso", email: "roman@lavande.mail" }],
     mode: storeMock.mode,
     folderRecords: [],
+    saveToDrafts: (draft: ComposeDraft) => storeMock.save(draft),
   }),
 }));
 
@@ -35,6 +39,7 @@ function Harness({
   cc,
   cci,
   subject,
+  onClose,
 }: {
   onChange?: (draft: ComposeDraft) => void;
   onSend?: (draft: ComposeDraft) => void;
@@ -45,6 +50,7 @@ function Harness({
   cc?: string;
   cci?: string;
   subject?: string;
+  onClose?: () => void;
 }) {
   const [draft, setDraft] = useState<ComposeDraft>({
     ...baseDraft("perso", false, false, threadId),
@@ -63,7 +69,7 @@ function Harness({
         onChange?.(next);
       }}
       onSend={onSend}
-      onClose={() => {}}
+      onClose={() => onClose?.()}
     />
   );
 }
@@ -77,6 +83,7 @@ beforeEach(() => {
   signatureMock.html = null;
   prefsMock.threadView = "tidy";
   storeMock.mode = "demo";
+  storeMock.save = async () => true;
 });
 
 describe("pièces jointes de la composition", () => {
@@ -247,6 +254,39 @@ describe("confirmations de rédaction · cibles tactiles", () => {
     expect(remove?.className).toContain("min-h-11");
     expect(remove?.className).toContain("text-rose-700");
     expect(remove?.className).toContain("dark:text-rose-300");
+  });
+
+  it("« Brouillons » enregistre le message puis ferme la composition", async () => {
+    const saved: ComposeDraft[] = [];
+    storeMock.save = async (draft) => {
+      saved.push(draft);
+      return true;
+    };
+    const onClose = vi.fn();
+    render(<Harness subject="Re: Maquettes" onClose={onClose} />);
+    fireEvent.click(screen.getByLabelText("Fermer"));
+
+    const dialog = await screen.findByRole("alertdialog", { name: "Enregistrer ou supprimer le brouillon" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Brouillons" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(saved).toHaveLength(1);
+    expect(saved[0].subject).toBe("Re: Maquettes");
+  });
+
+  it("garde la composition ouverte et le dit quand l'enregistrement échoue", async () => {
+    storeMock.save = async () => false;
+    const onClose = vi.fn();
+    render(<Harness subject="Re: Maquettes" onClose={onClose} />);
+    fireEvent.click(screen.getByLabelText("Fermer"));
+
+    const dialog = await screen.findByRole("alertdialog", { name: "Enregistrer ou supprimer le brouillon" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Brouillons" }));
+
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toContain("Brouillon non enregistré");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("alertdialog", { name: "Enregistrer ou supprimer le brouillon" })).toBeTruthy();
   });
 
   it("libelle les champs de rédaction avec une couleur de placeholder conforme", () => {
