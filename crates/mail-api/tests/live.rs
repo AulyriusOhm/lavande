@@ -264,6 +264,20 @@ fn subjects(messages: &[Value]) -> Vec<String> {
         .collect()
 }
 
+async fn previews(client: &Client, daemon: &Daemon, folder_path: &str, uids: &[u32]) -> Vec<Value> {
+    let uri = format!("/api/accounts/{ACCOUNT}/folders/{folder_path}/previews");
+    let response = client
+        .post(daemon.url(&uri))
+        .json(&json!({ "uids": uids }))
+        .send()
+        .await
+        .expect("POST previews");
+    let status = response.status();
+    let body = response.text().await.expect("corps");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    serde_json::from_str(&body).expect("aperçus")
+}
+
 async fn create_folder(path: &str) {
     let config = account();
     let mut session = imap::connect_with(&config, &tls_options())
@@ -389,6 +403,53 @@ async fn sent_message_is_found_by_a_sync() {
             .any(|attachment| attachment["filename"] == "note.txt"),
         "{stored}"
     );
+}
+
+/// La liste affiche un aperçu sans ouvrir le message : la route le relit sur le
+/// serveur pour les UIDs que la base garde vides.
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn the_previews_route_fills_the_empty_apercus() {
+    let daemon = Daemon::start().await;
+    let client = daemon.client();
+    add_account(&client, &daemon).await;
+
+    let word = unique("apercu").replace(' ', "");
+    let subject = unique("[live-api-apercu] sujet");
+    let body = format!("{word} premier paragraphe du corps");
+    send_with_body(&client, &daemon, &subject, &body).await;
+    sync(&client, &daemon, Some(INBOX)).await;
+
+    let inbox = threads(&client, &daemon, INBOX).await;
+    let uid = find(&inbox, &subject);
+    daemon
+        ._state
+        .store()
+        .set_preview(ACCOUNT, INBOX, uid, "")
+        .expect("aperçu vidé");
+    let stored = message(&client, &daemon, INBOX, uid).await;
+    assert_eq!(stored["preview"], "", "{stored}");
+
+    let entries = previews(&client, &daemon, INBOX, &[uid, 600_000]).await;
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0]["uid"], uid);
+    assert!(
+        entries[0]["preview"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(&word),
+        "{entries:?}"
+    );
+
+    let stored = message(&client, &daemon, INBOX, uid).await;
+    assert!(
+        stored["preview"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(&word),
+        "{stored}"
+    );
+    assert!(stored["body_text"].is_null(), "{stored}");
 }
 
 #[tokio::test]
@@ -804,6 +865,88 @@ async fn message_is_deleted_permanently() {
         !server.contains(&uid),
         "le serveur expose encore l'uid {uid} : {server:?}"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn the_bulk_routes_act_on_the_whole_selection() {
+    create_folder(ARCHIVE).await;
+    let daemon = Daemon::start().await;
+    let client = daemon.client();
+    add_account(&client, &daemon).await;
+
+    let first = unique("[live-api-bulk] premier");
+    let second = unique("[live-api-bulk] second");
+    send(&client, &daemon, &first).await;
+    send(&client, &daemon, &second).await;
+    sync(&client, &daemon, Some(INBOX)).await;
+    let listed = threads(&client, &daemon, INBOX).await;
+    let uids = json!([find(&listed, &first), find(&listed, &second)]);
+
+    let response = client
+        .post(daemon.url(&format!("/api/accounts/{ACCOUNT}/flags-bulk")))
+        .json(&json!({ "folder_path": INBOX, "uids": uids, "unread": false, "starred": true }))
+        .send()
+        .await
+        .expect("POST flags-bulk");
+    let status = response.status();
+    let body = response.text().await.expect("corps");
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    for uid in uids.as_array().expect("uids") {
+        let uid = uid.as_u64().expect("uid") as u32;
+        let stored = message(&client, &daemon, INBOX, uid).await;
+        assert_eq!(stored["flags"]["starred"], true, "uid {uid} : {stored}");
+        assert_eq!(stored["flags"]["unread"], false, "uid {uid} : {stored}");
+    }
+
+    let response = client
+        .post(daemon.url(&format!("/api/accounts/{ACCOUNT}/move-bulk")))
+        .json(&json!({ "from_path": INBOX, "uids": uids, "to_path": ARCHIVE }))
+        .send()
+        .await
+        .expect("POST move-bulk");
+    let status = response.status();
+    let body = response.text().await.expect("corps");
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let inbox = subjects(&threads(&client, &daemon, INBOX).await);
+    for subject in [&first, &second] {
+        assert!(
+            !inbox.iter().any(|known| known == subject),
+            "« {subject} » est encore dans INBOX : {inbox:?}"
+        );
+    }
+
+    sync(&client, &daemon, Some(ARCHIVE)).await;
+    let archived = threads(&client, &daemon, ARCHIVE).await;
+    let archived_subjects = subjects(&archived);
+    for subject in [&first, &second] {
+        assert!(
+            archived_subjects.iter().any(|known| known == subject),
+            "« {subject} » n'est pas dans Archive : {archived_subjects:?}"
+        );
+    }
+    let moved = json!([find(&archived, &first), find(&archived, &second)]);
+
+    let response = client
+        .post(daemon.url(&format!("/api/accounts/{ACCOUNT}/delete-bulk")))
+        .json(&json!({ "folder_path": ARCHIVE, "uids": moved }))
+        .send()
+        .await
+        .expect("POST delete-bulk");
+    let status = response.status();
+    let body = response.text().await.expect("corps");
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    sync(&client, &daemon, Some(ARCHIVE)).await;
+    let left = subjects(&threads(&client, &daemon, ARCHIVE).await);
+    for subject in [&first, &second] {
+        assert!(
+            !left.iter().any(|known| known == subject),
+            "« {subject} » est encore dans Archive : {left:?}"
+        );
+    }
 }
 
 #[tokio::test]

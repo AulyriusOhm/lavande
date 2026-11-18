@@ -18,14 +18,19 @@ use lavande_mail::sync as mail_sync;
 use serde::Deserialize;
 
 use crate::dto::{
-    ApiJson, DeleteRequest, FlagsRequest, FolderReport, HtmlImagesResponse, MoveRequest,
-    PurgeRequest, PurgeResponse, SendRequest, SyncRequest, SyncResponse,
+    ApiJson, DeleteBulkRequest, DeleteRequest, FlagsBulkRequest, FlagsRequest, FolderReport,
+    HtmlImagesResponse, MoveBulkRequest, MoveRequest, PreviewEntry, PreviewRequest, PurgeRequest,
+    PurgeResponse, SendRequest, SyncRequest, SyncResponse,
 };
 use crate::error::ApiError;
 use crate::state::AppState;
 
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 200;
+
+/// The same bound as `imap`'s snippet batch: one request past it would fetch
+/// nothing more.
+const MAX_PREVIEW_UIDS: usize = 50;
 
 /// A composition carries its images and attachments in base64, well past
 /// axum's 2 MiB default: a few pasted screenshots blow it up before anything
@@ -36,6 +41,7 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/accounts/{id}/sync", post(sync))
         .route("/api/accounts/{id}/folders/{path}/threads", get(threads))
+        .route("/api/accounts/{id}/folders/{path}/previews", post(previews))
         .route("/api/accounts/{id}/threads/{thread_id}", get(thread))
         .route(
             "/api/accounts/{id}/folders/{path}/messages/{uid}",
@@ -52,6 +58,9 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/accounts/{id}/flags", post(set_flags))
         .route("/api/accounts/{id}/move", post(move_message))
         .route("/api/accounts/{id}/delete", post(delete_message))
+        .route("/api/accounts/{id}/flags-bulk", post(set_flags_bulk))
+        .route("/api/accounts/{id}/move-bulk", post(move_bulk))
+        .route("/api/accounts/{id}/delete-bulk", post(delete_bulk))
         .route("/api/accounts/{id}/purge", post(purge_folder))
         .route("/api/accounts/{id}/send", post(send))
         .route("/api/accounts/{id}/drafts", post(save_draft))
@@ -156,6 +165,41 @@ async fn thread(
                 "fil « {thread_id} » introuvable pour le compte « {id} »"
             ))
         })
+}
+
+/// Fills the aperçus of a list the store still shows as pending. Best-effort:
+/// `fetch_previews` opens its own session and swallows its own failures, so the
+/// answer is only what the base holds once it returns.
+async fn previews(
+    Path((id, folder_path)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<PreviewRequest>,
+) -> Result<Json<Vec<PreviewEntry>>, ApiError> {
+    require_uids(&request.uids, MAX_PREVIEW_UIDS)?;
+    let config = state.account(&id).await?;
+    imap::fetch_previews(
+        &config,
+        state.tls(),
+        state.store(),
+        &id,
+        &folder_path,
+        &request.uids,
+    )
+    .await;
+    let mut entries = Vec::with_capacity(request.uids.len());
+    for uid in &request.uids {
+        let Some(message) = state.store().get_message(&id, &folder_path, *uid)? else {
+            continue;
+        };
+        if message.preview.is_empty() {
+            continue;
+        }
+        entries.push(PreviewEntry {
+            uid: *uid,
+            preview: message.preview,
+        });
+    }
+    Ok(Json(entries))
 }
 
 async fn message(
@@ -347,6 +391,86 @@ async fn delete_message(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// The whole selection goes through one IMAP session and one `UID STORE` per
+/// direction; the local rows are written in one statement. Every uid must be
+/// stored: a stale one refuses the batch before the connection is opened.
+async fn set_flags_bulk(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<FlagsBulkRequest>,
+) -> Result<StatusCode, ApiError> {
+    require_uids(&request.uids, MAX_BULK_UIDS)?;
+    let config = state.account(&id).await?;
+    let stored = state.store().flags_in_folder(&id, &request.folder_path)?;
+    let flags = Flags {
+        unread: request.unread,
+        starred: request.starred,
+        answered: false,
+    };
+    let mut updates = Vec::with_capacity(request.uids.len());
+    for uid in &request.uids {
+        let known = stored
+            .get(uid)
+            .ok_or_else(|| unknown(&id, &request.folder_path, *uid))?;
+        updates.push((
+            *uid,
+            Flags {
+                answered: known.answered,
+                ..flags
+            },
+        ));
+    }
+
+    let mut session = imap::connect_with(&config, state.tls()).await?;
+    imap::set_flags_many(&mut session, &request.folder_path, &request.uids, &flags).await?;
+    logout(session).await;
+    state
+        .store()
+        .set_flags_batch(&id, &request.folder_path, &updates)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn move_bulk(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<MoveBulkRequest>,
+) -> Result<StatusCode, ApiError> {
+    require_uids(&request.uids, MAX_BULK_UIDS)?;
+    let config = state.account(&id).await?;
+    let mut session = imap::connect_with(&config, state.tls()).await?;
+    imap::move_messages(
+        &mut session,
+        state.store(),
+        &id,
+        &request.from_path,
+        &request.uids,
+        &request.to_path,
+    )
+    .await?;
+    logout(session).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_bulk(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<DeleteBulkRequest>,
+) -> Result<StatusCode, ApiError> {
+    require_uids(&request.uids, MAX_BULK_UIDS)?;
+    let config = state.account(&id).await?;
+    let mut session = imap::connect_with(&config, state.tls()).await?;
+    imap::delete_messages_many(
+        &mut session,
+        state.store(),
+        &id,
+        &request.folder_path,
+        &request.uids,
+    )
+    .await?;
+    logout(session).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn purge_folder(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
@@ -519,6 +643,24 @@ async fn logout(mut session: ImapSession) {
     if let Err(error) = session.logout().await {
         tracing::debug!(error = %error, "fermeture de la session imap");
     }
+}
+
+/// Keeps the `UID STORE`/`UID MOVE` selector under the ~8 KiB command-line
+/// limit servers enforce (RFC 2683): 500 uids of up to 10 digits stay well
+/// below it. The client splits larger selections into several requests.
+const MAX_BULK_UIDS: usize = 500;
+
+fn require_uids(uids: &[u32], max: usize) -> Result<(), ApiError> {
+    if uids.is_empty() {
+        return Err(ApiError::bad_request("uids", "liste d'UIDs vide"));
+    }
+    if uids.len() > max {
+        return Err(ApiError::bad_request(
+            "uids",
+            format!("sélection trop grande : {max} messages maximum par requête"),
+        ));
+    }
+    Ok(())
 }
 
 fn unknown(account_id: &str, folder_path: &str, uid: u32) -> ApiError {

@@ -517,6 +517,189 @@ async fn delete_reaches_the_server() {
 
 #[tokio::test]
 #[ignore = "requires scripts/mail-test-server.sh start"]
+async fn bulk_flags_reach_the_server() {
+    let cfg = account();
+    let store = store(&cfg);
+    let first = unique("[live-flags-bulk] premier");
+    let second = unique("[live-flags-bulk] second");
+    send(&cfg, &first, "corps premier", None).await;
+    send(&cfg, &second, "corps second", None).await;
+    sync(&cfg, &store, INBOX).await;
+    let uids = [
+        find(&store, INBOX, &first).uid,
+        find(&store, INBOX, &second).uid,
+    ];
+
+    let mut session = connect(&cfg).await;
+    checked(
+        "set flags many",
+        imap::set_flags_many(
+            &mut session,
+            INBOX,
+            &uids,
+            &Flags {
+                unread: false,
+                starred: true,
+                answered: false,
+            },
+        )
+        .await,
+    );
+    checked(
+        "set flags on an empty selection",
+        imap::set_flags_many(
+            &mut session,
+            INBOX,
+            &[],
+            &Flags {
+                unread: true,
+                starred: false,
+                answered: false,
+            },
+        )
+        .await,
+    );
+
+    let mut fresh = connect(&cfg).await;
+    for uid in uids {
+        let flags = checked(
+            "fetch flags",
+            imap::fetch_flags(&mut fresh, INBOX, uid).await,
+        );
+        assert!(!flags.unread, "uid {uid} is still unread on the server");
+        assert!(flags.starred, "uid {uid} is not flagged on the server");
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn bulk_move_keeps_store_in_step_with_server() {
+    let cfg = account();
+    let store = store(&cfg);
+    let first = unique("[live-archive-bulk] premier");
+    let second = unique("[live-archive-bulk] second");
+    send(&cfg, &first, "corps premier", None).await;
+    send(&cfg, &second, "corps second", None).await;
+
+    let mut session = connect(&cfg).await;
+    checked(
+        "create Archive",
+        imap::create_folder(&mut session, "Archive").await,
+    );
+    checked(
+        "sync",
+        imap::sync_folder(
+            &mut session,
+            &store,
+            ACCOUNT,
+            INBOX,
+            &FolderMapping::default(),
+        )
+        .await,
+    );
+    let uids = [
+        find(&store, INBOX, &first).uid,
+        find(&store, INBOX, &second).uid,
+    ];
+
+    checked(
+        "move many to Archive",
+        imap::move_messages(&mut session, &store, ACCOUNT, INBOX, &uids, "Archive").await,
+    );
+    for uid in uids {
+        assert!(
+            checked("inbox lookup", store.get_message(ACCOUNT, INBOX, uid)).is_none(),
+            "uid {uid} is still in INBOX"
+        );
+        assert!(
+            store.is_tombstoned(ACCOUNT, INBOX, uid),
+            "the bulk move left uid {uid} untombstoned"
+        );
+    }
+    let inbox = checked(
+        "inbox listing",
+        store.messages_in_folder(ACCOUNT, INBOX, -1, 0),
+    );
+    for subject in [&first, &second] {
+        assert!(
+            inbox.iter().all(|message| &message.subject != subject),
+            "'{subject}' is still in the local INBOX"
+        );
+    }
+
+    let archived = [
+        find(&store, "Archive", &first),
+        find(&store, "Archive", &second),
+    ];
+    let mut raw = connect(&cfg).await;
+    select(&mut raw, "Archive").await;
+    let server = server_uids(&mut raw).await;
+    for message in &archived {
+        assert!(
+            server.contains(&message.uid),
+            "local Archive holds uid {} while the server exposes {server:?}",
+            message.uid
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn bulk_delete_reaches_the_server() {
+    let cfg = account();
+    let store = store(&cfg);
+    let first = unique("[live-delete-bulk] premier");
+    let second = unique("[live-delete-bulk] second");
+    let witness = unique("[live-delete-bulk] temoin");
+    send(&cfg, &first, "corps premier", None).await;
+    send(&cfg, &second, "corps second", None).await;
+    send(&cfg, &witness, "corps temoin", None).await;
+    sync(&cfg, &store, INBOX).await;
+    let uids = [
+        find(&store, INBOX, &first).uid,
+        find(&store, INBOX, &second).uid,
+    ];
+    let kept = find(&store, INBOX, &witness).uid;
+
+    let mut session = connect(&cfg).await;
+    checked(
+        "delete many",
+        imap::delete_messages_many(&mut session, &store, ACCOUNT, INBOX, &uids).await,
+    );
+    for uid in uids {
+        assert!(
+            checked("inbox lookup", store.get_message(ACCOUNT, INBOX, uid)).is_none(),
+            "uid {uid} survived the local bulk delete"
+        );
+    }
+    let inbox = checked(
+        "inbox listing",
+        store.messages_in_folder(ACCOUNT, INBOX, -1, 0),
+    );
+    for subject in [&first, &second] {
+        assert!(
+            inbox.iter().all(|message| &message.subject != subject),
+            "'{subject}' is still in the local INBOX"
+        );
+    }
+
+    let mut raw = connect(&cfg).await;
+    select(&mut raw, INBOX).await;
+    let server = server_uids(&mut raw).await;
+    for uid in uids {
+        assert!(
+            !server.contains(&uid),
+            "the server still exposes uid {uid}: {server:?}"
+        );
+    }
+    assert!(
+        server.contains(&kept),
+        "the bulk delete took the witness uid {kept} with it: {server:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
 async fn empty_folder_clears_both_sides() {
     let cfg = account();
     let store = store(&cfg);

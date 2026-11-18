@@ -996,7 +996,31 @@ pub async fn set_flags(
     uid: u32,
     flags: &Flags,
 ) -> Result<(), MailError> {
+    set_flags_many(session, folder_path, &[uid], flags).await
+}
+
+/// Same flags on many messages, in one `UID STORE` per direction: the selector
+/// carries every uid, so the server sees two commands whatever the selection
+/// holds. An empty selection is a no-op and never touches the connection.
+pub async fn set_flags_many(
+    session: &mut ImapSession,
+    folder_path: &str,
+    uids: &[u32],
+    flags: &Flags,
+) -> Result<(), MailError> {
+    if uids.is_empty() {
+        return Ok(());
+    }
     session.select(folder_path).await.map_err(imap_error)?;
+    let selector = uid_selector(uids);
+    let (add, remove) = flag_changes(flags);
+    store_flags_selector(session, &selector, "+FLAGS", &add).await?;
+    store_flags_selector(session, &selector, "-FLAGS", &remove).await
+}
+
+/// The flags `set_flags` adds and removes: `unread` drops `\Seen`, `starred`
+/// adds `\Flagged`, and each one is undone in the other direction.
+fn flag_changes(flags: &Flags) -> (Vec<&'static str>, Vec<&'static str>) {
     let mut add = Vec::new();
     let mut remove = Vec::new();
     if flags.unread {
@@ -1009,17 +1033,10 @@ pub async fn set_flags(
     } else {
         remove.push("\\Flagged");
     }
-    store_flags(session, uid, "+FLAGS", &add).await?;
-    store_flags(session, uid, "-FLAGS", &remove).await
+    (add, remove)
 }
 
-/// `UID MOVE` when the server has the capability, `UID COPY` + `\Deleted` +
-/// `UID EXPUNGE` otherwise; the fallback needs `UIDPLUS` and is refused before
-/// the copy when the server does not announce it. The source uid is tombstoned
-/// as soon as the server accepted the move — before the row is dropped — so a
-/// sync that wakes up on the move cannot re-import it, then the source row is
-/// dropped and the destination reconciled so it carries the uid the server
-/// actually gave the message.
+/// One message: a single uid through `move_messages`.
 pub async fn move_message(
     session: &mut ImapSession,
     store: &Store,
@@ -1028,11 +1045,33 @@ pub async fn move_message(
     uid: u32,
     to_path: &str,
 ) -> Result<(), MailError> {
+    move_messages(session, store, account_id, from_path, &[uid], to_path).await
+}
+
+/// `UID MOVE` when the server has the capability, `UID COPY` + `\Deleted` +
+/// `UID EXPUNGE` otherwise; the fallback needs `UIDPLUS` and is refused before
+/// the copy when the server does not announce it. One command per step carries
+/// every uid. The source uids are tombstoned as soon as the server accepted the
+/// move — before the rows are dropped — so a sync that wakes up on the move
+/// cannot re-import them, then the source rows are dropped and the destination
+/// reconciled so it carries the uids the server actually gave the messages.
+pub async fn move_messages(
+    session: &mut ImapSession,
+    store: &Store,
+    account_id: &str,
+    from_path: &str,
+    uids: &[u32],
+    to_path: &str,
+) -> Result<(), MailError> {
+    if uids.is_empty() {
+        return Ok(());
+    }
+    let selector = uid_selector(uids);
     session.select(from_path).await.map_err(imap_error)?;
     let capabilities = session.capabilities().await.map_err(imap_error)?;
     if capabilities.has_str("MOVE") {
         session
-            .uid_mv(uid.to_string(), to_path)
+            .uid_mv(selector.clone(), to_path)
             .await
             .map_err(imap_error)?;
     } else {
@@ -1040,14 +1079,16 @@ pub async fn move_message(
             return Err(uidplus_required());
         }
         session
-            .uid_copy(uid.to_string(), to_path)
+            .uid_copy(selector.clone(), to_path)
             .await
             .map_err(imap_error)?;
-        store_flags(session, uid, "+FLAGS", &["\\Deleted"]).await?;
-        expunge(session, &uid.to_string(), ExpungeMode::Strict).await?;
+        store_flags_selector(session, &selector, "+FLAGS", &["\\Deleted"]).await?;
+        expunge(session, &selector, ExpungeMode::Strict).await?;
     }
-    store.tombstone_uid(account_id, from_path, uid);
-    store.delete_messages(account_id, from_path, &[uid])?;
+    for uid in uids {
+        store.tombstone_uid(account_id, from_path, *uid);
+    }
+    store.delete_messages(account_id, from_path, uids)?;
     reconcile(session, store, account_id, to_path, None).await?;
     Ok(())
 }
@@ -1110,13 +1151,7 @@ pub async fn mark_answered(
     store_flags(session, uid, "+FLAGS", &["\\Answered"]).await
 }
 
-/// Drops the message from the server and from the store. The store row is
-/// dropped even when it was already gone: the server is the source of truth and
-/// a missing row must not turn a successful expunge into an error.
-///
-/// `UIDPLUS` is required and checked before `\Deleted` is set: without it the
-/// only expunge available is folder-wide and would destroy every message
-/// another client already flagged, so the call refuses and changes nothing.
+/// One message: a single uid through `delete_messages_many`.
 pub async fn delete_message(
     session: &mut ImapSession,
     store: &Store,
@@ -1124,14 +1159,38 @@ pub async fn delete_message(
     folder_path: &str,
     uid: u32,
 ) -> Result<(), MailError> {
+    delete_messages_many(session, store, account_id, folder_path, &[uid]).await
+}
+
+/// Drops the messages from the server and from the store, one `UID STORE` and
+/// one `UID EXPUNGE` for the whole selection. The store rows are dropped even
+/// when they were already gone: the server is the source of truth and a missing
+/// row must not turn a successful expunge into an error.
+///
+/// `UIDPLUS` is required and checked before `\Deleted` is set: without it the
+/// only expunge available is folder-wide and would destroy every message
+/// another client already flagged, so the call refuses and changes nothing.
+pub async fn delete_messages_many(
+    session: &mut ImapSession,
+    store: &Store,
+    account_id: &str,
+    folder_path: &str,
+    uids: &[u32],
+) -> Result<(), MailError> {
+    if uids.is_empty() {
+        return Ok(());
+    }
+    let selector = uid_selector(uids);
     session.select(folder_path).await.map_err(imap_error)?;
     if !supports_uidplus(session).await? {
         return Err(uidplus_required());
     }
-    store_flags(session, uid, "+FLAGS", &["\\Deleted"]).await?;
-    expunge(session, &uid.to_string(), ExpungeMode::Strict).await?;
-    store.tombstone_uid(account_id, folder_path, uid);
-    store.delete_messages(account_id, folder_path, &[uid])?;
+    store_flags_selector(session, &selector, "+FLAGS", &["\\Deleted"]).await?;
+    expunge(session, &selector, ExpungeMode::Strict).await?;
+    for uid in uids {
+        store.tombstone_uid(account_id, folder_path, *uid);
+    }
+    store.delete_messages(account_id, folder_path, uids)?;
     Ok(())
 }
 
@@ -1221,12 +1280,21 @@ async fn store_flags(
     operation: &str,
     flags: &[&str],
 ) -> Result<(), MailError> {
+    store_flags_selector(session, &uid.to_string(), operation, flags).await
+}
+
+async fn store_flags_selector(
+    session: &mut ImapSession,
+    selector: &str,
+    operation: &str,
+    flags: &[&str],
+) -> Result<(), MailError> {
     if flags.is_empty() {
         return Ok(());
     }
     let query = format!("{operation} ({})", flags.join(" "));
     let updated = session
-        .uid_store(uid.to_string(), query)
+        .uid_store(selector, query)
         .await
         .map_err(imap_error)?;
     let mut updated = Box::pin(updated);
@@ -1513,5 +1581,36 @@ mod tests {
     #[test]
     fn search_uids_come_back_newest_first() {
         assert_eq!(descending([3, 1, 7].into_iter().collect()), vec![7, 3, 1]);
+    }
+
+    #[test]
+    fn a_bulk_selector_carries_every_uid() {
+        assert_eq!(uid_selector(&[4, 7, 9]), "4,7,9");
+        assert_eq!(uid_selector(&[7]), "7");
+    }
+
+    #[test]
+    fn reading_a_starred_message_adds_both_flags() {
+        let (add, remove) = flag_changes(&read_starred());
+        assert_eq!(add, vec!["\\Seen", "\\Flagged"]);
+        assert!(remove.is_empty(), "{remove:?}");
+    }
+
+    #[test]
+    fn an_unread_unstarred_message_removes_both_flags() {
+        let (add, remove) = flag_changes(&unread());
+        assert!(add.is_empty(), "{add:?}");
+        assert_eq!(remove, vec!["\\Seen", "\\Flagged"]);
+    }
+
+    #[test]
+    fn one_flag_moves_in_one_direction_only() {
+        let (add, remove) = flag_changes(&Flags {
+            unread: true,
+            starred: true,
+            answered: true,
+        });
+        assert_eq!(add, vec!["\\Flagged"]);
+        assert_eq!(remove, vec!["\\Seen"]);
     }
 }

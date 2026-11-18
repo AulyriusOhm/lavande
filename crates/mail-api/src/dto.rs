@@ -211,6 +211,40 @@ pub struct DeleteRequest {
 }
 
 #[derive(Deserialize)]
+pub struct FlagsBulkRequest {
+    pub folder_path: String,
+    pub uids: Vec<u32>,
+    pub unread: bool,
+    pub starred: bool,
+}
+
+#[derive(Deserialize)]
+pub struct MoveBulkRequest {
+    pub from_path: String,
+    pub uids: Vec<u32>,
+    pub to_path: String,
+}
+
+#[derive(Deserialize)]
+pub struct DeleteBulkRequest {
+    pub folder_path: String,
+    pub uids: Vec<u32>,
+}
+
+#[derive(Deserialize)]
+pub struct PreviewRequest {
+    pub uids: Vec<u32>,
+}
+
+/// Only the aperçus the store now holds: a message whose server gave nothing
+/// back stays out of the answer.
+#[derive(Serialize)]
+pub struct PreviewEntry {
+    pub uid: u32,
+    pub preview: String,
+}
+
+#[derive(Deserialize)]
 pub struct PurgeRequest {
     pub folder_path: String,
 }

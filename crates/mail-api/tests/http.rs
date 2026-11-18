@@ -376,6 +376,131 @@ async fn unknown_message_flags_are_a_404() {
 }
 
 #[tokio::test]
+async fn bulk_flags_refuse_an_empty_uid_list() {
+    let directory = tempfile::tempdir().expect("répertoire temporaire");
+    seed(directory.path(), &[account("perso")]);
+    let state = state_in(directory.path()).await;
+    let payload = json!({ "folder_path": "INBOX", "uids": [], "unread": false, "starred": true });
+    let (status, body) = call(&state, post("/api/accounts/perso/flags-bulk", &payload)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json(&body)["kind"], "uids");
+    assert_eq!(json(&body)["error"], "liste d'UIDs vide");
+}
+
+#[tokio::test]
+async fn bulk_move_refuses_an_empty_uid_list() {
+    let directory = tempfile::tempdir().expect("répertoire temporaire");
+    seed(directory.path(), &[account("perso")]);
+    let state = state_in(directory.path()).await;
+    let payload = json!({ "from_path": "INBOX", "uids": [], "to_path": "Archive" });
+    let (status, body) = call(&state, post("/api/accounts/perso/move-bulk", &payload)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json(&body)["kind"], "uids");
+}
+
+#[tokio::test]
+async fn bulk_delete_refuses_an_empty_uid_list() {
+    let directory = tempfile::tempdir().expect("répertoire temporaire");
+    seed(directory.path(), &[account("perso")]);
+    let state = state_in(directory.path()).await;
+    let payload = json!({ "folder_path": "INBOX", "uids": [] });
+    let (status, body) = call(&state, post("/api/accounts/perso/delete-bulk", &payload)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json(&body)["kind"], "uids");
+}
+
+#[tokio::test]
+async fn bulk_flags_refuse_an_oversized_selection() {
+    let directory = tempfile::tempdir().expect("répertoire temporaire");
+    seed(directory.path(), &[account("perso")]);
+    let state = state_in(directory.path()).await;
+    let uids: Vec<u32> = (1..=501).collect();
+    let payload = json!({ "folder_path": "INBOX", "uids": uids, "unread": false, "starred": true });
+    let (status, body) = call(&state, post("/api/accounts/perso/flags-bulk", &payload)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json(&body)["kind"], "uids");
+}
+
+#[tokio::test]
+async fn bulk_operations_on_an_unknown_account_are_a_404() {
+    let (_directory, state) = state().await;
+    let flags = json!({ "folder_path": "INBOX", "uids": [4], "unread": false, "starred": true });
+    let (status, body) = call(&state, post("/api/accounts/absent/flags-bulk", &flags)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json(&body)["kind"], "store");
+
+    let moved = json!({ "from_path": "INBOX", "uids": [4], "to_path": "Archive" });
+    let (status, body) = call(&state, post("/api/accounts/absent/move-bulk", &moved)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json(&body)["kind"], "store");
+
+    let deleted = json!({ "folder_path": "INBOX", "uids": [4] });
+    let (status, body) = call(&state, post("/api/accounts/absent/delete-bulk", &deleted)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json(&body)["kind"], "store");
+}
+
+#[tokio::test]
+async fn bulk_flags_refuse_a_uid_the_store_does_not_hold() {
+    let directory = tempfile::tempdir().expect("répertoire temporaire");
+    seed(directory.path(), &[account("perso")]);
+    let state = state_in(directory.path()).await;
+    let payload = json!({ "folder_path": "INBOX", "uids": [42], "unread": false, "starred": true });
+    let (status, body) = call(&state, post("/api/accounts/perso/flags-bulk", &payload)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json(&body)["kind"], "store");
+}
+
+#[tokio::test]
+async fn previews_refuse_an_empty_uid_list() {
+    let directory = tempfile::tempdir().expect("répertoire temporaire");
+    seed(directory.path(), &[account("perso")]);
+    let state = state_in(directory.path()).await;
+    let payload = json!({ "uids": [] });
+    let (status, body) = call(
+        &state,
+        post("/api/accounts/perso/folders/INBOX/previews", &payload),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json(&body)["kind"], "uids");
+    assert_eq!(json(&body)["error"], "liste d'UIDs vide");
+}
+
+#[tokio::test]
+async fn previews_refuse_an_oversized_selection() {
+    let directory = tempfile::tempdir().expect("répertoire temporaire");
+    seed(directory.path(), &[account("perso")]);
+    let state = state_in(directory.path()).await;
+    let uids: Vec<u32> = (1..=51).collect();
+    let payload = json!({ "uids": uids });
+    let (status, body) = call(
+        &state,
+        post("/api/accounts/perso/folders/INBOX/previews", &payload),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json(&body)["kind"], "uids");
+    assert_eq!(
+        json(&body)["error"],
+        "sélection trop grande : 50 messages maximum par requête"
+    );
+}
+
+#[tokio::test]
+async fn previews_on_an_unknown_account_are_a_404() {
+    let (_directory, state) = state().await;
+    let payload = json!({ "uids": [4] });
+    let (status, body) = call(
+        &state,
+        post("/api/accounts/absent/folders/INBOX/previews", &payload),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json(&body)["kind"], "store");
+}
+
+#[tokio::test]
 async fn encoded_folder_path_is_decoded() {
     let (directory, state) = state().await;
     seed(directory.path(), &[account("perso")]);
