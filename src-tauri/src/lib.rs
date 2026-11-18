@@ -1,5 +1,7 @@
 use tauri::Manager;
 
+pub mod open_external;
+
 #[cfg(target_os = "android")]
 pub mod sync_bridge;
 
@@ -231,6 +233,7 @@ pub fn run() {
     );
     builder
         .invoke_handler(tauri::generate_handler![
+            open_external::open_external,
             mail_daemon_token,
             verify_android_update,
             android_update_endpoint

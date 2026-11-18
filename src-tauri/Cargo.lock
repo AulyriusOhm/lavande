@@ -3007,6 +3007,7 @@ dependencies = [
  "lavande-mail",
  "lavande-mail-api",
  "minisign-verify",
+ "open",
  "serde",
  "serde_json",
  "tauri",
@@ -3017,6 +3018,8 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-updater",
  "tokio",
+ "url",
+ "zbus 4.4.0",
 ]
 
 [[package]]

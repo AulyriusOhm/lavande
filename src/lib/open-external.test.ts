@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement, type ReactNode } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
 import { useExternalLinks } from "@/lib/open-external";
 
-vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn(() => Promise.resolve()) }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
 
-const openUrlMock = vi.mocked(openUrl);
+const invokeMock = vi.mocked(invoke);
 
 function Harness({ children }: { children: ReactNode }) {
   useExternalLinks();
@@ -53,8 +53,10 @@ describe("useExternalLinks", () => {
     expect(click("web")).toBe(false);
     await settle();
 
-    expect(openUrlMock).toHaveBeenCalledTimes(1);
-    expect(openUrlMock).toHaveBeenCalledWith("https://exemple.fr/chemin?q=1#bas");
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).toHaveBeenCalledWith("open_external", {
+      url: "https://exemple.fr/chemin?q=1#bas",
+    });
     expect(window.open).not.toHaveBeenCalled();
   });
 
@@ -69,7 +71,7 @@ describe("useExternalLinks", () => {
       "_blank",
       "noopener,noreferrer",
     );
-    expect(openUrlMock).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 
   it("laisse les ancres internes, mailto:, tel:, les liens relatifs et les téléchargements au document", () => {
@@ -80,7 +82,7 @@ describe("useExternalLinks", () => {
     }
     fireEvent.click(screen.getByRole("button", { name: "Bouton" }));
 
-    expect(openUrlMock).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalled();
     expect(window.open).not.toHaveBeenCalled();
   });
 
@@ -91,7 +93,9 @@ describe("useExternalLinks", () => {
     expect(click("protocole")).toBe(false);
     await settle();
 
-    expect(openUrlMock).toHaveBeenCalledWith(new URL("//exemple.fr/protocole-relatif", document.baseURI).href);
+    expect(invokeMock).toHaveBeenCalledWith("open_external", {
+      url: new URL("//exemple.fr/protocole-relatif", document.baseURI).href,
+    });
   });
 
   it("capte le clic avant un gestionnaire qui remonte l'événement", async () => {
@@ -111,6 +115,6 @@ describe("useExternalLinks", () => {
     expect(click("nested")).toBe(false);
     await settle();
 
-    expect(openUrlMock).toHaveBeenCalledWith("https://exemple.fr/nested");
+    expect(invokeMock).toHaveBeenCalledWith("open_external", { url: "https://exemple.fr/nested" });
   });
 });
