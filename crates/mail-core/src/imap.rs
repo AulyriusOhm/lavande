@@ -33,6 +33,7 @@ use crate::pgp::PgpKeyring;
 use crate::store::Store;
 use crate::threading;
 use crate::tls::TlsOptions;
+use crate::utf7;
 
 pub type ImapSession = Session<TlsStream<TcpStream>>;
 
@@ -185,6 +186,13 @@ pub async fn connect_with(
     }
 }
 
+/// Display name of a folder: the leaf of its `path`, decoded out of the
+/// modified UTF-7 servers label mailboxes with. The `path` stays raw, it is
+/// what the IMAP commands take.
+fn folder_label(path: &str) -> String {
+    utf7::decode_modified_utf7(config::leaf_name(path))
+}
+
 /// `LIST "" "*"`, with `UIDVALIDITY`/`UIDNEXT` read by `STATUS`, ready for
 /// `Store::upsert_folder`. Non-selectable names are skipped.
 pub async fn list_folders(
@@ -214,7 +222,7 @@ pub async fn list_folders(
             .iter()
             .map(|attribute| attribute_label(attribute).to_string())
             .collect();
-        let label = config::leaf_name(&path).to_string();
+        let label = folder_label(&path);
         let delimiter = name.delimiter().map(str::to_string);
         let status = session
             .status(&path, "(UIDVALIDITY UIDNEXT)")
@@ -384,7 +392,7 @@ fn record_sync(
     store.upsert_folder(&Folder {
         account_id: target.account_id.to_string(),
         path: target.folder_path.to_string(),
-        name: config::leaf_name(target.folder_path).to_string(),
+        name: folder_label(target.folder_path),
         role,
         uidvalidity: target.uidvalidity,
         uidnext,
@@ -1612,5 +1620,27 @@ mod tests {
         });
         assert_eq!(add, vec!["\\Flagged"]);
         assert_eq!(remove, vec!["\\Seen"]);
+    }
+
+    #[test]
+    fn a_folder_label_decodes_the_leaf_of_its_path() {
+        assert_eq!(folder_label("INBOX"), "INBOX");
+        assert_eq!(folder_label("&2Dzf5g-"), "🏦");
+        assert_eq!(folder_label("[Gmail]/&2Dzf5g- perso"), "🏦 perso");
+        assert_eq!(folder_label("Projets/&2Dzf5g-"), "🏦");
+    }
+
+    #[test]
+    fn a_decoded_label_still_gives_the_folder_its_role() {
+        let decoded = folder_label("[Gmail]/&2Dzf5g-");
+        assert_eq!(
+            config::folder_role("[Gmail]/&2Dzf5g-", &decoded, &[]),
+            FolderRole::Other
+        );
+        let flags: Vec<String> = vec!["\\Trash".to_string()];
+        assert_eq!(
+            config::folder_role("[Gmail]/&2Dzf5g-", &decoded, &flags),
+            FolderRole::Trash
+        );
     }
 }

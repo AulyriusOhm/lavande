@@ -1,3 +1,5 @@
+import { decodeModifiedUtf7 } from "@/lib/utf7";
+
 /** Un dossier réduit à ce qu'il faut pour le ranger : son chemin complet et le délimiteur du serveur. */
 export type FolderTreeSpec = {
   path: string;
@@ -36,8 +38,11 @@ export function buildFolderTree<T extends FolderTreeSpec>(items: T[]): FolderTre
 
   const split = (path: string): { parent: string; name: string } => {
     const index = delimiter ? path.lastIndexOf(delimiter) : -1;
-    if (!delimiter || index < 0) return { parent: "", name: path };
-    return { parent: path.slice(0, index), name: path.slice(index + delimiter.length) };
+    if (!delimiter || index < 0) return { parent: "", name: decodeModifiedUtf7(path) };
+    return {
+      parent: path.slice(0, index),
+      name: decodeModifiedUtf7(path.slice(index + delimiter.length)),
+    };
   };
 
   const ensure = (path: string): FolderTreeNode<T> => {

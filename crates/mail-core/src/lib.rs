@@ -17,6 +17,7 @@ pub mod store;
 pub mod sync;
 pub mod threading;
 pub mod tls;
+pub mod utf7;
 
 pub use caldav::{CaldavClient, CalendarCollection};
 pub use config::{AccountConfig, AuthConfig, Encryption, Endpoint, FolderMapping};
