@@ -42,6 +42,7 @@ import { ConnectScreen } from "@/screens/connect-screen";
 import { useShortcuts } from "@/lib/shortcuts";
 import { appShortcuts, type MailNavigation } from "@/lib/app-shortcuts";
 import { ShortcutsOverlay } from "@/components/shortcuts-overlay";
+import { UpdatePopup } from "@/components/update-popup";
 import { useExternalLinks } from "@/lib/open-external";
 
 const InboxScreen = memo(InboxView);
@@ -74,6 +75,7 @@ export default function App() {
                   <Stage />
                 )}
               </Suspense>
+              <UpdatePopup />
             </MailStoreProvider>
           </PlanningProvider>
         </PrefsProvider>
