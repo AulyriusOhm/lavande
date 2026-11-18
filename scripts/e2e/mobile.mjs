@@ -35,6 +35,15 @@ async function gotoInbox(page) {
   await page.getByRole("button", { name: /^Boîte de réception/ }).click();
 }
 
+/** Ouvre la feuille des comptes et sélectionne celui dont le bouton matche `name`. */
+async function selectAccount(page, name) {
+  await page.getByLabel("Changer de compte").dispatchEvent("click");
+  const sheet = page
+    .getByRole("heading", { name: "Comptes", exact: true })
+    .locator("xpath=ancestor::div[contains(@class,'rounded-t')]");
+  await sheet.getByRole("button", { name }).click();
+}
+
 /**
  * Le bouton de synchro ne vit que dans l'en-tête : la carte résumé le rouvre.
  * Son libellé devient « Synchronisation en cours » pendant la synchro de fond
@@ -210,10 +219,15 @@ export async function mobileReplySend({ page, api, seed, check }) {
     await back(page).click();
     await back(page).waitFor({ state: "detached", timeout: 30_000 });
     await syncInbox(page, api);
-    const thread = page
-      .locator(`[data-mail-row] [role="button"][aria-label*="${subject}"][aria-label*="2 messages"]`)
-      .first();
+    const thread = row(page, subject);
     await thread.waitFor({ timeout: 90_000 });
+    // #55 : « Boîte de réception » en tous-comptes est l'unifiée (charge aussi les
+    // Envoyés) : une réponse à soi-même y compte 3 copies. On vérifie le fil
+    // multi-messages ; le compte exact (2 dans INBOX) est asserté via l'API plus bas.
+    const label = (await thread.getAttribute("aria-label")) ?? "";
+    if (!/[2-9] messages|\d{2,} messages/.test(label)) {
+      throw new Error(`réponse non jointe au fil : « ${label} »`);
+    }
     const id = await accountId(api, ACCOUNT_EMAIL);
     const threads = await folderThreads(api, id, "INBOX");
     const found = threads.find((entry) =>
@@ -244,6 +258,9 @@ export async function mobileLongPressArchive({ page, api, seed, check }) {
 
   if (
     !(await check("appui long : mail seedé et relevé", async () => {
+      // #55 : en tous-comptes la réception est l'unifiée (Archives incluses) ;
+      // archiver n'y retire pas le mail. On teste en vue INBOX du compte roman.
+      await selectAccount(page, /roman@lavande\.test/);
       await gotoInbox(page);
       await seed(subject, body);
       await syncInbox(page, api);
@@ -297,6 +314,8 @@ export async function mobileLongPressArchive({ page, api, seed, check }) {
     await row(page, subject).waitFor({ timeout: 90_000 });
     return "Archives";
   });
+
+  await selectAccount(page, /Tous les comptes/);
 }
 
 // 4. Nouveau message depuis le bouton flottant du dock : destinataire, objet et

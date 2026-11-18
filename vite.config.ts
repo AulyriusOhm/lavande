@@ -61,7 +61,7 @@ export default defineConfig({
     strictPort: true,
     allowedHosts: true,
     watch: {
-      ignored: ["**/.plasma/**", "**/src-tauri/**", "**/server/**", "**/dist/**"],
+      ignored: ["**/.plasma/**", "**/src-tauri/**", "**/server/**", "**/dist/**", "**/target/**", "**/.agents/**", "**/artifacts/**"],
     },
     proxy: {
       "/api": { ...apiProxy },
