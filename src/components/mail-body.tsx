@@ -177,6 +177,127 @@ export function fitMailWidth(contentDocument: Document, available: number) {
   }
 }
 
+type Rgb = { r: number; g: number; b: number; a: number };
+
+/** En deçà de cette luminance relative (WCAG), un texte est noir. */
+const BLACK_TEXT_LUMINANCE = 0.12;
+/** En deçà, un texte est sombre : noir sur le fond sombre de l'app. */
+const DARK_TEXT_LUMINANCE = 0.42;
+/** Au-delà, un fond est clair : le texte sombre posé dessus reste lisible. */
+const LIGHT_BACKDROP_LUMINANCE = 0.5;
+/** Un fond plus transparent que ça laisse voir celui du dessous. */
+const OPAQUE_BACKDROP_ALPHA = 0.5;
+
+const COLOR_NAMES: Record<string, string> = {
+  transparent: "#00000000",
+  black: "#000000",
+  white: "#ffffff",
+  silver: "#c0c0c0",
+  gray: "#808080",
+  grey: "#808080",
+  lightgray: "#d3d3d3",
+  lightgrey: "#d3d3d3",
+  darkgray: "#a9a9a9",
+  darkgrey: "#a9a9a9",
+  dimgray: "#696969",
+  dimgrey: "#696969",
+  gainsboro: "#dcdcdc",
+  whitesmoke: "#f5f5f5",
+  red: "#ff0000",
+  maroon: "#800000",
+  orange: "#ffa500",
+  yellow: "#ffff00",
+  olive: "#808000",
+  lime: "#00ff00",
+  green: "#008000",
+  teal: "#008080",
+  blue: "#0000ff",
+  navy: "#000080",
+  aqua: "#00ffff",
+  cyan: "#00ffff",
+  purple: "#800080",
+  fuchsia: "#ff00ff",
+  magenta: "#ff00ff",
+};
+
+/** Luminance relative WCAG : 0 pour le noir, 1 pour le blanc. */
+function relativeLuminance({ r, g, b }: Rgb): number {
+  const linear = (channel: number) => {
+    const value = channel / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+}
+
+function hexColor(digits: string): Rgb | null {
+  if (!/^[0-9a-f]+$/.test(digits)) return null;
+  const full = digits.length <= 4 ? [...digits].map((digit) => digit + digit).join("") : digits;
+  if (full.length !== 6 && full.length !== 8) return null;
+  const byte = (start: number) => Number.parseInt(full.slice(start, start + 2), 16);
+  return { r: byte(0), g: byte(2), b: byte(4), a: full.length === 8 ? byte(6) / 255 : 1 };
+}
+
+/** `#hex` (3, 4, 6, 8), `rgb()`/`rgba()`, quelques noms CSS ; le reste rend `null`. */
+function parseColor(value: string): Rgb | null {
+  const text = value.trim().toLowerCase();
+  const hex = COLOR_NAMES[text] ?? (text.startsWith("#") ? text : null);
+  if (!hex) {
+    const channels = /^rgba?\(([^)]*)\)$/
+      .exec(text)?.[1].split(/[\s,/]+/)
+      .filter(Boolean)
+      .map(Number);
+    if (!channels) return null;
+    if (channels.length < 3 || channels.length > 4 || !channels.every(Number.isFinite)) return null;
+    const [r, g, b, a = 1] = channels;
+    const inRange = (channel: number, max: number) => channel >= 0 && channel <= max;
+    if (!inRange(r, 255) || !inRange(g, 255) || !inRange(b, 255) || !inRange(a, 1)) return null;
+    return { r, g, b, a };
+  }
+  return hexColor(hex.slice(1));
+}
+
+/**
+ * Thème sombre : un mail qui impose son texte en noir (style inline ou règle
+ * d'un bloc `<style>`) reste noir sur le fond sombre de l'app, donc illisible.
+ * Ces couleurs remontent vers la palette claire — mais seulement là où le fond
+ * effectif derrière l'élément est sombre : un encadré au fond jaune garde son
+ * texte noir. Un fond introuvable (aucun ancêtre opaque jusqu'à `html`/`body`,
+ * que la feuille de repli laisse transparents) vaut le fond de l'app, donc
+ * sombre. La passe n'est appelée qu'en thème sombre.
+ */
+export function liftDarkText(contentDocument: Document) {
+  const view = contentDocument.defaultView;
+  if (!view) return;
+  const elements = Array.from(contentDocument.querySelectorAll<HTMLElement>("*"));
+  const texts = elements.map((element) => parseColor(view.getComputedStyle(element).color));
+  const backdrops = new Map<Element, boolean>();
+
+  const onLightBackdrop = (element: Element | null): boolean => {
+    if (!element) return false;
+    const known = backdrops.get(element);
+    if (known !== undefined) return known;
+    const background = parseColor(view.getComputedStyle(element).backgroundColor);
+    const light =
+      background && background.a >= OPAQUE_BACKDROP_ALPHA
+        ? relativeLuminance(background) >= LIGHT_BACKDROP_LUMINANCE
+        : onLightBackdrop(element.parentElement);
+    backdrops.set(element, light);
+    return light;
+  };
+
+  elements.forEach((element, index) => {
+    const text = texts[index];
+    if (!text || onLightBackdrop(element)) return;
+    const luminance = relativeLuminance(text);
+    if (luminance >= DARK_TEXT_LUMINANCE) return;
+    element.style.setProperty(
+      "color",
+      luminance <= BLACK_TEXT_LUMINANCE ? DARK.ink : DARK.inkSoft,
+      "important",
+    );
+  });
+}
+
 /**
  * Corps du message : le HTML est **déjà assaini côté service** (liste blanche
  * stricte, styles filtrés, images de tracking retirées, liens `noopener`), on ne
@@ -187,10 +308,11 @@ export function fitMailWidth(contentDocument: Document, available: number) {
  * table) et notre palette ne sert qu'au contenu non stylé — le rendu fidèle
  * prime, y compris en thème sombre (sauf sous 720px, où la feuille ramène
  * tables et images à la largeur de l'écran et où `fitMailWidth` neutralise dans
- * le document les largeurs absolues que le mail impose). Les liens sont
- * interceptés côté parent — l'iframe n'exécute aucun script — et remis au
- * navigateur du système, la base `target="_blank"` ne restant qu'un repli.
- * Sans HTML, on retombe sur les paragraphes texte.
+ * le document les largeurs absolues que le mail impose). Une fois le cadre
+ * chargé, `liftDarkText` y remonte en thème sombre les textes restés sombres sur
+ * le fond de l'app. Les liens sont interceptés côté parent — l'iframe n'exécute
+ * aucun script — et remis au navigateur du système, la base `target="_blank"`
+ * ne restant qu'un repli. Sans HTML, on retombe sur les paragraphes texte.
  *
  * Les images distantes restent masquées par défaut : le bandeau ne fait que
  * demander au service de relire ce message-ci, jamais d'office, et le markup qui
@@ -301,10 +423,18 @@ export function MailBody({
     );
   }, []);
 
+  const adaptColors = useCallback(() => {
+    if (!theme.dark) return;
+    const contentDocument = frameRef.current?.contentDocument;
+    if (!contentDocument) return;
+    liftDarkText(contentDocument);
+  }, [theme.dark]);
+
   const handleFrameLoad = useCallback(() => {
     syncHeight();
     interceptLinks();
-  }, [interceptLinks, syncHeight]);
+    adaptColors();
+  }, [adaptColors, interceptLinks, syncHeight]);
 
   useEffect(() => {
     if (!body) return;

@@ -554,15 +554,15 @@ fn inline_cid_images(html: &str, message: &mail_parser::Message<'_>) -> String {
 
 /// Strips everything a mail can use to break out of the message view and keeps
 /// what makes its design: only the tags of `HTML_TAGS` survive, with `href`
-/// (http/https/mailto only), `title`, `class`, the table geometry attributes
-/// (`width`, `align`, `valign`, `bgcolor`, `cellpadding`, `cellspacing`,
-/// `border`) and a `style` attribute / `<style>` blocks filtered by
-/// `sanitize_declarations`. `script`/`iframe`/`form`/`on*`/`srcset` and unknown
-/// tags lose their tag but keep their text, remote images (tracking pixels) are
-/// dropped, the `data:` images of `INLINE_IMAGE_TYPES` are kept (the content the
-/// sender pasted, not a pixel that calls home), links get
-/// `rel="noopener noreferrer"` and `target="_blank"`. Returns `None` when no
-/// visible text is left.
+/// (http/https/mailto only), `title`, `class`, `id` (a `<style>` block selects
+/// on it), the table geometry attributes (`width`, `height`, `align`, `valign`,
+/// `bgcolor`, `cellpadding`, `cellspacing`, `border`) and a `style` attribute /
+/// `<style>` blocks filtered by `sanitize_declarations`.
+/// `script`/`iframe`/`form`/`on*`/`srcset` and unknown tags lose their tag but
+/// keep their text, remote images (tracking pixels) are dropped, the `data:`
+/// images of `INLINE_IMAGE_TYPES` are kept (the content the sender pasted, not
+/// a pixel that calls home), links get `rel="noopener noreferrer"` and
+/// `target="_blank"`. Returns `None` when no visible text is left.
 pub fn sanitize_html(html: &str) -> Option<String> {
     sanitize(html, false)
 }
@@ -731,16 +731,31 @@ fn html_sanitizer(images: bool) -> ammonia::Builder<'static> {
         ("a", HashSet::from(["href"])),
         (
             "td",
-            HashSet::from(["colspan", "rowspan", "width", "align", "valign", "bgcolor"]),
+            HashSet::from([
+                "colspan", "rowspan", "width", "height", "align", "valign", "bgcolor",
+            ]),
         ),
         (
             "th",
-            HashSet::from(["colspan", "rowspan", "width", "align", "valign", "bgcolor"]),
+            HashSet::from([
+                "colspan", "rowspan", "width", "height", "align", "valign", "bgcolor",
+            ]),
         ),
-        ("tr", HashSet::from(["align", "valign", "bgcolor"])),
+        (
+            "tr",
+            HashSet::from(["height", "align", "valign", "bgcolor"]),
+        ),
         (
             "table",
-            HashSet::from(["width", "align", "cellpadding", "cellspacing", "border"]),
+            HashSet::from([
+                "width",
+                "height",
+                "align",
+                "bgcolor",
+                "cellpadding",
+                "cellspacing",
+                "border",
+            ]),
         ),
         ("font", HashSet::from(["color", "face", "size"])),
         ("img", HashSet::from(["src", "alt", "width", "height"])),
@@ -750,7 +765,7 @@ fn html_sanitizer(images: bool) -> ammonia::Builder<'static> {
     builder
         .tags(tags)
         .tag_attributes(attributes)
-        .generic_attributes(HashSet::from(["title", "style", "class"]))
+        .generic_attributes(HashSet::from(["title", "style", "class", "id"]))
         .url_schemes(HashSet::from(["http", "https", "mailto", "data"]))
         .link_rel(Some("noopener noreferrer"))
         .attribute_filter(move |element, attribute, value| {
@@ -778,7 +793,7 @@ fn filter_attribute<'a>(
             let cleaned = sanitize_declarations(value);
             (!cleaned.is_empty()).then_some(Cow::Owned(cleaned))
         }
-        (_, "width") | (_, "height") if matches!(element, "table" | "td" | "th" | "img") => {
+        (_, "width" | "height") if matches!(element, "table" | "tr" | "td" | "th" | "img") => {
             is_length(value).then(|| value.into())
         }
         (_, "cellpadding") | (_, "cellspacing") | (_, "border") if element == "table" => {
@@ -922,8 +937,16 @@ const STYLE_PROPERTIES: &[&str] = &[
 ];
 
 /// Longhands of the shorthands above: `padding-top`, `margin-left`,
-/// `border-bottom-left-radius`, `list-style-type`…
-const STYLE_PREFIXES: &[&str] = &["border-", "list-style-", "margin-", "padding-"];
+/// `border-bottom-left-radius`, `background-image:linear-gradient(…)`,
+/// `list-style-type`… `background-` never reintroduces a resource: every
+/// `url()` is refused by `write_token` whatever the property.
+const STYLE_PREFIXES: &[&str] = &[
+    "background-",
+    "border-",
+    "list-style-",
+    "margin-",
+    "padding-",
+];
 
 /// Words that never belong in a value: they either run code (`expression()`,
 /// `javascript:`), bind a behaviour to the element (`behavior`,
@@ -1197,10 +1220,18 @@ fn style_property_allowed(name: &str) -> bool {
 }
 
 fn style_value_allowed(property: &str, value: &str) -> bool {
-    !property.eq_ignore_ascii_case("display")
-        || DISPLAY_VALUES
+    if property.eq_ignore_ascii_case("display") {
+        return DISPLAY_VALUES
             .iter()
-            .any(|allowed| allowed.eq_ignore_ascii_case(value))
+            .any(|allowed| allowed.eq_ignore_ascii_case(value));
+    }
+    // A background has no use for a string, but `image-set("https://…" 1x)`
+    // is a quoted resource the WebView still fetches: `url()` is not the only
+    // way to name one.
+    if property.to_ascii_lowercase().starts_with("background") {
+        return !value.contains(['"', '\'']);
+    }
+    true
 }
 
 fn is_denied_value_word(word: &str) -> bool {

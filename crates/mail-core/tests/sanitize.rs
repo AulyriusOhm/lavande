@@ -224,3 +224,166 @@ fn a_tracking_pixel_is_still_dropped_from_the_stored_body() {
         "{html}"
     );
 }
+
+const CALLOUT_MAIL: &str = concat!(
+    "<html><head><style>",
+    ".callout{background-color:#fff9e6;border-left:4px solid #f0b429;border-radius:8px;padding:16px}",
+    "pre.code{background-color:#f4f4f4;padding:12px;border-radius:6px}",
+    "code{background-color:#f0f0f0;color:#c7254e;padding:1px 4px;border-radius:3px}",
+    ".titre{color:#241b3a;font-family:'Georgia',serif}",
+    "</style></head><body>",
+    "<table width=\"600\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" ",
+    "bgcolor=\"#ffffff\"><tr><td style=\"padding:24px;font-size:14px;color:#333333\">",
+    "<h1 class=\"titre\">Facture</h1>",
+    "<div class=\"callout\">Encadré de classe</div>",
+    "<table width=\"100%\" height=\"120\" bgcolor=\"#fff9e6\"><tr height=\"24\">",
+    "<td height=\"24\" colspan=\"2\"></td></tr><tr>",
+    "<td style=\"border-left:4px solid #f0b429;padding:12px\" bgcolor=\"#fff9e6\">Encadré de table</td>",
+    "</tr></table>",
+    "<div style=\"background-color:#fff9e6;border-left:4px solid #f0b429;padding:16px\">",
+    "Encadré inline</div>",
+    "<div style=\"background:lightyellow;border:1px solid #e0a800\">Encadré nommé</div>",
+    "<div style=\"background-image:linear-gradient(90deg,#8b7cf6,#5b46e0);color:#ffffff\">Bouton</div>",
+    "<pre class=\"code\">code de classe</pre>",
+    "<pre style=\"background-color:#f4f4f4;padding:12px\"><code>code inline</code></pre>",
+    "<p>Un <code>extrait</code> dans une phrase.</p>",
+    "<blockquote style=\"border-left:3px solid #d0c9e0;background-color:#f6f3fd;padding-left:1em\">",
+    "Cité</blockquote>",
+    "<p style=\"color:#8b2f00\">Texte coloré</p>",
+    "<font color=\"#ff0000\">Rouge</font>",
+    "<span style=\"color:rgb(199, 37, 78)\">Rouge aussi</span>",
+    "</td></tr></table></body></html>",
+);
+
+#[test]
+fn a_callout_keeps_its_background_and_its_border_whatever_it_is_built_with() {
+    let html = body(CALLOUT_MAIL);
+    for kept in [
+        ".callout{background-color:#fff9e6;border-left:4px solid #f0b429;border-radius:8px;padding:16px}",
+        "pre.code{background-color:#f4f4f4;padding:12px;border-radius:6px}",
+        "code{background-color:#f0f0f0;color:#c7254e;padding:1px 4px;border-radius:3px}",
+        r##"bgcolor="#ffffff""##,
+        r##"<div class="callout">Encadré de classe</div>"##,
+        r##"<table width="100%" height="120" bgcolor="#fff9e6">"##,
+        r##"<tr height="24"><td height="24" colspan="2"></td></tr>"##,
+        r##"bgcolor="#fff9e6">Encadré de table</td>"##,
+        r##"style="border-left:4px solid #f0b429;padding:12px""##,
+        r##"style="background-color:#fff9e6;border-left:4px solid #f0b429;padding:16px""##,
+        r##"style="background:lightyellow;border:1px solid #e0a800""##,
+        r##"style="background-image:linear-gradient(90deg, #8b7cf6, #5b46e0);color:#ffffff""##,
+        r##"<pre class="code">code de classe</pre>"##,
+        r##"style="background-color:#f4f4f4;padding:12px""##,
+        r##"<code>code inline</code>"##,
+        r##"style="border-left:3px solid #d0c9e0;background-color:#f6f3fd;padding-left:1em""##,
+        r##"style="color:#8b2f00">Texte coloré"##,
+        r##"<font color="#ff0000">Rouge</font>"##,
+        r##"style="color:rgb(199, 37, 78)"##,
+    ] {
+        assert!(html.contains(kept), "manque {kept}\n{html}");
+    }
+}
+
+#[test]
+fn the_callout_mail_keeps_nothing_that_could_run_bind_or_fetch() {
+    let html = body(CALLOUT_MAIL);
+    for refused in [
+        "url(",
+        "expression",
+        "behavior",
+        "javascript",
+        "position",
+        "z-index",
+        "<script",
+        "onerror",
+        "@import",
+    ] {
+        assert!(!html.contains(refused), "{refused} survit\n{html}");
+    }
+}
+
+#[test]
+fn a_table_background_colour_survives_and_an_invalid_one_does_not() {
+    let html =
+        body(r##"<table bgcolor="#fff9e6"><tr><td bgcolor="lightyellow">a</td></tr></table>"##);
+    assert_eq!(
+        html,
+        r##"<table bgcolor="#fff9e6"><tbody><tr><td bgcolor="lightyellow">a</td></tr></tbody></table>"##
+    );
+
+    let refused = body(
+        r##"<table bgcolor="javascript:alert(1)"><tr><td bgcolor="url(https://track.test/p.png)">a</td></tr><tr><td bgcolor="expression(alert(1))">b</td></tr><tr><td bgcolor="#12345">c</td></tr><tr><td bgcolor="red;background:url(https://track.test/p.png)">d</td></tr></table>"##,
+    );
+    assert_eq!(
+        refused,
+        "<table><tbody><tr><td>a</td></tr><tr><td>b</td></tr><tr><td>c</td></tr><tr><td>d</td></tr></tbody></table>"
+    );
+}
+
+#[test]
+fn a_gradient_background_survives_and_a_remote_one_does_not() {
+    let html = body(
+        r##"<div style="background-image:linear-gradient(90deg,#8b7cf6,#5b46e0);background-size:cover;background-position:center;color:#ffffff">x</div>"##,
+    );
+    assert_eq!(
+        html,
+        r##"<div style="background-image:linear-gradient(90deg, #8b7cf6, #5b46e0);background-size:cover;background-position:center;color:#ffffff">x</div>"##
+    );
+
+    for css in [
+        r##"<div style="color:#333;background-image:url(https://track.test/p.png)">x</div>"##,
+        r##"<div style="color:#333;background-image:image-set(url(https://track.test/p.png) 1x)">x</div>"##,
+        r##"<div style='color:#333;background-image:image-set("https://track.test/p.png" 1x)'>x</div>"##,
+        r##"<div style="color:#333;background-image:-webkit-image-set('https://track.test/p.png' 1x)">x</div>"##,
+        r##"<div style='color:#333;background:-webkit-cross-fade("x.png",#fff,.5)'>x</div>"##,
+        r##"<div style="color:#333;background:url(https://track.test/p.png) #fff">x</div>"##,
+    ] {
+        let html = body(css);
+        assert_eq!(html, r##"<div style="color:#333">x</div>"##, "{css}");
+    }
+
+    let named = body(
+        r##"<div style="background-image:linear-gradient(180deg,rgba(139,124,246,.15),transparent)">x</div>"##,
+    );
+    assert_eq!(
+        named,
+        r##"<div style="background-image:linear-gradient(180deg, rgba(139, 124, 246, 0.15), transparent)">x</div>"##
+    );
+}
+
+#[test]
+fn an_id_survives_so_a_block_selector_finds_its_element() {
+    let html = body(
+        "<style>#hero .box{background-color:#fff9e6;border:1px solid #e0a800}</style>\
+         <div id=\"hero\"><div class=\"box\">x</div></div>",
+    );
+    assert_eq!(
+        html,
+        "<style>#hero .box{background-color:#fff9e6;border:1px solid #e0a800}</style>\
+         <div id=\"hero\"><div class=\"box\">x</div></div>"
+    );
+
+    let stripped =
+        body(r##"<div id="hero" onclick="alert(1)" style="background-color:#fff9e6">x</div>"##);
+    assert_eq!(
+        stripped,
+        r##"<div id="hero" style="background-color:#fff9e6">x</div>"##
+    );
+
+    let quoted = body(r##"<div id="&quot; onmouseover=&quot;alert(1)">x</div>"##);
+    assert!(!quoted.contains("onmouseover=alert"), "{quoted}");
+    assert!(
+        quoted.contains(r##"id="&quot; onmouseover=&quot;alert(1)""##),
+        "{quoted}"
+    );
+}
+
+#[test]
+fn a_cell_height_survives_and_an_invalid_one_does_not() {
+    let html = body(
+        r##"<table height="100%"><tr height="24"><td height="24" colspan="2"></td><td height="auto">x</td></tr></table>"##,
+    );
+    assert_eq!(
+        html,
+        r##"<table height="100%"><tbody><tr height="24"><td height="24" colspan="2"></td><td>x</td></tr></tbody></table>"##
+    );
+}

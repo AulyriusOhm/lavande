@@ -15,7 +15,7 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("@/lib/open-external", () => ({ openExternal, isTauriShell: () => false }));
 
-const { MailBody, fitMailWidth } = await import("@/components/mail-body");
+const { MailBody, fitMailWidth, liftDarkText } = await import("@/components/mail-body");
 
 const SOURCE: MailSource = { accountId: "perso", folderPath: "INBOX", uid: 12 };
 const STORED = "<p>Soldes du mois</p>";
@@ -164,7 +164,7 @@ describe("feuille de repli", () => {
     expect(doc).toContain('style="padding:24px"');
   });
 
-  it("ne touche pas aux couleurs du mail en thème sombre", () => {
+  it("n'applique aucun filtre CSS au document en thème sombre", () => {
     document.documentElement.classList.add("dark");
     const doc = srcDoc(renderBody().container);
 
@@ -324,6 +324,188 @@ describe("thème", () => {
     document.documentElement.style.setProperty("--accent", "rgb(255, 0, 0)");
     const invalid = renderBody();
     expect(srcDoc(invalid.container)).toContain("--accent:#8b7cf6");
+  });
+});
+
+describe("mode sombre : lisibilité du texte", () => {
+  function mailFrame(markup: string) {
+    const element = document.createElement("iframe");
+    document.body.append(element);
+    const contentDocument = element.contentDocument as Document;
+    contentDocument.body.innerHTML = markup;
+    return { contentDocument, cleanup: () => element.remove() };
+  }
+
+  function colorOf(contentDocument: Document, selector: string) {
+    const element = contentDocument.querySelector(selector);
+    if (!element) throw new Error(`cible absente : ${selector}`);
+    return contentDocument.defaultView!.getComputedStyle(element).color;
+  }
+
+  it("remonte un texte noir posé sur le fond sombre de l'app", () => {
+    const page = mailFrame('<p style="color:#000">Un devis</p>');
+    try {
+      liftDarkText(page.contentDocument);
+
+      expect(colorOf(page.contentDocument, "p")).toBe("rgb(244, 241, 250)");
+      expect(page.contentDocument.querySelector("p")?.style.getPropertyPriority("color")).toBe(
+        "important",
+      );
+    } finally {
+      page.cleanup();
+    }
+  });
+
+  it("garde une hiérarchie : le noir remonte à l'encre, le gris sombre à l'encre douce", () => {
+    const page = mailFrame(
+      '<h1 style="color:#333">Titre</h1><p style="color:#6b6478">Corps</p><p style="color:#fff9e6">Déjà clair</p>',
+    );
+    try {
+      liftDarkText(page.contentDocument);
+
+      expect(colorOf(page.contentDocument, "h1")).toBe("rgb(244, 241, 250)");
+      expect(colorOf(page.contentDocument, "p:nth-of-type(1)")).toBe("rgb(168, 161, 184)");
+      expect(colorOf(page.contentDocument, "p:nth-of-type(2)")).toBe("rgb(255, 249, 230)");
+    } finally {
+      page.cleanup();
+    }
+  });
+
+  it("laisse le texte noir d'un encadré au fond clair, style inline ou classe", () => {
+    const page = mailFrame(
+      '<style>.callout{background-color:#fff9e6}</style>' +
+        '<div style="background-color:#fff9e6"><p id="inline" style="color:#000">Encadré</p></div>' +
+        '<div class="callout"><p id="classed" style="color:#000">Encadré aussi</p></div>',
+    );
+    try {
+      liftDarkText(page.contentDocument);
+
+      expect(colorOf(page.contentDocument, "#inline")).toBe("rgb(0, 0, 0)");
+      expect(colorOf(page.contentDocument, "#classed")).toBe("rgb(0, 0, 0)");
+    } finally {
+      page.cleanup();
+    }
+  });
+
+  it("remonte un texte sombre posé sur un fond sombre du mail", () => {
+    const page = mailFrame(
+      '<div style="background-color:#241b3a"><p style="color:#333">Encadré sombre</p></div>',
+    );
+    try {
+      liftDarkText(page.contentDocument);
+
+      expect(colorOf(page.contentDocument, "p")).toBe("rgb(244, 241, 250)");
+    } finally {
+      page.cleanup();
+    }
+  });
+
+  it("s'arrête au fond le plus proche : un encadré clair garde son texte sous un ancêtre sombre", () => {
+    const page = mailFrame(
+      '<div style="background-color:#241b3a"><div style="background-color:#fff9e6">' +
+        '<p style="color:#000">Encadré clair</p></div></div>',
+    );
+    try {
+      liftDarkText(page.contentDocument);
+
+      expect(colorOf(page.contentDocument, "p")).toBe("rgb(0, 0, 0)");
+    } finally {
+      page.cleanup();
+    }
+  });
+
+  it("remonte une couleur sombre héritée d'un ancêtre", () => {
+    const page = mailFrame('<div style="color:#111"><p>Hérité</p></div>');
+    try {
+      liftDarkText(page.contentDocument);
+
+      expect(colorOf(page.contentDocument, "div")).toBe("rgb(244, 241, 250)");
+      expect(colorOf(page.contentDocument, "p")).toBe("rgb(244, 241, 250)");
+    } finally {
+      page.cleanup();
+    }
+  });
+
+  it("traverse un fond translucide pour trouver le fond clair du dessous", () => {
+    const page = mailFrame(
+      '<div style="background-color:#ffffff"><div style="background-color:rgba(0, 0, 0, 0.05)">' +
+        '<p style="color:#000">Carte</p></div></div>',
+    );
+    try {
+      liftDarkText(page.contentDocument);
+
+      expect(colorOf(page.contentDocument, "p")).toBe("rgb(0, 0, 0)");
+    } finally {
+      page.cleanup();
+    }
+  });
+
+  it("laisse telle quelle une couleur qu'il ne sait pas lire", () => {
+    const page = mailFrame('<p style="color:#000">Exotique</p>');
+    try {
+      Object.defineProperty(page.contentDocument, "defaultView", {
+        configurable: true,
+        value: {
+          getComputedStyle: () => ({
+            color: "color(display-p3 0 0 0)",
+            backgroundColor: "rgba(0, 0, 0, 0)",
+          }),
+        },
+      });
+
+      liftDarkText(page.contentDocument);
+
+      expect(page.contentDocument.querySelector("p")?.style.color).toBe("rgb(0, 0, 0)");
+    } finally {
+      page.cleanup();
+    }
+  });
+
+  it("ne fait rien sans vue sur le document", () => {
+    const contentDocument = document.implementation.createHTMLDocument("message");
+    contentDocument.body.innerHTML = '<p style="color:#000">x</p>';
+
+    liftDarkText(contentDocument);
+
+    expect(contentDocument.querySelector("p")?.style.color).toBe("rgb(0, 0, 0)");
+  });
+
+  it("tourne au chargement du cadre en thème sombre", () => {
+    document.documentElement.classList.add("dark");
+    const { container } = renderBody();
+    const contentDocument = frame(container).contentDocument as Document;
+    contentDocument.body.innerHTML = '<p style="color:#000">Un devis</p>';
+
+    fireEvent.load(frame(container));
+
+    expect(colorOf(contentDocument, "p")).toBe("rgb(244, 241, 250)");
+  });
+
+  it("rejoue la passe quand le thème bascule : le cadre se recharge et l'onLoad repart", async () => {
+    const { container } = renderBody();
+    const element = frame(container);
+    const light = srcDoc(container);
+    fireEvent.load(element);
+
+    document.documentElement.classList.add("dark");
+    await waitFor(() => expect(srcDoc(container)).toContain("color-scheme:dark"));
+    expect(srcDoc(container)).not.toBe(light);
+
+    const contentDocument = element.contentDocument as Document;
+    contentDocument.body.innerHTML = '<p style="color:#000">Un devis</p>';
+    fireEvent.load(element);
+
+    expect(colorOf(contentDocument, "p")).toBe("rgb(244, 241, 250)");
+  });
+
+  it("ne touche à rien au chargement du cadre en thème clair", () => {
+    const { container } = renderBody();
+    const contentDocument = frame(container).contentDocument as Document;
+    contentDocument.body.innerHTML = '<p style="color:#000">Un devis</p>';
+
+    fireEvent.load(frame(container));
+
+    expect(colorOf(contentDocument, "p")).toBe("rgb(0, 0, 0)");
   });
 });
 
