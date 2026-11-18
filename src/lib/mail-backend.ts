@@ -192,6 +192,9 @@ function toneOf(email: string): number {
   return hash % TONES.length;
 }
 
+/** Le repli de la liste tant que le serveur n'a pas rendu d'aperçu. */
+export const PREVIEW_PENDING = "Aperçu chargé à l'ouverture";
+
 export function bodyParagraphs(text: string | null): string[] {
   if (!text) return [];
   return text
@@ -225,7 +228,7 @@ export function messageToMail(
     to: message.to.map((address) => address.email).join(", ") || undefined,
     cc: message.cc.map((address) => address.email).join(", ") || undefined,
     subject: message.subject || "(sans objet)",
-    preview: message.preview || body[0] || "Aperçu chargé à l'ouverture",
+    preview: message.preview || body[0] || PREVIEW_PENDING,
     body,
     html: message.body_html ?? undefined,
     time: shortTime(message.date),

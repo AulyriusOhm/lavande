@@ -238,7 +238,7 @@ function mountStore() {
 }
 
 describe("boîte unifiée · dossiers et compteurs", () => {
-  it("atterrit sur la boîte unifiée, en tête de la liste des dossiers", async () => {
+  it("atterrit sur la réception unifiée, en tête de la liste des dossiers", async () => {
     mockFolders();
     const { result } = mountStore();
 
@@ -247,10 +247,28 @@ describe("boîte unifiée · dossiers et compteurs", () => {
 
     expect(result.current.store.folderOptions[0]).toEqual({
       id: "unified",
-      label: "Boîte unifiée",
+      label: "Boîte de réception",
       path: "unified",
       delimiter: null,
     });
+  });
+
+  it("n'affiche qu'une seule entrée de réception sur « Tous les comptes »", async () => {
+    mockFolders();
+    const { result } = mountStore();
+    await waitFor(() => expect(result.current.store.folder).toBe("unified"));
+
+    const labels = result.current.store.folderOptions.map((option) => option.label);
+    expect(labels.filter((label) => label === "Boîte de réception")).toHaveLength(1);
+    expect(labels).not.toContain("Boîte unifiée");
+    expect(result.current.store.folderOptions.some((option) => option.id === "inbox")).toBe(false);
+    expect(result.current.store.folderOptions.map((option) => option.id)).toEqual([
+      "unified",
+      "sent",
+      "spam",
+      "trash",
+      "other",
+    ]);
   });
 
   it("charge les fils de tous les dossiers sauf corbeille et spam", async () => {

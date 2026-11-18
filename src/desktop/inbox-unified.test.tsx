@@ -191,15 +191,17 @@ afterEach(() => {
 });
 
 describe("boîte PC · boîte unifiée", () => {
-  it("ouvre « Tous les comptes » sur la boîte unifiée, en tête du rail", async () => {
+  it("ouvre « Tous les comptes » sur une réception unique, en tête du rail", async () => {
     stubBackend();
     render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
 
-    await waitFor(() => expect(rail(/^Boîte unifiée/)).toBeTruthy());
+    await waitFor(() => expect(rail(/^Boîte de réception/)).toBeTruthy());
 
     expect(folderRows()[0]).toBe("unified");
-    expect(rail(/^Boîte unifiée/)?.getAttribute("aria-current")).toBe("true");
-    expect(screen.getAllByText("Boîte unifiée").length).toBeGreaterThan(0);
+    expect(rail(/^Boîte de réception/)?.getAttribute("aria-current")).toBe("true");
+    expect(screen.queryByText("Boîte unifiée")).toBeNull();
+    expect(folderRows().filter((row) => row === "inbox")).toEqual([]);
+    expect(screen.getAllByText("Boîte de réception").length).toBeGreaterThan(0);
   });
 
   it("mélange les dossiers de tous les comptes, sans corbeille ni spam", async () => {
@@ -248,7 +250,9 @@ describe("boîte PC · boîte unifiée", () => {
 
     fireEvent.click(rail(/^Tous les comptes/)!);
 
-    await waitFor(() => expect(rail(/^Boîte unifiée/)?.getAttribute("aria-current")).toBe("true"));
+    await waitFor(() =>
+      expect(rail(/^Boîte de réception/)?.getAttribute("aria-current")).toBe("true"),
+    );
     expect(folderRows()[0]).toBe("unified");
   });
 
@@ -272,13 +276,15 @@ describe("boîte PC · boîte unifiée", () => {
 });
 
 describe("feuille des dossiers mobile · boîte unifiée", () => {
-  it("met la boîte unifiée en tête de la feuille", async () => {
+  it("met la réception unifiée en tête de la feuille, sans seconde réception", async () => {
     stubBackend();
     render(<MailboxSheet folder="unified" onSelect={() => {}} onClose={() => {}} />, { wrapper });
 
-    await waitFor(() => expect(screen.getByText("Boîte unifiée")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Boîte de réception")).toBeTruthy());
     expect(folderRows()[0]).toBe("unified");
-    expect(screen.getByText("Boîte unifiée").closest("[data-folder-row]")).toBeTruthy();
-    expect(folderRows()).toContain("inbox");
+    expect(screen.getByText("Boîte de réception").closest("[data-folder-row]")).toBeTruthy();
+    expect(folderRows()).not.toContain("inbox");
+    expect(screen.queryByText("Boîte unifiée")).toBeNull();
+    expect(screen.getAllByText("Boîte de réception")).toHaveLength(1);
   });
 });

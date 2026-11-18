@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   BellRing,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -38,12 +39,15 @@ import { downloadAttachment } from "@/lib/attachments";
 import type { Thread } from "@/lib/threads";
 import { threadsInFolder } from "@/lib/threads";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
+import type { FolderOption } from "@/lib/mail-backend";
 import { PGP_STATE, formatKeyDate, keyLabel, keyState, shortFingerprint, type PgpKey } from "@/lib/pgp";
 import { listKeys } from "@/lib/pgp-api";
-import { useMailStore } from "@/lib/store";
-import { resolvePgp, usePrefs } from "@/lib/prefs";
+import { useMailStore, type BulkKind } from "@/lib/store";
+import { DEFAULT_INBOX_PANES, resolvePgp, usePrefs } from "@/lib/prefs";
 import type { MailNavigation } from "@/lib/app-shortcuts";
 import { useEscapeLayer } from "@/desktop/escape";
+import { PaneSplitter } from "@/desktop/pane-splitter";
+import { SelectionBar } from "@/desktop/selection-bar";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/primitives";
@@ -54,6 +58,7 @@ import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { MailBody, MailBodyLoading } from "@/components/mail-body";
 import { MailRecipients } from "@/components/mail-recipients";
 import { MailContextMenu } from "@/components/mail-context-menu";
+import { FolderContextMenu } from "@/desktop/folder-context-menu";
 import { EmptyTrashButton } from "@/components/empty-trash";
 import { HiddenFoldersRail } from "@/components/folder-row";
 import { useFolderTree } from "@/components/folder-tree";
@@ -93,6 +98,14 @@ const NARROW_MAX = 859;
 const MEDIUM_MAX = 1099;
 const NARROW_QUERY = `(max-width: ${NARROW_MAX}px)`;
 const MEDIUM_QUERY = `(max-width: ${MEDIUM_MAX}px)`;
+
+/** Bornes des colonnes dossiers et liste, et largeur minimale gardée au lecteur. */
+const SPLITTER_WIDTH = 8;
+const RAIL_MIN = 200;
+const RAIL_MAX = 360;
+const LIST_MIN = 320;
+const LIST_MAX = 640;
+const READER_MIN = 320;
 
 type InboxTier = "wide" | "medium" | "narrow";
 
@@ -372,6 +385,7 @@ function MorningSummary({
 function ThreadRow({
   thread,
   selected,
+  checked,
   delay,
   onOpen,
   onStar,
@@ -384,8 +398,9 @@ function ThreadRow({
 }: {
   thread: Thread;
   selected: boolean;
+  checked: boolean;
   delay: number;
-  onOpen: () => void;
+  onOpen: (event: React.MouseEvent | null) => void;
   onStar: () => void;
   onRead: () => void;
   onArchive: () => void;
@@ -434,8 +449,12 @@ function ThreadRow({
     <BlurFade delay={delay} yOffset={10}>
       <div
         className={cn(
-          "group relative rounded-[16px] transition-colors duration-200",
-          selected ? "bg-accent-soft ring-1 ring-accent-ring" : "hover:bg-surface-2",
+          "group relative rounded-[16px] border transition-colors duration-200",
+          selected || checked
+            ? "border-transparent bg-accent-soft ring-1 ring-accent-ring"
+            : unread
+              ? "border-accent-ring/60 bg-surface shadow-[0_10px_30px_-24px_var(--accent)] hover:border-accent-ring"
+              : "border-transparent hover:bg-surface-2",
         )}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -444,17 +463,32 @@ function ThreadRow({
       >
         <button
           type="button"
-          onClick={onOpen}
+          onClick={(event) => onOpen(event)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            onOpen(null);
+          }}
           aria-current={selected}
+          aria-pressed={checked}
           data-mail-row={thread.id}
           aria-label={`${name} — ${thread.subject}${thread.count > 1 ? ` · ${thread.count} messages` : ""}${
             unread ? " · non lu" : ""
-          }`}
+          }${checked ? " · sélectionné" : ""}`}
           className="focus-row absolute inset-0 rounded-[16px]"
         />
 
         <div className="pointer-events-none relative flex gap-3 px-3 py-3.5">
-          <Avatar name={name} tone={mail.tone} size={40} rounded="rounded-full" />
+          <div className="relative shrink-0">
+            <Avatar name={name} tone={mail.tone} size={40} rounded="rounded-full" />
+            {checked ? (
+              <span className="absolute -top-1 -left-1 grid size-4 place-items-center rounded-full border-2 border-surface bg-accent text-accent-contrast">
+                <Check className="size-2.5" strokeWidth={3.5} />
+              </span>
+            ) : unread ? (
+              <span className="absolute top-0 left-0 size-2.5 rounded-full border-2 border-surface bg-accent" />
+            ) : null}
+          </div>
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
@@ -552,6 +586,7 @@ export function DesktopInbox({
     setFolder,
     toggleStar,
     mailAction,
+    bulkMailAction,
     moveToInbox,
     restoreMail,
     emptyTrash,
@@ -582,10 +617,42 @@ export function DesktopInbox({
   const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
   const [cursor, setCursor] = useState<number | null>(null);
   const [menu, setMenu] = useState<{ mail: Mail; x: number; y: number } | null>(null);
+  const [folderMenu, setFolderMenu] = useState<{ entry: FolderOption; x: number; y: number } | null>(
+    null,
+  );
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const selectionAnchor = useRef<string | null>(null);
   const tier = useInboxTier();
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [gridWidth, setGridWidth] = useState(() => window.innerWidth);
+  const [draggingPane, setDraggingPane] = useState(false);
+  const [panes, setPanes] = useState(prefs.inboxPanes);
   const listRef = useRef<HTMLDivElement>(null);
   const readerRef = useRef<HTMLElement>(null);
   const pendingFocus = useRef<"reader" | "list" | null>(null);
+
+  const setInboxPanes = prefs.setInboxPanes;
+
+  useEffect(() => {
+    setPanes(prefs.inboxPanes);
+  }, [prefs.inboxPanes]);
+
+  useEffect(() => {
+    const measure = () => {
+      const width = gridRef.current?.getBoundingClientRect().width ?? 0;
+      setGridWidth(width > 0 ? width : window.innerWidth);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [tier]);
+
+  const railWidth = Math.min(Math.max(panes.rail, RAIL_MIN), RAIL_MAX);
+  const listCeiling = Math.min(
+    LIST_MAX,
+    Math.max(LIST_MIN, gridWidth - railWidth - READER_MIN - 2 * SPLITTER_WIDTH),
+  );
+  const listWidth = Math.min(Math.max(panes.list, LIST_MIN), listCeiling);
 
   const focusRow = useCallback((id: string | null) => {
     if (!id || !listRef.current) return;
@@ -601,6 +668,11 @@ export function DesktopInbox({
     const active = document.activeElement;
     if (!active || active === document.body) return true;
     return listRef.current?.contains(active) ?? false;
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+    selectionAnchor.current = null;
   }, []);
 
 
@@ -638,9 +710,43 @@ export function DesktopInbox({
     setDropTarget(null);
   };
   const heading =
-    folderOptions.find((entry) => entry.id === folder && entry.path === folderPath)?.label ??
-    folderLabel(folder);
+    folderOptions.find(
+      (entry) => entry.id === folder && (entry.id !== "other" || entry.path === folderPath),
+    )?.label ?? folderLabel(folder);
+  const reception = folder === "inbox" || folder === "unified";
   const visible = threads.filter(FILTER_MATCH[filter]);
+  const selectedMails = visible.filter((thread) => selectedIds.has(thread.id)).map((thread) => thread.primary);
+  const selection = useRef({ ids: selectedIds, mails: selectedMails });
+  selection.current = { ids: selectedIds, mails: selectedMails };
+
+  const selectThread = (thread: Thread, index: number, event: React.MouseEvent | null) => {
+    if (event && (event.ctrlKey || event.metaKey)) {
+      setSelectedIds((current) => {
+        const next = new Set(current);
+        if (next.has(thread.id)) next.delete(thread.id);
+        else next.add(thread.id);
+        return next;
+      });
+      selectionAnchor.current = thread.id;
+      return;
+    }
+    if (event && event.shiftKey && selectionAnchor.current) {
+      const anchorIndex = visible.findIndex((entry) => entry.id === selectionAnchor.current);
+      if (anchorIndex >= 0) {
+        const from = Math.min(anchorIndex, index);
+        const to = Math.max(anchorIndex, index);
+        setSelectedIds((current) => {
+          const next = new Set(current);
+          for (let step = from; step <= to; step += 1) next.add(visible[step].id);
+          return next;
+        });
+        return;
+      }
+    }
+    clearSelection();
+    setCursor(index);
+    openMessage(thread.primary);
+  };
   const unreadThreads = threads.filter((thread) => thread.unread > 0).length;
   const attachmentThreads = threads.filter((thread) => thread.attachments > 0).length;
   const summaryFiles = summaryMails.flatMap((mail) => mail.attachments ?? []);
@@ -691,6 +797,8 @@ export function DesktopInbox({
 
   useEffect(() => {
     setCursor(null);
+    setSelectedIds(new Set());
+    selectionAnchor.current = null;
   }, [filter, folder, folderPath, account]);
 
   useEscapeLayer(Boolean(mail), () => {
@@ -698,6 +806,8 @@ export function DesktopInbox({
     pendingFocus.current = "list";
     closeMessage();
   });
+
+  useEscapeLayer(selectedIds.size > 0, clearSelection);
 
   useEffect(() => {
     if (!navigationRef) return;
@@ -728,6 +838,14 @@ export function DesktopInbox({
       if (!mail) return null;
       run(mail);
       return mail;
+    };
+
+    const bulk = (kind: BulkKind) => {
+      const current = selection.current;
+      if (current.ids.size === 0) return false;
+      bulkMailAction(kind, current.mails);
+      clearSelection();
+      return true;
     };
 
     const move = (step: number) => {
@@ -762,18 +880,23 @@ export function DesktopInbox({
         openMessage(thread.primary);
         pendingFocus.current = "reader";
       },
+      selectAll: () => setSelectedIds(new Set(navState.current.visible.map((thread) => thread.id))),
       deleteSelected: () => {
+        if (bulk("delete")) return;
         const mail = guarded((entry) => mailAction("delete", entry));
         if (mail) advance(threadIdOf(mail));
       },
       archiveSelected: () => {
+        if (bulk("archive")) return;
         const mail = guarded((entry) => mailAction("archive", entry));
         if (mail) advance(threadIdOf(mail));
       },
       toggleStarSelected: () => {
+        if (bulk(selection.current.mails.every((entry) => entry.starred) ? "unstar" : "star")) return;
         guarded((entry) => toggleStar(entry.id));
       },
       toggleReadSelected: () => {
+        if (bulk(selection.current.mails.some((entry) => entry.unread) ? "read" : "unread")) return;
         guarded((entry) => mailAction("read", entry));
       },
       replySelected: () => {
@@ -787,7 +910,19 @@ export function DesktopInbox({
     return () => {
       navigationRef.current = null;
     };
-  }, [navigationRef, openMessage, closeMessage, mailAction, toggleStar, replyTo, forwardMail, focusRow, listFocused]);
+  }, [
+    navigationRef,
+    openMessage,
+    closeMessage,
+    mailAction,
+    bulkMailAction,
+    toggleStar,
+    replyTo,
+    forwardMail,
+    focusRow,
+    listFocused,
+    clearSelection,
+  ]);
 
   useEffect(() => {
     if (pendingFocus.current === "reader" && mail) {
@@ -879,14 +1014,23 @@ export function DesktopInbox({
   return (
     <>
       <div
+        ref={gridRef}
         className={cn(
           "relative grid h-full min-h-0",
-          tier === "wide" && "grid-cols-[248px_420px_minmax(0,1fr)]",
+          tier === "wide" && draggingPane && "select-none",
           tier === "medium" && "grid-cols-[minmax(0,360px)_minmax(0,1fr)]",
           tier === "narrow" && "grid-cols-[minmax(0,1fr)]",
         )}
+        style={
+          tier === "wide"
+            ? {
+                gridTemplateColumns: `${railWidth}px ${SPLITTER_WIDTH}px ${listWidth}px ${SPLITTER_WIDTH}px minmax(0,1fr)`,
+              }
+            : undefined
+        }
         data-testid="desktop-inbox"
         data-tier={tier}
+        data-panes={tier === "wide" ? `${railWidth},${listWidth}` : undefined}
       >
         <aside className={cn("flex min-h-0 flex-col border-r border-line", tier !== "wide" && "hidden")}>
           <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-2.5 pt-4 pb-2">
@@ -951,6 +1095,11 @@ export function DesktopInbox({
                       key={row.node.path}
                       data-folder-row={row.node.path}
                       draggable={reorderable && entry !== null}
+                      onContextMenu={(event) => {
+                        if (!entry) return;
+                        event.preventDefault();
+                        setFolderMenu({ entry, x: event.clientX, y: event.clientY });
+                      }}
                       onDragStart={(event) => {
                         event.dataTransfer?.setData("text/plain", row.node.path);
                         setDragged({ path: row.node.path, depth: row.depth, parentPath: row.parentPath });
@@ -1089,12 +1238,25 @@ export function DesktopInbox({
           </div>
         </aside>
 
-        <section className="flex min-h-0 flex-col border-r border-line">
+        {tier === "wide" ? (
+          <PaneSplitter
+            label="Largeur du rail de dossiers"
+            value={railWidth}
+            min={RAIL_MIN}
+            max={RAIL_MAX}
+            onChange={(rail) => setPanes((current) => ({ ...current, rail }))}
+            onCommit={(rail) => setInboxPanes({ rail })}
+            onReset={() => setInboxPanes({ rail: DEFAULT_INBOX_PANES.rail })}
+            onDraggingChange={setDraggingPane}
+          />
+        ) : null}
+
+        <section className="relative flex min-h-0 flex-col border-r border-line">
           <div className="shrink-0 px-4 pt-4 pb-2">
             <div className="flex items-center gap-2">
               <PaneTitle
                 hint={
-                  folder === "inbox" ? (
+                  reception ? (
                     <>
                       <NumberTicker value={unreadThreads} /> non lus
                     </>
@@ -1177,7 +1339,7 @@ export function DesktopInbox({
             </div>
           </div>
 
-          {folder === "inbox" ? (
+          {reception ? (
             <div className="shrink-0 px-4">
               <MorningSummary
                 open={summaryOpen}
@@ -1201,8 +1363,9 @@ export function DesktopInbox({
                 key={thread.id}
                 thread={thread}
                 selected={selectedThreadId === thread.id}
+                checked={selectedIds.has(thread.id)}
                 delay={Math.min(0.4, 0.06 + index * 0.04)}
-                onOpen={() => openMessage(thread.primary)}
+                onOpen={(event) => selectThread(thread, index, event)}
                 onStar={() => toggleStar(thread.primary.id)}
                 onRead={() => mailAction("read", thread.primary)}
                 onArchive={() => mailAction("archive", thread.primary)}
@@ -1253,7 +1416,35 @@ export function DesktopInbox({
               </div>
             ) : null}
           </div>
+
+          {selectedIds.size > 0 ? (
+            <SelectionBar
+              count={selectedMails.length}
+              mails={selectedMails}
+              folder={folder}
+              allSelected={selectedIds.size >= visible.length}
+              onAction={(kind) => {
+                bulkMailAction(kind, selectedMails);
+                clearSelection();
+              }}
+              onSelectAll={() => setSelectedIds(new Set(visible.map((thread) => thread.id)))}
+              onClear={clearSelection}
+            />
+          ) : null}
         </section>
+
+        {tier === "wide" ? (
+          <PaneSplitter
+            label="Largeur de la liste des mails"
+            value={listWidth}
+            min={LIST_MIN}
+            max={listCeiling}
+            onChange={(list) => setPanes((current) => ({ ...current, list }))}
+            onCommit={(list) => setInboxPanes({ list })}
+            onReset={() => setInboxPanes({ list: DEFAULT_INBOX_PANES.list })}
+            onDraggingChange={setDraggingPane}
+          />
+        ) : null}
 
         <section
           ref={readerRef}
@@ -1555,6 +1746,10 @@ export function DesktopInbox({
             </div>
           )}
         </section>
+
+        {tier === "wide" && draggingPane ? (
+          <div aria-hidden className="absolute inset-0 z-40" />
+        ) : null}
       </div>
 
       {menu ? (
@@ -1562,6 +1757,14 @@ export function DesktopInbox({
           mail={menu.mail}
           ancre={{ x: menu.x, y: menu.y }}
           onClose={() => setMenu(null)}
+        />
+      ) : null}
+
+      {folderMenu ? (
+        <FolderContextMenu
+          entry={folderMenu.entry}
+          ancre={{ x: folderMenu.x, y: folderMenu.y }}
+          onClose={() => setFolderMenu(null)}
         />
       ) : null}
     </>

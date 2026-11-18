@@ -383,6 +383,7 @@ function PhoneApp({ native }: { native?: boolean }) {
         next: () => mailNav.current?.next(),
         previous: () => mailNav.current?.previous(),
         open: () => mailNav.current?.open(),
+        selectAll: () => mailNav.current?.selectAll(),
         deleteSelected: () => mailNav.current?.deleteSelected(),
         archiveSelected: () => mailNav.current?.archiveSelected(),
         toggleStarSelected: () => mailNav.current?.toggleStarSelected(),

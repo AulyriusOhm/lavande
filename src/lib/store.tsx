@@ -61,6 +61,7 @@ import {
   loadMailbox,
   mailMode,
   messageToMail,
+  PREVIEW_PENDING,
   sendInputOf,
   setAccountDecryptPolicy,
   splitAddresses,
@@ -79,9 +80,84 @@ import type { ComposeBus, ComposeState } from "@/lib/compose-bus";
 
 export type BackendPhase = "loading" | "ready" | "offline" | "empty";
 
+export type BulkKind =
+  | "read"
+  | "unread"
+  | "star"
+  | "unstar"
+  | "archive"
+  | "delete"
+  | "restore"
+  | "inbox";
+
+/** La borne du contrat bulk : au-delà, le démon refuse le lot. */
+const BULK_LIMIT = 500;
+
+function foldChunks<T>(list: T[]): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < list.length; index += BULK_LIMIT) {
+    chunks.push(list.slice(index, index + BULK_LIMIT));
+  }
+  return chunks;
+}
+
+/** Le rôle visé par un déplacement groupé ; `undefined` = suppression définitive. */
+function bulkTargetRole(kind: BulkKind, mail: Mail): FolderId | undefined {
+  if (kind === "archive") return "archive";
+  if (kind === "inbox") return "inbox";
+  if (kind === "restore") return mail.previousFolder ?? "inbox";
+  if (kind === "delete") return mail.folder === "trash" ? undefined : "trash";
+  return undefined;
+}
+
+function bulkSummary(kind: BulkKind, count: number, definitive: number): string {
+  const plural = count > 1 ? "s" : "";
+  const messages = `${count} message${plural}`;
+  if (kind === "archive") return `${messages} archivé${plural}`;
+  if (kind === "inbox") return `${messages} déplacé${plural} vers la boîte de réception`;
+  if (kind === "restore") return `${messages} restauré${plural}`;
+  if (definitive === count) return `${messages} supprimé${plural} définitivement`;
+  return `${messages} déplacé${plural} vers la corbeille`;
+}
+
 const PAGE_SIZE = 50;
 const SUMMARY_TICK_MS = 5 * 60_000;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** La borne de la route des aperçus, par dossier et par requête. */
+const PREVIEW_BATCH = 50;
+
+function previewKeyOf(accountId: string, folderPath: string, uid: number): string {
+  return `${accountId}\u0000${folderPath}\u0000${uid}`;
+}
+
+type PreviewGroup = { accountId: string; folderPath: string; uids: number[] };
+
+/**
+ * Les mails de la liste qui attendent encore leur aperçu, groupés par dossier
+ * et bornés aux 50 plus récents : les UIDs déjà demandés une fois sont laissés
+ * de côté, un serveur muet ne doit pas être réinterrogé à chaque rendu.
+ */
+function pendingPreviews(mails: Mail[], attempted: Set<string>): PreviewGroup[] {
+  const groups = new Map<string, PreviewGroup>();
+  const newestFirst = [...mails].sort((left, right) => (right.timestamp ?? 0) - (left.timestamp ?? 0));
+  for (const mail of newestFirst) {
+    const source = mail.source;
+    if (!source || mail.bodyFetched || mail.pgp === "encrypted") continue;
+    if (mail.preview !== PREVIEW_PENDING) continue;
+    if (attempted.has(previewKeyOf(source.accountId, source.folderPath, source.uid))) continue;
+    const path = `${source.accountId}\u0000${source.folderPath}`;
+    const group = groups.get(path) ?? {
+      accountId: source.accountId,
+      folderPath: source.folderPath,
+      uids: [],
+    };
+    if (group.uids.length >= PREVIEW_BATCH) continue;
+    group.uids.push(source.uid);
+    groups.set(path, group);
+  }
+  return [...groups.values()];
+}
 
 const NO_FOLDER_ORDER: string[] = [];
 
@@ -217,6 +293,7 @@ export type MailStoreValue = {
   dismissNotice: () => void;
   toggleStar: (id: string) => void;
   mailAction: (kind: "delete" | "archive" | "read", mail: Mail) => void;
+  bulkMailAction: (kind: BulkKind, mails: Mail[]) => void;
   moveToInbox: (mail: Mail) => void;
   restoreMail: (mail: Mail) => void;
   emptyTrash: () => void;
@@ -241,6 +318,8 @@ export type MailStoreValue = {
   refreshMailbox: () => Promise<void>;
   useDemo: () => void;
   syncFolder: () => void;
+  /** Relève un dossier du rail, quel que soit le dossier consulté. */
+  syncFolderAt: (role: FolderId, path: string | null) => void;
   searchMails: (query: string) => Promise<Mail[]>;
   openConnect: () => void;
   closeConnect: () => void;
@@ -284,9 +363,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const [folderRecords, setFolderRecords] = useState<FolderRecord[]>([]);
   const [mails, setMails] = useState<Mail[]>(() => (mode === "demo" ? MAILS : []));
   const [account, setAccountState] = useState<string>(() => (mode === "demo" ? ALL_ACCOUNTS : ""));
-  const [folder, setFolderState] = useState<FolderId>("inbox");
+  const [folder, setFolderState] = useState<FolderId>(() => (mode === "demo" ? "unified" : "inbox"));
   const [folderPath, setFolderPath] = useState<string | null>(null);
   const [threadsLoading, setThreadsLoading] = useState(false);
+  /** UIDs d'aperçu déjà demandés au démon : jamais deux fois le même. */
+  const previewAttempts = useRef(new Set<string>());
   const [pages, setPages] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -489,7 +570,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     setFolderRecords([]);
     setMails(MAILS);
     setAccountState(ALL_ACCOUNTS);
-    setFolderState("inbox");
+    setFolderState("unified");
     setFolderPath(null);
     setOpenMail(null);
     setPages(1);
@@ -525,6 +606,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     let cancelled = false;
+    const previewRuns: { keys: string[]; done: boolean }[] = [];
     setThreadsLoading(true);
     const requests = targets.flatMap((target) =>
       Array.from({ length: pages }, (_, page) =>
@@ -544,11 +626,44 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           notify(errorText(failed.reason));
           return;
         }
-        setMails(
-          loaded.flatMap((threads) =>
-            threads.flatMap((thread) => threadToMails(thread, folderRecords, folder)),
-          ),
+        const loadedMails = loaded.flatMap((threads) =>
+          threads.flatMap((thread) => threadToMails(thread, folderRecords, folder)),
         );
+        setMails(loadedMails);
+        for (const group of pendingPreviews(loadedMails, previewAttempts.current)) {
+          const keys = group.uids.map((uid) => previewKeyOf(group.accountId, group.folderPath, uid));
+          for (const key of keys) previewAttempts.current.add(key);
+          const run = { keys, done: false };
+          previewRuns.push(run);
+          void mailApi
+            .previews(group.accountId, group.folderPath, group.uids)
+            .then((entries) => {
+              run.done = true;
+              if (cancelled) {
+                for (const key of run.keys) previewAttempts.current.delete(key);
+                return;
+              }
+              if (entries.length === 0) return;
+              const filled = new Map(
+                entries.map((entry) => [
+                  previewKeyOf(group.accountId, group.folderPath, entry.uid),
+                  entry.preview,
+                ]),
+              );
+              setMails((current) =>
+                current.map((mail) => {
+                  if (mail.preview !== PREVIEW_PENDING || !mail.source) return mail;
+                  const preview = filled.get(
+                    previewKeyOf(mail.source.accountId, mail.source.folderPath, mail.source.uid),
+                  );
+                  return preview === undefined ? mail : { ...mail, preview };
+                }),
+              );
+            })
+            .catch(() => {
+              run.done = true;
+            });
+        }
         setHasMore(
           targets.some((_, index) => {
             const last = results[index * pages + pages - 1];
@@ -562,13 +677,18 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       });
     return () => {
       cancelled = true;
+      for (const run of previewRuns) {
+        if (run.done) continue;
+        for (const key of run.keys) previewAttempts.current.delete(key);
+      }
     };
   }, [mode, phase, targets, pages, folder, folderRecords, revision, notify]);
 
   const folderOptions = useMemo<FolderOption[]>(() => {
+    const all = account === ALL_ACCOUNTS;
     const unified: FolderOption = {
       id: "unified",
-      label: folderLabel("unified"),
+      label: folderLabel("inbox"),
       path: "unified",
       delimiter: null,
     };
@@ -581,18 +701,19 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         { id: "spam", label: folderLabel("spam"), path: "spam" },
         { id: "trash", label: folderLabel("trash"), path: "trash" },
       ];
-      return account === ALL_ACCOUNTS ? [unified, ...demo] : demo;
+      if (!all) return demo;
+      return [unified, ...demo.filter((option) => option.id !== "inbox")];
     }
     const visible = folderRecords.filter(
       (record) =>
         record.role !== "other" ||
         !isFolderHidden(prefs.hiddenFolders, record.accountId, record.path),
     );
-    const options =
-      account === ALL_ACCOUNTS
-        ? folderOptionsForAll(visible, mailAccounts.map((entry) => entry.id))
-        : optionsOf(visible, account);
-    return account === ALL_ACCOUNTS ? [unified, ...options] : options;
+    if (!all) return optionsOf(visible, account);
+    const options = folderOptionsForAll(visible, mailAccounts.map((entry) => entry.id)).filter(
+      (option) => option.id !== "inbox",
+    );
+    return [unified, ...options];
   }, [mode, folderRecords, account, mailAccounts, prefs.hiddenFolders]);
 
   const folderOrder = useMemo<string[]>(() => {
@@ -614,7 +735,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       setAccountState(value);
       setFolderPath(null);
       if (value === ALL_ACCOUNTS) {
-        if (mode === "api") setFolderState("unified");
+        setFolderState("unified");
         return;
       }
       setFolderState((current) => {
@@ -1124,6 +1245,228 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     [mode, moveTo, notify, readOnlyBlocked],
   );
 
+  const bulkMailAction = useCallback(
+    (kind: BulkKind, selection: Mail[]) => {
+      if (readOnlyBlocked()) return;
+      if (selection.length === 0) return;
+
+      if (kind === "read" || kind === "unread" || kind === "star" || kind === "unstar") {
+        const field = kind === "read" || kind === "unread" ? "unread" : "starred";
+        const value = kind === "unread" || kind === "star";
+        const touched = selection.filter(
+          (mail) => mail[field] !== value && (mode !== "api" || mail.source !== undefined),
+        );
+        if (touched.length === 0) return;
+        const touchedIds = new Set(touched.map((mail) => mail.id));
+        const flag = (entry: Mail) =>
+          touchedIds.has(entry.id) ? { ...entry, [field]: value } : entry;
+        setMails((current) => current.map(flag));
+        setOpenMail((current) => (current ? flag(current) : current));
+        if (mode !== "api") return;
+
+        const kept = field === "unread" ? "starred" : "unread";
+        type FlagItem = { mail: Mail; source: MailSource };
+        type FlagGroup = {
+          accountId: string;
+          folderPath: string;
+          kept: boolean;
+          mails: FlagItem[];
+        };
+        const groups = new Map<string, FlagGroup>();
+        for (const mail of touched) {
+          const source = mail.source;
+          if (!source) continue;
+          const preserved = mail[kept];
+          const key = `${source.accountId}\u0000${source.folderPath}\u0000${preserved}`;
+          const group = groups.get(key) ?? {
+            accountId: source.accountId,
+            folderPath: source.folderPath,
+            kept: preserved,
+            mails: [],
+          };
+          group.mails.push({ mail, source });
+          groups.set(key, group);
+        }
+
+        const unreadDelta = field === "unread" ? (value ? 1 : -1) : 0;
+        const counts = new Map<string, { accountId: string; folderPath: string; count: number }>();
+        for (const group of groups.values()) {
+          for (const { source } of group.mails) {
+            const key = `${source.accountId}\u0000${source.folderPath}`;
+            const entry = counts.get(key) ?? {
+              accountId: source.accountId,
+              folderPath: source.folderPath,
+              count: 0,
+            };
+            entry.count += 1;
+            counts.set(key, entry);
+          }
+        }
+        const adjust = (sign: number) => {
+          if (!unreadDelta) return;
+          for (const entry of counts.values()) {
+            adjustCounts(entry.accountId, entry.folderPath, 0, sign * unreadDelta * entry.count);
+          }
+        };
+        adjust(1);
+
+        const originals = new Map(touched.map((mail) => [mail.id, mail]));
+        const restore = (entry: Mail) => {
+          const original = originals.get(entry.id);
+          return original
+            ? { ...entry, unread: original.unread, starred: original.starred }
+            : entry;
+        };
+        const requests = [...groups.values()].flatMap((group) =>
+          foldChunks(group.mails).map((part) =>
+            mailApi.bulkFlags(group.accountId, {
+              folder_path: group.folderPath,
+              uids: part.map(({ source }) => source.uid),
+              unread: field === "unread" ? value : group.kept,
+              starred: field === "starred" ? value : group.kept,
+            }),
+          ),
+        );
+        Promise.all(requests).catch((error: unknown) => {
+          setMails((current) => current.map(restore));
+          setOpenMail((current) => (current ? restore(current) : current));
+          adjust(-1);
+          notify(errorText(error));
+        });
+        return;
+      }
+
+      const removed =
+        kind === "delete" ? selection.filter((mail) => mail.folder === "trash") : [];
+      const removedIds = new Set(removed.map((mail) => mail.id));
+
+      if (mode !== "api") {
+        const roles = new Map(selection.map((mail) => [mail.id, bulkTargetRole(kind, mail)]));
+        const originals = new Map(selection.map((mail) => [mail.id, mail]));
+        setMails((current) =>
+          current
+            .filter((entry) => !removedIds.has(entry.id))
+            .map((entry) => {
+              const role = roles.get(entry.id);
+              if (!role) return entry;
+              return {
+                ...entry,
+                folder: role,
+                previousFolder:
+                  kind === "restore" || kind === "inbox" ? undefined : entry.folder,
+              };
+            }),
+        );
+        notify(bulkSummary(kind, selection.length, removed.length), {
+          label: "Annuler",
+          run: () =>
+            setMails((current) => [
+              ...current.map((entry) => {
+                const original = originals.get(entry.id);
+                return original
+                  ? { ...entry, folder: original.folder, previousFolder: original.previousFolder }
+                  : entry;
+              }),
+              ...removed.filter((mail) => !current.some((entry) => entry.id === mail.id)),
+            ]),
+        });
+        return;
+      }
+
+      const plan = selection.flatMap((mail) => {
+        const source = mail.source;
+        if (!source) return [];
+        const role = bulkTargetRole(kind, mail);
+        const target =
+          role === undefined ? undefined : folderPathOf(folderRecords, source.accountId, role);
+        if (role !== undefined && target === undefined) return [];
+        if (target === source.folderPath) return [];
+        return [{ mail, source, target }];
+      });
+      if (plan.length === 0) return;
+
+      const planIds = new Set(plan.map(({ mail }) => mail.id));
+      setMails((current) => current.filter((entry) => !planIds.has(entry.id)));
+      setOpenMail((current) => (current && planIds.has(current.id) ? null : current));
+
+      const deltas = new Map<
+        string,
+        { accountId: string; path: string; total: number; unread: number }
+      >();
+      const bump = (accountId: string, path: string, total: number, unread: number) => {
+        const key = `${accountId}\u0000${path}`;
+        const entry = deltas.get(key) ?? { accountId, path, total: 0, unread: 0 };
+        entry.total += total;
+        entry.unread += unread;
+        deltas.set(key, entry);
+      };
+      const moves = new Map<
+        string,
+        { accountId: string; from: string; to: string; uids: number[] }
+      >();
+      const deletes = new Map<string, { accountId: string; path: string; uids: number[] }>();
+      for (const { mail, source, target } of plan) {
+        bump(source.accountId, source.folderPath, -1, mail.unread ? -1 : 0);
+        if (target === undefined) {
+          const key = `${source.accountId}\u0000${source.folderPath}`;
+          const group = deletes.get(key) ?? {
+            accountId: source.accountId,
+            path: source.folderPath,
+            uids: [],
+          };
+          group.uids.push(source.uid);
+          deletes.set(key, group);
+          continue;
+        }
+        bump(source.accountId, target, 1, mail.unread ? 1 : 0);
+        const key = `${source.accountId}\u0000${source.folderPath}\u0000${target}`;
+        const group = moves.get(key) ?? {
+          accountId: source.accountId,
+          from: source.folderPath,
+          to: target,
+          uids: [],
+        };
+        group.uids.push(source.uid);
+        moves.set(key, group);
+      }
+      const applyCounts = (sign: number) => {
+        for (const entry of deltas.values()) {
+          adjustCounts(entry.accountId, entry.path, sign * entry.total, sign * entry.unread);
+        }
+      };
+      applyCounts(1);
+
+      const requests = [
+        ...[...moves.values()].flatMap((group) =>
+          foldChunks(group.uids).map((uids) =>
+            mailApi.bulkMove(group.accountId, { from_path: group.from, uids, to_path: group.to }),
+          ),
+        ),
+        ...[...deletes.values()].flatMap((group) =>
+          foldChunks(group.uids).map((uids) =>
+            mailApi.bulkDelete(group.accountId, { folder_path: group.path, uids }),
+          ),
+        ),
+      ];
+      Promise.all(requests)
+        .then(() => {
+          setRevision((value) => value + 1);
+          notify(bulkSummary(kind, plan.length, plan.filter(({ target }) => !target).length));
+        })
+        .catch((error: unknown) => {
+          setMails((current) => [
+            ...current,
+            ...plan
+              .filter(({ mail }) => !current.some((entry) => entry.id === mail.id))
+              .map(({ mail }) => mail),
+          ]);
+          applyCounts(-1);
+          notify(errorText(error));
+        });
+    },
+    [adjustCounts, folderRecords, mode, notify, readOnlyBlocked],
+  );
+
   const emptyTrash = useCallback(() => {
     if (readOnlyBlocked()) return;
     const inTrash = (entry: Mail) =>
@@ -1588,6 +1931,33 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   );
   sendDraftRef.current = sendDraft;
 
+  const runSync = useCallback(
+    (due: { accountId: string; path: string }[]) => {
+      setSyncing(true);
+      Promise.all(due.map((target) => mailApi.sync(target.accountId, target.path)))
+        .then((results) => {
+          const reports = results.flatMap((result) => result.reports);
+          if (account === ALL_ACCOUNTS) {
+            const totals = reports.reduce(
+              (sum, report) => ({
+                inserted: sum.inserted + report.inserted,
+                flags_updated: sum.flags_updated + report.flags_updated,
+                removed: sum.removed + report.removed,
+              }),
+              { inserted: 0, flags_updated: 0, removed: 0 },
+            );
+            notify(syncNotice([totals]));
+          } else {
+            notify(syncNotice(reports));
+          }
+          setRevision((value) => value + 1);
+        })
+        .catch((error: unknown) => notify(`Synchro impossible · ${errorText(error)}`))
+        .finally(() => setSyncing(false));
+    },
+    [account, notify],
+  );
+
   const syncFolder = useCallback(() => {
     if (readOnlyBlocked()) return;
     if (mode !== "api") {
@@ -1607,28 +1977,49 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       notify("Mails hors périmètre de ce compte · synchronisation ignorée");
       return;
     }
-    setSyncing(true);
-    Promise.all(due.map((target) => mailApi.sync(target.accountId, target.path)))
-      .then((results) => {
-        const reports = results.flatMap((result) => result.reports);
-        if (account === ALL_ACCOUNTS) {
-          const totals = reports.reduce(
-            (sum, report) => ({
-              inserted: sum.inserted + report.inserted,
-              flags_updated: sum.flags_updated + report.flags_updated,
-              removed: sum.removed + report.removed,
-            }),
-            { inserted: 0, flags_updated: 0, removed: 0 },
-          );
-          notify(syncNotice([totals]));
-        } else {
-          notify(syncNotice(reports));
-        }
-        setRevision((value) => value + 1);
-      })
-      .catch((error: unknown) => notify(`Synchro impossible · ${errorText(error)}`))
-      .finally(() => setSyncing(false));
-  }, [account, accounts, mailAccounts, mailsInPerimeter, targets, mode, notify, readOnlyBlocked]);
+    runSync(due);
+  }, [
+    accounts,
+    mailAccounts,
+    mailsInPerimeter,
+    mode,
+    notify,
+    readOnlyBlocked,
+    runSync,
+    targets,
+  ]);
+
+  const syncFolderAt = useCallback(
+    (role: FolderId, path: string | null) => {
+      if (readOnlyBlocked()) return;
+      if (mode !== "api") {
+        notify("Mode démo : la synchronisation est simulée.");
+        return;
+      }
+      const scoped = folderTargets(
+        folderRecords,
+        account === ALL_ACCOUNTS ? mailAccounts.map((entry) => entry.id) : account ? [account] : [],
+        role,
+        path ?? undefined,
+      );
+      const due = scoped.filter((target) => mailsInPerimeter(target.accountId));
+      if (due.length === 0) {
+        notify("Mails hors périmètre de ce compte · synchronisation ignorée");
+        return;
+      }
+      runSync(due);
+    },
+    [
+      account,
+      folderRecords,
+      mailAccounts,
+      mailsInPerimeter,
+      mode,
+      notify,
+      readOnlyBlocked,
+      runSync,
+    ],
+  );
 
   const openConnect = useCallback(() => {
     if (readOnlyBlocked()) return;
@@ -1751,7 +2142,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
             : remaining.length > 1
               ? ALL_ACCOUNTS
               : (remaining[0]?.id ?? "");
-        setFolderState(mode === "api" && nextAccount === ALL_ACCOUNTS ? "unified" : "inbox");
+        setFolderState(nextAccount === ALL_ACCOUNTS ? "unified" : "inbox");
         setFolderPath(null);
         await bootstrap();
       })
@@ -2219,6 +2610,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       dismissNotice,
       toggleStar,
       mailAction,
+      bulkMailAction,
       moveToInbox,
       restoreMail,
       emptyTrash,
@@ -2243,6 +2635,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       refreshMailbox: bootstrap,
       useDemo,
       syncFolder,
+      syncFolderAt,
       searchMails,
       openConnect,
       closeConnect,
@@ -2306,6 +2699,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       dismissNotice,
       toggleStar,
       mailAction,
+      bulkMailAction,
       moveToInbox,
       restoreMail,
       emptyTrash,
@@ -2329,6 +2723,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       retryBackend,
       useDemo,
       syncFolder,
+      syncFolderAt,
       searchMails,
       openConnect,
       closeConnect,

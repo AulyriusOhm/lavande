@@ -84,8 +84,12 @@ describe("boîte de réception · actions au clavier", () => {
   });
 
   it("archive le message sélectionné", async () => {
-    const ids = await openDesktop();
-    const index = singleIndex(ids, 0);
+    await openDesktop();
+    fireEvent.click(screen.getByRole("button", { name: /^Perso/ }));
+    await waitFor(() => expect(rowIds().every((id) => id.startsWith("perso:"))).toBe(true));
+
+    const ids = rowIds();
+    const index = singleIndex(ids, 1);
     const target = await select(index);
 
     fireEvent.keyDown(window, { key: "e", ctrlKey: true });

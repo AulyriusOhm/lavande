@@ -85,7 +85,7 @@ describe("Boîte PC · reflow aux points de rupture", () => {
     await openDesktop(1440);
 
     expect(inbox().dataset.tier).toBe("wide");
-    expect(inbox().className).toContain("grid-cols-[248px_420px_minmax(0,1fr)]");
+    expect(inbox().style.gridTemplateColumns).toBe("248px 8px 420px 8px minmax(0px, 1fr)");
     expect(scope()).toBeNull();
     expect(foldersRail()).toBeTruthy();
   });

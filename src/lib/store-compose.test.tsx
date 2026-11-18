@@ -32,7 +32,7 @@ describe("compteurs par dossier (démo)", () => {
     const spamUnread = MAILS.filter((mail) => mail.folder === "spam" && mail.unread).length;
     const inboxUnread = MAILS.filter((mail) => mail.folder === "inbox" && mail.unread).length;
 
-    expect(result.current.folder).toBe("inbox");
+    expect(result.current.folder).toBe("unified");
     expect(result.current.folderStats("spam").unread).toBe(spamUnread);
     expect(result.current.folderStats("inbox").unread).toBe(inboxUnread);
     expect(result.current.folderStats("trash").total).toBe(

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { DesktopInbox } from "@/desktop/inbox";
 import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
@@ -42,23 +42,25 @@ afterEach(() => {
 });
 
 describe("boîte PC · boîte unifiée en démo", () => {
-  it("garde l'atterrissage sur la réception et offre la boîte unifiée en tête", async () => {
+  it("atterrit sur une réception unique, sans doublon de boîte unifiée", async () => {
     render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
 
     await waitFor(() => expect(rail(/^Boîte de réception/)).toBeTruthy());
 
     expect(rail(/^Boîte de réception/)?.getAttribute("aria-current")).toBe("true");
     expect(folderRows()[0]).toBe("unified");
-    expect(rail(/^Boîte unifiée/)).toBeTruthy();
+    expect(rail(/^Boîte unifiée/)).toBeNull();
+    expect(folderRows()).not.toContain("inbox");
+    expect(
+      within(screen.getByTestId("desktop-inbox")).getAllByRole("button", {
+        name: /^Boîte de réception/,
+      }),
+    ).toHaveLength(1);
   });
 
   it("liste les conversations de tous les dossiers, spam exclu", async () => {
     render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
-    await waitFor(() => expect(rail(/^Boîte unifiée/)).toBeTruthy());
 
-    fireEvent.click(rail(/^Boîte unifiée/)!);
-
-    await waitFor(() => expect(rail(/^Boîte unifiée/)?.getAttribute("aria-current")).toBe("true"));
     await waitFor(() => expect(mailRows()).toBeGreaterThan(3));
 
     expect(screen.getAllByText("Devis signé — retour de ma part").length).toBeGreaterThan(0);

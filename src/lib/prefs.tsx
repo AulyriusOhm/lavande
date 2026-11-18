@@ -73,7 +73,10 @@ export const DEFAULT_NOTIFICATIONS: NotificationPrefs = {
 /** Délais de rappel proposés avant un rendez-vous, en minutes. */
 export const CALENDAR_LEAD_MINUTES = [0, 5, 10, 15, 30] as const;
 
+/** Largeur des colonnes dossiers et liste de la boîte PC, en pixels. */
+export type InboxPanes = { rail: number; list: number };
 
+export const DEFAULT_INBOX_PANES: InboxPanes = { rail: 248, list: 420 };
 
 export type Prefs = {
   swipeLeft: SwipeActionId;
@@ -108,6 +111,8 @@ export type Prefs = {
   notifications: NotificationPrefs;
   /** Conversation dans la rédaction : panneau repliable ou citation dans le mail. */
   threadView: ThreadView;
+  /** Largeurs des trois colonnes de la boîte PC, ajustées à la souris. */
+  inboxPanes: InboxPanes;
 };
 
 const DEFAULTS: Prefs = {
@@ -133,6 +138,7 @@ const DEFAULTS: Prefs = {
   perimeters: {},
   notifications: DEFAULT_NOTIFICATIONS,
   threadView: "tidy",
+  inboxPanes: DEFAULT_INBOX_PANES,
 };
 
 type PrefsContextValue = Prefs & {
@@ -156,6 +162,7 @@ type PrefsContextValue = Prefs & {
   setNotifications: (patch: Partial<NotificationPrefs>) => void;
   setAccountNotification: (accountId: string, value: boolean) => void;
   setThreadView: (value: ThreadView) => void;
+  setInboxPanes: (patch: Partial<InboxPanes>) => void;
 };
 
 const PrefsContext = createContext<PrefsContextValue | null>(null);
@@ -271,6 +278,17 @@ export const asSync = (value: unknown): SyncPrefs => {
     mails: asBoolean(mails, DEFAULT_SYNC.mails),
     calendar: asBoolean(calendar, DEFAULT_SYNC.calendar),
     kanban: asBoolean(kanban, DEFAULT_SYNC.kanban),
+  };
+};
+
+const asPanes = (value: unknown): InboxPanes => {
+  if (!value || typeof value !== "object") return { ...DEFAULT_INBOX_PANES };
+  const { rail, list } = value as Record<string, unknown>;
+  const width = (raw: unknown, fallback: number) =>
+    typeof raw === "number" && Number.isFinite(raw) ? Math.round(raw) : fallback;
+  return {
+    rail: width(rail, DEFAULT_INBOX_PANES.rail),
+    list: width(list, DEFAULT_INBOX_PANES.list),
   };
 };
 
@@ -418,6 +436,7 @@ function read(): Prefs {
     perimeters: asPerimeters(stored.perimeters),
     notifications: asNotifications(stored.notifications),
     threadView: asThreadView(stored.threadView),
+    inboxPanes: asPanes(stored.inboxPanes),
   };
 }
 
@@ -605,6 +624,12 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
 
   const setThreadView = useCallback((value: ThreadView) => patch("threadView", value), [patch]);
 
+  const setInboxPanes = useCallback(
+    (patch: Partial<InboxPanes>) =>
+      write((current) => ({ ...current, inboxPanes: { ...current.inboxPanes, ...patch } })),
+    [],
+  );
+
   const value = useMemo<PrefsContextValue>(
     () => ({
       ...prefs,
@@ -628,6 +653,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setNotifications,
       setAccountNotification,
       setThreadView,
+      setInboxPanes,
     }),
     [
       prefs,
@@ -651,6 +677,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setNotifications,
       setAccountNotification,
       setThreadView,
+      setInboxPanes,
     ],
   );
 

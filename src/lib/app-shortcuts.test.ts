@@ -26,6 +26,7 @@ function navigation(overrides: Partial<MailNavigation> = {}): MailNavigation {
     next: vi.fn(),
     previous: vi.fn(),
     open: vi.fn(),
+    selectAll: vi.fn(),
     deleteSelected: vi.fn(),
     archiveSelected: vi.fn(),
     toggleStarSelected: vi.fn(),
@@ -156,6 +157,7 @@ describe("raccourcis · actions sur le message", () => {
 
     expect(ids).toEqual(
       expect.arrayContaining([
+        "mail-select-all",
         "mail-delete",
         "mail-archive",
         "mail-star",
@@ -168,6 +170,14 @@ describe("raccourcis · actions sur le message", () => {
       list
         .filter((entry) => entry.group === "Actions sur le message")
         .map((entry) => entry.keys),
-    ).toEqual(["delete", "mod+e", "mod+shift+s", "mod+shift+u", "mod+shift+r", "mod+shift+f"]);
+    ).toEqual([
+      "mod+a",
+      "delete",
+      "mod+e",
+      "mod+shift+s",
+      "mod+shift+u",
+      "mod+shift+r",
+      "mod+shift+f",
+    ]);
   });
 });

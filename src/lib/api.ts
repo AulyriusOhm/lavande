@@ -252,6 +252,24 @@ export type PurgeResult = {
   removed: number;
 };
 
+export type FlagsBulkInput = {
+  folder_path: string;
+  uids: number[];
+  unread: boolean;
+  starred: boolean;
+};
+
+export type MoveBulkInput = {
+  from_path: string;
+  uids: number[];
+  to_path: string;
+};
+
+export type DeleteBulkInput = {
+  folder_path: string;
+  uids: number[];
+};
+
 /** Corps HTML relu à la demande, images distantes comprises (déjà assaini par le service). */
 export type HtmlImages = {
   html: string;
@@ -546,6 +564,16 @@ export const mailApi = {
       `${accountPath(id)}/folders/${encodeURIComponent(folderPath)}/threads?limit=${limit}&offset=${offset}`,
     ),
 
+  /**
+   * Les aperçus manquants d'une liste : le démon relit les messages concernés
+   * sur le serveur et ne rend que ceux qu'il a pu remplir.
+   */
+  previews: (id: string, folderPath: string, uids: number[]) =>
+    request<{ uid: number; preview: string }[]>(
+      `${accountPath(id)}/folders/${encodeURIComponent(folderPath)}/previews`,
+      { method: "POST", body: { uids }, timeout: LONG_TIMEOUT },
+    ),
+
   /** Le fil complet, tous dossiers du compte confondus : corps compris en base seulement. */
   thread: (id: string, threadId: string) =>
     request<ApiThread>(`${accountPath(id)}/threads/${encodeURIComponent(threadId)}`),
@@ -594,6 +622,23 @@ export const mailApi = {
 
   purgeFolder: (id: string, input: PurgeInput) =>
     request<PurgeResult>(`${accountPath(id)}/purge`, {
+      method: "POST",
+      body: input,
+      timeout: LONG_TIMEOUT,
+    }),
+
+  bulkFlags: (id: string, input: FlagsBulkInput) =>
+    request<void>(`${accountPath(id)}/flags-bulk`, { method: "POST", body: input }),
+
+  bulkMove: (id: string, input: MoveBulkInput) =>
+    request<void>(`${accountPath(id)}/move-bulk`, {
+      method: "POST",
+      body: input,
+      timeout: LONG_TIMEOUT,
+    }),
+
+  bulkDelete: (id: string, input: DeleteBulkInput) =>
+    request<void>(`${accountPath(id)}/delete-bulk`, {
       method: "POST",
       body: input,
       timeout: LONG_TIMEOUT,

@@ -155,8 +155,10 @@ export function InboxScreen({
 
   const threads = threadsInFolder(mails, folder, account);
   const heading =
-    folderOptions.find((entry) => entry.id === folder && entry.path === folderPath)?.label ??
-    folderLabel(folder);
+    folderOptions.find(
+      (entry) => entry.id === folder && (entry.id !== "other" || entry.path === folderPath),
+    )?.label ?? folderLabel(folder);
+  const reception = folder === "inbox" || folder === "unified";
   const unreadCount = threads.filter((thread) => thread.unread > 0).length;
   const starredCount = threads.filter((thread) => thread.starred).length;
   const encryptedCount = threads.filter((thread) => thread.encrypted > 0).length;
@@ -249,6 +251,7 @@ export function InboxScreen({
         setCursor(index);
         onOpen(thread.primary);
       },
+      selectAll: () => {},
       deleteSelected: () => {
         const mail = guarded((entry) => onMailAction("delete", entry));
         if (mail) advance(threadIdOf(mail));
@@ -304,7 +307,7 @@ export function InboxScreen({
                   className="ring-2 ring-accent-ring ring-offset-2 ring-offset-canvas"
                 />
                 <h1 className="text-[24px] leading-[1.05] font-extrabold tracking-[-0.035em] text-ink">
-                  {folder === "inbox" ? (
+                  {reception ? (
                     <>
                       Boîte de
                       <br />
@@ -366,7 +369,7 @@ export function InboxScreen({
 
         <motion.div style={{ height: barSpace }} />
 
-        {folder === "inbox" && (
+        {reception && (
           <>
             <motion.div
               style={{ height: cardHeight }}

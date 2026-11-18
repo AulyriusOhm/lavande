@@ -9,6 +9,7 @@ export type MailNavigation = {
   next: () => void;
   previous: () => void;
   open: () => void;
+  selectAll: () => void;
   deleteSelected: () => void;
   archiveSelected: () => void;
   toggleStarSelected: () => void;
@@ -174,6 +175,15 @@ export function appShortcuts(actions: AppShortcutActions): Shortcut[] {
       run: mail.open,
     },
     {
+      id: "mail-select-all",
+      keys: "mod+a",
+      group: "Actions sur le message",
+      label: "Tout sélectionner",
+      description: "Sélectionner les messages de la liste",
+      when: () => actions.mail.canMove(),
+      run: () => actions.mail.selectAll(),
+    },
+    {
       id: "mail-delete",
       keys: "delete",
       group: "Actions sur le message",
@@ -240,6 +250,7 @@ const CATALOG_NAVIGATION: MailNavigation = {
   next: noop,
   previous: noop,
   open: noop,
+  selectAll: noop,
   deleteSelected: noop,
   archiveSelected: noop,
   toggleStarSelected: noop,

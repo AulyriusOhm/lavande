@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useRef } from "react";
 import { motion } from "motion/react";
 import {
   Archive,
@@ -13,22 +13,12 @@ import {
   ShieldCheck,
   Star,
   Trash2,
-  type LucideIcon,
 } from "lucide-react";
 import { useMailStore } from "@/lib/store";
 import { splitAddresses } from "@/lib/mail-backend";
 import type { Mail } from "@/lib/mail";
-import { cn } from "@/lib/utils";
 import { useEscapeLayer } from "@/desktop/escape";
-
-type MenuAction = {
-  label: string;
-  icon: LucideIcon;
-  run: () => void;
-  danger?: boolean;
-};
-
-const MARGIN = 8;
+import { AnchoredMenu, MenuItem, type MenuAction } from "@/components/anchored-menu";
 
 export function MailContextMenu({
   mail,
@@ -52,9 +42,7 @@ export function MailContextMenu({
     accountById,
     readOnly,
   } = useMailStore();
-  const panelRef = useRef<HTMLDivElement>(null);
-  const firstRef = useRef<HTMLButtonElement>(null);
-  const [clamped, setClamped] = useState<{ x: number; y: number } | null>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
 
   const self = accountById(mail.account)?.email.toLowerCase();
   const otherRecipient = splitAddresses(`${mail.to ?? ""} ${mail.cc ?? ""}`).some(
@@ -122,39 +110,12 @@ export function MailContextMenu({
     );
   }
 
-  useEscapeLayer(true, onClose);
-
-  useEffect(() => {
-    if (ancre) firstRef.current?.focus({ preventScroll: true });
-  }, [ancre]);
-
-  useLayoutEffect(() => {
-    if (!ancre || !panelRef.current) return;
-    const { width, height } = panelRef.current.getBoundingClientRect();
-    setClamped({
-      x: Math.max(MARGIN, Math.min(ancre.x, window.innerWidth - width - MARGIN)),
-      y: Math.max(MARGIN, Math.min(ancre.y, window.innerHeight - height - MARGIN)),
-    });
-  }, [ancre]);
-
-  useEffect(() => {
-    if (!ancre) return;
-    const outside = (event: Event) => {
-      if (panelRef.current?.contains(event.target as Node)) return;
-      onClose();
-    };
-    window.addEventListener("pointerdown", outside, true);
-    window.addEventListener("scroll", onClose, true);
-    return () => {
-      window.removeEventListener("pointerdown", outside, true);
-      window.removeEventListener("scroll", onClose, true);
-    };
-  }, [ancre, onClose]);
+  useEscapeLayer(!ancre, onClose);
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const items = Array.from(
-      panelRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
+      sheetRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
     );
     if (items.length === 0) return;
     event.preventDefault();
@@ -162,29 +123,6 @@ export function MailContextMenu({
     const step = event.key === "ArrowDown" ? 1 : -1;
     items[(index + step + items.length) % items.length]?.focus();
   };
-
-  const run = (action: MenuAction) => {
-    action.run();
-    onClose();
-  };
-
-  const item = (action: MenuAction, index: number, compact: boolean) => (
-    <button
-      key={action.label}
-      ref={index === 0 ? firstRef : undefined}
-      type="button"
-      role="menuitem"
-      onClick={() => run(action)}
-      className={cn(
-        "focus-ring flex w-full items-center gap-2.5 rounded-[12px] px-2.5 text-left font-semibold transition-colors hover:bg-surface-2",
-        compact ? "min-h-9 text-[12.5px]" : "min-h-11 text-[13px]",
-        action.danger ? "text-red-600 dark:text-red-300" : "text-ink-soft hover:text-ink",
-      )}
-    >
-      <action.icon className="size-4 shrink-0" strokeWidth={2.2} />
-      <span className="truncate">{action.label}</span>
-    </button>
-  );
 
   if (!ancre) {
     return (
@@ -216,12 +154,15 @@ export function MailContextMenu({
             </button>
           </div>
           <div
+            ref={sheetRef}
             role="menu"
             aria-label="Actions du message"
             onKeyDown={onKeyDown}
             className="max-h-[52vh] space-y-0.5 overflow-y-auto no-scrollbar px-3 pb-1"
           >
-            {actions.map((action, index) => item(action, index, false))}
+            {actions.map((action) => (
+              <MenuItem key={action.label} action={action} compact={false} onSelect={onClose} />
+            ))}
           </div>
           <div className="px-3 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+0.75rem)]">
             <button
@@ -238,18 +179,10 @@ export function MailContextMenu({
   }
 
   return (
-    <motion.div
-      ref={panelRef}
-      role="menu"
-      aria-label="Actions du message"
-      onKeyDown={onKeyDown}
-      initial={{ opacity: 0, scale: 0.97 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.12 }}
-      style={{ left: (clamped ?? ancre).x, top: (clamped ?? ancre).y }}
-      className="fixed z-[80] w-[236px] space-y-0.5 rounded-[18px] border border-line bg-canvas p-1 shadow-[0_30px_80px_-30px_var(--accent)]"
-    >
-      {actions.map((action, index) => item(action, index, true))}
-    </motion.div>
+    <AnchoredMenu ancre={ancre} onClose={onClose} label="Actions du message">
+      {actions.map((action) => (
+        <MenuItem key={action.label} action={action} compact onSelect={onClose} />
+      ))}
+    </AnchoredMenu>
   );
 }

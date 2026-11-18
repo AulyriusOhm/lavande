@@ -101,7 +101,7 @@ describe("Boîte de réception · panneau PGP", () => {
     mount(<DesktopInbox onOpenSearch={() => {}} />);
 
     await waitFor(() => expect(screen.getByText(/Expire le 12\/03\/2028/)).toBeTruthy());
-    expect(screen.getByText(/Roman/)).toBeTruthy();
+    expect(screen.getByText(/^Roman ·$/)).toBeTruthy();
   });
 
   it("reste discret quand aucune clé n'est disponible", async () => {
