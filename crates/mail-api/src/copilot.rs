@@ -29,7 +29,6 @@ const SESSION_TTL: Duration = Duration::from_secs(600);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const REFRESH_MARGIN_SECS: i64 = 60;
 const UNKNOWN_SESSION: &str = "session GitHub Copilot inconnue ou expirée";
-const REFUSED: &str = "GitHub a refusé l'accès Copilot : vérifie ton abonnement ou reconnecte-toi.";
 
 /// Points d'entrée GitHub, Copilot et budget du proxy chat : surchargeables pour
 /// les tests, valeurs réelles par défaut.
@@ -341,7 +340,7 @@ pub async fn chat(state: &AppState, request: ChatRequest) -> Result<Value, ApiEr
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(refusal(status));
+        return Err(refusal(status, &text));
     }
     let payload: Value = serde_json::from_str(&text).map_err(|error| {
         ApiError::gateway("copilot", format!("réponse du modèle illisible : {error}"))
@@ -449,12 +448,23 @@ async fn finish(
 }
 
 async fn connect(settings: &Settings, github_token: &str) -> Result<CopilotTokens, ApiError> {
-    let (copilot_token, expires_at) = fetch_copilot_token(settings, github_token).await?;
     let login = match fetch_login(settings, github_token).await {
         Ok(login) => Some(login),
         Err(error) => {
             tracing::warn!(error = %error.message(), "nom du compte GitHub indisponible");
             None
+        }
+    };
+    let (copilot_token, expires_at) = match fetch_copilot_token(settings, github_token).await {
+        Ok(token) => token,
+        Err(error) => {
+            return Err(match login {
+                Some(login) if !error.is_transient() => ApiError::gateway(
+                    "copilot",
+                    format!("Compte GitHub « {login} » : {}", error.message()),
+                ),
+                _ => error,
+            })
         }
     };
     Ok(CopilotTokens {
@@ -540,7 +550,7 @@ async fn fetch_copilot_token(
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(refusal(status));
+        return Err(refusal(status, &body));
     }
     let payload: Value = serde_json::from_str(&body).map_err(|error| {
         ApiError::gateway(
@@ -606,18 +616,43 @@ fn report(state: &AppState, id: &str) -> Result<StatusResponse, ApiError> {
         .ok_or_else(|| ApiError::not_found(UNKNOWN_SESSION))
 }
 
-fn refusal(status: reqwest::StatusCode) -> ApiError {
-    if matches!(status.as_u16(), 401 | 403) {
-        ApiError::gateway("copilot", REFUSED)
-    } else {
-        ApiError::gateway(
+fn refusal(status: reqwest::StatusCode, body: &str) -> ApiError {
+    let suffix = refusal_reason(body)
+        .map(|reason| format!(" — {reason}"))
+        .unwrap_or_default();
+    match status.as_u16() {
+        401 => ApiError::gateway(
+            "copilot",
+            format!("GitHub a refusé le jeton Copilot (401){suffix} : reconnecte ton compte dans les réglages IA."),
+        ),
+        403 => ApiError::gateway(
             "copilot",
             format!(
-                "GitHub Copilot a refusé la demande (code {}). Réessaie dans un instant.",
-                status.as_u16()
+                "GitHub a refusé l'accès Copilot (403){suffix} : vérifie l'abonnement Copilot du compte autorisé, ou reconnecte-toi avec le bon compte."
             ),
-        )
+        ),
+        other => ApiError::gateway(
+            "copilot",
+            format!(
+                "GitHub Copilot a refusé la demande (code {other}){suffix}. Réessaie dans un instant."
+            ),
+        ),
     }
+}
+
+fn refusal_reason(body: &str) -> Option<String> {
+    if let Some(reason) = reason_of(body) {
+        return Some(reason);
+    }
+    let payload: Value = serde_json::from_str(body).ok()?;
+    let reason = payload
+        .get("error")
+        .and_then(|error| error.get("message"))
+        .or_else(|| payload.get("message"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())?;
+    Some(reason.to_string())
 }
 
 fn reason_of(body: &str) -> Option<String> {

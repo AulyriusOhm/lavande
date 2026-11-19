@@ -109,6 +109,11 @@ where
                 let request = read_request(&mut socket).await;
                 log.lock().unwrap().push(request.clone());
                 let (status, body) = reply(&request);
+                // Statut 0 : connexion coupée sans réponse, pour simuler une erreur transport.
+                if status == 0 {
+                    let _ = socket.shutdown().await;
+                    return;
+                }
                 let head = format!(
                     "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     reason(status),
@@ -486,6 +491,35 @@ async fn a_completed_flow_stores_both_tokens_and_the_login() {
 }
 
 #[tokio::test]
+async fn a_refused_exchange_names_the_account_and_the_github_reason() {
+    let fake = serve(|request| match path(request) {
+        "/login/device/code" => (200, DEVICE_CODE.to_string()),
+        "/login/oauth/access_token" => (200, authorized()),
+        "/user" => (200, json!({ "login": "roman" }).to_string()),
+        "/copilot_internal/v2/token" => (
+            403,
+            json!({ "message": "no Copilot access for this account" }).to_string(),
+        ),
+        _ => (404, "{}".to_string()),
+    })
+    .await;
+    let (_directory, state) = state(settings(&fake)).await;
+    let session = started(&state).await;
+
+    let (_, payload) = status(&state, &session).await;
+
+    assert_eq!(payload["status"], "failed", "{payload}");
+    let message = payload["error"].as_str().expect("message");
+    assert!(message.contains("roman"), "{message}");
+    assert!(message.contains("403"), "{message}");
+    assert!(
+        message.contains("no Copilot access for this account"),
+        "{message}"
+    );
+    assert!(state.copilot_tokens().await.expect("coffre").is_none());
+}
+
+#[tokio::test]
 async fn a_refused_copilot_token_fails_the_session() {
     let fake = serve(|request| match path(request) {
         "/login/device/code" => (200, DEVICE_CODE.to_string()),
@@ -657,6 +691,30 @@ async fn chat_refreshes_an_expired_copilot_token() {
 }
 
 #[tokio::test]
+async fn a_cut_connection_during_the_exchange_stays_pending_and_retries() {
+    let fake = serve(|request| match path(request) {
+        "/login/device/code" => (200, DEVICE_CODE.to_string()),
+        "/login/oauth/access_token" => (200, authorized()),
+        "/user" => (200, json!({ "login": "roman" }).to_string()),
+        "/copilot_internal/v2/token" => (0, String::new()),
+        _ => (404, "{}".to_string()),
+    })
+    .await;
+    let (_directory, state) = state(settings(&fake)).await;
+    let session = started(&state).await;
+
+    let (code, payload) = status(&state, &session).await;
+
+    assert_eq!(code, StatusCode::OK, "{payload}");
+    assert_eq!(payload["status"], "pending", "{payload}");
+
+    let (_, payload) = status(&state, &session).await;
+
+    assert_eq!(payload["status"], "pending", "{payload}");
+    assert_eq!(fake.count("GET /copilot_internal/v2/token"), 2);
+}
+
+#[tokio::test]
 async fn a_refused_chat_is_a_502_with_an_actionable_message() {
     let fake = serve(|request| match path(request) {
         "/chat/completions" => (401, json!({ "error": "unauthorized" }).to_string()),
@@ -677,8 +735,44 @@ async fn a_refused_chat_is_a_502_with_an_actionable_message() {
     assert_eq!(payload["kind"], "copilot");
     assert_eq!(
         payload["error"],
-        "GitHub a refusé l'accès Copilot : vérifie ton abonnement ou reconnecte-toi."
+        "GitHub a refusé le jeton Copilot (401) — unauthorized : reconnecte ton compte dans les réglages IA."
     );
+}
+
+#[tokio::test]
+async fn a_model_refusal_surfaces_the_github_reason() {
+    let fake = serve(|request| match path(request) {
+        "/chat/completions" => (
+            400,
+            json!({
+                "error": {
+                    "message": "The requested model is not supported.",
+                    "code": "model_not_supported"
+                }
+            })
+            .to_string(),
+        ),
+        _ => (404, "{}".to_string()),
+    })
+    .await;
+    let (_directory, state) = state(settings(&fake)).await;
+    connected(&state, now() + 3600, Some("copilot-token")).await;
+
+    let (status, payload) = post(
+        &state,
+        "/api/ai/chat",
+        json!({ "model": "gpt-4o", "messages": [{ "role": "user", "content": "bonjour" }] }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{payload}");
+    assert_eq!(payload["kind"], "copilot");
+    let message = payload["error"].as_str().expect("message");
+    assert!(
+        message.contains("The requested model is not supported"),
+        "{message}"
+    );
+    assert!(message.contains("code 400"), "{message}");
 }
 
 #[tokio::test]
