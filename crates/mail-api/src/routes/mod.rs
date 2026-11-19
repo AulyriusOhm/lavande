@@ -1,8 +1,9 @@
 //! HTTP routes, split between account management, mailbox operations,
-//! read-only calendar import and the stored CalDAV sources.
+//! read-only calendar import, the stored CalDAV sources and the contact list.
 
 pub mod accounts;
 pub mod calendars;
+pub mod contacts;
 pub mod counts;
 pub mod discover;
 pub mod events;

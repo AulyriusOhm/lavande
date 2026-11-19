@@ -1779,3 +1779,248 @@ fn deleting_a_message_clears_its_index_entry() {
         .expect("search")
         .is_empty());
 }
+
+fn add_folder(store: &Store, account_id: &str, path: &str, role: FolderRole) {
+    store
+        .upsert_folder(&Folder {
+            account_id: account_id.to_string(),
+            path: path.to_string(),
+            name: path.to_string(),
+            role,
+            uidvalidity: 7,
+            uidnext: 10,
+            last_sync_at: None,
+            modseq: None,
+            delimiter: None,
+        })
+        .expect("folder");
+}
+
+fn contact<'a>(
+    contacts: &'a [lavande_mail::store::Contact],
+    email: &str,
+) -> &'a lavande_mail::store::Contact {
+    contacts
+        .iter()
+        .find(|contact| contact.email == email)
+        .unwrap_or_else(|| panic!("contact {email} absent : {contacts:?}"))
+}
+
+#[test]
+fn a_received_message_adds_its_sender() {
+    let store = open();
+    store
+        .upsert_message(&message(1, "t1", "Marc", "Planning", 10))
+        .expect("insert");
+
+    let contacts = store.contacts("", 20).expect("contacts");
+    assert_eq!(contacts.len(), 1);
+    assert_eq!(contacts[0].email, "marc@mail.fr");
+    assert_eq!(contacts[0].name.as_deref(), Some("Marc"));
+    assert_eq!(contacts[0].received, 1);
+    assert_eq!(contacts[0].sent, 0);
+    assert_eq!(
+        contacts[0].last_seen.as_deref(),
+        Some("2026-11-10T10:00:00Z")
+    );
+}
+
+#[test]
+fn a_sent_message_adds_its_recipients_and_copies() {
+    let store = open();
+    let mut sent = message(1, "t1", "Roman", "Planning", 10);
+    sent.folder_path = "Sent".to_string();
+    sent.to = vec![
+        Address {
+            name: Some("Marc".to_string()),
+            email: "Marc@Mail.fr".to_string(),
+        },
+        Address {
+            name: None,
+            email: "lea@mail.fr".to_string(),
+        },
+    ];
+    sent.cc = vec![Address {
+        name: Some("Camille".to_string()),
+        email: "camille@mail.fr".to_string(),
+    }];
+    store.upsert_message(&sent).expect("insert");
+
+    let contacts = store.contacts("", 20).expect("contacts");
+    assert_eq!(contacts.len(), 3);
+    assert_eq!(contact(&contacts, "marc@mail.fr").sent, 1);
+    assert_eq!(
+        contact(&contacts, "marc@mail.fr").name.as_deref(),
+        Some("Marc")
+    );
+    assert_eq!(contact(&contacts, "lea@mail.fr").sent, 1);
+    assert!(contact(&contacts, "lea@mail.fr").name.is_none());
+    assert_eq!(contact(&contacts, "camille@mail.fr").sent, 1);
+    assert!(
+        contacts.iter().all(|contact| contact.received == 0),
+        "l'expéditeur d'un envoi n'est pas un contact reçu"
+    );
+    assert!(
+        !contacts
+            .iter()
+            .any(|contact| contact.email == "roman@lavande.fr"),
+        "l'adresse du compte n'entre pas dans la liste"
+    );
+}
+
+#[test]
+fn spam_trash_and_drafts_are_not_contacts() {
+    let store = open();
+    add_folder(&store, "perso", "Junk", FolderRole::Spam);
+    add_folder(&store, "perso", "Trash", FolderRole::Trash);
+    add_folder(&store, "perso", "Drafts", FolderRole::Drafts);
+    for (uid, path) in [(1, "Junk"), (2, "Trash"), (3, "Drafts")] {
+        let mut mail = message(uid, "t1", "Marc", "Promo", 10);
+        mail.folder_path = path.to_string();
+        store.upsert_message(&mail).expect("insert");
+    }
+
+    assert!(store.contacts("", 20).expect("contacts").is_empty());
+}
+
+#[test]
+fn an_archived_message_still_feeds_the_list() {
+    let store = open();
+    let mut archived = message(1, "t1", "Lea", "Planning", 10);
+    archived.folder_path = "Archive".to_string();
+    store.upsert_message(&archived).expect("insert");
+
+    let contacts = store.contacts("", 20).expect("contacts");
+    assert_eq!(contact(&contacts, "lea@mail.fr").received, 1);
+}
+
+#[test]
+fn the_account_address_is_never_a_contact() {
+    let store = open();
+    let mut own = message(1, "t1", "Roman", "Note", 10);
+    own.from = Address {
+        name: Some("Roman".to_string()),
+        email: "Roman@Lavande.FR".to_string(),
+    };
+    store.upsert_message(&own).expect("insert");
+    assert!(store.contacts("", 20).expect("contacts").is_empty());
+}
+
+#[test]
+fn the_name_follows_the_latest_message() {
+    let store = open();
+    store
+        .upsert_message(&message(1, "t1", "Marc", "Planning", 10))
+        .expect("insert");
+    let mut newer = message(2, "t2", "Marc Delaunay", "Re: Planning", 12);
+    newer.from.email = "marc@mail.fr".to_string();
+    store.upsert_message(&newer).expect("insert");
+    let mut older = message(3, "t3", "M. Delaunay", "Vieux fil", 9);
+    older.from.email = "marc@mail.fr".to_string();
+    store.upsert_message(&older).expect("insert");
+
+    let contacts = store.contacts("", 20).expect("contacts");
+    let marc = contact(&contacts, "marc@mail.fr");
+    assert_eq!(marc.received, 3);
+    assert_eq!(marc.name.as_deref(), Some("Marc Delaunay"));
+    assert_eq!(marc.last_seen.as_deref(), Some("2026-11-12T10:00:00Z"));
+}
+
+#[test]
+fn a_message_without_account_or_folder_is_not_a_contact_and_not_an_error() {
+    let store = Store::open_in_memory().expect("open");
+    store.migrate().expect("migrate");
+    store
+        .upsert_message(&message(1, "t1", "Marc", "Planning", 10))
+        .expect("insert");
+
+    assert!(store.contacts("", 20).expect("contacts").is_empty());
+}
+
+#[test]
+fn contacts_are_filtered_sorted_and_paged() {
+    let store = open();
+    for (uid, name, day) in [(1, "Marc", 10), (2, "Marc", 11), (3, "Lea", 12)] {
+        store
+            .upsert_message(&message(uid, &format!("t{uid}"), name, "Planning", day))
+            .expect("insert");
+    }
+    store
+        .upsert_message(&message(4, "t4", "Marc", "Encore", 13))
+        .expect("insert");
+
+    let all = store.contacts("", 20).expect("contacts");
+    assert_eq!(
+        all.iter()
+            .map(|contact| contact.email.as_str())
+            .collect::<Vec<_>>(),
+        ["marc@mail.fr", "lea@mail.fr"],
+        "le plus fréquent d'abord"
+    );
+    assert_eq!(contact(&all, "marc@mail.fr").received, 3);
+    assert_eq!(all[1].last_seen.as_deref(), Some("2026-11-12T10:00:00Z"));
+
+    assert_eq!(store.contacts("marc", 20).expect("contacts").len(), 1);
+    assert_eq!(store.contacts("LEA@", 20).expect("contacts").len(), 1);
+    assert_eq!(store.contacts("mai", 20).expect("contacts").len(), 2);
+    assert!(store.contacts("%", 20).expect("contacts").is_empty());
+    assert_eq!(store.contacts("marc", 1).expect("contacts").len(), 1);
+}
+
+#[test]
+fn the_migration_fills_the_contact_list_once() {
+    let path = std::env::temp_dir().join(format!("lavande-contacts-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+
+    {
+        let store = Store::open(&path).expect("open");
+        store.migrate().expect("migrate");
+        store
+            .upsert_account("perso", "Perso", "roman@lavande.fr")
+            .expect("account");
+        add_folder(&store, "perso", "INBOX", FolderRole::Inbox);
+        store
+            .upsert_message(&message(1, "t1", "Marc", "Planning", 10))
+            .expect("insert");
+    }
+    {
+        let conn = rusqlite::Connection::open(&path).expect("raw open");
+        conn.execute_batch(
+            "DELETE FROM contacts; \
+             INSERT INTO contacts (account_id, email, received, sent, source) \
+             VALUES ('perso', 'marc@mail.fr', 9, 9, 'mail'); \
+             PRAGMA user_version = 7;",
+        )
+        .expect("base d'avant la table");
+    }
+    {
+        let store = Store::open(&path).expect("reopen");
+        store.migrate().expect("migrate");
+        let contacts = store.contacts("", 20).expect("contacts");
+        let marc = contact(&contacts, "marc@mail.fr");
+        assert_eq!(
+            marc.received, 1,
+            "les compteurs sont reconstruits, pas additionnés"
+        );
+        assert_eq!(marc.sent, 0);
+        assert_eq!(marc.name.as_deref(), Some("Marc"));
+
+        store.migrate().expect("migrate encore");
+        let again = store.contacts("", 20).expect("contacts");
+        assert_eq!(
+            contact(&again, "marc@mail.fr").received,
+            1,
+            "la migration rejouée ne compte pas deux fois"
+        );
+
+        store
+            .upsert_message(&message(2, "t2", "Marc", "Re: Planning", 11))
+            .expect("insert");
+        let after = store.contacts("", 20).expect("contacts");
+        assert_eq!(contact(&after, "marc@mail.fr").received, 2);
+    }
+
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(path.with_extension("db-wal"));
+    let _ = std::fs::remove_file(path.with_extension("db-shm"));
+}

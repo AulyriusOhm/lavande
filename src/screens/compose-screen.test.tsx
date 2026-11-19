@@ -8,12 +8,14 @@ import { sendInputOf } from "@/lib/mail-backend";
 
 const storeMock = vi.hoisted(() => ({
   mode: "demo" as "api" | "demo",
+  mails: [] as unknown[],
   save: async (_draft: ComposeDraft) => true,
 }));
 
 vi.mock("@/lib/store", () => ({
   useMailStore: () => ({
     mailAccounts: [{ id: "perso", label: "Perso", email: "roman@lavande.mail" }],
+    mails: storeMock.mails,
     mode: storeMock.mode,
     folderRecords: [],
     saveToDrafts: (draft: ComposeDraft) => storeMock.save(draft),

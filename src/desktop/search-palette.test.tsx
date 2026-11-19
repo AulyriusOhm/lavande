@@ -61,6 +61,12 @@ describe("palette PC · historique et contacts", () => {
     expect(screen.queryByRole("button", { name: "facture" })).toBeNull();
   });
 
+  it("liste les expéditeurs de la boîte en démo", async () => {
+    mount();
+
+    await waitFor(() => expect(screen.getByText("Marc Delaunay")).toBeTruthy());
+  });
+
   it("remplit le champ depuis une recherche récente", () => {
     window.localStorage.setItem(RECENT_KEY, JSON.stringify(["facture"]));
     mount();

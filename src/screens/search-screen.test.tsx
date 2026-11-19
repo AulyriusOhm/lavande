@@ -78,15 +78,29 @@ const reply = (body: unknown) =>
   ({ ok: true, status: 200, statusText: "", json: async () => body }) as unknown as Response;
 
 let searches: URLSearchParams[] = [];
+let contactQueries: URLSearchParams[] = [];
+
+const CONTACT = {
+  email: "pantaleo.s@grenoble.archi.fr",
+  name: "Pantaleo Sanchez",
+  received: 4,
+  sent: 1,
+  last_seen: "2026-11-10T10:00:00Z",
+};
 
 function mockBackend() {
   searches = [];
+  contactQueries = [];
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const { pathname, searchParams } = new URL(String(input), "http://localhost");
     const path = decodeURIComponent(pathname);
     if (path.endsWith("/api/accounts")) return reply([account]);
     if (path.endsWith("/sync")) return reply({ reports: [] });
     if (path.endsWith("/folder-counts")) return reply([]);
+    if (path.endsWith("/api/contacts")) {
+      contactQueries.push(searchParams);
+      return reply([CONTACT]);
+    }
     if (path.endsWith("/search")) {
       searches.push(searchParams);
       const unread = searchParams.get("unread") === "true";
@@ -163,6 +177,22 @@ describe("recherche mobile · scopes côté démon", () => {
     await waitFor(() => expect(searches).toHaveLength(2));
     expect(searches[1].get("has_attachment")).toBe("true");
     expect(searches[1].get("unread")).toBeNull();
+  });
+
+  it("« Contacts » interroge le carnet du démon", async () => {
+    mockBackend();
+    mount();
+    fireEvent.change(input(), { target: { value: "panta" } });
+    await waitFor(() => expect(searches).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Contacts" }));
+
+    await waitFor(() =>
+      expect(contactQueries[contactQueries.length - 1]?.get("q")).toBe("panta"),
+    );
+    await waitFor(() => expect(status()).toBe("1 contact pour « panta »"));
+    expect(screen.getByText("Pantaleo Sanchez")).toBeTruthy();
+    expect(screen.getByText("pantaleo.s@grenoble.archi.fr")).toBeTruthy();
   });
 
   it("revient au tout-venant en quittant le scope", async () => {

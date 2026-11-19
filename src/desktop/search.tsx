@@ -3,7 +3,8 @@ import { AnimatePresence, motion } from "motion/react";
 import { Archive, Search, Star, Trash2, X } from "lucide-react";
 import { useMailStore } from "@/lib/store";
 import { useEscapeLayer } from "@/desktop/escape";
-import { frequentContacts, mailFolderLabel } from "@/lib/mail";
+import { useContacts } from "@/lib/contacts";
+import { mailFolderLabel } from "@/lib/mail";
 import type { Mail } from "@/lib/mail";
 import { readRecentSearches, writeRecentSearches } from "@/lib/recent-searches";
 import { parseSearchQuery, searchTerms } from "@/lib/search-query";
@@ -57,7 +58,7 @@ function RowAction({
 }
 
 export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { mails, openMessage, toggleStar, mailAction, accountById, searchMails, loadMoreSearch, searchHasMore } =
+  const { openMessage, toggleStar, mailAction, accountById, searchMails, loadMoreSearch, searchHasMore } =
     useMailStore();
   const [query, setQuery] = useState("");
   const [recent, setRecent] = useState<string[]>(readRecentSearches);
@@ -92,7 +93,7 @@ export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () =>
 
   const threads = useMemo(() => buildThreads(results), [results]);
 
-  const contacts = useMemo(() => frequentContacts(mails).slice(0, 6), [mails]);
+  const contacts = useContacts("", 6);
 
   useEffect(() => {
     setSelected(0);
@@ -258,12 +259,19 @@ export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () =>
                         <button
                           key={contact.email}
                           type="button"
-                          onClick={() => setQuery(contact.name)}
+                          onClick={() => setQuery(contact.name ?? contact.email)}
                           className="focus-ring flex items-center gap-2.5 rounded-[16px] px-2 py-2 text-left transition-colors duration-200 hover:bg-surface-2"
                         >
-                          <Avatar name={contact.name} tone={contact.tone} size={32} rounded="rounded-full" />
+                          <Avatar
+                            name={contact.name ?? contact.email}
+                            tone={contact.tone}
+                            size={32}
+                            rounded="rounded-full"
+                          />
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-[12.5px] font-bold text-ink">{contact.name}</span>
+                            <span className="block truncate text-[12.5px] font-bold text-ink">
+                              {contact.name ?? contact.email}
+                            </span>
                             <span className="block truncate text-[11px] font-medium text-ink-muted">
                               {contact.count} message{contact.count > 1 ? "s" : ""}
                             </span>

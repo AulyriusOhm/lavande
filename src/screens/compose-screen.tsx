@@ -42,6 +42,11 @@ import { activeSignature, resolvePgp, usePrefs } from "@/lib/prefs";
 import { ConversationPanel } from "@/components/conversation-panel";
 import { QuotedBlock } from "@/components/quoted-block";
 import { splitAddresses } from "@/lib/mail-backend";
+import {
+  RecipientSuggestions,
+  useRecipientAutocomplete,
+  type RecipientField,
+} from "@/components/recipient-suggestions";
 
 export type { ComposeDraft };
 
@@ -106,6 +111,23 @@ export function ComposeScreen({
   const update = (patch: Partial<ComposeDraft>) => {
     onDraftChange({ ...draft, ...patch });
   };
+
+  const setRecipient = (field: RecipientField, value: string) =>
+    update(field === "to" ? { to: value } : field === "cc" ? { cc: value } : { cci: value });
+
+  const autocomplete = useRecipientAutocomplete(
+    { to: draft.to, cc: draft.cc, cci: draft.cci },
+    setRecipient,
+  );
+
+  const suggestionsFor = (field: RecipientField) =>
+    autocomplete.field === field && autocomplete.open ? (
+      <RecipientSuggestions
+        options={autocomplete.options}
+        active={autocomplete.active}
+        onPick={autocomplete.pick}
+      />
+    ) : null;
 
   const addFiles = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -309,13 +331,16 @@ export function ComposeScreen({
           <label htmlFor="compose-to" className="text-[12px] font-bold tracking-[0.1em] text-ink-muted uppercase">
             À
           </label>
-          <input
-            id="compose-to"
-            value={draft.to}
-            onChange={(event) => update({ to: event.target.value })}
-            placeholder="destinataire@mail.com"
-            className="min-w-0 flex-1 bg-transparent text-[13.5px] font-medium text-ink outline-none placeholder:text-ink-soft"
-          />
+          <div className="relative min-w-0 flex-1">
+            <input
+              id="compose-to"
+              {...autocomplete.bind("to")}
+              value={draft.to}
+              placeholder="destinataire@mail.com"
+              className="w-full bg-transparent text-[13.5px] font-medium text-ink outline-none placeholder:text-ink-soft"
+            />
+            {suggestionsFor("to")}
+          </div>
           <button
             type="button"
             onClick={() => {
@@ -353,13 +378,16 @@ export function ComposeScreen({
             <label htmlFor="compose-cc" className="text-[12px] font-bold tracking-[0.1em] text-ink-muted uppercase">
               Cc
             </label>
-            <input
-              id="compose-cc"
-              value={draft.cc}
-              onChange={(event) => update({ cc: event.target.value })}
-              placeholder="copie@mail.com"
-              className="min-w-0 flex-1 bg-transparent text-[13.5px] font-medium text-ink outline-none placeholder:text-ink-soft"
-            />
+            <div className="relative min-w-0 flex-1">
+              <input
+                id="compose-cc"
+                {...autocomplete.bind("cc")}
+                value={draft.cc}
+                placeholder="copie@mail.com"
+                className="w-full bg-transparent text-[13.5px] font-medium text-ink outline-none placeholder:text-ink-soft"
+              />
+              {suggestionsFor("cc")}
+            </div>
           </div>
         )}
 
@@ -368,13 +396,16 @@ export function ComposeScreen({
             <label htmlFor="compose-cci" className="text-[12px] font-bold tracking-[0.1em] text-ink-muted uppercase">
               Cci
             </label>
-            <input
-              id="compose-cci"
-              value={draft.cci}
-              onChange={(event) => update({ cci: event.target.value })}
-              placeholder="copie cachée@mail.com"
-              className="min-w-0 flex-1 bg-transparent text-[13.5px] font-medium text-ink outline-none placeholder:text-ink-soft"
-            />
+            <div className="relative min-w-0 flex-1">
+              <input
+                id="compose-cci"
+                {...autocomplete.bind("cci")}
+                value={draft.cci}
+                placeholder="copie cachée@mail.com"
+                className="w-full bg-transparent text-[13.5px] font-medium text-ink outline-none placeholder:text-ink-soft"
+              />
+              {suggestionsFor("cci")}
+            </div>
           </div>
         )}
 

@@ -45,6 +45,18 @@ CREATE TABLE IF NOT EXISTS messages (
     PRIMARY KEY (account_id, folder_path, uid)
 );
 
+CREATE TABLE IF NOT EXISTS contacts (
+    account_id TEXT,
+    email TEXT,
+    name TEXT,
+    received INTEGER NOT NULL DEFAULT 0,
+    sent INTEGER NOT NULL DEFAULT 0,
+    first_seen TEXT,
+    last_seen TEXT,
+    source TEXT NOT NULL DEFAULT 'mail',
+    PRIMARY KEY (account_id, email)
+);
+
 CREATE TABLE IF NOT EXISTS attachments (
     account_id TEXT,
     folder_path TEXT,
@@ -75,3 +87,6 @@ CREATE INDEX IF NOT EXISTS idx_messages_thread
 
 CREATE INDEX IF NOT EXISTS idx_messages_message_id
     ON messages (account_id, message_id);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_last_seen
+    ON contacts (last_seen DESC);

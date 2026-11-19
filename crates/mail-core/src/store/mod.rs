@@ -15,7 +15,7 @@ use crate::mime::ParsedMessage;
 use crate::model::{Address, AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState, Thread};
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// Rows reindexed per statement when `migrate` fills the FTS index of a
 /// database written before it existed: a big mailbox must not hold the daemon
@@ -55,6 +55,17 @@ pub struct FolderCount {
     pub unread: usize,
 }
 
+/// One address the mailbox has traded mail with, every account merged: what
+/// the recipient field and the contacts search propose.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Contact {
+    pub email: String,
+    pub name: Option<String>,
+    pub received: i64,
+    pub sent: i64,
+    pub last_seen: Option<String>,
+}
+
 impl Store {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, MailError> {
         Self::from_connection(Connection::open(path)?)
@@ -90,6 +101,7 @@ impl Store {
             add_missing_columns(&conn)?;
             backfill_attachment_flags(&conn)?;
             backfill_search_index(&conn)?;
+            backfill_contacts(&conn)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         let healed = heal_reply_threads_on(&conn)?;
@@ -327,6 +339,15 @@ impl Store {
         index_message(
             &tx,
             rowid_of(&tx, &message.account_id, &message.folder_path, message.uid)?,
+        )?;
+        collect_contacts(
+            &tx,
+            &message.account_id,
+            &message.folder_path,
+            &message.from,
+            &message.to,
+            &message.cc,
+            message.date.map(format_date).as_deref(),
         )?;
         tx.commit()?;
         Ok(())
@@ -738,6 +759,30 @@ impl Store {
     ) -> Result<Vec<Message>, MailError> {
         let conn = self.conn()?;
         messages_in_folder_on(&conn, account_id, folder_path, limit, offset)
+    }
+
+    /// The contact list, every account merged: the counters of an address add
+    /// up, the most recent name that is not empty wins, `last_seen` is the
+    /// latest. The accounts' own addresses never come back. `query` is a
+    /// case-insensitive substring of the name or the address, empty for the
+    /// whole list.
+    pub fn contacts(&self, query: &str, limit: i64) -> Result<Vec<Contact>, MailError> {
+        let conn = self.conn()?;
+        let mut statement = conn.prepare(CONTACTS_SQL)?;
+        let rows = statement.query_map(params![like_pattern(query), limit.max(0)], |row| {
+            Ok(Contact {
+                email: row.get(0)?,
+                name: row.get(1)?,
+                received: row.get(2)?,
+                sent: row.get(3)?,
+                last_seen: row.get(4)?,
+            })
+        })?;
+        let mut contacts = Vec::new();
+        for row in rows {
+            contacts.push(row?);
+        }
+        Ok(contacts)
     }
 
     /// Search over the subjects, correspondents and bodies of one account,
@@ -1523,6 +1568,215 @@ fn backfill_search_index(conn: &Connection) -> Result<(), MailError> {
             index_message(conn, rowid)?;
         }
     }
+}
+
+/// The merged contact list: one row per address, counters added up, the name
+/// of the most recent message that carried one, own addresses left out. The
+/// pattern is `%%` when the query is empty, which matches every address.
+const CONTACTS_SQL: &str = "\
+     SELECT contacts.email, \
+     (SELECT name FROM contacts AS named WHERE named.email = contacts.email \
+     AND named.name IS NOT NULL AND named.name <> '' \
+     ORDER BY named.last_seen DESC LIMIT 1) AS name, \
+     SUM(contacts.received), SUM(contacts.sent), MAX(contacts.last_seen) \
+     FROM contacts \
+     WHERE contacts.email NOT IN \
+     (SELECT lower(email) FROM accounts WHERE email IS NOT NULL AND email <> '') \
+     AND (lower(contacts.email) LIKE ?1 ESCAPE '\\' \
+     OR lower(COALESCE(contacts.name, '')) LIKE ?1 ESCAPE '\\') \
+     GROUP BY contacts.email \
+     ORDER BY SUM(contacts.received) + SUM(contacts.sent) DESC, \
+     MAX(contacts.last_seen) DESC, contacts.email \
+     LIMIT ?2";
+
+/// One message's contribution to a contact: a counter, the name it carried and
+/// the instant it was sent. The name only moves forward with `last_seen`, so an
+/// old message re-imported later never brings back an outdated spelling.
+const BUMP_CONTACT: &str = "\
+     INSERT INTO contacts (account_id, email, name, received, sent, first_seen, last_seen, source) \
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 'mail') \
+     ON CONFLICT(account_id, email) DO UPDATE SET \
+     received = contacts.received + excluded.received, \
+     sent = contacts.sent + excluded.sent, \
+     name = CASE \
+         WHEN excluded.last_seen IS NULL THEN contacts.name \
+         WHEN contacts.last_seen IS NULL OR excluded.last_seen >= contacts.last_seen \
+             THEN COALESCE(excluded.name, contacts.name) \
+         ELSE contacts.name END, \
+     first_seen = COALESCE(contacts.first_seen, excluded.first_seen), \
+     last_seen = CASE \
+         WHEN contacts.last_seen IS NULL THEN excluded.last_seen \
+         WHEN excluded.last_seen IS NULL THEN contacts.last_seen \
+         ELSE MAX(contacts.last_seen, excluded.last_seen) END";
+
+/// Writes one message into the contact list: the sender of a received message,
+/// the recipients (and copies) of a sent one. A folder the store does not know
+/// (tests seeding messages by hand) and a folder the list ignores write nothing.
+fn collect_contacts(
+    conn: &Connection,
+    account_id: &str,
+    folder_path: &str,
+    sender: &Address,
+    recipients: &[Address],
+    copies: &[Address],
+    seen: Option<&str>,
+) -> Result<(), MailError> {
+    let Some((received, own)) = contact_scope(conn, account_id, folder_path)? else {
+        return Ok(());
+    };
+    let addresses: Vec<&Address> = if received {
+        vec![sender]
+    } else {
+        recipients.iter().chain(copies.iter()).collect()
+    };
+    let mut statement = conn.prepare(BUMP_CONTACT)?;
+    let mut done = HashSet::new();
+    for address in addresses {
+        let email = normalize_email(&address.email);
+        if email.is_empty() || Some(email.as_str()) == own.as_deref() || !done.insert(email.clone())
+        {
+            continue;
+        }
+        let name = address
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        let (received, sent) = if received { (1, 0) } else { (0, 1) };
+        statement.execute(params![account_id, email, name, received, sent, seen])?;
+    }
+    Ok(())
+}
+
+/// Whether a message of this folder feeds the list, and the address of the
+/// account itself. `None` when the folder or the account is unknown here, and
+/// for the folders whose mail is not correspondence (brouillons, spam,
+/// corbeille).
+fn contact_scope(
+    conn: &Connection,
+    account_id: &str,
+    folder_path: &str,
+) -> Result<Option<(bool, Option<String>)>, MailError> {
+    let row = conn
+        .query_row(
+            "SELECT folders.role, accounts.email FROM folders \
+             JOIN accounts ON accounts.id = folders.account_id \
+             WHERE folders.account_id = ?1 AND folders.path = ?2",
+            params![account_id, folder_path],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((role, own)) = row else {
+        return Ok(None);
+    };
+    let received = match FolderRole::from_db(role.as_deref().unwrap_or_default()) {
+        FolderRole::Sent => false,
+        FolderRole::Drafts | FolderRole::Spam | FolderRole::Trash => return Ok(None),
+        _ => true,
+    };
+    let own = own
+        .map(|email| normalize_email(&email))
+        .filter(|email| !email.is_empty());
+    Ok(Some((received, own)))
+}
+
+/// Fills the contact list of a mailbox written before it existed, rowid batch
+/// after rowid batch, with the rules of `collect_contacts`. The counters are
+/// rebuilt, never added to what the table holds: `migrate` guards the call with
+/// `user_version`, and a rebuild interrupted by a crash leaves the table as it
+/// was. Contacts another source will bring (a CardDAV address book) stay.
+fn backfill_contacts(conn: &Connection) -> Result<(), MailError> {
+    let tx = conn.unchecked_transaction()?;
+    let conn = &tx;
+    conn.execute("DELETE FROM contacts WHERE source = 'mail'", [])?;
+    let mut last = 0;
+    loop {
+        let rows: Vec<ContactRow> = {
+            let mut statement = conn.prepare(
+                "SELECT rowid, account_id, folder_path, from_json, to_json, cc_json, date \
+                 FROM messages WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
+            )?;
+            let rows = statement
+                .query_map(params![last, REINDEX_BATCH], |row| {
+                    Ok(ContactRow {
+                        rowid: row.get(0)?,
+                        account_id: row.get(1)?,
+                        folder_path: row.get(2)?,
+                        sender: row.get(3)?,
+                        recipients: row.get(4)?,
+                        copies: row.get(5)?,
+                        seen: row.get(6)?,
+                    })
+                })?
+                .collect::<Result<_, _>>()?;
+            rows
+        };
+        let Some(batch_end) = rows.last().map(|row| row.rowid) else {
+            tx.commit()?;
+            return Ok(());
+        };
+        last = batch_end;
+        for row in rows {
+            let ContactRow {
+                account_id,
+                folder_path,
+                sender,
+                recipients,
+                copies,
+                seen,
+                ..
+            } = row;
+            let (Some(sender), Some(recipients), Some(copies)) = (sender, recipients, copies)
+            else {
+                continue;
+            };
+            let sender: Address = from_json(&sender)?;
+            let recipients: Vec<Address> = from_json(&recipients)?;
+            let copies: Vec<Address> = from_json(&copies)?;
+            collect_contacts(
+                conn,
+                &account_id,
+                &folder_path,
+                &sender,
+                &recipients,
+                &copies,
+                seen.as_deref(),
+            )?;
+        }
+    }
+}
+
+struct ContactRow {
+    rowid: i64,
+    account_id: String,
+    folder_path: String,
+    sender: Option<String>,
+    recipients: Option<String>,
+    copies: Option<String>,
+    seen: Option<String>,
+}
+
+fn normalize_email(email: &str) -> String {
+    email.trim().to_lowercase()
+}
+
+/// The `LIKE` pattern of a free-text query: its `%`, `_` and escape character
+/// are neutralised, the text itself is matched case-insensitively.
+fn like_pattern(query: &str) -> String {
+    let mut pattern = String::from("%");
+    for character in query.trim().to_lowercase().chars() {
+        if matches!(character, '%' | '_' | '\\') {
+            pattern.push('\\');
+        }
+        pattern.push(character);
+    }
+    pattern.push('%');
+    pattern
 }
 
 fn to_json<T: Serialize>(value: &T) -> Result<String, MailError> {

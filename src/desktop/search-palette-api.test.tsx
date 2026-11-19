@@ -79,15 +79,18 @@ const reply = (body: unknown) =>
 
 let searches: URLSearchParams[] = [];
 let answer: (params: URLSearchParams) => ApiMessage[] = () => [];
+let contacts: unknown[] = [];
 
 function mockBackend() {
   searches = [];
+  contacts = [];
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const { pathname, searchParams } = new URL(String(input), "http://localhost");
     const path = decodeURIComponent(pathname);
     if (path.endsWith("/api/accounts")) return reply([account]);
     if (path.endsWith("/sync")) return reply({ reports: [] });
     if (path.endsWith("/folder-counts")) return reply([]);
+    if (path.endsWith("/api/contacts")) return reply(contacts);
     if (path.endsWith("/search")) {
       searches.push(searchParams);
       return reply(answer(searchParams));
@@ -144,6 +147,25 @@ describe("palette PC · pagination", () => {
     expect(searches[0].get("q")).toBe("facture");
     expect(searches[1].get("offset")).toBe("50");
     expect(screen.queryByRole("button", { name: "Charger plus" })).toBeNull();
+  });
+});
+
+describe("palette PC · contacts du démon", () => {
+  it("liste le carnet dans l'état vide", async () => {
+    mockBackend();
+    contacts = [
+      {
+        email: "pantaleo.s@grenoble.archi.fr",
+        name: "Pantaleo Sanchez",
+        received: 4,
+        sent: 1,
+        last_seen: "2026-11-10T10:00:00Z",
+      },
+    ];
+    mount();
+
+    await waitFor(() => expect(screen.getByText("Pantaleo Sanchez")).toBeTruthy());
+    expect(screen.getByText("5 messages")).toBeTruthy();
   });
 });
 

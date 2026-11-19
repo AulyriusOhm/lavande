@@ -122,6 +122,15 @@ export type ApiFolderCount = {
   unread: number;
 };
 
+/** Un contact déduit du courrier échangé, tous comptes fusionnés. */
+export type ApiContact = {
+  email: string;
+  name: string | null;
+  received: number;
+  sent: number;
+  last_seen: string | null;
+};
+
 export type ApiAccount = {
   id: string;
   label: string;
@@ -553,6 +562,10 @@ export const mailApi = {
     }),
 
   folderCounts: (id: string) => request<ApiFolderCount[]>(`${accountPath(id)}/folder-counts`),
+
+  /** Carnet déduit du courrier échangé : `q` filtre le nom ou l'adresse, vide pour tout. */
+  contacts: (query = "", limit = 20) =>
+    request<ApiContact[]>(`/contacts?q=${encodeURIComponent(query)}&limit=${limit}`),
 
   sync: (id: string, folderPath?: string) =>
     request<SyncResult>(`${accountPath(id)}/sync`, {

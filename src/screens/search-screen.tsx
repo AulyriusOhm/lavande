@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { RotateCcw, Search, X } from "lucide-react";
 import type { Mail } from "@/lib/mail";
-import { frequentContacts, normalize } from "@/lib/mail";
+import { useContacts } from "@/lib/contacts";
 import type { SearchFilter } from "@/lib/search-query";
 import { readRecentSearches, writeRecentSearches } from "@/lib/recent-searches";
 import { buildThreads } from "@/lib/threads";
@@ -52,7 +52,7 @@ export function SearchScreen({
 
   const trimmed = query.trim();
 
-  const { searchMails, mails } = useMailStore();
+  const { searchMails } = useMailStore();
   const [found, setFound] = useState<Mail[]>([]);
   const [searching, setSearching] = useState(false);
 
@@ -84,15 +84,7 @@ export function SearchScreen({
     [results, scope],
   );
 
-  const allContacts = useMemo(() => frequentContacts(mails), [mails]);
-
-  const contacts = useMemo(() => {
-    const needle = normalize(trimmed);
-    if (!needle) return [];
-    return allContacts.filter(
-      (contact) => normalize(contact.name).includes(needle) || normalize(contact.email).includes(needle),
-    );
-  }, [allContacts, trimmed]);
+  const contacts = useContacts(scope === "Contacts" || trimmed === "" ? trimmed : null, 20);
 
   const resetSearch = () => {
     setQuery("");
@@ -198,16 +190,16 @@ export function SearchScreen({
               Contacts fréquents
             </p>
             <div className="mt-3 flex gap-3 overflow-x-auto pb-1 no-scrollbar">
-              {allContacts.slice(0, 8).map((contact) => (
+              {contacts.slice(0, 8).map((contact) => (
                 <button
                   key={contact.email}
                   type="button"
-                  onClick={() => setQuery(contact.name)}
+                  onClick={() => setQuery(contact.name ?? contact.email)}
                   className="flex w-16 shrink-0 flex-col items-center gap-1.5 transition-transform active:scale-95"
                 >
-                  <Avatar name={contact.name} tone={contact.tone} size={46} />
+                  <Avatar name={contact.name ?? contact.email} tone={contact.tone} size={46} />
                   <span className="w-full truncate text-center text-[10.5px] font-semibold text-ink-soft">
-                    {contact.name.split(" ")[0]}
+                    {(contact.name ?? contact.email).split(" ")[0]}
                   </span>
                 </button>
               ))}
@@ -238,10 +230,14 @@ export function SearchScreen({
               {contacts.map((contact, index) => (
                 <BlurFade key={contact.email} delay={index * 0.04} yOffset={14}>
                   <div className="flex items-center gap-3 rounded-[22px] px-3 py-3">
-                    <Avatar name={contact.name} tone={contact.tone} size={42} />
+                    <Avatar name={contact.name ?? contact.email} tone={contact.tone} size={42} />
                     <div className="min-w-0 flex-1 leading-tight">
-                      <p className="truncate text-[13.5px] font-bold text-ink">{contact.name}</p>
-                      <p className="truncate text-[11.5px] font-medium text-ink-muted">{contact.email}</p>
+                      <p className="truncate text-[13.5px] font-bold text-ink">
+                        {contact.name ?? contact.email}
+                      </p>
+                      {contact.name ? (
+                        <p className="truncate text-[11.5px] font-medium text-ink-muted">{contact.email}</p>
+                      ) : null}
                     </div>
                   </div>
                 </BlurFade>
