@@ -302,6 +302,27 @@ describe("suggestions de rendez-vous IA · génération", () => {
     expect(result.current.suggestions.map((entry) => entry.date).sort()).toEqual([DAY, second].sort());
   });
 
+  it("ne rappelle pas le modèle pour le même passage après un remontage", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: true, events: true, windowHours: 48 });
+    const llmCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)], [event()]);
+    const first = mount();
+
+    await waitFor(
+      () => expect(first.result.current.suggestions.some((entry) => entry.kind === "event")).toBe(true),
+      { timeout: 3000 },
+    );
+    expect(eventCalls(llmCalls)).toHaveLength(1);
+
+    first.unmount();
+    const second = mount();
+
+    await waitFor(() => expect(second.result.current.mails.length).toBeGreaterThan(0), { timeout: 3000 });
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+
+    expect(eventCalls(llmCalls)).toHaveLength(1);
+  });
+
   it("persiste le type et les champs d'agenda de la suggestion", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs({ enabled: true, events: true, windowHours: 48 });

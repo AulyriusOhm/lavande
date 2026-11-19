@@ -35,7 +35,12 @@ const mail = (id: string, timestamp = 1_700_000_000_000): SummaryMailInput => ({
 
 const RESULT: SummaryResult = {
   period: { id: "morning", label: "Résumé du matin" },
-  text: "Trois mails, dont un de Camille.",
+  headline: "Trois mails, dont un de Camille.",
+  groups: {
+    actions: [{ mailId: "1", reason: "Répondre à Camille", due: "2026-01-06" }],
+    infos: [{ mailId: "2", reason: "Compte rendu à lire" }],
+    notifications: [],
+  },
   tasks: [{ title: "Répondre à Camille", due: "vendredi", from: "Camille", mailId: "1" }],
   mailCount: 2,
   generatedAt: 1_700_000_000_000,
@@ -84,13 +89,18 @@ describe("résumé · cache sur le poste", () => {
   it("conserve une entrée par portée", () => {
     const storage = memoryStorage();
     const signature = summarySignature([mail("1"), mail("2")]);
-    const other: SummaryResult = { ...RESULT, text: "Résumé de la boîte alpha", mailCount: 1, mailIds: ["1"] };
+    const other: SummaryResult = {
+      ...RESULT,
+      headline: "Briefing de la boîte alpha",
+      mailCount: 1,
+      mailIds: ["1"],
+    };
 
     writeSummaryCache(storage, "all", "morning", signature, RESULT);
     writeSummaryCache(storage, "alpha", "morning", signature, other);
 
-    expect(readSummaryCache(storage, "all", "morning", signature)?.text).toBe(RESULT.text);
-    expect(readSummaryCache(storage, "alpha", "morning", signature)?.text).toBe(other.text);
+    expect(readSummaryCache(storage, "all", "morning", signature)?.headline).toBe(RESULT.headline);
+    expect(readSummaryCache(storage, "alpha", "morning", signature)?.headline).toBe(other.headline);
     expect(Object.keys(JSON.parse(storage.getItem(SUMMARY_CACHE_KEY) ?? "{}"))).toEqual([
       `all:morning:${signature}`,
       `alpha:morning:${signature}`,
@@ -118,9 +128,43 @@ describe("résumé · cache sur le poste", () => {
     expect(readSummaryCache(null, "all", "morning", signature)).toBeNull();
     storage.setItem(SUMMARY_CACHE_KEY, "{pas du json");
     expect(readSummaryCache(storage, "all", "morning", signature)).toBeNull();
-    storage.setItem(SUMMARY_CACHE_KEY, JSON.stringify({ "all:morning": { signature, result: { text: 3 } } }));
+    storage.setItem(SUMMARY_CACHE_KEY, JSON.stringify({ "all:morning": { signature, result: { headline: 3 } } }));
+    expect(readSummaryCache(storage, "all", "morning", signature)).toBeNull();
+    const noGroups = { period: RESULT.period, headline: "x", tasks: [], mailIds: [] };
+    storage.setItem(
+      SUMMARY_CACHE_KEY,
+      JSON.stringify({ [`all:morning:${signature}`]: { signature, result: noGroups } }),
+    );
     expect(readSummaryCache(storage, "all", "morning", signature)).toBeNull();
     expect(() => writeSummaryCache(null, "all", "morning", signature, RESULT)).not.toThrow();
+  });
+
+  it("relit la forme v2 telle quelle, sans migration", () => {
+    const storage = memoryStorage();
+    const signature = summarySignature([mail("1")]);
+
+    writeSummaryCache(storage, "all", "morning", signature, RESULT);
+
+    expect(SUMMARY_CACHE_KEY).toBe("lavande.summary.cache.v2");
+    expect(readSummaryCache(storage, "all", "morning", signature)).toEqual(RESULT);
+  });
+
+  it("ignore un ancien blob v1", () => {
+    const storage = memoryStorage();
+    const signature = summarySignature([mail("1")]);
+    const legacy = {
+      period: RESULT.period,
+      text: "Trois mails, dont un de Camille.",
+      tasks: [],
+      mailCount: 1,
+      generatedAt: 1_700_000_000_000,
+      source: "llm",
+      mailIds: ["1"],
+    };
+
+    storage.setItem(SUMMARY_CACHE_KEY, JSON.stringify({ [`all:morning:${signature}`]: { signature, result: legacy } }));
+
+    expect(readSummaryCache(storage, "all", "morning", signature)).toBeNull();
   });
 });
 

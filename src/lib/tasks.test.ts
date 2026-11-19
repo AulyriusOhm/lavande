@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAIL_SUGGESTIONS, draftFromSuggestion, type MailSuggestion } from "@/lib/tasks";
+import { MAIL_SUGGESTIONS, draftFromSuggestion, taskFromSuggestion, type MailSuggestion } from "@/lib/tasks";
 
 const MEETING: MailSuggestion = {
   ...MAIL_SUGGESTIONS[0],
@@ -51,5 +51,15 @@ describe("draftFromSuggestion · suggestion de rendez-vous → créneau de créa
 
   it("ignore le lieu vide", () => {
     expect(draftFromSuggestion({ ...MEETING, location: "" })).not.toHaveProperty("location");
+  });
+});
+
+describe("taskFromSuggestion · assigné", () => {
+  it("reprend l'assigné de la suggestion", () => {
+    expect(taskFromSuggestion({ ...MAIL_SUGGESTIONS[0], assignee: "Stéphane" }, "t-sugg").assignee).toBe("Stéphane");
+  });
+
+  it("n'ajoute aucun champ assigné quand la suggestion n'en porte pas", () => {
+    expect(taskFromSuggestion(MAIL_SUGGESTIONS[0], "t-sugg")).not.toHaveProperty("assignee");
   });
 });

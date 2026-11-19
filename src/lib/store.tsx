@@ -34,8 +34,11 @@ import {
   suggestTasks,
   writeSummaryCache,
 } from "@/lib/summary";
-import type { SummaryEvent, SummaryMailInput, SummaryResult, SummaryTask } from "@/lib/summary";
-import { llmReady } from "@/lib/llm";
+import type { SummaryEvent, SummaryMailInput, SummaryRef, SummaryResult, SummaryTask } from "@/lib/summary";
+import { analyseMail } from "@/lib/analyse";
+import type { AnalyseResult, AnalyseTask } from "@/lib/analyse";
+import { sentSamples, styleProfile, threadConversation } from "@/lib/assist";
+import { EMPTY_LLM, llmReady } from "@/lib/llm";
 import { TODAY_ISO } from "@/lib/calendar";
 import type { CalendarEvent } from "@/lib/calendar";
 import {
@@ -47,6 +50,7 @@ import {
   usePrefs,
 } from "@/lib/prefs";
 import { suggestionsInWindow, usePlanning } from "@/lib/planning-store";
+import { teamContextOf, teamPromptBlock } from "@/lib/team";
 import { mailApi, errorText } from "@/lib/api";
 import type { LiveEvent } from "@/lib/api";
 import type { NewAccount } from "@/lib/api";
@@ -79,6 +83,14 @@ import {
 import type { ComposeBus, ComposeState } from "@/lib/compose-bus";
 
 export type BackendPhase = "loading" | "ready" | "offline" | "empty";
+
+/** Analyse à la demande du mail ouvert : un seul mail à la fois, cache par mail. */
+export type MailAnalyse = {
+  mailId: string;
+  status: "loading" | "ready" | "error";
+  result: AnalyseResult | null;
+  error: string | null;
+};
 
 export type BulkKind =
   | "read"
@@ -186,8 +198,86 @@ function summarySuggestion(task: SummaryTask, mail: Mail | undefined, period: st
     tone: mail?.tone ?? 0,
     description: day ? `${period} · échéance ${formatDueDate(day)}` : period,
   };
+  if (task.assignee) suggestion.assignee = task.assignee;
   if (typeof mail?.timestamp === "number") suggestion.timestamp = mail.timestamp;
   return suggestion;
+}
+
+type DuplicateCandidate = { mailId: string; title: string; when: string };
+
+const tokensOf = (value: string): string[] =>
+  normalize(value)
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 1);
+
+/**
+ * Même mail, même échéance et intitulé proche (égal, contenu, ou 60 % de mots
+ * communs) : une action reformulée par le modèle ne devient pas une seconde
+ * suggestion.
+ */
+function nearDuplicate(existing: DuplicateCandidate[], candidate: DuplicateCandidate): boolean {
+  if (!candidate.mailId) return false;
+  const title = normalize(candidate.title);
+  if (!title) return false;
+  const tokens = new Set(tokensOf(candidate.title));
+  return existing.some((entry) => {
+    if (entry.mailId !== candidate.mailId || entry.when !== candidate.when) return false;
+    const other = normalize(entry.title);
+    if (!other) return false;
+    if (other === title || other.includes(title) || title.includes(other)) return true;
+    const others = new Set(tokensOf(entry.title));
+    if (tokens.size === 0 || others.size === 0) return false;
+    const shared = [...tokens].filter((token) => others.has(token)).length;
+    return shared / new Set([...tokens, ...others]).size >= 0.6;
+  });
+}
+
+const AI_RUNS_KEY = "lavande.ai.runs.v1";
+const AI_RUNS_MAX = 16;
+type AiRunKind = "tasks" | "events";
+type AiRuns = Record<AiRunKind, Record<string, number>>;
+
+function numberMap(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, number> = {};
+  for (const [key, at] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof at === "number" && Number.isFinite(at)) out[key] = at;
+  }
+  return out;
+}
+
+/** Passages IA déjà payés sur ce poste : un remontage ne rappelle pas le modèle. */
+function readAiRuns(): AiRuns {
+  try {
+    const raw = window.localStorage.getItem(AI_RUNS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object") return { tasks: {}, events: {} };
+    const stored = parsed as Record<string, unknown>;
+    return { tasks: numberMap(stored.tasks), events: numberMap(stored.events) };
+  } catch {
+    return { tasks: {}, events: {} };
+  }
+}
+
+function aiRunDone(kind: AiRunKind, runKey: string): boolean {
+  return readAiRuns()[kind][runKey] !== undefined;
+}
+
+function markAiRun(kind: AiRunKind, runKey: string): void {
+  try {
+    const runs = readAiRuns();
+    const entries = { ...runs[kind], [runKey]: Date.now() };
+    const keys = Object.keys(entries);
+    if (keys.length > AI_RUNS_MAX) {
+      keys
+        .sort((left, right) => entries[left] - entries[right])
+        .slice(0, keys.length - AI_RUNS_MAX)
+        .forEach((key) => delete entries[key]);
+    }
+    window.localStorage.setItem(AI_RUNS_KEY, JSON.stringify({ ...runs, [kind]: entries }));
+  } catch {
+    // stockage plein ou indisponible : la mémoire de session suffit
+  }
 }
 
 /** Un rendez-vous extrait devient une suggestion d'AGENDA en attente, jamais un événement. */
@@ -263,6 +353,18 @@ export type MailStoreValue = {
   /** Mails analysés par le résumé en cours, retrouvés dans la liste vivante. */
   summaryMails: Mail[];
   refreshSummary: (force?: boolean) => Promise<void>;
+  /** Transforme une action du résumé en suggestion en attente (jamais une tâche). */
+  proposeSummaryAction: (ref: SummaryRef) => void;
+  /** Analyse à la demande du mail ouvert, avec son cache par mail. */
+  analyse: MailAnalyse | null;
+  runAnalyse: (mail: Mail, force?: boolean) => Promise<void>;
+  closeAnalyse: () => void;
+  /** Une tâche analysée devient une suggestion en attente, jamais une tâche. */
+  acceptAnalyseTask: (task: AnalyseTask) => void;
+  /** Un rendez-vous analysé devient une suggestion en attente, jamais un événement. */
+  acceptAnalyseEvent: (event: SummaryEvent) => void;
+  /** Réponse pré-remplie : ouvre la réponse au mail avec ce corps. */
+  openReplyWithBody: (mail: Mail, body: string) => void;
   events: CalendarEvent[];
   selectedDate: string;
   openMail: Mail | null;
@@ -311,7 +413,7 @@ export type MailStoreValue = {
   detachCompose: () => void;
   dockCompose: () => void;
   detachClosed: () => void;
-  replyTo: (mail: Mail, all?: boolean) => void;
+  replyTo: (mail: Mail, all?: boolean, body?: string) => void;
   forwardMail: (mail: Mail) => void;
   sendDraft: (draft: ComposeDraft) => void;
   retryBackend: () => void;
@@ -400,6 +502,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const summaryRun = useRef<string | null>(null);
   const summaryRunning = useRef(false);
+  const [analyse, setAnalyse] = useState<MailAnalyse | null>(null);
+  const analyseRun = useRef<string | null>(null);
+  const analyseRunning = useRef(false);
   const taskRun = useRef<string | null>(null);
   const taskRunning = useRef(false);
   const eventRun = useRef<string | null>(null);
@@ -1779,7 +1884,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   }, [readOnlyBlocked]);
 
   const replyTo = useCallback(
-    (mail: Mail, all = false) => {
+    (mail: Mail, all = false, body?: string) => {
       if (readOnlyBlocked()) return;
       const start = () => {
         resetDraftSource();
@@ -1793,7 +1898,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           to: all ? replyAllRecipients(mail, accountById(mail.account)?.email) : mail.email,
           ...(all ? { cc: mail.cc ?? "" } : {}),
           subject: /^re\s*:/i.test(mail.subject.trim()) ? mail.subject : `Re: ${mail.subject}`,
-          body: "",
+          body: body ? textToHtml(body) : "",
           quoted: buildQuotedHtml(
             `Le ${mail.date ?? mail.time}, ${mail.name} a écrit :`,
             textToHtml(mail.body.join("\n")),
@@ -1812,6 +1917,16 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       start();
     },
     [accountById, composeDetached, composeDraft, notify, pgpPrefs, readOnlyBlocked, resetDraftSource],
+  );
+
+  /**
+   * Réponse pré-remplie par l'analyse : même garde de brouillon que Répondre,
+   * puis le corps suggéré remplace le corps vide — la relève vers la fenêtre
+   * détachée passe par l'état partagé, comme tout brouillon.
+   */
+  const openReplyWithBody = useCallback(
+    (mail: Mail, body: string) => replyTo(mail, false, body),
+    [replyTo],
   );
 
   const forwardMail = useCallback(
@@ -2292,7 +2407,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
   /**
    * Transforme des tâches extraites en SUGGESTIONS en attente de validation.
-   * Dédup par mail + intitulé : une même action ne devient jamais deux suggestions.
+   * Dédup par mail + intitulé, puis par proximité d'intitulé à échéance égale :
+   * une même action ne devient jamais deux suggestions.
    */
   const proposeTasks = useCallback(
     (proposed: SummaryTask[], byId: Map<string, Mail>, label: string) => {
@@ -2300,15 +2416,63 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         ...planning.suggestions.map((entry) => `${entry.mailId}:${normalize(entry.proposal)}`),
         ...planning.tasks.map((entry) => `${entry.mailId ?? ""}:${normalize(entry.title)}`),
       ]);
+      const existing: DuplicateCandidate[] = [
+        ...planning.suggestions.map((entry) => ({
+          mailId: entry.mailId,
+          title: entry.proposal,
+          when: entry.due,
+        })),
+        ...planning.tasks.map((entry) => ({
+          mailId: entry.mailId ?? "",
+          title: entry.title,
+          when: entry.due,
+        })),
+      ];
       for (const task of proposed) {
-        const key = `${task.mailId ?? ""}:${normalize(task.title)}`;
-        if (known.has(key)) continue;
-        known.add(key);
         const mail = task.mailId ? byId.get(task.mailId) : undefined;
-        planning.proposeSuggestion(summarySuggestion(task, mail, label));
+        const suggestion = summarySuggestion(task, mail, label);
+        const key = `${suggestion.mailId}:${normalize(suggestion.proposal)}`;
+        if (known.has(key)) continue;
+        const candidate = { mailId: suggestion.mailId, title: suggestion.proposal, when: suggestion.due };
+        if (nearDuplicate(existing, candidate)) continue;
+        known.add(key);
+        existing.push(candidate);
+        planning.proposeSuggestion(suggestion);
       }
     },
     [planning],
+  );
+
+  /** Une action du briefing : une suggestion à valider, passée par le même circuit de dédup. */
+  const proposeSummaryAction = useCallback(
+    (ref: SummaryRef) => {
+      const mail = inboxIndex.get(ref.mailId);
+      proposeTasks(
+        [
+          {
+            title: ref.reason.trim() || mail?.subject || "Action à traiter",
+            due: ref.due && ref.due !== "aucune" ? ref.due : "aucune",
+            from: mail?.name ?? "",
+            mailId: ref.mailId,
+          },
+        ],
+        inboxIndex,
+        summary?.period.label ?? "Résumé",
+      );
+    },
+    [inboxIndex, proposeTasks, summary?.period.label],
+  );
+
+  /** Contexte d'équipe fiable envoyé au modèle : la boîte visée, ou l'union des boîtes. */
+  const teamContextFor = useCallback(
+    (scope: string = ALL_ACCOUNTS): string => {
+      const accounts = scope === ALL_ACCOUNTS ? Object.keys(prefs.teamContext) : [scope];
+      return accounts
+        .map((id) => teamPromptBlock(teamContextOf(prefs, id)))
+        .filter(Boolean)
+        .join("\n\n");
+    },
+    [prefs.teamContext],
   );
 
 
@@ -2350,6 +2514,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           prefs.llm,
           inputs,
           now,
+          undefined,
+          teamContextFor(scope),
         );
         setSummary(result);
         if (result.mailCount > 0) summaryRun.current = runKey;
@@ -2382,13 +2548,15 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       prefs.summary,
       proposeTasks,
       summaryInputs,
+      teamContextFor,
     ],
   );
 
   /**
    * Propose des tâches extraites des mails de la fenêtre configurée. Le LLM n'est
-   * sollicité qu'une fois par contenu de fenêtre (signature window+mails), et
-   * jamais en démo : pas de réseau, pas de boucle, aucune création automatique.
+   * sollicité qu'une fois par contenu de fenêtre (signature window+mails, gardée
+   * en mémoire puis sur le poste) et jamais en démo : pas de réseau, pas de
+   * boucle, aucune création automatique.
    */
   const refreshTaskSuggestions = useCallback(async () => {
     const config = prefs.aiTasks;
@@ -2401,16 +2569,39 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     if (recent.length === 0) return;
     const signature = `${config.windowHours}:${recent.map((mail) => mail.id).join(",")}`;
     if (taskRun.current === signature) return;
+    if (aiRunDone("tasks", signature)) {
+      taskRun.current = signature;
+      return;
+    }
     taskRunning.current = true;
     try {
-      const proposed = await suggestTasks({ windowHours: config.windowHours }, prefs.llm, recent);
+      const proposed = await suggestTasks(
+        { windowHours: config.windowHours },
+        prefs.llm,
+        recent,
+        new Date(),
+        undefined,
+        teamContextFor(),
+      );
+      if (proposed === null) return;
       taskRun.current = signature;
+      markAiRun("tasks", signature);
       if (proposed.length === 0) return;
       proposeTasks(proposed, inboxIndex, "Suggestion IA");
     } finally {
       taskRunning.current = false;
     }
-  }, [aiMails, inboxIndex, mode, prefs.aiTasks, prefs.llm, prefs.planningEnabled, proposeTasks, summaryInputs]);
+  }, [
+    aiMails,
+    inboxIndex,
+    mode,
+    prefs.aiTasks,
+    prefs.llm,
+    prefs.planningEnabled,
+    proposeTasks,
+    summaryInputs,
+    teamContextFor,
+  ]);
 
   const refreshSummaryRef = useRef(refreshSummary);
   useEffect(() => {
@@ -2423,8 +2614,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   }, [refreshTaskSuggestions]);
 
   /**
-   * Dédup par mail + intitulé + jour : un même rendez-vous ne devient jamais
-   * deux suggestions, ni ne double un événement déjà présent à l'agenda.
+   * Dédup par mail + intitulé + jour, puis par proximité d'intitulé au même
+   * jour : un même rendez-vous ne devient jamais deux suggestions, ni ne double
+   * un événement déjà présent à l'agenda.
    */
   const proposeEvents = useCallback(
     (proposed: SummaryEvent[], byId: Map<string, Mail>, label: string) => {
@@ -2433,10 +2625,25 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         ...planning.suggestions.map((entry) => key(entry.mailId, entry.proposal, entry.date ?? "")),
         ...planning.events.map((entry) => key(entry.mailId ?? "", entry.title, entry.date)),
       ]);
+      const existing: DuplicateCandidate[] = [
+        ...planning.suggestions.map((entry) => ({
+          mailId: entry.mailId,
+          title: entry.proposal,
+          when: entry.date ?? "",
+        })),
+        ...planning.events.map((entry) => ({
+          mailId: entry.mailId ?? "",
+          title: entry.title,
+          when: entry.date,
+        })),
+      ];
       for (const event of proposed) {
         const dedup = key(event.mailId ?? "", event.title, event.date);
         if (known.has(dedup)) continue;
+        const candidate = { mailId: event.mailId ?? "", title: event.title, when: event.date };
+        if (nearDuplicate(existing, candidate)) continue;
         known.add(dedup);
+        existing.push(candidate);
         const mail = event.mailId ? byId.get(event.mailId) : undefined;
         planning.proposeSuggestion(eventSuggestion(event, mail, label));
       }
@@ -2460,10 +2667,23 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     if (recent.length === 0) return;
     const signature = `${config.windowHours}:${recent.map((mail) => mail.id).join(",")}`;
     if (eventRun.current === signature) return;
+    if (aiRunDone("events", signature)) {
+      eventRun.current = signature;
+      return;
+    }
     eventRunning.current = true;
     try {
-      const proposed = await suggestEvents({ windowHours: config.windowHours }, prefs.llm, recent);
+      const proposed = await suggestEvents(
+        { windowHours: config.windowHours },
+        prefs.llm,
+        recent,
+        new Date(),
+        undefined,
+        teamContextFor(),
+      );
+      if (proposed === null) return;
       eventRun.current = signature;
+      markAiRun("events", signature);
       if (proposed.length === 0) return;
       proposeEvents(proposed, inboxIndex, "Rendez-vous IA");
     } finally {
@@ -2478,7 +2698,82 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     prefs.llm,
     proposeEvents,
     summaryInputs,
+    teamContextFor,
   ]);
+
+  /**
+   * Analyse du mail ouvert, à la demande : rien ne tourne tant que
+   * l'utilisateur ne clique pas, et le cache de l'analyse évite un second
+   * passage sur un contenu inchangé. En démo, jamais de réseau.
+   */
+  const runAnalyse = useCallback(
+    async (mail: Mail, force = false) => {
+      if (analyseRunning.current) return;
+      analyseRunning.current = true;
+      const mailId = mail.id;
+      analyseRun.current = mailId;
+      setAnalyse({ mailId, status: "loading", result: null, error: null });
+      const storage = summaryStorage();
+      const llm = mode === "demo" ? EMPTY_LLM : prefs.llm;
+      try {
+        let body = mail.body.join("\n");
+        const source = mail.source;
+        if (!body.trim() && mode === "api" && source) {
+          const message = await mailApi.message(source.accountId, source.folderPath, source.uid);
+          body = messageToMail(message, folderRecords, mail.folder).body.join("\n");
+        }
+        const samples = mode === "demo" ? [] : await sentSamples(mail.account);
+        const style = await styleProfile(llm, mail.account, samples, storage);
+        const result = await analyseMail(
+          llm,
+          {
+            mailId,
+            from: mail.name,
+            subject: mail.subject,
+            body,
+            conversation: threadConversation(undefined, mails, mail.threadId),
+          },
+          events,
+          { team: teamContextFor(mail.account), style, force, storage },
+        );
+        if (analyseRun.current !== mailId) return;
+        if (result.source === "local" && llmReady(llm)) {
+          setAnalyse({
+            mailId,
+            status: "error",
+            result: null,
+            error: "Le modèle n'a rien renvoyé d'exploitable.",
+          });
+          return;
+        }
+        setAnalyse({ mailId, status: "ready", result, error: null });
+      } catch (error) {
+        if (analyseRun.current !== mailId) return;
+        setAnalyse({ mailId, status: "error", result: null, error: errorText(error) });
+      } finally {
+        analyseRunning.current = false;
+      }
+    },
+    [events, folderRecords, mails, mode, prefs.llm, teamContextFor],
+  );
+
+  /** Une tâche analysée suit le circuit de suggestions : validation humaine obligatoire. */
+  const acceptAnalyseTask = useCallback(
+    (task: AnalyseTask) => {
+      proposeTasks([task], inboxIndex, "Analyse IA");
+    },
+    [inboxIndex, proposeTasks],
+  );
+
+  const acceptAnalyseEvent = useCallback(
+    (event: SummaryEvent) => {
+      proposeEvents([event], inboxIndex, "Analyse IA");
+      notify("Rendez-vous proposé dans l'agenda");
+    },
+    [inboxIndex, notify, proposeEvents],
+  );
+
+  const closeAnalyse = useCallback(() => setAnalyse(null), []);
 
   const refreshEventSuggestionsRef = useRef(refreshEventSuggestions);
   useEffect(() => {
@@ -2584,6 +2879,12 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       summaryLoading,
       summaryMails,
       refreshSummary,
+      proposeSummaryAction,
+      analyse,
+      runAnalyse,
+      closeAnalyse,
+      acceptAnalyseTask,
+      acceptAnalyseEvent,
       events,
       selectedDate,
       openMail: resolvedOpenMail,
@@ -2629,6 +2930,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       detachClosed,
       replyTo,
       forwardMail,
+      openReplyWithBody,
       sendDraft,
       saveToDrafts,
       retryBackend,
@@ -2678,6 +2980,12 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       summaryLoading,
       summaryMails,
       refreshSummary,
+      proposeSummaryAction,
+      analyse,
+      runAnalyse,
+      closeAnalyse,
+      acceptAnalyseTask,
+      acceptAnalyseEvent,
       events,
       selectedDate,
       resolvedOpenMail,
@@ -2718,6 +3026,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       detachClosed,
       replyTo,
       forwardMail,
+      openReplyWithBody,
       sendDraft,
       saveToDrafts,
       retryBackend,

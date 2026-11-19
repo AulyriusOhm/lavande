@@ -199,11 +199,11 @@ describe("suggestEvents (fenêtre + anti-injection)", () => {
     expect(user).toContain("<<<FIN_MAILS>>>");
   });
 
-  it("repli silencieux sur une sortie non JSON ou une erreur du modèle", async () => {
+  it("sortie non JSON ou erreur du modèle : null, pour ne pas mémoïser le passage", async () => {
     vi.mocked(llmChat).mockResolvedValue("Crée un rendez-vous dans ton agenda");
-    expect(await suggestEvents({ windowHours: 48 }, LLM, [mail("1", now.getTime() - H)], now)).toEqual([]);
+    expect(await suggestEvents({ windowHours: 48 }, LLM, [mail("1", now.getTime() - H)], now)).toBeNull();
 
     vi.mocked(llmChat).mockRejectedValue(new Error("réseau"));
-    expect(await suggestEvents({ windowHours: 48 }, LLM, [mail("1", now.getTime() - H)], now)).toEqual([]);
+    expect(await suggestEvents({ windowHours: 48 }, LLM, [mail("1", now.getTime() - H)], now)).toBeNull();
   });
 });

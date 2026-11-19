@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
-import { Check, EyeOff, Mail, Plus, Sparkles, Trash2, X } from "lucide-react";
+import { Check, EyeOff, Mail, Plus, Sparkles, Trash2, UserRound, X } from "lucide-react";
 import type { Mail as MailType } from "@/lib/mail";
 import type { MailSuggestion, Task, TaskState } from "@/lib/tasks";
 import {
@@ -20,6 +20,7 @@ import { useEscapeLayer } from "@/desktop/escape";
 import { cn } from "@/lib/utils";
 import { Badge, DButton, DChip, DIconButton, PaneTitle, SectionLabel, TextArea, TextInput } from "@/desktop/ui";
 import { SyncBadge } from "@/components/sync-badge";
+import { TeamDatalist } from "@/components/team-datalist";
 import { BorderBeam } from "@/components/ui/border-beam";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { Avatar } from "@/components/ui/primitives";
@@ -36,6 +37,8 @@ const DUE_TONE: Record<Task["dueTone"], Tone> = {
 
 const LABEL = "block text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase";
 const FIELD = "mt-1.5";
+const FILTER_CHIP =
+  "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-bold transition-colors";
 
 type Selection = { kind: "task"; id: string } | { kind: "suggestion"; suggestion: MailSuggestion } | null;
 
@@ -51,8 +54,15 @@ export function DesktopPlanning({
   const [selection, setSelection] = useState<Selection>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<TaskState | null>(null);
+  const [assigneeFilter, setAssigneeFilter] = useState<string | null>(null);
 
   const openTasks = tasks.filter((task) => task.state !== "done").length;
+  const assignees = useMemo(
+    () => [...new Set(tasks.flatMap((task) => (task.assignee ? [task.assignee] : [])))],
+    [tasks],
+  );
+  const activeAssignee =
+    assigneeFilter !== null && assignees.includes(assigneeFilter) ? assigneeFilter : null;
   const taskSuggestions = suggestions.filter((suggestion) => suggestion.kind !== "event");
   const mailIndex = useMemo(() => new Map(mails.map((mail) => [mail.id, mail])), [mails]);
   const selectedTask = selection?.kind === "task" ? tasks.find((task) => task.id === selection.id) : undefined;
@@ -202,9 +212,47 @@ export function DesktopPlanning({
         </div>
       ) : null}
 
+      {assignees.length > 0 ? (
+        <div className="mt-3 flex shrink-0 flex-wrap items-center gap-1.5 px-5">
+          <button
+            type="button"
+            onClick={() => setAssigneeFilter(null)}
+            aria-pressed={activeAssignee === null}
+            className={cn(
+              FILTER_CHIP,
+              assigneeFilter === null
+                ? "bg-accent text-accent-contrast shadow-[0_6px_16px_-8px_var(--accent)]"
+                : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
+            )}
+          >
+            Tous
+          </button>
+          {assignees.map((name) => (
+            <button
+              key={name}
+              type="button"
+              data-testid={`assignee-filter-${name}`}
+              onClick={() => setAssigneeFilter(name)}
+              aria-pressed={activeAssignee === name}
+              className={cn(
+                FILTER_CHIP,
+                assigneeFilter === name
+                  ? "bg-accent text-accent-contrast shadow-[0_6px_16px_-8px_var(--accent)]"
+                  : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
+              )}
+            >
+              <UserRound className="size-2.5" strokeWidth={2.8} />
+              {name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       <div className="mt-4 grid min-h-0 flex-1 grid-cols-[repeat(5,minmax(220px,1fr))] gap-3.5 overflow-x-auto px-5 pb-2">
         {TASK_STATES.map((state) => {
-          const columnTasks = tasks.filter((task) => task.state === state.id);
+          const columnTasks = tasks.filter(
+            (task) => task.state === state.id && (activeAssignee === null || task.assignee === activeAssignee),
+          );
           const active = over === state.id;
           return (
             <section
@@ -396,6 +444,16 @@ function TaskCard({
               {doneCount}/{subtasks.length}
             </span>
           ) : null}
+          {task.assignee ? (
+            <span
+              data-testid="assignee-chip"
+              title={`Assigné à ${task.assignee}`}
+              className="ml-auto inline-flex min-w-0 items-center gap-1 rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent-ink"
+            >
+              <UserRound className="size-2.5 shrink-0" strokeWidth={2.8} />
+              <span className="truncate">{task.assignee}</span>
+            </span>
+          ) : null}
         </span>
       </button>
     </BlurFade>
@@ -521,6 +579,20 @@ function TaskDetail({
       <p className="mt-1.5 text-[10.5px] font-semibold text-ink-muted">
         {task.dueDate ? capitalizeFirst(formatDueDate(task.dueDate)) : "Aucune échéance"}
       </p>
+
+      <label className={cn(LABEL, "mt-4")} htmlFor="desk-task-assignee">
+        Assignée à
+      </label>
+      <TextInput
+        id="desk-task-assignee"
+        className={FIELD}
+        list="desk-team-members"
+        value={task.assignee ?? ""}
+        placeholder="Personne"
+        onChange={(event) => onPatch({ assignee: event.target.value || undefined })}
+        onBlur={() => onPatch({ assignee: task.assignee?.trim() || undefined })}
+      />
+      <TeamDatalist id="desk-team-members" />
 
       <label className={cn(LABEL, "mt-4")} htmlFor="desk-task-description">
         Description
@@ -689,6 +761,7 @@ function NewTaskForm({ onCreate, onClose }: { onCreate: (task: Task) => void; on
   const [description, setDescription] = useState("");
   const [state, setState] = useState<TaskState>("todo");
   const [dueDate, setDueDate] = useState(isoToday(1));
+  const [assignee, setAssignee] = useState("");
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -711,6 +784,7 @@ function NewTaskForm({ onCreate, onClose }: { onCreate: (task: Task) => void; on
       dueTone: dueDate ? dueToneFor(dueDate) : "none",
       dueDate: dueDate || undefined,
       description: description.trim() || undefined,
+      assignee: assignee.trim() || undefined,
     });
   };
 
@@ -770,6 +844,19 @@ function NewTaskForm({ onCreate, onClose }: { onCreate: (task: Task) => void; on
             {dueDate ? formatDueDate(dueDate) : "sans échéance"}
           </span>
         </div>
+
+        <label className={cn(LABEL, "mt-4")} htmlFor="new-task-assignee">
+          Assignée à
+        </label>
+        <TextInput
+          id="new-task-assignee"
+          className={FIELD}
+          list="new-task-team-members"
+          value={assignee}
+          placeholder="Personne"
+          onChange={(event) => setAssignee(event.target.value)}
+        />
+        <TeamDatalist id="new-task-team-members" />
 
         <p className={cn(LABEL, "mt-4")}>État</p>
         <div className="mt-1.5 flex flex-wrap gap-1.5">

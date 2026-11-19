@@ -3,6 +3,7 @@ import { Check } from "lucide-react";
 import type { Task, TaskState } from "@/lib/tasks";
 import { TASK_STATES, dueToneFor, formatDueDate, isoEndOfWeek, isoToday, sortTasks } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
+import { TeamDatalist } from "@/components/team-datalist";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 
 const SHORTCUTS = [
@@ -22,6 +23,7 @@ export function NewTaskSheet({
   const [description, setDescription] = useState("");
   const [state, setState] = useState<TaskState>("todo");
   const [dueDate, setDueDate] = useState(isoToday(0));
+  const [assignee, setAssignee] = useState("");
 
   const dueLabel = dueDate ? formatDueDate(dueDate) : "sans échéance";
 
@@ -36,6 +38,7 @@ export function NewTaskSheet({
       dueTone: dueDate ? dueToneFor(dueDate) : "none",
       dueDate: dueDate || undefined,
       description: description.trim() || undefined,
+      assignee: assignee.trim() || undefined,
     });
     onClose();
   };
@@ -129,6 +132,22 @@ export function NewTaskSheet({
         <p className="mt-1.5 text-[10.5px] font-semibold text-ink-muted">
           {dueDate ? `Échéance retenue : ${formatDueDate(dueDate)}` : "Aucune échéance"}
         </p>
+
+        <label
+          className="mt-4 block text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase"
+          htmlFor="task-assignee"
+        >
+          Assignée à
+        </label>
+        <input
+          id="task-assignee"
+          list="task-team-members"
+          value={assignee}
+          onChange={(event) => setAssignee(event.target.value)}
+          placeholder="Personne"
+          className="mt-1.5 w-full rounded-2xl border border-line bg-surface px-3.5 py-3 text-[13px] font-bold tracking-tight text-ink outline-none placeholder:font-semibold placeholder:text-ink-soft focus:border-accent-ring"
+        />
+        <TeamDatalist id="task-team-members" />
 
         <p className="mt-4 mb-2 text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">État</p>
         <div className="flex flex-wrap gap-1.5 pb-4">

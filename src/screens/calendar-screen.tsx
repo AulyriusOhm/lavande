@@ -238,7 +238,7 @@ export function CalendarScreen({
               : undefined;
           return (
             <BlurFade key={event.id} delay={0.05 * index} yOffset={10}>
-              <div className="flex gap-3">
+              <div className="flex gap-3" data-testid="calendar-event">
                 <div className="w-11 shrink-0 pt-1 text-right">
                   {event.start && (
                     <p className="text-[11.5px] font-bold whitespace-nowrap text-ink">{event.start}</p>

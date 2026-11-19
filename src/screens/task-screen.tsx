@@ -5,6 +5,7 @@ import { useMailStore } from "@/lib/store";
 import type { Task, TaskState } from "@/lib/tasks";
 import { TASK_STATES, dueToneFor, formatDueDate, stateMeta } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
+import { TeamDatalist } from "@/components/team-datalist";
 import { Avatar, SectionTitle } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { MeshGlow } from "@/components/ui/backdrops";
@@ -56,10 +57,16 @@ export function TaskScreen({
     title: task.title,
     description: task.description ?? "",
     dueDate: task.dueDate ?? "",
+    assignee: task.assignee ?? "",
   });
 
   const startEditing = () => {
-    setDraft({ title: task.title, description: task.description ?? "", dueDate: task.dueDate ?? "" });
+    setDraft({
+      title: task.title,
+      description: task.description ?? "",
+      dueDate: task.dueDate ?? "",
+      assignee: task.assignee ?? "",
+    });
     setDueEdited(false);
     setEditing(true);
   };
@@ -72,6 +79,7 @@ export function TaskScreen({
       ...task,
       title: draft.title.trim(),
       description: draft.description.trim() || undefined,
+      assignee: draft.assignee.trim() || undefined,
     };
     if (dueEdited) {
       next.due = draft.dueDate ? formatDueDate(draft.dueDate) : "sans échéance";
@@ -177,6 +185,19 @@ export function TaskScreen({
                 {task.dueDate ? ` (${formatDueDate(task.dueDate)})` : ""}
               </p>
             ) : null}
+
+            <label className={LABEL} htmlFor="task-edit-assignee">
+              Assignée à
+            </label>
+            <input
+              id="task-edit-assignee"
+              list="task-edit-team-members"
+              value={draft.assignee}
+              placeholder="Personne"
+              onChange={(event) => setDraft((current) => ({ ...current, assignee: event.target.value }))}
+              className={FIELD}
+            />
+            <TeamDatalist id="task-edit-team-members" />
 
             <label className={LABEL} htmlFor="task-edit-description">
               Description

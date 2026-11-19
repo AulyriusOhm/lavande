@@ -84,13 +84,16 @@ const THREADS = [
   apiThread(3, "Léa", "Devis Léa", BETA),
 ];
 
-const summaryPrompt = (system: string) => system.includes("résumé d'emails");
+const summaryPrompt = (system: string) => system.includes("briefing d'emails");
 
 const reply = (body: unknown) =>
   ({ ok: true, status: 200, statusText: "", json: async () => body }) as unknown as Response;
 
 const SUMMARY_JSON = {
-  resume: "Camille attend un retour sur la v3.",
+  accroche: "Camille attend un retour sur la v3.",
+  actions: [{ mailId: `${ALPHA}:INBOX:1`, raison: "Répondre à Camille sur la v3", echeance: "2026-11-20" }],
+  infos: [{ mailId: `${ALPHA}:INBOX:2`, raison: "Accès serveur" }],
+  notifications: [],
   taches: [{ titre: "Répondre à Camille", echeance: "2026-11-20", de: "Camille", mailId: `${ALPHA}:INBOX:1` }],
 };
 
@@ -139,9 +142,9 @@ const seedPrefs = () =>
     }),
   );
 
-const cachedText = () => {
+const cachedResult = () => {
   const raw = window.localStorage.getItem(SUMMARY_CACHE_KEY);
-  return raw ? (JSON.parse(raw) as Record<string, { result: { text: string } }>) : {};
+  return raw ? (JSON.parse(raw) as Record<string, { result: { headline: string } }>) : {};
 };
 
 beforeEach(() => {
@@ -171,7 +174,7 @@ describe("résumé IA · portée de la boîte sélectionnée", () => {
     await waitFor(() => expect(result.current.summary?.mailCount).toBe(2), { timeout: 3000 });
     expect(summaryCalls(prompts).at(-1)?.user).not.toContain("Devis Léa");
     expect(summaryCalls(prompts).at(-1)?.user).toContain("Maquettes v3");
-    expect(Object.keys(cachedText()).some((key) => key.startsWith(`${ALPHA}:${currentPeriod(DEFAULT_SUMMARY).id}:`))).toBe(
+    expect(Object.keys(cachedResult()).some((key) => key.startsWith(`${ALPHA}:${currentPeriod(DEFAULT_SUMMARY).id}:`))).toBe(
       true,
     );
   });
@@ -220,15 +223,40 @@ describe("résumé IA · cache du passage", () => {
     const first = mount();
 
     await waitFor(() => expect(first.result.current.summary?.source).toBe("llm"), { timeout: 3000 });
-    const text = first.result.current.summary?.text;
+    const headline = first.result.current.summary?.headline;
     expect(summaryCalls(prompts)).toHaveLength(1);
     first.unmount();
 
     const second = mount();
 
-    await waitFor(() => expect(second.result.current.summary?.text).toBe(text), { timeout: 3000 });
+    await waitFor(() => expect(second.result.current.summary?.headline).toBe(headline), { timeout: 3000 });
+    expect(second.result.current.summary?.groups.actions).toHaveLength(1);
     expect(summaryCalls(prompts)).toHaveLength(1);
     expect(second.result.current.summary?.mailCount).toBe(THREADS.length);
+  });
+
+  it("joint le contexte d'équipe fiable au prompt du résumé", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({
+        llm: LLM,
+        summary: { ...DEFAULT_SUMMARY, llmConsent: true },
+        aiTasks: { enabled: false },
+        teamContext: {
+          [ALPHA]: { identity: "Camille", role: "Produit", context: "", members: [{ name: "Marc", scope: "Dev" }] },
+        },
+      }),
+    );
+    const prompts = mockBackend();
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.summary?.source).toBe("llm"), { timeout: 3000 });
+
+    const system = summaryCalls(prompts).at(-1)?.system ?? "";
+    expect(system).toContain("CONTEXTE UTILISATEUR");
+    expect(system).toContain("Marc — Dev");
+    expect(system.indexOf("NON FIABLE")).toBeLessThan(system.indexOf("CONTEXTE UTILISATEUR"));
   });
 
   it("ne relance le modèle que sur « Régénérer »", async () => {
@@ -253,7 +281,7 @@ describe("résumé IA · cache du passage", () => {
 
     await waitFor(() => expect(result.current.summary).not.toBeNull());
     expect(result.current.summary?.source).toBe("fallback");
-    expect(cachedText()).toEqual({});
+    expect(cachedResult()).toEqual({});
     expect(result.current.summary?.mailIds.length).toBeGreaterThan(0);
   });
 });

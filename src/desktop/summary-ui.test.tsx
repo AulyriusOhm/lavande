@@ -1,13 +1,17 @@
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { DesktopInbox } from "@/desktop/inbox";
+import { DesktopInbox, MorningSummary } from "@/desktop/inbox";
 import { DesktopSettings } from "@/desktop/settings";
 import { MailStoreProvider } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { ThemeProvider } from "@/lib/theme";
 import { createMemoryStorage } from "@/lib/sync/storage";
+import { MAILS } from "@/lib/mail";
+import type { Mail } from "@/lib/mail";
+import type { SummaryResult } from "@/lib/summary";
+import { isoToday } from "@/lib/tasks";
 
 vi.stubEnv("VITE_MAIL_BACKEND", "demo");
 
@@ -30,34 +34,175 @@ function mount(children: ReactNode) {
   );
 }
 
+const byId = (id: string): Mail => {
+  const mail = MAILS.find((entry) => entry.id === id);
+  if (!mail) throw new Error(`mail de démo ${id} introuvable`);
+  return mail;
+};
+
+/** Mails indexés par le briefing de test : trois groupes, deux pièces jointes. */
+const BRIEFING_MAILS: Mail[] = ["3", "8", "1", "4", "2", "6", "7"].map(byId);
+
+const GENERATED_AT = new Date();
+GENERATED_AT.setHours(8, 12, 0, 0);
+
+const briefing = (overrides: Partial<SummaryResult> = {}): SummaryResult => ({
+  period: { id: "morning", label: "Résumé du matin" },
+  headline: "7 mails sur 24 h · 2 actions attendues, 2 pour info, 3 notifications.",
+  groups: {
+    actions: [
+      { mailId: "3", reason: "Renvoyer l'avenant signé", due: isoToday(0) },
+      { mailId: "8", reason: "Régler la facture OVH", due: "aucune" },
+    ],
+    infos: [{ mailId: "1", reason: "" }, { mailId: "4", reason: "" }],
+    notifications: [{ mailId: "2", reason: "" }, { mailId: "6", reason: "" }, { mailId: "7", reason: "" }],
+  },
+  tasks: [],
+  mailCount: 7,
+  generatedAt: GENERATED_AT.getTime(),
+  source: "llm",
+  mailIds: BRIEFING_MAILS.map((mail) => mail.id),
+  ...overrides,
+});
+
+function renderSummary(
+  summary: SummaryResult,
+  handlers: { onOpen?: (id: string) => void; onReply?: (mail: Mail) => void; onPropose?: (ref: { mailId: string; reason: string; due?: string }) => void } = {},
+) {
+  return render(
+    <MorningSummary
+      open
+      unread={12}
+      attachments={2}
+      encrypted={1}
+      demo={false}
+      summary={summary}
+      mails={BRIEFING_MAILS}
+      loading={false}
+      onToggle={() => {}}
+      onOpen={handlers.onOpen ?? (() => {})}
+      onRefresh={() => {}}
+      onReply={handlers.onReply ?? (() => {})}
+      onPropose={handlers.onPropose ?? (() => {})}
+    />,
+  );
+}
+
 beforeEach(() => {
   window.localStorage.clear();
   vi.unstubAllGlobals();
 });
 
-describe("Boîte de réception · résumé périodique", () => {
-  it("affiche le résumé de la plage courante et son origine", async () => {
+describe("Résumé du matin · briefing structuré", () => {
+  it("affiche l'accroche, les groupes comptés et le pied de génération", async () => {
     stubBackend();
     mount(<DesktopInbox onOpenSearch={() => {}} />);
 
     const card = await screen.findByTestId("morning-summary");
+    await waitFor(() => expect(within(card).getByTestId("summary-attachments")).toBeTruthy());
+
     expect(within(card).getByText(/^Résumé du (matin|midi|soir)$/)).toBeTruthy();
     expect(within(card).getByTestId("summary-source").textContent).toBe("local");
-    expect(within(card).getByText(/période/)).toBeTruthy();
-    expect(within(card).getByLabelText("Régénérer le résumé")).toBeTruthy();
+    expect(within(card).getByText(/sur la période/)).toBeTruthy();
+    expect(within(card).getByText("Pour info")).toBeTruthy();
+    expect(card.textContent).toMatch(/Généré à \d{2}:\d{2}/);
+    expect(card.textContent).toContain("local");
+    expect(card.textContent).toContain("mails analysés");
   });
 
-  it("affiche les pièces jointes des mails résumés", async () => {
+  it("affiche les pièces jointes de chaque mail résumé", async () => {
     stubBackend();
     mount(<DesktopInbox onOpenSearch={() => {}} />);
 
     const card = await screen.findByTestId("morning-summary");
-
     await waitFor(() => expect(within(card).getByTestId("summary-attachments")).toBeTruthy());
+
     const chips = within(card).getByTestId("summary-attachments");
     expect(chips.textContent).toContain("inbox-v3.fig");
     expect(chips.textContent).toContain("4,2 Mo");
-    expect(chips.querySelectorAll("span[title]").length).toBeGreaterThan(0);
+    expect(chips.textContent).toContain("specs-mobile.pdf");
+    expect(chips.querySelectorAll("button[title]").length).toBeGreaterThan(0);
+  });
+
+  it("rend les actions, les informations et les notifications repliées", () => {
+    renderSummary(briefing());
+    const card = screen.getByTestId("morning-summary");
+
+    expect(within(card).getByText("À traiter")).toBeTruthy();
+    expect(within(card).getByText("Pour info")).toBeTruthy();
+    expect(within(card).getByText("Renvoyer l'avenant signé")).toBeTruthy();
+    expect(within(card).getByText("Régler la facture OVH")).toBeTruthy();
+    expect(within(card).getByRole("button", { name: /Notifications & listes · 3/ })).toBeTruthy();
+    expect(within(card).queryByText("[lavande] Rust backend: 3 pull requests")).toBeNull();
+    expect(card.textContent).toContain("Généré à 08:12");
+    expect(card.textContent).toContain("mis en cache");
+    expect(card.textContent).toContain("7 mails analysés");
+  });
+
+  it("déplie puis replie les notifications et listes", () => {
+    renderSummary(briefing());
+    const card = screen.getByTestId("morning-summary");
+    const fold = within(card).getByRole("button", { name: /Notifications & listes · 3/ });
+
+    fireEvent.click(fold);
+    expect(within(card).getByText("[lavande] Rust backend: 3 pull requests")).toBeTruthy();
+    expect(within(card).getByText("Ta playlist « Focus lavande » a été mise à jour")).toBeTruthy();
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(fold);
+    expect(within(card).queryByText("[lavande] Rust backend: 3 pull requests")).toBeNull();
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("ouvre le mail depuis l'objet, une pièce jointe ou « Voir le mail »", () => {
+    const onOpen = vi.fn();
+    renderSummary(briefing(), { onOpen });
+    const card = screen.getByTestId("morning-summary");
+
+    fireEvent.click(within(card).getByRole("button", { name: "Devis signé — retour de ma part" }));
+    const chip = card.querySelector<HTMLButtonElement>('button[title="inbox-v3.fig · 4,2 Mo"]');
+    fireEvent.click(chip as HTMLButtonElement);
+    const seeMail = within(card)
+      .getAllByRole("button", { name: "Voir le mail" })
+      .at(0) as HTMLButtonElement;
+    fireEvent.click(seeMail);
+
+    expect(onOpen.mock.calls.map((call) => call[0])).toEqual(["3", "1", "3"]);
+  });
+
+  it("propose la ligne en planification et répond au mail", () => {
+    const onPropose = vi.fn();
+    const onReply = vi.fn();
+    renderSummary(briefing(), { onPropose, onReply });
+    const card = screen.getByTestId("morning-summary");
+
+    fireEvent.click(within(card).getAllByRole("button", { name: "Planification" })[0]);
+    fireEvent.click(within(card).getAllByRole("button", { name: "Répondre" })[1]);
+
+    expect(onPropose).toHaveBeenCalledWith({ mailId: "3", reason: "Renvoyer l'avenant signé", due: isoToday(0) });
+    expect(onReply).toHaveBeenCalledTimes(1);
+    expect((onReply.mock.calls[0][0] as Mail).id).toBe("8");
+  });
+
+  it("ignore les lignes dont le mail a disparu de la boîte", () => {
+    renderSummary(
+      briefing({
+        groups: {
+          actions: [
+            { mailId: "3", reason: "Renvoyer l'avenant signé", due: "aucune" },
+            { mailId: "disparu", reason: "Mail effacé", due: "aucune" },
+          ],
+          infos: [{ mailId: "1", reason: "" }],
+          notifications: [],
+        },
+      }),
+    );
+    const card = screen.getByTestId("morning-summary");
+
+    expect(within(card).getByText("Renvoyer l'avenant signé")).toBeTruthy();
+    expect(within(card).queryByText("Mail effacé")).toBeNull();
+    expect(within(card).getByText("À traiter").parentElement?.textContent).toContain("1");
+    expect(within(card).queryByRole("button", { name: /Notifications & listes/ })).toBeNull();
   });
 
   it("retombe sur les compteurs quand les résumés sont désactivés", async () => {

@@ -9,10 +9,20 @@ import { createMemoryStorage } from "@/lib/sync/storage";
 
 vi.stubEnv("VITE_MAIL_BACKEND", "demo");
 
-const GROUPS = ["Comptes", "Apparence", "Synchronisation", "Sécurité & PGP", "IA", "MCP", "Application"];
+const GROUPS = [
+  "Comptes",
+  "Moi et mon équipe",
+  "Apparence",
+  "Synchronisation",
+  "Sécurité & PGP",
+  "IA",
+  "MCP",
+  "Application",
+];
 
 const GROUP_SECTIONS: Record<string, string[]> = {
   Comptes: ["Comptes", "Périmètre de synchronisation"],
+  "Moi et mon équipe": ["Moi et mon équipe"],
   Apparence: ["Couleur d'accent", "Modules", "Apparence"],
   Synchronisation: ["Synchronisation", "Calendriers", "Sources", "Notifications", "Notifications par compte"],
   "Sécurité & PGP": ["Sécurité"],
@@ -59,7 +69,7 @@ afterEach(() => {
 });
 
 describe("Réglages mobile · navigation par groupes", () => {
-  it("ouvre sur la liste des sept groupes, dans l'ordre", () => {
+  it("ouvre sur la liste des huit groupes, dans l'ordre", () => {
     mount();
 
     expect(groupRows()).toEqual(GROUPS);
@@ -67,7 +77,7 @@ describe("Réglages mobile · navigation par groupes", () => {
     expect(screen.queryByRole("heading", { name: "Gestes des mails" })).toBeNull();
   });
 
-  it("sous VITE_PLATFORM=android : six groupes, MCP retiré", () => {
+  it("sous VITE_PLATFORM=android : sept groupes, MCP retiré", () => {
     vi.stubEnv("VITE_PLATFORM", "android");
     mount();
 

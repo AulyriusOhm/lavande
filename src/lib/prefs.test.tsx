@@ -14,6 +14,7 @@ import {
   asPerimeters,
   asPgpAccounts,
   asSync,
+  asTeamContext,
   asThreadView,
   perimeterOf,
   storedPerimeters,
@@ -24,6 +25,13 @@ import {
 } from "@/lib/prefs";
 import type { NotificationPrefs } from "@/lib/prefs";
 import { DEFAULT_SUMMARY } from "@/lib/summary";
+import {
+  EMPTY_TEAM_CONTEXT,
+  TEAM_MEMBERS_MAX,
+  allTeamMembers,
+  teamContextOf,
+  teamPromptBlock,
+} from "@/lib/team";
 
 const mount = () =>
   renderHook(() => usePrefs(), {
@@ -643,5 +651,115 @@ describe("préférences · affichage des conversations", () => {
     expect(stored().threadView).toBe("inline");
     expect(result.current.summary).toEqual(DEFAULT_SUMMARY);
     expect(result.current.notifications).toEqual(DEFAULT_NOTIFICATIONS);
+  });
+});
+
+describe("préférences · moi et mon équipe", () => {
+  const FICHE = {
+    identity: "Roman",
+    role: "DSI",
+    context: "ENSAG",
+    members: [{ name: "Camille", scope: "Ateliers" }],
+  };
+
+  it("démarre sans fiche", () => {
+    const { result } = mount();
+
+    expect(result.current.teamContext).toEqual({});
+    expect(teamContextOf(result.current, "perso")).toEqual(EMPTY_TEAM_CONTEXT);
+  });
+
+  it("relit une fiche par compte en ignorant le bruit", () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({
+        teamContext: {
+          perso: {
+            identity: "  Roman  ",
+            role: "DSI",
+            context: "ENSAG",
+            members: [{ name: " Camille ", scope: "Ateliers" }, { name: "   " }, 12, { scope: "sans nom" }],
+          },
+          pro: "oui",
+          muet: {},
+        },
+      }),
+    );
+    const { result } = mount();
+
+    expect(result.current.teamContext).toEqual({ perso: FICHE, muet: EMPTY_TEAM_CONTEXT });
+    expect(teamContextOf(result.current, "pro")).toEqual(EMPTY_TEAM_CONTEXT);
+  });
+
+  it("expose un parseur tolérant qui plafonne les membres", () => {
+    expect(asTeamContext(undefined)).toEqual({});
+    expect(asTeamContext("tout")).toEqual({});
+    expect(asTeamContext({ a: null, b: 4 })).toEqual({});
+    expect(asTeamContext({ a: { identity: 7, members: "x" } })).toEqual({ a: EMPTY_TEAM_CONTEXT });
+
+    const many = { members: Array.from({ length: 20 }, (_, index) => ({ name: `Membre ${index}` })) };
+    expect(asTeamContext({ a: many }).a.members).toHaveLength(TEAM_MEMBERS_MAX);
+  });
+
+  it("enregistre une fiche par compte sans toucher aux autres", () => {
+    const { result } = mount();
+
+    act(() => result.current.setTeamContext("perso", FICHE));
+
+    expect(result.current.teamContext).toEqual({ perso: FICHE });
+    expect(stored().teamContext).toEqual({ perso: FICHE });
+
+    act(() => result.current.setTeamContext("pro", { ...EMPTY_TEAM_CONTEXT, identity: "Roman (Studio)" }));
+
+    expect(teamContextOf(result.current, "perso")).toEqual(FICHE);
+    expect(teamContextOf(result.current, "pro").identity).toBe("Roman (Studio)");
+    expect(stored().teamContext).toEqual({ perso: FICHE, pro: { ...EMPTY_TEAM_CONTEXT, identity: "Roman (Studio)" } });
+  });
+
+  it("compose un bloc de prompt fiable, vide quand la fiche est vide", () => {
+    expect(teamPromptBlock(EMPTY_TEAM_CONTEXT)).toBe("");
+    expect(teamPromptBlock({ ...EMPTY_TEAM_CONTEXT, identity: "   " })).toBe("");
+
+    const block = teamPromptBlock({
+      identity: "Roman",
+      role: "DSI",
+      context: "ENSAG",
+      members: [{ name: "Camille", scope: "Ateliers" }, { name: "Noé", scope: "" }],
+    });
+
+    expect(block.split("\n")).toEqual([
+      "CONTEXTE UTILISATEUR (fiable, fourni par l'utilisateur)",
+      "Identité : Roman",
+      "Rôle : DSI",
+      "Contexte : ENSAG",
+      "Équipe :",
+      "- Camille — Ateliers",
+      "- Noé",
+    ]);
+    expect(teamPromptBlock({ identity: "Roman", role: "", context: "", members: [] })).toBe(
+      "CONTEXTE UTILISATEUR (fiable, fourni par l'utilisateur)\nIdentité : Roman",
+    );
+  });
+
+  it("réunit les membres de toutes les boîtes, une fois par nom", () => {
+    const { result } = mount();
+
+    act(() =>
+      result.current.setTeamContext("perso", {
+        ...EMPTY_TEAM_CONTEXT,
+        members: [{ name: "Camille", scope: "Ateliers" }, { name: "Noé", scope: "Stage" }],
+      }),
+    );
+    act(() =>
+      result.current.setTeamContext("pro", {
+        ...EMPTY_TEAM_CONTEXT,
+        members: [{ name: "camille", scope: "Doublon" }],
+      }),
+    );
+
+    expect(allTeamMembers(result.current)).toEqual([
+      { name: "Camille", scope: "Ateliers" },
+      { name: "Noé", scope: "Stage" },
+    ]);
   });
 });

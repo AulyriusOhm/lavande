@@ -16,6 +16,7 @@ export type Task = {
   description?: string;
   subtasks?: Subtask[];
   mailId?: string;
+  assignee?: string;
 };
 
 export const TASK_STATES: {
@@ -161,6 +162,8 @@ export type MailSuggestion = {
   location?: string;
   /** Suggestion produite par l'IA (résumé LLM ou extraction de tâches). */
   ai?: boolean;
+  /** Personne à qui la tâche issue de cette suggestion revient. */
+  assignee?: string;
   /** Horodatage (ms) du mail source : base du filtre de fenêtre des suggestions IA. */
   timestamp?: number;
 };
@@ -270,6 +273,7 @@ export function taskFromSuggestion(suggestion: MailSuggestion, id: string): Task
     dueTone: suggestion.dueTone,
     description: suggestion.description,
     mailId: suggestion.mailId,
+    ...(suggestion.assignee ? { assignee: suggestion.assignee } : {}),
   };
 }
 

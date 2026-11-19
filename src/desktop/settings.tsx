@@ -79,6 +79,13 @@ import {
   THREAD_VIEWS,
   usePrefs,
 } from "@/lib/prefs";
+import {
+  EMPTY_TEAM_CONTEXT,
+  TEAM_MEMBERS_MAX,
+  teamContextOf,
+  type AccountTeamContext,
+  type TeamMember,
+} from "@/lib/team";
 import { requestNotifications } from "@/lib/notify";
 import { APP_VERSION, phaseLabel, useUpdater } from "@/lib/updater";
 import { llmModels, llmProbe, llmReady } from "@/lib/llm";
@@ -104,6 +111,7 @@ import {
   PaneTitle,
   SectionLabel,
   Surface,
+  TextArea,
   TextInput,
 } from "@/desktop/ui";
 
@@ -124,6 +132,11 @@ const SECTION_GROUPS = [
       { id: "comptes", label: "Comptes" },
       { id: "signatures", label: "Signatures" },
     ],
+  },
+  {
+    id: "moi-equipe",
+    label: "Moi et mon équipe",
+    sections: [{ id: "moi-equipe", label: "Moi et mon équipe" }],
   },
   {
     id: "apparence",
@@ -856,6 +869,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     setMcpAlwaysAllow,
     resetMcpAllowances,
     signatures,
+    teamContext,
+    setTeamContext,
     llm,
     setLlm,
     aiReplyEnabled,
@@ -876,6 +891,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   const [hex, setHex] = useState(accent);
   const [openServer, setOpenServer] = useState<string | null>(null);
   const [signatureAccount, setSignatureAccount] = useState<string | null>(null);
+  const [teamAccount, setTeamAccount] = useState<string | null>(null);
   const [pgpAccount, setPgpAccount] = useState<string | null>(null);
   const [notificationAccount, setNotificationAccount] = useState<string | null>(null);
   const [generateForm, setGenerateForm] = useState(false);
@@ -920,6 +936,21 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   const notificationTarget = accounts.find((item) => item.id === notificationAccount) ?? accounts[0] ?? null;
   const signatureTarget = accounts.find((item) => item.id === signatureAccount) ?? accounts[0] ?? null;
   const signedAccounts = accounts.filter((item) => activeSignature(signatures, item.id)).length;
+  const teamTarget = accounts.find((item) => item.id === teamAccount) ?? accounts[0] ?? null;
+  const team = teamTarget ? teamContextOf({ teamContext }, teamTarget.id) : EMPTY_TEAM_CONTEXT;
+  const updateTeam = (patch: Partial<AccountTeamContext>) => {
+    if (!teamTarget) return;
+    setTeamContext(teamTarget.id, { ...team, ...patch });
+  };
+  const patchMember = (index: number, patch: Partial<TeamMember>) =>
+    updateTeam({
+      members: team.members.map((member, position) =>
+        position === index ? { ...member, ...patch } : member,
+      ),
+    });
+  const addMember = () => updateTeam({ members: [...team.members, { name: "", scope: "" }] });
+  const removeMember = (index: number) =>
+    updateTeam({ members: team.members.filter((_, position) => position !== index) });
   const pgpSettings = { pgpEncrypt, pgpSign, pgpAccounts };
   const pgpTarget = accounts.find((item) => item.id === pgpAccount) ?? accounts[0] ?? null;
   const pgpEntry = pgpTarget ? accountPgp(pgpSettings, pgpTarget.id) : null;
@@ -1286,6 +1317,113 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                     <p className="text-[12.5px] font-bold text-ink">Aucun compte</p>
                     <p className="mt-0.5 text-[11.5px] font-medium text-ink-muted">
                       Ajoute un compte pour lui donner sa propre signature.
+                    </p>
+                  </Surface>
+                )}
+              </Block>
+
+              <Block id="moi-equipe" label="Moi et mon équipe" hint="identité, rôle, équipe par boîte">
+                {teamTarget ? (
+                  <BlurFade delay={0.04}>
+                    <div className="mb-2.5 flex flex-wrap items-center gap-1.5">
+                      {accounts.map((item) => (
+                        <DChip
+                          key={item.id}
+                          active={teamTarget.id === item.id}
+                          onClick={() => setTeamAccount(item.id)}
+                        >
+                          <span className="size-2 rounded-full" style={{ backgroundColor: item.color }} />
+                          {item.label}
+                        </DChip>
+                      ))}
+                    </div>
+                    <Surface className="space-y-2.5 p-3.5">
+                      <div className="grid gap-2.5 md:grid-cols-2">
+                        <label className="grid gap-1">
+                          <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                            Votre nom
+                          </span>
+                          <TextInput
+                            aria-label="Votre nom"
+                            placeholder="Roman FELDEN"
+                            value={team.identity}
+                            onChange={(event) => updateTeam({ identity: event.target.value })}
+                          />
+                        </label>
+                        <label className="grid gap-1">
+                          <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                            Votre rôle
+                          </span>
+                          <TextInput
+                            aria-label="Votre rôle"
+                            placeholder="DSI"
+                            value={team.role}
+                            onChange={(event) => updateTeam({ role: event.target.value })}
+                          />
+                        </label>
+                      </div>
+                      <label className="grid gap-1">
+                        <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                          Contexte de la boîte
+                        </span>
+                        <TextArea
+                          aria-label="Contexte de la boîte"
+                          rows={3}
+                          placeholder="Je suis Roman FELDEN, DSI de l'ENSAG…"
+                          value={team.context}
+                          onChange={(event) => updateTeam({ context: event.target.value })}
+                        />
+                      </label>
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                            Équipe
+                          </span>
+                          <DButton
+                            variant="ghost"
+                            size="sm"
+                            disabled={team.members.length >= TEAM_MEMBERS_MAX}
+                            onClick={addMember}
+                          >
+                            <Plus className="size-3.5" />
+                            Ajouter un membre
+                          </DButton>
+                        </div>
+                        {team.members.map((member, index) => (
+                          <div key={index} className="flex items-center gap-1.5">
+                            <TextInput
+                              aria-label={`Nom du membre ${index + 1}`}
+                              placeholder="Camille"
+                              value={member.name}
+                              onChange={(event) => patchMember(index, { name: event.target.value })}
+                            />
+                            <TextInput
+                              aria-label={`Périmètre du membre ${index + 1}`}
+                              placeholder="Ateliers, planning"
+                              value={member.scope}
+                              onChange={(event) => patchMember(index, { scope: event.target.value })}
+                            />
+                            <DButton
+                              variant="plain"
+                              size="sm"
+                              aria-label={`Retirer le membre ${index + 1}`}
+                              onClick={() => removeMember(index)}
+                            >
+                              <Trash2 className="size-3.5" />
+                            </DButton>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-[11.5px] leading-relaxed font-medium text-ink-muted">
+                        L'assistant reçoit cette fiche comme contexte fiable, en dehors des mails.
+                      </p>
+                    </Surface>
+                  </BlurFade>
+                ) : (
+                  <Surface className="p-4">
+                    <p className="text-[12.5px] font-bold text-ink">Aucun compte</p>
+                    <p className="mt-0.5 text-[11.5px] font-medium text-ink-muted">
+                      Ajoute un compte pour lui donner sa propre fiche.
                     </p>
                   </Surface>
                 )}

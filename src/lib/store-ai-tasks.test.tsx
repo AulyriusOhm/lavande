@@ -6,6 +6,7 @@ import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { DEFAULT_SUMMARY } from "@/lib/summary";
+import { formatDueDate, isoToday } from "@/lib/tasks";
 import { LOCAL_SCHEMA_VERSION, docKey, type Doc } from "@/lib/sync/merge";
 import { createDevice, createMemoryStorage, emptyState, type SyncStorage } from "@/lib/sync/storage";
 
@@ -81,15 +82,17 @@ const apiThread = (
 const RECEIVED = new Date(Date.now() - H).toISOString();
 const OLD = new Date(Date.now() - 72 * H).toISOString();
 const MAIL_ID = `${ALPHA}:INBOX:1`;
+const DUE_ISO = isoToday(4);
+const DUE_LABEL = formatDueDate(DUE_ISO);
 
 const TASKS_JSON = {
-  taches: [{ titre: "Envoyer le compte rendu", echeance: "2026-11-20", de: "Camille", mailId: MAIL_ID }],
+  taches: [{ titre: "Envoyer le compte rendu", echeance: DUE_ISO, de: "Camille", mailId: MAIL_ID }],
 };
 
 const reply = (body: unknown) =>
   ({ ok: true, status: 200, statusText: "", json: async () => body }) as unknown as Response;
 
-function mockBackend(threads: ApiThread[], tasksJson: unknown = TASKS_JSON) {
+function mockBackend(threads: ApiThread[], tasksJson: unknown = TASKS_JSON, failChat = false) {
   const llmCalls: { system: string; user: string }[] = [];
   const accountIds = threads.length > 0 ? [...new Set(threads.map((thread) => thread.account_id))] : [ALPHA];
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -104,6 +107,7 @@ function mockBackend(threads: ApiThread[], tasksJson: unknown = TASKS_JSON) {
         system: body.messages?.[0]?.content ?? "",
         user: body.messages?.[1]?.content ?? "",
       });
+      if (failChat) throw new Error("réseau");
       return reply({ choices: [{ message: { content: JSON.stringify(tasksJson) } }] });
     }
     if (path.endsWith("/api/accounts")) return reply(accountIds.map((accountId) => apiAccount(accountId)));
@@ -177,9 +181,9 @@ describe("suggestions de tâches IA · fenêtre des 48 h", () => {
 
     const proposal = result.current.suggestions.find((entry) => entry.proposal === "Envoyer le compte rendu");
     expect(proposal?.mailId).toBe(MAIL_ID);
-    expect(proposal?.due).toBe("ven 20 nov");
+    expect(proposal?.due).toBe(DUE_LABEL);
     expect(proposal?.dueTone).toBe("soft");
-    expect(proposal?.description).toBe("Suggestion IA · échéance ven 20 nov");
+    expect(proposal?.description).toBe(`Suggestion IA · échéance ${DUE_LABEL}`);
     expect(proposal?.timestamp).toBe(Date.parse(RECEIVED));
     expect(proposal?.ai).toBe(true);
     expect(proposal?.account).toBe(ALPHA);
@@ -248,6 +252,82 @@ describe("suggestions de tâches IA · fenêtre des 48 h", () => {
 
     expect(llmCalls).toHaveLength(0);
     expect(result.current.suggestions).toHaveLength(0);
+  });
+});
+
+describe("suggestions de tâches IA · dédup et mémoire des passages", () => {
+  it("ne crée qu'une suggestion pour une action reformulée du même mail", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: true, windowHours: 48 });
+    mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)], {
+      taches: [
+        { titre: "Envoyer le compte rendu", echeance: DUE_ISO, de: "Camille", mailId: MAIL_ID },
+        { titre: "Compte rendu à envoyer", echeance: DUE_ISO, de: "Camille", mailId: MAIL_ID },
+      ],
+    });
+    const { result } = mount();
+
+    await waitFor(
+      () => expect(result.current.suggestions.some((entry) => entry.proposal === "Envoyer le compte rendu")).toBe(true),
+      { timeout: 3000 },
+    );
+    await new Promise((resolve) => window.setTimeout(resolve, 30));
+
+    expect(result.current.suggestions).toHaveLength(1);
+  });
+
+  it("un passage en échec n'est pas mémoïsé : nouvelle tentative au remontage", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: true, windowHours: 48 });
+    const firstCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)], TASKS_JSON, true);
+    const first = mount();
+    await waitFor(() => expect(firstCalls).toHaveLength(1), { timeout: 3000 });
+    expect(window.localStorage.getItem("lavande.ai.runs.v1")).toBeNull();
+    first.unmount();
+    const secondCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)], TASKS_JSON, true);
+    mount();
+    await waitFor(() => expect(secondCalls).toHaveLength(1), { timeout: 3000 });
+  });
+
+  it("ignore une mémoire de passages corrompue et rappelle le modèle", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: true, windowHours: 48 });
+    window.localStorage.setItem("lavande.ai.runs.v1", "{pas du json");
+    const llmCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)]);
+    const { result } = mount();
+
+    await waitFor(
+      () => expect(result.current.suggestions.some((entry) => entry.proposal === "Envoyer le compte rendu")).toBe(true),
+      { timeout: 3000 },
+    );
+
+    expect(llmCalls).toHaveLength(1);
+  });
+
+  it("ne rappelle pas le modèle pour le même passage après un remontage", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: true, windowHours: 48 });
+    const llmCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)]);
+    const first = mount();
+
+    await waitFor(
+      () => expect(first.result.current.suggestions.some((entry) => entry.proposal === "Envoyer le compte rendu")).toBe(true),
+      { timeout: 3000 },
+    );
+    expect(llmCalls).toHaveLength(1);
+
+    const runs = JSON.parse(window.localStorage.getItem("lavande.ai.runs.v1") ?? "{}") as {
+      tasks?: Record<string, number>;
+    };
+    expect(Object.keys(runs.tasks ?? {})).toHaveLength(1);
+
+    first.unmount();
+    const second = mount();
+
+    await waitFor(() => expect(second.result.current.mails.length).toBeGreaterThan(0), { timeout: 3000 });
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+
+    expect(llmCalls).toHaveLength(1);
   });
 });
 
@@ -324,11 +404,11 @@ describe("suggestions de tâches IA · exclusion par compte", () => {
     );
     mockBackend(
       [apiThread(1, "Camille", "Maquettes v3", RECEIVED), apiThread(2, "Marc", "Accès serveur", RECEIVED, SECOND)],
-      { resume: "Deux mails", taches: [{ titre: "Relancer Marc", echeance: "2026-11-20", de: "Marc", mailId: SECOND_MAIL_ID }] },
+      { accroche: "Deux mails", taches: [{ titre: "Relancer Marc", echeance: "2026-11-20", de: "Marc", mailId: SECOND_MAIL_ID }] },
     );
     const { result } = mount();
 
-    await waitFor(() => expect(result.current.summary?.text).toBe("Deux mails"), { timeout: 3000 });
+    await waitFor(() => expect(result.current.summary?.headline).toBe("Deux mails"), { timeout: 3000 });
     await new Promise((resolve) => window.setTimeout(resolve, 30));
 
     expect(result.current.suggestions).toHaveLength(0);
@@ -339,11 +419,11 @@ describe("suggestions de tâches IA · exclusion par compte", () => {
     seedPrefs({ enabled: false, windowHours: 48 }, { enabled: true, llmConsent: true });
     mockBackend(
       [apiThread(1, "Camille", "Maquettes v3", RECEIVED), apiThread(2, "Marc", "Accès serveur", RECEIVED, SECOND)],
-      { resume: "Deux mails", taches: [{ titre: "Relancer Marc", echeance: "2026-11-20", de: "Marc", mailId: SECOND_MAIL_ID }] },
+      { accroche: "Deux mails", taches: [{ titre: "Relancer Marc", echeance: "2026-11-20", de: "Marc", mailId: SECOND_MAIL_ID }] },
     );
     const { result } = mount();
 
-    await waitFor(() => expect(result.current.summary?.text).toBe("Deux mails"), { timeout: 3000 });
+    await waitFor(() => expect(result.current.summary?.headline).toBe("Deux mails"), { timeout: 3000 });
 
     const proposal = result.current.suggestions.find((entry) => entry.proposal === "Relancer Marc");
     expect(proposal?.account).toBe(SECOND);

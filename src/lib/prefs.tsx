@@ -26,6 +26,12 @@ import { EMPTY_LLM, setUsageSink, type LlmConfig } from "@/lib/llm";
 import { demoReadOnly } from "@/lib/mail-backend";
 import { setMcpRights } from "@/lib/mcp";
 import { DEFAULT_AI_TASKS, DEFAULT_SUMMARY, type AiTasksConfig, type SummaryConfig } from "@/lib/summary";
+import {
+  EMPTY_TEAM_CONTEXT,
+  TEAM_MEMBERS_MAX,
+  type AccountTeamContext,
+  type TeamMember,
+} from "@/lib/team";
 
 export type AccountSignature = { html: string; enabled: boolean };
 
@@ -93,6 +99,8 @@ export type Prefs = {
   signatures: Record<string, AccountSignature>;
   /** Réglages PGP explicites : un compte absent suit les défauts globaux. */
   pgpAccounts: Record<string, AccountPgp>;
+  /** « Moi et mon équipe » : identité, rôle et équipe propres à chaque boîte. */
+  teamContext: Record<string, AccountTeamContext>;
   llm: LlmConfig;
   /** Suggestions de réponse générées par le LLM (sinon repli local). */
   aiReplyEnabled: boolean;
@@ -128,6 +136,7 @@ const DEFAULTS: Prefs = {
   mcpAlwaysAllow: {},
   signatures: {},
   pgpAccounts: {},
+  teamContext: {},
   llm: EMPTY_LLM,
   aiReplyEnabled: true,
   summary: DEFAULT_SUMMARY,
@@ -151,6 +160,7 @@ type PrefsContextValue = Prefs & {
   resetMcpAllowances: () => void;
   setSignature: (accountId: string, patch: Partial<AccountSignature>) => void;
   setAccountPgp: (accountId: string, patch: Partial<AccountPgp>) => void;
+  setTeamContext: (accountId: string, value: AccountTeamContext) => void;
   setLlm: (patch: Partial<LlmConfig>) => void;
   setAiReplyEnabled: (value: boolean) => void;
   setSummary: (patch: Partial<SummaryConfig>) => void;
@@ -216,6 +226,37 @@ export const asPgpAccounts = (
       enabled: asBoolean(enabled, true),
       encrypt: asBoolean(encrypt, fallback.encrypt),
       sign: asBoolean(sign, fallback.sign),
+    };
+  }
+  return out;
+};
+
+const asTeamText = (value: unknown, max: number): string =>
+  typeof value === "string" ? value.trim().slice(0, max) : "";
+
+const asTeamMember = (value: unknown): TeamMember | null => {
+  if (!value || typeof value !== "object") return null;
+  const { name, scope } = value as Record<string, unknown>;
+  const trimmed = asTeamText(name, 80);
+  if (!trimmed) return null;
+  return { name: trimmed, scope: asTeamText(scope, 160) };
+};
+
+export const asTeamContext = (value: unknown): Record<string, AccountTeamContext> => {
+  if (!value || typeof value !== "object") return {};
+  const out: Record<string, AccountTeamContext> = {};
+  for (const [accountId, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (!entry || typeof entry !== "object") continue;
+    const { identity, role, context, members } = entry as Record<string, unknown>;
+    out[accountId] = {
+      ...EMPTY_TEAM_CONTEXT,
+      identity: asTeamText(identity, 80),
+      role: asTeamText(role, 120),
+      context: asTeamText(context, 2000),
+      members: (Array.isArray(members) ? members : [])
+        .map(asTeamMember)
+        .filter((member): member is TeamMember => member !== null)
+        .slice(0, TEAM_MEMBERS_MAX),
     };
   }
   return out;
@@ -426,6 +467,7 @@ function read(): Prefs {
     mcpAlwaysAllow: asFlags(stored.mcpAlwaysAllow),
     signatures: asSignatures(stored.signatures),
     pgpAccounts: asPgpAccounts(stored.pgpAccounts, { encrypt: pgpEncrypt, sign: pgpSign }),
+    teamContext: asTeamContext(stored.teamContext),
     llm: asLlm(stored.llm),
     aiReplyEnabled: asBoolean(stored.aiReplyEnabled, DEFAULTS.aiReplyEnabled),
     summary: asSummary(stored.summary),
@@ -530,6 +572,15 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
           ...current.pgpAccounts,
           [accountId]: { ...accountPgp(current, accountId), ...patch },
         },
+      })),
+    [],
+  );
+
+  const setTeamContext = useCallback(
+    (accountId: string, value: AccountTeamContext) =>
+      write((current) => ({
+        ...current,
+        teamContext: { ...current.teamContext, [accountId]: value },
       })),
     [],
   );
@@ -642,6 +693,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       resetMcpAllowances,
       setSignature,
       setAccountPgp,
+      setTeamContext,
       setLlm,
       setAiReplyEnabled,
       setSummary,
@@ -666,6 +718,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       resetMcpAllowances,
       setSignature,
       setAccountPgp,
+      setTeamContext,
       setLlm,
       setAiReplyEnabled,
       setSummary,

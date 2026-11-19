@@ -9,10 +9,20 @@ import { createMemoryStorage } from "@/lib/sync/storage";
 
 vi.stubEnv("VITE_MAIL_BACKEND", "local");
 
-const GROUPS = ["Comptes", "Apparence", "Synchronisation", "Sécurité", "IA", "MCP", "Application"];
+const GROUPS = [
+  "Comptes",
+  "Moi et mon équipe",
+  "Apparence",
+  "Synchronisation",
+  "Sécurité",
+  "IA",
+  "MCP",
+  "Application",
+];
 
 const GROUP_SECTIONS: Record<string, string[]> = {
   Comptes: ["Comptes", "Signatures"],
+  "Moi et mon équipe": ["Moi et mon équipe"],
   Apparence: ["Apparence", "Modules"],
   Synchronisation: ["Synchronisation", "Calendriers", "Notifications"],
   Sécurité: ["Sécurité & PGP"],
@@ -24,6 +34,7 @@ const GROUP_SECTIONS: Record<string, string[]> = {
 const SECTIONS = [
   { label: "Comptes", anchor: "reglages-comptes" },
   { label: "Signatures", anchor: "reglages-signatures" },
+  { label: "Moi et mon équipe", anchor: "reglages-moi-equipe" },
   { label: "Apparence", anchor: "reglages-apparence" },
   { label: "Modules", anchor: "reglages-modules" },
   { label: "Synchronisation", anchor: "reglages-synchronisation" },
@@ -70,7 +81,7 @@ function renderSettings() {
 const nav = () => screen.getByRole("navigation", { name: "Sections des réglages" });
 
 describe("Réglages · sommaire groupé", () => {
-  it("range les sections en sept groupes nommés, dans l'ordre acté", () => {
+  it("range les sections en huit groupes nommés, dans l'ordre acté", () => {
     renderSettings();
 
     const groups = within(nav()).getAllByRole("group");

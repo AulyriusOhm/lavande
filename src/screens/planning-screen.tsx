@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useMotionValue, useSpring, useTransform } from "motion/react";
-import { Check, ChevronRight, EyeOff, ListChecks, Mail, Plus, Sparkles } from "lucide-react";
+import { Check, ChevronRight, EyeOff, ListChecks, Mail, Plus, Sparkles, UserRound } from "lucide-react";
 import type { MailSuggestion, Task, TaskState } from "@/lib/tasks";
 import { TASK_STATES, sortTasks, stateMeta } from "@/lib/tasks";
 import { sourceAccountLabel } from "@/lib/accounts";
@@ -51,6 +51,7 @@ export function PlanningScreen({
   onOpenSync?: () => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
+  const [assigneeFilter, setAssigneeFilter] = useState<string | null>(null);
   const { accounts, mails, openMessage } = useMailStore();
   const mailIndex = useMemo(() => new Map(mails.map((mail) => [mail.id, mail])), [mails]);
   const [localMoving, setLocalMoving] = useState<Task | null>(null);
@@ -123,8 +124,17 @@ export function PlanningScreen({
   }, [filter]);
 
   const countFor = (state: TaskState) => tasks.filter((task) => task.state === state).length;
-  const visibleTasks =
+  const assignees = useMemo(
+    () => [...new Set(tasks.flatMap((task) => (task.assignee ? [task.assignee] : [])))],
+    [tasks],
+  );
+  const activeAssignee =
+    assigneeFilter !== null && assignees.includes(assigneeFilter) ? assigneeFilter : null;
+  const stateTasks =
     filter === "all" ? tasks : filter === "suggestion" ? [] : tasks.filter((task) => task.state === filter);
+  const visibleTasks = stateTasks.filter(
+    (task) => activeAssignee === null || task.assignee === activeAssignee,
+  );
   const showSuggestions = filter === "all" || filter === "suggestion";
 
   const setState = (id: string, state: TaskState) => {
@@ -244,6 +254,28 @@ export function PlanningScreen({
                   >
                     {countFor(state.id)}
                   </span>
+                </button>
+              );
+            })}
+
+            {assignees.map((name) => {
+              const active = activeAssignee === name;
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  data-testid={`assignee-filter-${name}`}
+                  onClick={() => setAssigneeFilter(active ? null : name)}
+                  aria-pressed={active}
+                  className={cn(
+                    CHIP,
+                    active
+                      ? "bg-accent text-accent-contrast shadow-[0_6px_16px_-8px_var(--accent)]"
+                      : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
+                  )}
+                >
+                  <UserRound className={cn("size-3", active ? "text-accent-contrast" : "text-accent-ink")} strokeWidth={2.6} />
+                  {name}
                 </button>
               );
             })}
@@ -402,6 +434,16 @@ export function PlanningScreen({
                       {task.title}
                     </p>
                     <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug font-medium text-ink-muted">{task.meta}</p>
+                    {task.assignee ? (
+                      <span
+                        data-testid="assignee-chip"
+                        title={`Assigné à ${task.assignee}`}
+                        className="mt-1 inline-flex max-w-full items-center gap-1 rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent-ink"
+                      >
+                        <UserRound className="size-2.5 shrink-0" strokeWidth={2.8} />
+                        <span className="truncate">{task.assignee}</span>
+                      </span>
+                    ) : null}
                     {typeof task.progress === "number" && !done ? (
                       <div className="mt-1.5 flex items-center gap-1.5">
                         <div

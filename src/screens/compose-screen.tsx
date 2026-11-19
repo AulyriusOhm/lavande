@@ -19,7 +19,17 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMailStore } from "@/lib/store";
-import { aiComposeReply, composeReply, replySuggestions, threadConversation, userPart, type ReplySuggestion } from "@/lib/assist";
+import {
+  aiComposeReply,
+  composeReply,
+  replySuggestions,
+  sentSamples,
+  styleProfile,
+  threadConversation,
+  userPart,
+  type ReplySuggestion,
+} from "@/lib/assist";
+import { teamContextOf, teamPromptBlock } from "@/lib/team";
 import { llmReady } from "@/lib/llm";
 import { ReplySuggestSheet, RewriteSheet } from "@/screens/assist-sheet";
 import { IconButton } from "@/components/ui/primitives";
@@ -693,7 +703,9 @@ export function ComposeScreen({
           const input = { subject: draft.subject, to: draft.to, body: htmlToText(draft.body) };
           if (!llmReady(llm) || !aiReplyEnabled) return composeReply({ ...input, brief });
           const conversation = threadConversation(openThread?.messages, mails ?? [], draft.threadId);
-          return aiComposeReply(llm, { ...input, conversation }, brief);
+          const team = teamPromptBlock(teamContextOf(prefs, draft.account));
+          const style = await styleProfile(llm, draft.account, await sentSamples(draft.account));
+          return aiComposeReply(llm, { ...input, conversation }, brief, { team, style });
         }}
         onPick={applySuggestion}
         onClose={() => setSuggestOpen(false)}

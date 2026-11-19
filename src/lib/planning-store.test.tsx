@@ -193,6 +193,51 @@ describe("PlanningProvider", () => {
     expect(storage.read().outbox).toHaveLength(0);
   });
 
+  it("persiste l'assigné d'une tâche et laisse le champ absent sur les autres", () => {
+    const storage = createMemoryStorage();
+    const first = mount(storage);
+
+    act(() => {
+      first.result.current.setTasks((current) =>
+        current.map((task) => (task.id === "t10" ? { ...task, assignee: "Stéphane" } : task)),
+      );
+    });
+
+    const stored = storage.read().docs[docKey("task", "t10")]?.raw;
+    expect(stored?.assignee).toBe("Stéphane");
+    expect(storage.read().docs[docKey("task", "t7")]?.raw).not.toHaveProperty("assignee");
+    expect(first.result.current.tasks.find((task) => task.id === "t10")?.assignee).toBe("Stéphane");
+    expect(first.result.current.tasks.find((task) => task.id === "t7")?.assignee).toBeUndefined();
+    first.unmount();
+
+    const second = mount(storage);
+    expect(second.result.current.tasks.find((task) => task.id === "t10")?.assignee).toBe("Stéphane");
+    expect(second.result.current.tasks.find((task) => task.id === "t7")?.assignee).toBeUndefined();
+  });
+
+  it("retire l'assigné quand le patch le remet à vide", () => {
+    const storage = createMemoryStorage();
+    const first = mount(storage);
+
+    act(() => {
+      first.result.current.setTasks((current) =>
+        current.map((task) => (task.id === "t10" ? { ...task, assignee: "Stéphane" } : task)),
+      );
+    });
+    act(() => {
+      first.result.current.setTasks((current) =>
+        current.map((task) => (task.id === "t10" ? { ...task, assignee: undefined } : task)),
+      );
+    });
+
+    expect(storage.read().docs[docKey("task", "t10")]?.raw.assignee).toBeNull();
+    expect(first.result.current.tasks.find((task) => task.id === "t10")?.assignee).toBeUndefined();
+    first.unmount();
+
+    const second = mount(storage);
+    expect(second.result.current.tasks.find((task) => task.id === "t10")?.assignee).toBeUndefined();
+  });
+
   it("pose un tombstone quand setTasks supprime une tâche", () => {
     const storage = createMemoryStorage();
     const first = mount(storage);
@@ -290,6 +335,31 @@ describe("suggestions · fenêtre temporelle", () => {
     const projected = second.result.current.suggestions.find((entry) => entry.proposal === proposed.proposal);
     expect(projected?.ai).toBe(true);
     expect(projected?.account).toBe("alpha-42");
+  });
+
+  it("reporte l'assigné d'une suggestion sur la tâche qu'elle crée", () => {
+    const storage = createMemoryStorage();
+    const first = mount(storage);
+    const proposed: MailSuggestion = { ...suggestion("ia-assigne"), ai: true, assignee: "Stéphane" };
+
+    act(() => {
+      first.result.current.proposeSuggestion(proposed);
+    });
+
+    expect(first.result.current.suggestions.find((entry) => entry.proposal === proposed.proposal)?.assignee).toBe(
+      "Stéphane",
+    );
+    first.unmount();
+
+    const second = mount(storage);
+    const reloaded = second.result.current.suggestions.find((entry) => entry.proposal === proposed.proposal)!;
+    expect(reloaded.assignee).toBe("Stéphane");
+
+    act(() => {
+      second.result.current.addSuggestion(reloaded);
+    });
+
+    expect(second.result.current.tasks.find((task) => task.title === proposed.proposal)?.assignee).toBe("Stéphane");
   });
 
   it("persiste l'horodatage du mail source avec la suggestion", () => {

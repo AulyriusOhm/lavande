@@ -53,6 +53,13 @@ import {
   type CalendarDef,
 } from "@/lib/calendars";
 import { useCalendarSources } from "@/lib/ics";
+import {
+  EMPTY_TEAM_CONTEXT,
+  TEAM_MEMBERS_MAX,
+  teamContextOf,
+  type AccountTeamContext,
+  type TeamMember,
+} from "@/lib/team";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
 import type { ApiAccount, GoogleCalendar } from "@/lib/api";
 import { useMailStore } from "@/lib/store";
@@ -91,10 +98,19 @@ const PREVIEW_OPTIONS = [
 
 type PreviewMode = (typeof PREVIEW_OPTIONS)[number]["value"];
 
-type GroupId = "comptes" | "apparence" | "synchronisation" | "securite" | "ia" | "mcp" | "application";
+type GroupId =
+  | "comptes"
+  | "moi-equipe"
+  | "apparence"
+  | "synchronisation"
+  | "securite"
+  | "ia"
+  | "mcp"
+  | "application";
 
 const GROUPS: { id: GroupId; label: string; hint: string; icon: typeof Sun }[] = [
   { id: "comptes", label: "Comptes", hint: "Boîtes mail, signatures, dossiers", icon: Users },
+  { id: "moi-equipe", label: "Moi et mon équipe", hint: "Identité, rôle, équipe par boîte", icon: Users },
   { id: "apparence", label: "Apparence", hint: "Thème, couleur d'accent, modules", icon: Palette },
   { id: "synchronisation", label: "Synchronisation", hint: "Appareils, calendriers, notifications", icon: RefreshCw },
   { id: "securite", label: "Sécurité & PGP", hint: "Clés et chiffrement de bout en bout", icon: KeyRound },
@@ -152,10 +168,13 @@ export function SettingsScreen({
     setAiTasks,
     perimeters,
     setAccountPerimeter,
+    teamContext,
+    setTeamContext,
     threadView,
     setThreadView,
   } = usePrefs();
   const [openGroup, setOpenGroup] = useState<GroupId | null>(null);
+  const [teamAccount, setTeamAccount] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewMode>("unlocked");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [probing, setProbing] = useState(false);
@@ -174,6 +193,25 @@ export function SettingsScreen({
   const scrollRef = useRef<HTMLDivElement>(null);
   const groups =
     import.meta.env.VITE_PLATFORM === "android" ? GROUPS.filter((entry) => entry.id !== "mcp") : GROUPS;
+  const teamTarget =
+    accounts.find((entry) => entry.id === teamAccount) ??
+    accounts.find((entry) => entry.id === account) ??
+    accounts[0] ??
+    null;
+  const team = teamTarget ? teamContextOf({ teamContext }, teamTarget.id) : EMPTY_TEAM_CONTEXT;
+  const updateTeam = (patch: Partial<AccountTeamContext>) => {
+    if (!teamTarget) return;
+    setTeamContext(teamTarget.id, { ...team, ...patch });
+  };
+  const patchMember = (index: number, patch: Partial<TeamMember>) =>
+    updateTeam({
+      members: team.members.map((member, position) =>
+        position === index ? { ...member, ...patch } : member,
+      ),
+    });
+  const addMember = () => updateTeam({ members: [...team.members, { name: "", scope: "" }] });
+  const removeMember = (index: number) =>
+    updateTeam({ members: team.members.filter((_, position) => position !== index) });
   const group = groups.find((entry) => entry.id === openGroup) ?? null;
   const enabled = mergeFlags(
     Object.fromEntries(MCP_SERVERS.map((server) => [server.id, server.status === "connected"])),
@@ -510,6 +548,139 @@ export function SettingsScreen({
               </BlurFade>
             </>
           ) : null}
+        </>
+      ) : null}
+
+      {openGroup === "moi-equipe" ? (
+        <>
+          <SectionTitle hint="par boîte">Moi et mon équipe</SectionTitle>
+          <BlurFade delay={0.08}>
+            <div role="group" aria-label="Boîte de la fiche" className="mx-5 flex gap-1.5 overflow-x-auto pb-1">
+              {accounts.map((item) => {
+                const selected = teamTarget?.id === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => setTeamAccount(item.id)}
+                    className={cn(
+                      "focus-ring inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full px-3 text-[11.5px] font-bold transition-colors",
+                      selected
+                        ? "bg-accent text-accent-contrast"
+                        : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
+                    )}
+                  >
+                    <span className="size-2 rounded-full" style={{ backgroundColor: item.color }} />
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+            {teamTarget ? (
+              <Card className="mx-5 mt-3 space-y-3 p-3.5">
+                <label className="block">
+                  <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                    Votre nom
+                  </span>
+                  <input
+                    aria-label="Votre nom"
+                    type="text"
+                    autoComplete="off"
+                    placeholder="Roman FELDEN"
+                    value={team.identity}
+                    onChange={(event) => updateTeam({ identity: event.target.value })}
+                    className="focus-ring mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                    Votre rôle
+                  </span>
+                  <input
+                    aria-label="Votre rôle"
+                    type="text"
+                    autoComplete="off"
+                    placeholder="DSI"
+                    value={team.role}
+                    onChange={(event) => updateTeam({ role: event.target.value })}
+                    className="focus-ring mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                    Contexte de la boîte
+                  </span>
+                  <textarea
+                    aria-label="Contexte de la boîte"
+                    rows={3}
+                    placeholder="Je suis Roman FELDEN, DSI de l'ENSAG…"
+                    value={team.context}
+                    onChange={(event) => updateTeam({ context: event.target.value })}
+                    className="focus-ring mt-1.5 w-full resize-none rounded-xl border border-line bg-surface px-3 py-2.5 text-[13px] leading-relaxed font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
+                  />
+                </label>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                      Équipe
+                    </span>
+                    <button
+                      type="button"
+                      disabled={team.members.length >= TEAM_MEMBERS_MAX}
+                      onClick={addMember}
+                      className="focus-ring inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11.5px] font-bold text-ink-soft transition-colors disabled:opacity-40"
+                    >
+                      <Plus className="size-3.5" />
+                      Ajouter un membre
+                    </button>
+                  </div>
+                  {team.members.map((member, index) => (
+                    <div key={index} className="flex items-center gap-1.5">
+                      <input
+                        aria-label={`Nom du membre ${index + 1}`}
+                        type="text"
+                        autoComplete="off"
+                        placeholder="Camille"
+                        value={member.name}
+                        onChange={(event) => patchMember(index, { name: event.target.value })}
+                        className="focus-ring h-11 min-w-0 flex-1 rounded-xl border border-line bg-surface px-3 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
+                      />
+                      <input
+                        aria-label={`Périmètre du membre ${index + 1}`}
+                        type="text"
+                        autoComplete="off"
+                        placeholder="Ateliers, planning"
+                        value={member.scope}
+                        onChange={(event) => patchMember(index, { scope: event.target.value })}
+                        className="focus-ring h-11 min-w-0 flex-1 rounded-xl border border-line bg-surface px-3 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
+                      />
+                      <button
+                        type="button"
+                        aria-label={`Retirer le membre ${index + 1}`}
+                        onClick={() => removeMember(index)}
+                        className="focus-ring grid size-11 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[12px] leading-relaxed font-medium text-ink-muted">
+                  {`Chaque boîte garde sa propre fiche · ${TEAM_MEMBERS_MAX} membres au plus.`}
+                </p>
+              </Card>
+            ) : (
+              <Card className="mx-5 mt-3 p-3.5">
+                <p className="text-[12px] font-medium text-ink-muted">
+                  Aucun compte : la fiche se remplit après la connexion d'une boîte.
+                </p>
+              </Card>
+            )}
+            <p className="mt-2 px-5 text-[12px] leading-relaxed font-medium text-ink-muted">
+              L'assistant reçoit cette fiche comme contexte fiable, en dehors des mails.
+            </p>
+          </BlurFade>
         </>
       ) : null}
 

@@ -306,6 +306,54 @@ describe("reprise d'un brouillon", () => {
   });
 });
 
+describe("analyse à la demande", () => {
+  const renderWithAnalyse = (
+    mail: Mail = MAIL,
+    options: { onAnalyse?: (mail: Mail) => void; readOnly?: boolean } = {},
+  ) => {
+    render(
+      <PrefsProvider>
+        <MessageScreen
+          thread={{ ...THREAD, messages: [mail], primary: mail }}
+          readOnly={options.readOnly}
+          onClose={() => {}}
+          onToggleStar={() => {}}
+          onReply={() => {}}
+          onAnalyse={options.onAnalyse}
+        />
+      </PrefsProvider>,
+    );
+  };
+
+  it("propose le bouton Analyse à côté de Transférer", () => {
+    const onAnalyse = vi.fn();
+    renderWithAnalyse(MAIL, { onAnalyse });
+
+    expect(screen.getByLabelText("Transférer")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Analyse"));
+
+    expect(onAnalyse).toHaveBeenCalledWith(MAIL);
+  });
+
+  it("garde le bouton inactif sans gestionnaire", () => {
+    renderWithAnalyse();
+
+    expect((screen.getByLabelText("Analyse") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("masque le bouton Analyse en lecture seule", () => {
+    renderWithAnalyse(MAIL, { onAnalyse: vi.fn(), readOnly: true });
+
+    expect(screen.queryByLabelText("Analyse")).toBeNull();
+  });
+
+  it("masque le bouton Analyse sur un brouillon", () => {
+    renderWithAnalyse({ ...MAIL, folder: "drafts" }, { onAnalyse: vi.fn() });
+
+    expect(screen.queryByLabelText("Analyse")).toBeNull();
+  });
+});
+
 describe("destinataires du message", () => {
   it("affiche les À et Cc du message reçu", () => {
     renderScreen({ ...MAIL, to: "roman@lavande.mail", cc: "marc@test.fr, copie@test.fr" });

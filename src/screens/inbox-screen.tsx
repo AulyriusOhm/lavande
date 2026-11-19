@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { animate, motion, useMotionValue, useSpring, useTransform } from "motion/react";
-import { Archive, ChevronDown, ChevronUp, Inbox, Layers, Loader2, Paperclip, PenLine, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2, type LucideIcon } from "lucide-react";
+import { Archive, ChevronDown, ChevronUp, CornerUpLeft, Inbox, Layers, Loader2, Paperclip, PenLine, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2, type LucideIcon } from "lucide-react";
 import type { FolderId, Mail } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
+import type { SummaryRef } from "@/lib/summary";
+import { dueToneFor, formatDueDate } from "@/lib/tasks";
 import { threadsInFolder } from "@/lib/threads";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
 import { useMailStore } from "@/lib/store";
 import type { MailNavigation } from "@/lib/app-shortcuts";
 import { accentContrast } from "@/lib/theme";
-import { cn } from "@/lib/utils";
+import { clockOf, cn, initials } from "@/lib/utils";
 import { Avatar, Chip, IconButton } from "@/components/ui/primitives";
 import { AnimatedGradientText } from "@/components/ui/animated-text";
 import { BorderBeam } from "@/components/ui/border-beam";
@@ -24,7 +26,35 @@ type Filter = "all" | "unread" | "starred" | "encrypted";
 
 const INTRO_HOLD_MS = 2000;
 
-const SUMMARY_FILE_CHIPS = 4;
+const ISO_DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+const SUMMARY_CHIP =
+  "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-line bg-surface px-2 text-[10px] font-bold text-ink-soft transition-colors duration-200";
+const SUMMARY_CHIP_FILLED =
+  "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-accent px-2 text-[10px] font-bold text-accent-contrast transition-colors duration-200";
+const SUMMARY_DUE_TONE: Record<ReturnType<typeof dueToneFor>, string> = {
+  late: "bg-rose-500/12 text-rose-700 dark:text-rose-300",
+  soon: "bg-amber-500/14 text-amber-700 dark:text-amber-300",
+  soft: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
+  none: "bg-surface-2 text-ink-muted",
+};
+
+const SUMMARY_FILE_CHIPS = 3;
+
+function summaryClock(mail: Mail) {
+  return typeof mail.timestamp === "number" ? clockOf(mail.timestamp) : mail.time;
+}
+
+function SummaryTitle({ label, count }: { label: string; count: number }) {
+  return (
+    <div className="mb-1 flex items-center gap-1.5 px-0.5 text-[9.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+      <span>{label}</span>
+      <span className="rounded-full bg-surface px-1.5 py-0.5 text-[9.5px] font-bold tracking-normal text-ink-soft tabular-nums">
+        {count}
+      </span>
+    </div>
+  );
+}
 
 export function InboxScreen({
   mails,
@@ -63,6 +93,7 @@ export function InboxScreen({
 }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [compact, setCompact] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [sizes, setSizes] = useState({ hero: 0, card: 0, bar: 0 });
   const [cursor, setCursor] = useState<number | null>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
@@ -93,6 +124,7 @@ export function InboxScreen({
     summaryLoading,
     summaryMails,
     refreshSummary,
+    proposeSummaryAction,
     openMail,
     closeMessage,
   } = useMailStore();
@@ -162,12 +194,49 @@ export function InboxScreen({
   const unreadCount = threads.filter((thread) => thread.unread > 0).length;
   const starredCount = threads.filter((thread) => thread.starred).length;
   const encryptedCount = threads.filter((thread) => thread.encrypted > 0).length;
-  const attachmentThreads = threads.filter((thread) => thread.attachments > 0).length;
-  const summaryFiles = summaryMails.flatMap((mail) => mail.attachments ?? []);
+  const summaryById = useMemo(() => new Map(summaryMails.map((mail) => [mail.id, mail])), [summaryMails]);
+  const summaryRows = (refs: SummaryRef[]) =>
+    refs.flatMap((ref) => {
+      const mail = summaryById.get(ref.mailId);
+      return mail ? [{ ref, mail }] : [];
+    });
+  const actionRows = summary ? summaryRows(summary.groups.actions) : [];
+  const infoRows = summary ? summaryRows(summary.groups.infos) : [];
+  const notificationRows = summary ? summaryRows(summary.groups.notifications) : [];
+  const summaryRow = ({ ref, mail }: { ref: SummaryRef; mail: Mail }) => (
+    <div key={ref.mailId} className="flex items-center gap-1.5 py-1.5">
+      <span className="grid size-5 shrink-0 place-items-center rounded-md bg-surface text-[8.5px] font-bold text-ink-soft">
+        {initials(mail.name)}
+      </span>
+      <button
+        type="button"
+        onClick={() => onOpen(mail)}
+        className="focus-ring min-w-0 flex-1 truncate text-left text-[11.5px] font-semibold text-ink"
+      >
+        {mail.subject}
+      </button>
+      {(mail.attachments ?? []).map((file, index) => (
+        <button
+          key={`${file.name}-${index}`}
+          type="button"
+          onClick={() => onOpen(mail)}
+          title={`${file.name} · ${file.size}`}
+          className="focus-ring inline-flex h-5 max-w-[120px] shrink-0 items-center gap-1 rounded-full bg-surface px-1.5 text-[9.5px] font-bold text-ink-soft"
+        >
+          <Paperclip className="size-2.5 shrink-0 text-accent-ink" strokeWidth={2.6} />
+          <span className="truncate">{file.name}</span>
+          <span className="shrink-0 font-semibold text-ink-muted">{file.size}</span>
+        </button>
+      ))}
+      <span className="shrink-0 text-[9.5px] font-semibold text-ink-muted tabular-nums">
+        {summaryClock(mail)}
+      </span>
+    </div>
+  );
 
   useLayoutEffect(() => {
     if (cardRef.current) setSizes((current) => ({ ...current, card: cardRef.current?.offsetHeight ?? current.card }));
-  }, [summary, summaryFiles.length]);
+  }, [summary, summaryMails.length, notificationsOpen]);
   const current = accountById(account);
 
   const visible = threads.filter((thread) => {
@@ -424,9 +493,132 @@ export function InboxScreen({
                   ) : null}
                 </div>
                 {summary ? (
-                  <p className="mt-2 text-[12.5px] leading-relaxed font-medium text-ink">
-                    {summary.text}
-                  </p>
+                  <>
+                    <p className="mt-2 text-[12px] leading-relaxed font-medium text-ink">{summary.headline}</p>
+                    <div
+                      data-testid="summary-attachments-mobile"
+                      className="mt-2.5 max-h-[38vh] space-y-2.5 overflow-y-auto pr-1"
+                    >
+                      {actionRows.length > 0 ? (
+                        <section>
+                          <SummaryTitle label="À traiter" count={actionRows.length} />
+                          <div className="space-y-1.5">
+                            {actionRows.map(({ ref, mail }) => {
+                              const due = ref.due && ISO_DAY.test(ref.due) ? ref.due : null;
+                              return (
+                                <article
+                                  key={ref.mailId}
+                                  className="flex gap-2 rounded-[14px] bg-surface px-2.5 py-2"
+                                >
+                                  <span className="grid size-7 shrink-0 place-items-center rounded-[9px] bg-accent/15 text-[9.5px] font-bold text-accent-ink">
+                                    {initials(mail.name)}
+                                  </span>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-baseline gap-1.5">
+                                      <span className="min-w-0 truncate text-[11px] font-bold text-ink">
+                                        {mail.name}
+                                      </span>
+                                      <span className="shrink-0 text-[10px] font-semibold text-ink-muted tabular-nums">
+                                        {summaryClock(mail)}
+                                      </span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => onOpen(mail)}
+                                      className="focus-ring mt-0.5 block max-w-full truncate text-left text-[12px] leading-[1.4] font-bold text-accent-ink underline decoration-[1.5px] underline-offset-2"
+                                    >
+                                      {mail.subject}
+                                    </button>
+                                    {ref.reason ? (
+                                      <p className="mt-1 text-[11px] leading-[1.45] font-medium text-ink-soft">
+                                        {ref.reason}
+                                      </p>
+                                    ) : null}
+                                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => proposeSummaryAction(ref)}
+                                        className={SUMMARY_CHIP_FILLED}
+                                      >
+                                        <Plus className="size-3" strokeWidth={2.8} />
+                                        Planification
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => onReply(mail)}
+                                        className={SUMMARY_CHIP}
+                                      >
+                                        <CornerUpLeft className="size-3" strokeWidth={2.4} />
+                                        Répondre
+                                      </button>
+                                      {(mail.attachments ?? []).slice(0, SUMMARY_FILE_CHIPS).map((file, index) => (
+                                        <button
+                                          key={`${file.name}-${index}`}
+                                          type="button"
+                                          onClick={() => onOpen(mail)}
+                                          title={`${file.name} · ${file.size}`}
+                                          className={SUMMARY_CHIP}
+                                        >
+                                          <Paperclip className="size-3 shrink-0 text-accent-ink" strokeWidth={2.6} />
+                                          <span className="max-w-[90px] truncate">{file.name}</span>
+                                          <span className="shrink-0 font-semibold text-ink-muted">{file.size}</span>
+                                        </button>
+                                      ))}
+                                      {due ? (
+                                        <span
+                                          className={cn(
+                                            "inline-flex h-6 shrink-0 items-center rounded-md px-1.5 text-[10px] font-bold",
+                                            SUMMARY_DUE_TONE[dueToneFor(due)],
+                                          )}
+                                        >
+                                          {formatDueDate(due)}
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                </article>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      ) : null}
+
+                      {infoRows.length > 0 ? (
+                        <section>
+                          <SummaryTitle label="Pour info" count={infoRows.length} />
+                          <div className="divide-y divide-line/70">{infoRows.map(summaryRow)}</div>
+                        </section>
+                      ) : null}
+
+                      {notificationRows.length > 0 ? (
+                        <section>
+                          <button
+                            type="button"
+                            onClick={() => setNotificationsOpen(!notificationsOpen)}
+                            aria-expanded={notificationsOpen}
+                            className="focus-ring flex w-full items-center gap-2 rounded-[12px] border border-dashed border-accent-ring bg-surface/60 px-2.5 py-1.5 text-left"
+                          >
+                            <span className="shrink-0 text-[10px] font-bold text-accent-ink">
+                              Notifications &amp; listes · {notificationRows.length}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate text-[10px] font-semibold text-ink-muted">
+                              {[...new Set(notificationRows.map((row) => row.mail.name))].slice(0, 2).join(", ")}
+                              {new Set(notificationRows.map((row) => row.mail.name)).size > 2 ? "…" : ""}
+                            </span>
+                            <ChevronDown
+                              className={cn(
+                                "size-3.5 shrink-0 text-accent-ink transition-transform duration-200",
+                                notificationsOpen && "rotate-180",
+                              )}
+                            />
+                          </button>
+                          {notificationsOpen ? (
+                            <div className="mt-1 divide-y divide-line/70">{notificationRows.map(summaryRow)}</div>
+                          ) : null}
+                        </section>
+                      ) : null}
+                    </div>
+                  </>
                 ) : (
                   <p className="mt-2 text-[12.5px] leading-relaxed font-medium text-ink">
                     <span className="font-bold">
@@ -437,35 +629,18 @@ export function InboxScreen({
                       : "dans ta boîte de réception. Camille veut un retour sur les maquettes v3 avant vendredi."}
                   </p>
                 )}
-                {summaryFiles.length > 0 ? (
-                  <div data-testid="summary-attachments-mobile" className="mt-2 flex flex-wrap items-center gap-1.5">
-                    {summaryFiles.slice(0, SUMMARY_FILE_CHIPS).map((file, index) => (
-                      <span
-                        key={`${file.name}-${index}`}
-                        title={`${file.name} · ${file.size}`}
-                        className="inline-flex max-w-[190px] items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-[10.5px] font-bold text-ink-soft"
-                      >
-                        <Paperclip className="size-2.5 shrink-0 text-accent-ink" strokeWidth={2.6} />
-                        <span className="truncate">{file.name}</span>
-                        <span className="shrink-0 font-semibold text-ink-muted">{file.size}</span>
-                      </span>
-                    ))}
-                    {summaryFiles.length > SUMMARY_FILE_CHIPS ? (
-                      <span className="rounded-full bg-surface px-2 py-0.5 text-[10.5px] font-bold text-ink-muted tabular-nums">
-                        +{summaryFiles.length - SUMMARY_FILE_CHIPS}
-                      </span>
-                    ) : null}
+                {summary ? (
+                  <div
+                    data-testid="summary-footer-mobile"
+                    className="mt-2 flex items-center gap-1.5 text-[10px] font-bold text-ink-muted"
+                  >
+                    <span>Généré à {clockOf(summary.generatedAt)}</span>
+                    <span aria-hidden className="size-[3px] rounded-full bg-accent-ring" />
+                    <span>{summary.source === "llm" ? "mis en cache" : "local"}</span>
+                    <span aria-hidden className="size-[3px] rounded-full bg-accent-ring" />
+                    <span className="tabular-nums">{summary.mailCount} mails analysés</span>
                   </div>
                 ) : null}
-                <div className="mt-3 flex gap-1.5">
-                  <span className="rounded-full bg-surface px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
-                    {attachmentThreads} conversation{attachmentThreads > 1 ? "s" : ""} avec pièce
-                    {attachmentThreads > 1 ? "s" : ""} jointe{attachmentThreads > 1 ? "s" : ""}
-                  </span>
-                  <span className="rounded-full bg-surface px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
-                    {encryptedCount} chiffré{encryptedCount > 1 ? "s" : ""}
-                  </span>
-                </div>
               </motion.div>
 
               <motion.button

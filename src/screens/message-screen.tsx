@@ -15,6 +15,7 @@ import {
   RotateCcw,
   ShieldCheck,
   ShieldOff,
+  Sparkles,
   Star,
   Trash2,
 } from "lucide-react";
@@ -39,6 +40,7 @@ export function MessageScreen({
   onToggleStar,
   onReply,
   onForward,
+  onAnalyse,
   onResume,
   onArchive,
   onDelete,
@@ -54,6 +56,8 @@ export function MessageScreen({
   onToggleStar: () => void;
   onReply: (mail: Mail) => void;
   onForward?: (mail: Mail) => void;
+  /** Analyse à la demande du mail ouvert. */
+  onAnalyse?: (mail: Mail) => void;
   onResume?: (mail: Mail) => void;
   onArchive?: (mail: Mail) => void;
   onDelete?: (mail: Mail) => void;
@@ -496,6 +500,15 @@ export function MessageScreen({
                 aria-label="Transférer"
               >
                 <CornerUpRight className="size-4.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onAnalyse?.(mail)}
+                disabled={!onAnalyse}
+                className="grid size-11 place-items-center rounded-full border border-line bg-surface text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink disabled:pointer-events-none disabled:opacity-40"
+                aria-label="Analyse"
+              >
+                <Sparkles className="size-4.5" />
               </button>
             </>
           )}

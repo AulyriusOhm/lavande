@@ -12,6 +12,7 @@ import { PlanningProvider } from "@/lib/planning-store";
 import { Dock, TABS, type TabId } from "@/components/dock";
 import { AccountSwitchSheet, InboxScreen as InboxView, MailboxSheet } from "@/screens/inbox-screen";
 import { MailContextMenu } from "@/components/mail-context-menu";
+import { AnalysePanel } from "@/components/analyse-panel";
 import { SearchScreen } from "@/screens/search-screen";
 import { CalendarScreen as CalendarView } from "@/screens/calendar-screen";
 import { McpApprovalHost, McpScreen } from "@/screens/mcp-screen";
@@ -175,6 +176,12 @@ function PhoneApp({ native }: { native?: boolean }) {
     replyTo,
     forwardMail,
     sendDraft,
+    analyse,
+    runAnalyse,
+    closeAnalyse,
+    acceptAnalyseTask,
+    acceptAnalyseEvent,
+    openReplyWithBody,
     mode,
     readOnly,
     phase,
@@ -563,6 +570,7 @@ function PhoneApp({ native }: { native?: boolean }) {
                 onToggleStar={() => toggleStar(openMail.id)}
                 onReply={replyTo}
                 onForward={forwardMail}
+                onAnalyse={(mail) => void runAnalyse(mail)}
                 onResume={resumeDraft}
                 onArchive={(mail) => {
                   mailAction("archive", mail);
@@ -585,6 +593,18 @@ function PhoneApp({ native }: { native?: boolean }) {
                   openPgp();
                 }}
               />
+              {analyse && analyse.mailId === openMail.id ? (
+                <AnalysePanel
+                  analyse={analyse}
+                  mail={openMail}
+                  variant="mobile"
+                  onClose={closeAnalyse}
+                  onAcceptTask={acceptAnalyseTask}
+                  onAcceptEvent={acceptAnalyseEvent}
+                  onUseReply={(body) => openReplyWithBody(openMail, body)}
+                  onRetry={() => void runAnalyse(openMail, true)}
+                />
+              ) : null}
             </motion.div>
           )}
         </AnimatePresence>

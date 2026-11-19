@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ExternalEvent } from "@/lib/api";
 import App from "@/App";
 import { TODAY_ISO } from "@/lib/calendar";
@@ -96,7 +96,10 @@ describe("Mobile · agenda et sources externes", () => {
     expect(await screen.findByText("Réunion externe", {}, { timeout: 5000 })).toBeTruthy();
     expect(screen.getByTestId("external-badge").textContent).toBe("ICS");
     expect(screen.getByText("exemple.tld")).toBeTruthy();
-    expect(screen.getByText("11:00")).toBeTruthy();
+    const row = screen
+      .getAllByTestId("calendar-event")
+      .find((element) => element.textContent?.includes("Réunion externe"));
+    expect(within(row!).getByText("11:00")).toBeTruthy();
   });
 
   it("suit une source ajoutée après le montage, sans recharger", async () => {

@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
-  BellRing,
   Check,
-  CheckCircle2,
   ChevronDown,
   ChevronLeft,
-  ChevronRight,
   ChevronUp,
   CornerUpLeft,
   CornerUpRight,
@@ -21,6 +18,7 @@ import {
   Moon,
   Paperclip,
   PenLine,
+  Plus,
   RefreshCw,
   RotateCcw,
   Search,
@@ -34,7 +32,8 @@ import {
 } from "lucide-react";
 import type { FolderId, Mail, MailAttachment } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
-import type { SummaryResult } from "@/lib/summary";
+import type { SummaryRef, SummaryResult } from "@/lib/summary";
+import { dueToneFor, formatDueDate } from "@/lib/tasks";
 import { downloadAttachment } from "@/lib/attachments";
 import type { Thread } from "@/lib/threads";
 import { threadsInFolder } from "@/lib/threads";
@@ -49,7 +48,7 @@ import { useEscapeLayer } from "@/desktop/escape";
 import { PaneSplitter } from "@/desktop/pane-splitter";
 import { SelectionBar } from "@/desktop/selection-bar";
 import { useTheme } from "@/lib/theme";
-import { cn } from "@/lib/utils";
+import { clockOf, cn, initials } from "@/lib/utils";
 import { Avatar } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { BorderBeam } from "@/components/ui/border-beam";
@@ -58,6 +57,7 @@ import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { MailBody, MailBodyLoading } from "@/components/mail-body";
 import { MailRecipients } from "@/components/mail-recipients";
 import { MailContextMenu } from "@/components/mail-context-menu";
+import { AnalysePanel } from "@/components/analyse-panel";
 import { FolderContextMenu } from "@/desktop/folder-context-menu";
 import { EmptyTrashButton } from "@/components/empty-trash";
 import { HiddenFoldersRail } from "@/components/folder-row";
@@ -76,7 +76,27 @@ import {
 
 type Filter = "all" | "unread" | "starred" | "encrypted" | "attachments";
 
-const SUMMARY_FILE_CHIPS = 4;
+const SUMMARY_FILE_CHIPS = 3;
+const ISO_DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+const SUMMARY_DUE_TONE: Record<ReturnType<typeof dueToneFor>, "rose" | "amber" | "green"> = {
+  late: "rose",
+  soon: "amber",
+  soft: "green",
+  none: "green",
+};
+
+const SUMMARY_CHIP =
+  "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-line bg-surface px-2.5 text-[10.5px] font-bold text-ink-soft transition-colors duration-200 hover:border-accent-ring hover:text-ink";
+const SUMMARY_CHIP_FILLED =
+  "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-accent px-2.5 text-[10.5px] font-bold text-accent-contrast transition-colors duration-200 hover:bg-accent-ink";
+const SUMMARY_SUBJECT =
+  "focus-ring block max-w-full truncate text-left text-[12.5px] leading-[1.4] font-bold text-accent-ink underline decoration-[1.5px] underline-offset-2 transition-colors duration-200 hover:text-accent";
+
+/** Heure courte d'un mail résumé : horodatage réel, sinon libellé déjà formaté. */
+function summaryClock(mail: Mail): string {
+  return typeof mail.timestamp === "number" ? clockOf(mail.timestamp) : mail.time;
+}
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: "all", label: "Tous" },
@@ -153,12 +173,6 @@ const ACCOUNT_TONE: Record<string, "accent" | "sky" | "rose"> = {
 const accountTone = (id: string): "accent" | "sky" | "rose" => ACCOUNT_TONE[id] ?? "accent";
 
 const TO_DO = 3;
-
-const SUMMARY_ACTIONS: { label: string; hint: string; icon: LucideIcon; target: string }[] = [
-  { label: "Répondre à Camille", hint: "Maquettes mobiles — version 3", icon: CornerUpLeft, target: "1" },
-  { label: "Valider la v3", hint: "avant vendredi", icon: CheckCircle2, target: "1" },
-  { label: "Relancer Marc", hint: "accès serveur", icon: BellRing, target: "3" },
-];
 
 type QuickAction = { label: string; icon: LucideIcon; filled?: boolean; run: () => void };
 
@@ -239,18 +253,33 @@ function RailItem({
   );
 }
 
-function MorningSummary({
+type SummaryRow = { ref: SummaryRef; mail: Mail };
+
+function SummaryGroupTitle({ label, count }: { label: string; count: number }) {
+  return (
+    <div className="mb-1.5 flex items-center gap-1.5 px-1 text-[10px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+      <span>{label}</span>
+      <span className="rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] font-bold tracking-normal text-ink-soft tabular-nums">
+        {count}
+      </span>
+    </div>
+  );
+}
+
+export function MorningSummary({
   open,
   unread,
   attachments,
   encrypted,
   demo,
   summary,
-  files,
+  mails,
   loading,
   onToggle,
   onOpen,
   onRefresh,
+  onReply,
+  onPropose,
 }: {
   open: boolean;
   unread: number;
@@ -258,14 +287,70 @@ function MorningSummary({
   encrypted: number;
   demo: boolean;
   summary: SummaryResult | null;
-  files: MailAttachment[];
+  /** Mails réellement analysés : index vivant des lignes du briefing. */
+  mails: Mail[];
   loading: boolean;
   onToggle: () => void;
   onOpen: (id: string) => void;
   onRefresh: () => void;
+  onReply: (mail: Mail) => void;
+  onPropose: (ref: SummaryRef) => void;
 }) {
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const label = summary?.period.label ?? "Résumé du matin";
   const source = summary ? (summary.source === "llm" ? "IA" : "local") : null;
+  const byId = useMemo(() => new Map(mails.map((mail) => [mail.id, mail])), [mails]);
+  const generatedClock = summary ? clockOf(summary.generatedAt) : "";
+  const rowsOf = (refs: SummaryRef[]): SummaryRow[] =>
+    refs.flatMap((ref) => {
+      const mail = byId.get(ref.mailId);
+      return mail ? [{ ref, mail }] : [];
+    });
+  const actions = summary ? rowsOf(summary.groups.actions) : [];
+  const infos = summary ? rowsOf(summary.groups.infos) : [];
+  const notifications = summary ? rowsOf(summary.groups.notifications) : [];
+  const senders = [...new Set(notifications.map((row) => row.mail.name))];
+  const notified = senders
+    .slice(0, 2)
+    .map((name) => {
+      const count = notifications.filter((row) => row.mail.name === name).length;
+      return count > 1 ? `${name} ×${count}` : name;
+    })
+    .join(", ");
+
+  const infoRow = ({ ref, mail }: SummaryRow) => (
+    <div
+      key={ref.mailId}
+      className="flex items-center gap-2 rounded-[10px] px-1 py-1.5 transition-colors duration-200 hover:bg-surface/70"
+    >
+      <span className="grid size-[22px] shrink-0 place-items-center rounded-[7px] bg-surface-2 text-[9px] font-bold text-ink-soft">
+        {initials(mail.name)}
+      </span>
+      <button
+        type="button"
+        onClick={() => onOpen(mail.id)}
+        className="focus-ring min-w-0 flex-1 truncate text-left text-[12px] font-semibold text-ink transition-colors duration-200 hover:text-accent-ink hover:underline"
+      >
+        {mail.subject}
+      </button>
+      {(mail.attachments ?? []).map((file, index) => (
+        <button
+          key={`${file.name}-${index}`}
+          type="button"
+          onClick={() => onOpen(mail.id)}
+          title={`${file.name} · ${file.size}`}
+          className="focus-ring inline-flex h-5 max-w-[150px] shrink-0 items-center gap-1 rounded-full border border-accent-ring/60 bg-surface/85 px-2 text-[10px] font-bold text-ink-soft transition-colors duration-200 hover:border-accent-ring hover:text-accent-ink"
+        >
+          <Paperclip className="size-2.5 shrink-0 text-accent-ink" strokeWidth={2.6} />
+          <span className="truncate">{file.name}</span>
+          <span className="shrink-0 font-semibold text-ink-muted">{file.size}</span>
+        </button>
+      ))}
+      <span className="shrink-0 text-[10.5px] font-semibold text-ink-muted tabular-nums">
+        {summaryClock(mail)}
+      </span>
+    </div>
+  );
 
   if (!open) {
     return (
@@ -329,7 +414,113 @@ function MorningSummary({
         </div>
 
         {summary ? (
-          <p className="mt-1 text-[12.5px] leading-[1.55] font-medium text-ink-soft">{summary.text}</p>
+          <>
+            <p className="mt-1 text-[12.5px] leading-[1.55] font-medium text-ink-soft">{summary.headline}</p>
+            <div data-testid="summary-attachments" className="mt-2 space-y-2.5">
+              {actions.length > 0 ? (
+                <section>
+                  <SummaryGroupTitle label="À traiter" count={actions.length} />
+                  <div className="space-y-1.5">
+                    {actions.map(({ ref, mail }) => {
+                      const due = ref.due && ISO_DAY.test(ref.due) ? ref.due : null;
+                      return (
+                        <article
+                          key={ref.mailId}
+                          className="flex gap-2.5 rounded-[14px] border border-line bg-surface px-3 py-2.5"
+                        >
+                          <span className="grid size-[30px] shrink-0 place-items-center rounded-[10px] border border-accent-ring bg-accent-soft text-[10.5px] font-bold text-accent-ink">
+                            {initials(mail.name)}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-baseline gap-1.5">
+                              <span className="min-w-0 truncate text-[11.5px] font-bold text-ink">{mail.name}</span>
+                              <span className="shrink-0 text-[10.5px] font-semibold text-ink-muted tabular-nums">
+                                {summaryClock(mail)}
+                              </span>
+                            </div>
+                            <button type="button" onClick={() => onOpen(mail.id)} className={SUMMARY_SUBJECT}>
+                              {mail.subject}
+                            </button>
+                            {ref.reason ? (
+                              <p className="mt-1 text-[11.5px] leading-[1.5] font-medium text-ink-soft">{ref.reason}</p>
+                            ) : null}
+                            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => onPropose(ref)}
+                                className={SUMMARY_CHIP_FILLED}
+                              >
+                                <Plus className="size-3" strokeWidth={2.8} />
+                                Planification
+                              </button>
+                              <button type="button" onClick={() => onReply(mail)} className={SUMMARY_CHIP}>
+                                <CornerUpLeft className="size-3" strokeWidth={2.4} />
+                                Répondre
+                              </button>
+                              <button type="button" onClick={() => onOpen(mail.id)} className={SUMMARY_CHIP}>
+                                Voir le mail
+                              </button>
+                              {(mail.attachments ?? []).slice(0, SUMMARY_FILE_CHIPS).map((file, index) => (
+                                <button
+                                  key={`${file.name}-${index}`}
+                                  type="button"
+                                  onClick={() => onOpen(mail.id)}
+                                  title={`${file.name} · ${file.size}`}
+                                  className={SUMMARY_CHIP}
+                                >
+                                  <Paperclip className="size-3 shrink-0 text-accent-ink" strokeWidth={2.6} />
+                                  <span className="max-w-[120px] truncate">{file.name}</span>
+                                  <span className="shrink-0 font-semibold text-ink-muted">{file.size}</span>
+                                </button>
+                              ))}
+                              {due ? (
+                                <Badge tone={SUMMARY_DUE_TONE[dueToneFor(due)]}>{formatDueDate(due)}</Badge>
+                              ) : null}
+                            </div>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </section>
+              ) : null}
+
+              {infos.length > 0 ? (
+                <section>
+                  <SummaryGroupTitle label="Pour info" count={infos.length} />
+                  <div className="divide-y divide-accent-ring/20">{infos.map(infoRow)}</div>
+                </section>
+              ) : null}
+
+              {notifications.length > 0 ? (
+                <section>
+                  <button
+                    type="button"
+                    onClick={() => setNotificationsOpen(!notificationsOpen)}
+                    aria-expanded={notificationsOpen}
+                    className="focus-ring flex w-full items-center gap-2 rounded-[12px] border border-dashed border-accent-ring/70 bg-surface/55 px-2.5 py-1.5 text-left transition-colors duration-200 hover:border-accent-ring"
+                  >
+                    <span className="shrink-0 text-[10.5px] font-bold tracking-[0.04em] text-accent-ink">
+                      Notifications &amp; listes · {notifications.length}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-[10.5px] font-semibold text-ink-muted">
+                      {notified}
+                      {senders.length > 2 ? "…" : ""}
+                    </span>
+                    <ChevronDown
+                      className={cn(
+                        "size-3.5 shrink-0 text-accent-ink transition-transform duration-200",
+                        notificationsOpen && "rotate-180",
+                      )}
+                    />
+                  </button>
+                  {notificationsOpen ? (
+                    <div className="mt-1 divide-y divide-accent-ring/20">{notifications.map(infoRow)}</div>
+                  ) : null}
+                </section>
+              ) : null}
+            </div>
+          </>
         ) : (
           <p className="mt-1 line-clamp-2 text-[12.5px] leading-[1.55] font-medium text-ink-soft">
             <span className="font-bold text-ink">{unread} conversations non lues</span>, {attachments} avec des pièces
@@ -338,44 +529,15 @@ function MorningSummary({
           </p>
         )}
 
-        {files.length > 0 ? (
-          <div data-testid="summary-attachments" className="mt-2 flex flex-wrap items-center gap-1.5">
-            {files.slice(0, SUMMARY_FILE_CHIPS).map((file, index) => (
-              <span
-                key={`${file.name}-${index}`}
-                title={`${file.name} · ${file.size}`}
-                className="inline-flex max-w-[220px] items-center gap-1 rounded-full border border-accent-ring/50 bg-surface/80 px-2 py-0.5 text-[10.5px] font-bold text-ink-soft"
-              >
-                <Paperclip className="size-2.5 shrink-0 text-accent-ink" strokeWidth={2.6} />
-                <span className="truncate">{file.name}</span>
-                <span className="shrink-0 font-semibold text-ink-muted">{file.size}</span>
-              </span>
-            ))}
-            {files.length > SUMMARY_FILE_CHIPS ? (
-              <span className="rounded-full bg-surface/80 px-2 py-0.5 text-[10.5px] font-bold text-ink-muted tabular-nums">
-                +{files.length - SUMMARY_FILE_CHIPS}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
       </div>
 
-      {demo ? (
-        <div className="relative divide-y divide-accent-ring/20 border-t border-accent-ring/20">
-          {SUMMARY_ACTIONS.map((action) => (
-            <button
-              key={action.label}
-              type="button"
-              onClick={() => onOpen(action.target)}
-              aria-label={`${action.label} — ${action.hint}`}
-              className="focus-ring flex h-9 w-full items-center gap-2.5 px-4 text-left transition-colors duration-200 hover:bg-surface/70"
-            >
-              <action.icon className="size-4 shrink-0 text-accent-ink" strokeWidth={2.4} />
-              <span className="shrink-0 text-[12px] font-bold text-ink">{action.label}</span>
-              <span className="truncate text-[11px] font-semibold text-ink-muted">{action.hint}</span>
-              <ChevronRight className="ml-auto size-3.5 shrink-0 text-ink-muted" />
-            </button>
-          ))}
+      {summary ? (
+        <div className="relative flex items-center gap-1.5 border-t border-accent-ring/25 px-4 py-2 text-[10.5px] font-bold text-ink-muted">
+          <span>Généré à {generatedClock}</span>
+          <span aria-hidden className="size-[3px] rounded-full bg-accent-ring" />
+          <span>{summary.source === "llm" ? "mis en cache" : "local"}</span>
+          <span aria-hidden className="size-[3px] rounded-full bg-accent-ring" />
+          <span className="tabular-nums">{summary.mailCount} mails analysés</span>
         </div>
       ) : null}
     </div>
@@ -595,12 +757,19 @@ export function DesktopInbox({
     replyTo,
     forwardMail,
     resumeDraft,
+    analyse,
+    runAnalyse,
+    closeAnalyse,
+    acceptAnalyseTask,
+    acceptAnalyseEvent,
+    openReplyWithBody,
     folderStats,
     accountUnread,
     summary,
     summaryLoading,
     summaryMails,
     refreshSummary,
+    proposeSummaryAction,
     bodyFetching,
     fetchBody,
     hiddenFolderOptions,
@@ -749,7 +918,6 @@ export function DesktopInbox({
   };
   const unreadThreads = threads.filter((thread) => thread.unread > 0).length;
   const attachmentThreads = threads.filter((thread) => thread.attachments > 0).length;
-  const summaryFiles = summaryMails.flatMap((mail) => mail.attachments ?? []);
   const encryptedThreads = threads.filter((thread) => thread.encrypted > 0).length;
 
   useEffect(() => {
@@ -1348,11 +1516,13 @@ export function DesktopInbox({
                 encrypted={encryptedThreads}
                 demo={mode === "demo"}
                 summary={summary}
-                files={summaryFiles}
+                mails={summaryMails}
                 loading={summaryLoading}
                 onToggle={() => setSummaryOpen(!summaryOpen)}
                 onOpen={openById}
                 onRefresh={() => void refreshSummary(true)}
+                onReply={replyTo}
+                onPropose={proposeSummaryAction}
               />
             </div>
           ) : null}
@@ -1522,9 +1692,30 @@ export function DesktopInbox({
                         <CornerUpRight className="size-3.5" />
                         Transférer
                       </DButton>
+                      <DButton
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void runAnalyse(mail)}
+                      >
+                        <Sparkles className="size-3.5" />
+                        Analyse
+                      </DButton>
                     </>
                   )}
                 </div>
+
+                {analyse && analyse.mailId === mail.id ? (
+                  <AnalysePanel
+                    analyse={analyse}
+                    mail={mail}
+                    variant="desktop"
+                    onClose={closeAnalyse}
+                    onAcceptTask={acceptAnalyseTask}
+                    onAcceptEvent={acceptAnalyseEvent}
+                    onUseReply={(body) => openReplyWithBody(mail, body)}
+                    onRetry={() => void runAnalyse(mail, true)}
+                  />
+                ) : null}
               </div>
 
               <div

@@ -6,7 +6,7 @@ import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { DEFAULT_SUMMARY, currentPeriod } from "@/lib/summary";
-import { MAIL_SUGGESTIONS, TASKS } from "@/lib/tasks";
+import { MAIL_SUGGESTIONS, TASKS, formatDueDate, isoToday } from "@/lib/tasks";
 import { createMemoryStorage } from "@/lib/sync/storage";
 
 const ALPHA = "alpha";
@@ -82,10 +82,15 @@ const THREADS = [
 const reply = (body: unknown) =>
   ({ ok: true, status: 200, statusText: "", json: async () => body }) as unknown as Response;
 
+const DUE_ISO = isoToday(4);
+
 const SUMMARY_JSON = {
-  resume: "Camille attend un retour sur la v3, la facture OVH est arrivée.",
+  accroche: "Camille attend un retour sur la v3, la facture OVH est arrivée.",
+  actions: [{ mailId: `${ALPHA}:INBOX:1`, raison: "Répondre à Camille sur la v3", echeance: DUE_ISO }],
+  infos: [{ mailId: `${ALPHA}:INBOX:2`, raison: "Avenant à lire" }],
+  notifications: [],
   taches: [
-    { titre: "Répondre à Camille", echeance: "2026-11-20", de: "Camille", mailId: `${ALPHA}:INBOX:1` },
+    { titre: "Répondre à Camille", echeance: DUE_ISO, de: "Camille", mailId: `${ALPHA}:INBOX:1` },
     { titre: "Classer la facture OVH", echeance: "aucune", de: "OVH" },
   ],
 };
@@ -146,7 +151,9 @@ describe("résumé périodique · repli local", () => {
     const summary = result.current.summary!;
     expect(summary.source).toBe("fallback");
     expect(summary.period.label).toBe(currentPeriod(DEFAULT_SUMMARY).label);
-    expect(summary.text.length).toBeGreaterThan(0);
+    expect(summary.headline.length).toBeGreaterThan(0);
+    expect(summary.groups.actions).toEqual([]);
+    expect(summary.groups.infos.length).toBeGreaterThan(0);
     expect(summary.tasks).toHaveLength(0);
     expect(llmCalls).toHaveLength(0);
     expect(result.current.tasks).toHaveLength(TASKS.length);
@@ -171,7 +178,9 @@ describe("résumé périodique · tâches proposées", () => {
 
     await waitFor(() => expect(result.current.summary?.source).toBe("llm"), { timeout: 3000 });
 
-    expect(result.current.summary?.text).toBe(SUMMARY_JSON.resume);
+    expect(result.current.summary?.headline).toBe(SUMMARY_JSON.accroche);
+    expect(result.current.summary?.groups.actions[0].mailId).toBe(`${ALPHA}:INBOX:1`);
+    expect(result.current.summary?.groups.infos[0].mailId).toBe(`${ALPHA}:INBOX:2`);
     expect(result.current.summary?.mailCount).toBe(THREADS.length);
     expect(result.current.tasks).toHaveLength(0);
     expect(result.current.tasks.some((task) => task.title === "Répondre à Camille")).toBe(false);
@@ -183,7 +192,7 @@ describe("résumé périodique · tâches proposées", () => {
     const linked = result.current.suggestions.find((entry) => entry.proposal === "Répondre à Camille");
     expect(linked?.mailId).toBe(`${ALPHA}:INBOX:1`);
     expect(linked?.subject).toBe("Maquettes v3");
-    expect(linked?.due).toBe("ven 20 nov");
+    expect(linked?.due).toBe(formatDueDate(DUE_ISO));
     expect(linked?.ai).toBe(true);
     expect(linked?.account).toBe(ALPHA);
     expect(MAIL_SUGGESTIONS.every((entry) => entry.ai === undefined)).toBe(true);

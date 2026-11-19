@@ -7,6 +7,7 @@ import { baseDraft } from "@/lib/draft";
 const prefs = vi.hoisted(() => ({
   aiReplyEnabled: true,
   llm: { endpoint: "https://llm.example/v1", apiKey: "sk-test", model: "modele" },
+  teamContext: {} as Record<string, unknown>,
 }));
 
 const store = vi.hoisted(() => ({
@@ -24,6 +25,7 @@ vi.mock("@/lib/prefs", () => ({
     signatures: [],
     llm: prefs.llm,
     aiReplyEnabled: prefs.aiReplyEnabled,
+    teamContext: prefs.teamContext,
     threadView: "tidy" as const,
   }),
   activeSignature: () => null,
@@ -71,6 +73,12 @@ function Harness() {
   return <ComposeScreen draft={draft} onDraftChange={setDraft} onClose={() => {}} />;
 }
 
+function systemPrompt(fetchMock: ReturnType<typeof vi.fn>): string {
+  const init = fetchMock.mock.calls.at(-1)?.[1] as RequestInit;
+  const body = JSON.parse(String(init.body)) as { messages: { role: string; content: string }[] };
+  return body.messages.find((message) => message.role === "system")?.content ?? "";
+}
+
 async function generate(brief: string) {
   fireEvent.click(screen.getByLabelText("Suggestion de réponse"));
   fireEvent.change(screen.getByLabelText("Ta consigne"), { target: { value: brief } });
@@ -80,6 +88,7 @@ async function generate(brief: string) {
 beforeEach(() => {
   vi.unstubAllGlobals();
   prefs.aiReplyEnabled = true;
+  prefs.teamContext = {};
   store.mails = FIL.messages;
   store.openThread = FIL;
 });
@@ -102,6 +111,38 @@ describe("suggestion de réponse · IA", () => {
     expect(user).toContain("Peux-tu confirmer le devis ?");
     expect(user).toContain("Je vérifie et je te réponds.");
     expect(user).toContain("Consigne pour la réponse : confirme le devis");
+  });
+
+  it("ajoute le contexte d'équipe de la boîte au prompt système", async () => {
+    prefs.teamContext = {
+      perso: {
+        identity: "Roman",
+        role: "Développeur",
+        context: "Application Lavande",
+        members: [{ name: "Stéphane", scope: "Support" }],
+      },
+    };
+    const fetchMock = vi.fn(async () => response({ choices: [{ message: { content: "C'est noté." } }] }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Harness />);
+
+    await generate("confirme le devis");
+
+    expect(await screen.findByText("C'est noté.")).toBeTruthy();
+    const system = systemPrompt(fetchMock);
+    expect(system).toContain("CONTEXTE UTILISATEUR");
+    expect(system).toContain("Stéphane");
+  });
+
+  it("n'ajoute aucune section d'équipe quand le contexte est vide", async () => {
+    const fetchMock = vi.fn(async () => response({ choices: [{ message: { content: "Volontiers." } }] }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Harness />);
+
+    await generate("confirme le devis");
+
+    expect(await screen.findByText("Volontiers.")).toBeTruthy();
+    expect(systemPrompt(fetchMock)).not.toContain("CONTEXTE UTILISATEUR");
   });
 
   it("replie sur les suggestions locales quand le réglage est désactivé", async () => {

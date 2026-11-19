@@ -40,6 +40,7 @@ const TASK_FIELDS = [
   "description",
   "subtasks",
   "mailId",
+  "assignee",
 ] as const;
 
 const TASK_STATE_IDS: TaskState[] = TASK_STATES.map((entry) => entry.id);
@@ -93,6 +94,7 @@ function projectTask(doc: Doc): Task {
   if (typeof raw.description === "string") task.description = raw.description;
   if (Array.isArray(raw.subtasks)) task.subtasks = projectSubtasks(raw.subtasks);
   if (typeof raw.mailId === "string") task.mailId = raw.mailId;
+  if (typeof raw.assignee === "string") task.assignee = raw.assignee;
   return task;
 }
 
@@ -113,6 +115,7 @@ function projectSuggestion(doc: Doc): MailSuggestion | null {
     kind: raw.kind === "event" ? "event" : "task",
   };
   if (raw.ai === true) suggestion.ai = true;
+  if (typeof raw.assignee === "string") suggestion.assignee = raw.assignee;
   if (typeof raw.timestamp === "number" && Number.isFinite(raw.timestamp)) {
     suggestion.timestamp = raw.timestamp;
   }
@@ -168,6 +171,7 @@ function suggestionFields(
     mailId: suggestion.mailId,
     account: suggestion.account,
     ...(suggestion.ai ? { ai: true } : {}),
+    ...(suggestion.assignee === undefined ? {} : { assignee: suggestion.assignee }),
     from: suggestion.from,
     subject: suggestion.subject,
     proposal: suggestion.proposal,
