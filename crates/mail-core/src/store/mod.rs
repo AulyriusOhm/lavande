@@ -12,10 +12,22 @@ use serde::Serialize;
 
 use crate::error::MailError;
 use crate::mime::ParsedMessage;
-use crate::model::{AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState, Thread};
+use crate::model::{Address, AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState, Thread};
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
+
+/// Rows reindexed per statement when `migrate` fills the FTS index of a
+/// database written before it existed: a big mailbox must not hold the daemon
+/// (or the Android widget) at startup.
+const REINDEX_BATCH: i64 = 5000;
+
+/// The rows `evict_bodies_before` empties: selected for reindexing and updated
+/// with the same predicate, so the index says exactly what the table says.
+const EVICTABLE: &str = "account_id = ?1 AND date < ?2 AND starred = 0 \
+     AND (body_text IS NOT NULL OR body_html IS NOT NULL) \
+     AND folder_path NOT IN \
+     (SELECT path FROM folders WHERE account_id = ?1 AND role = ?3)";
 const MESSAGE_COLUMNS: &str = "account_id, folder_path, uid, uidvalidity, thread_id, message_id, \
      in_reply_to, references_json, from_json, to_json, cc_json, subject, date, unread, starred, \
      answered, size, pgp, preview, body_text, body_html, pgp_detail";
@@ -76,6 +88,8 @@ impl Store {
         if version < SCHEMA_VERSION {
             conn.execute_batch(SCHEMA)?;
             add_missing_columns(&conn)?;
+            backfill_attachment_flags(&conn)?;
+            backfill_search_index(&conn)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         let healed = heal_reply_threads_on(&conn)?;
@@ -217,6 +231,7 @@ impl Store {
     pub fn delete_account(&self, account_id: &str) -> Result<usize, MailError> {
         let conn = self.conn()?;
         let tx = conn.unchecked_transaction()?;
+        drop_search_index(&tx, "account_id = ?1", params![account_id])?;
         let mut deleted = tx.execute(
             "DELETE FROM messages WHERE account_id = ?1",
             params![account_id],
@@ -240,15 +255,27 @@ impl Store {
     /// aperçu or the PGP detail `set_body` wrote, and it leaves the stored
     /// attachments alone when it brings none.
     pub fn upsert_message(&self, message: &Message) -> Result<(), MailError> {
+        self.upsert_message_with_attachment(message, !message.attachments.is_empty())
+    }
+
+    /// Same write, with the attachment flag the caller read from the headers it
+    /// imported: a sync never parses a body, so `multipart/mixed` announced in
+    /// the headers is the only hint a message never opened can give. The flag
+    /// only ever goes up here; `set_body` overwrites it with the truth.
+    pub fn upsert_message_with_attachment(
+        &self,
+        message: &Message,
+        has_attachment: bool,
+    ) -> Result<(), MailError> {
         let conn = self.conn()?;
         let tx = conn.unchecked_transaction()?;
         tx.execute(
             "INSERT INTO messages (account_id, folder_path, uid, uidvalidity, \
              thread_id, message_id, in_reply_to, references_json, from_json, to_json, cc_json, \
              subject, date, unread, starred, answered, size, pgp, preview, body_text, body_html, \
-             pgp_detail) \
+             pgp_detail, has_attachment) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, \
-             ?17, ?18, ?19, ?20, ?21, ?22) \
+             ?17, ?18, ?19, ?20, ?21, ?22, ?23) \
              ON CONFLICT(account_id, folder_path, uid) DO UPDATE SET \
              uidvalidity = excluded.uidvalidity, thread_id = excluded.thread_id, \
              message_id = excluded.message_id, in_reply_to = excluded.in_reply_to, \
@@ -256,7 +283,8 @@ impl Store {
              to_json = excluded.to_json, cc_json = excluded.cc_json, \
              subject = excluded.subject, date = excluded.date, unread = excluded.unread, \
              starred = excluded.starred, answered = excluded.answered, \
-             size = excluded.size, pgp = excluded.pgp",
+             size = excluded.size, pgp = excluded.pgp, \
+             has_attachment = MAX(messages.has_attachment, excluded.has_attachment)",
             params![
                 message.account_id,
                 message.folder_path,
@@ -280,6 +308,7 @@ impl Store {
                 message.body_text,
                 message.body_html,
                 to_json_option(&message.pgp_detail)?,
+                has_attachment,
             ],
         )?;
         if !message.attachments.is_empty() {
@@ -295,6 +324,10 @@ impl Store {
                 &message.attachments,
             )?;
         }
+        index_message(
+            &tx,
+            rowid_of(&tx, &message.account_id, &message.folder_path, message.uid)?,
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -309,11 +342,14 @@ impl Store {
         preview: &str,
     ) -> Result<(), MailError> {
         let conn = self.conn()?;
-        conn.execute(
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
             "UPDATE messages SET preview = ?4 \
              WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
             params![account_id, folder_path, uid, preview],
         )?;
+        index_message(&tx, rowid_of(&tx, account_id, folder_path, uid)?)?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -323,14 +359,30 @@ impl Store {
     /// messages were emptied.
     pub fn evict_bodies_before(&self, account_id: &str, cutoff: &str) -> Result<usize, MailError> {
         let conn = self.conn()?;
-        Ok(conn.execute(
-            "UPDATE messages SET body_text = NULL, body_html = NULL, pgp_detail = NULL \
-             WHERE account_id = ?1 AND date < ?2 AND starred = 0 \
-             AND (body_text IS NOT NULL OR body_html IS NOT NULL) \
-             AND folder_path NOT IN \
-             (SELECT path FROM folders WHERE account_id = ?1 AND role = ?3)",
+        let tx = conn.unchecked_transaction()?;
+        let emptied: Vec<i64> = {
+            let mut statement =
+                tx.prepare(&format!("SELECT rowid FROM messages WHERE {EVICTABLE}"))?;
+            let rows = statement
+                .query_map(
+                    params![account_id, cutoff, FolderRole::Drafts.as_str()],
+                    |row| row.get(0),
+                )?
+                .collect::<Result<_, _>>()?;
+            rows
+        };
+        let count = tx.execute(
+            &format!(
+                "UPDATE messages SET body_text = NULL, body_html = NULL, pgp_detail = NULL \
+                 WHERE {EVICTABLE}"
+            ),
             params![account_id, cutoff, FolderRole::Drafts.as_str()],
-        )?)
+        )?;
+        for rowid in emptied {
+            index_message(&tx, rowid)?;
+        }
+        tx.commit()?;
+        Ok(count)
     }
 
     pub fn get_message(
@@ -511,7 +563,8 @@ impl Store {
         let tx = conn.unchecked_transaction()?;
         let updated = tx.execute(
             "UPDATE messages SET body_text = ?4, body_html = ?5, preview = ?6, pgp = ?7, \
-             pgp_detail = ?8 WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
+             pgp_detail = ?8, has_attachment = ?9 \
+             WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
             params![
                 account_id,
                 folder_path,
@@ -521,6 +574,7 @@ impl Store {
                 parsed.preview,
                 parsed.pgp.as_str(),
                 to_json_option(&parsed.pgp_detail)?,
+                !parsed.attachments.is_empty(),
             ],
         )?;
         require_one(updated, "message")?;
@@ -529,6 +583,7 @@ impl Store {
             params![account_id, folder_path, uid],
         )?;
         insert_attachments(&tx, account_id, folder_path, uid, &parsed.attachments)?;
+        index_message(&tx, rowid_of(&tx, account_id, folder_path, uid)?)?;
         tx.commit()?;
         Ok(())
     }
@@ -594,6 +649,11 @@ impl Store {
     pub fn clear_folder(&self, account_id: &str, folder_path: &str) -> Result<usize, MailError> {
         let conn = self.conn()?;
         let tx = conn.unchecked_transaction()?;
+        drop_search_index(
+            &tx,
+            "account_id = ?1 AND folder_path = ?2",
+            params![account_id, folder_path],
+        )?;
         let deleted = tx.execute(
             "DELETE FROM messages WHERE account_id = ?1 AND folder_path = ?2",
             params![account_id, folder_path],
@@ -626,6 +686,11 @@ impl Store {
     pub fn delete_folder(&self, account_id: &str, folder_path: &str) -> Result<usize, MailError> {
         let conn = self.conn()?;
         let tx = conn.unchecked_transaction()?;
+        drop_search_index(
+            &tx,
+            "account_id = ?1 AND folder_path = ?2",
+            params![account_id, folder_path],
+        )?;
         let deleted = tx.execute(
             "DELETE FROM messages WHERE account_id = ?1 AND folder_path = ?2",
             params![account_id, folder_path],
@@ -675,30 +740,80 @@ impl Store {
         messages_in_folder_on(&conn, account_id, folder_path, limit, offset)
     }
 
-    /// Full-text-ish search over the local store: subject, preview, body and
-    /// sender, newest first. `%` and `_` in the query are escaped.
+    /// Search over the subjects, correspondents and bodies of one account,
+    /// newest first.
     pub fn search_messages(
         &self,
         account_id: &str,
         query: &str,
         limit: i64,
     ) -> Result<Vec<Message>, MailError> {
-        let escaped = query
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_");
-        let needle = format!("%{escaped}%");
+        self.search(
+            account_id,
+            &SearchFilter {
+                q: query,
+                limit,
+                ..SearchFilter::default()
+            },
+        )
+    }
+
+    /// The full search: a free-text query, the structured filters, a page. The
+    /// text goes through the FTS index when it holds at least one word, and the
+    /// filters are plain SQL on `messages`. An empty query with filters is a
+    /// filtered listing, with nothing at all an unfiltered one.
+    pub fn search(
+        &self,
+        account_id: &str,
+        filter: &SearchFilter<'_>,
+    ) -> Result<Vec<Message>, MailError> {
         let conn = self.conn()?;
-        let sql = format!(
-            "SELECT {MESSAGE_COLUMNS} FROM messages \
-             WHERE account_id = ?1 AND (subject LIKE ?2 ESCAPE '\\' \
-                 OR preview LIKE ?2 ESCAPE '\\' \
-                 OR body_text LIKE ?2 ESCAPE '\\' \
-                 OR from_json LIKE ?2 ESCAPE '\\') \
-             ORDER BY date DESC, uid DESC LIMIT ?3"
-        );
+        let matched = fts_query(filter);
+        if matched.is_none() && !filter.q.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let bounds = [
+            ("folder_path = ", filter.folder),
+            ("date >= ", filter.after),
+            ("date < ", filter.before),
+        ];
+        let switches = [
+            ("unread", filter.unread.map(i64::from)),
+            ("starred", filter.starred.map(i64::from)),
+            ("has_attachment", filter.has_attachment.map(i64::from)),
+        ];
+        let limit = if filter.limit <= 0 { -1 } else { filter.limit };
+        let offset = filter.offset.max(0);
+        let mut sql = format!("SELECT {MESSAGE_COLUMNS} FROM messages WHERE account_id = ?1");
+        let mut values: Vec<&dyn ToSql> = vec![&account_id];
+        if let Some(matched) = &matched {
+            values.push(matched);
+            sql.push_str(&format!(
+                " AND rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?{})",
+                values.len()
+            ));
+        }
+        for (column, value) in &bounds {
+            if let Some(value) = value {
+                values.push(value);
+                sql.push_str(&format!(" AND {column}?{}", values.len()));
+            }
+        }
+        for (column, value) in &switches {
+            if let Some(value) = value {
+                values.push(value);
+                sql.push_str(&format!(" AND {column} = ?{}", values.len()));
+            }
+        }
+        values.push(&limit);
+        sql.push_str(&format!(
+            " ORDER BY date DESC, uid DESC LIMIT ?{} OFFSET ?{}",
+            values.len(),
+            values.len() + 1
+        ));
+        values.push(&offset);
         let mut statement = conn.prepare(&sql)?;
-        let rows = statement.query_map(params![account_id, needle, limit], MessageRow::read)?;
+        let rows = statement.query_map(values.as_slice(), MessageRow::read)?;
         let mut messages = Vec::new();
         for row in rows {
             messages.push(row?.into_message()?);
@@ -1070,6 +1185,11 @@ fn delete_messages_on(
     let mut values: Vec<&dyn ToSql> = vec![&account_id, &folder_path];
     values.extend(uids.iter().map(|uid| uid as &dyn ToSql));
     let tx = conn.unchecked_transaction()?;
+    drop_search_index(
+        &tx,
+        &format!("account_id = ?1 AND folder_path = ?2 AND uid IN ({placeholders})"),
+        values.as_slice(),
+    )?;
     let deleted = tx.execute(
         &format!(
             "DELETE FROM messages WHERE account_id = ?1 AND folder_path = ?2 \
@@ -1214,6 +1334,197 @@ impl MessageRow {
     }
 }
 
+/// What a search looks for. `q` is free text, matched against the subject, the
+/// correspondents and the body; `from`, `to` and `subject` narrow one field
+/// each; `after` and `before` are RFC 3339 instants, `after` inclusive,
+/// `before` exclusive. Every field is optional: no query and no filter lists the
+/// account newest first.
+#[derive(Clone, Debug, Default)]
+pub struct SearchFilter<'a> {
+    pub q: &'a str,
+    pub folder: Option<&'a str>,
+    pub from: Option<&'a str>,
+    pub to: Option<&'a str>,
+    pub subject: Option<&'a str>,
+    pub unread: Option<bool>,
+    pub starred: Option<bool>,
+    pub has_attachment: Option<bool>,
+    pub before: Option<&'a str>,
+    pub after: Option<&'a str>,
+    pub limit: i64,
+    pub offset: i64,
+}
+
+/// The FTS5 expression of the text part of a search, `None` when there is no
+/// word to match. Every word is quoted and taken as a prefix, so no character
+/// the user types can reach the query grammar: a query made of punctuation
+/// alone (`%`, `"`, `(`) simply has nothing to look for.
+fn fts_query(filter: &SearchFilter<'_>) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(tokens) = match_tokens(filter.q) {
+        parts.push(format!("({tokens})"));
+    }
+    for (column, value) in [
+        ("subject", filter.subject),
+        ("sender", filter.from),
+        ("recipients", filter.to),
+    ] {
+        if let Some(tokens) = value.and_then(match_tokens) {
+            parts.push(format!("{column} : ({tokens})"));
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join(" AND "))
+}
+
+/// The words of a text, each as a quoted FTS5 prefix phrase and joined by
+/// `AND`; `None` when the text holds no word at all.
+fn match_tokens(text: &str) -> Option<String> {
+    let tokens: Vec<String> = text
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(|token| format!("\"{token}\"*"))
+        .collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    Some(tokens.join(" AND "))
+}
+
+/// Rewrites the index entry of one message from the row it points at: the only
+/// place the FTS table is written, so every write path indexes the same
+/// columns. `body` is indexed only while the message still holds one — an
+/// evicted body must stop matching.
+fn index_message(conn: &Connection, rowid: i64) -> Result<(), MailError> {
+    conn.execute("DELETE FROM messages_fts WHERE rowid = ?1", params![rowid])?;
+    let row = conn
+        .query_row(
+            "SELECT subject, from_json, to_json, cc_json, body_text FROM messages \
+             WHERE rowid = ?1",
+            params![rowid],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((subject, from_json, to_json, cc_json, body)) = row else {
+        return Ok(());
+    };
+    let sender = sender_text(&from_json)?;
+    let recipients = [addresses_text(&to_json)?, addresses_text(&cc_json)?].join(" ");
+    conn.execute(
+        "INSERT INTO messages_fts (rowid, subject, sender, recipients, body) \
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![rowid, subject, sender, recipients, body.unwrap_or_default()],
+    )?;
+    Ok(())
+}
+
+/// "name email" of a stored `from_json`, empty when the sender is unknown.
+fn sender_text(raw: &str) -> Result<String, MailError> {
+    let sender: Address = from_json(raw)?;
+    Ok([sender.name.unwrap_or_default(), sender.email]
+        .join(" ")
+        .trim()
+        .to_string())
+}
+
+/// "name email" of every stored recipient of `to_json` or `cc_json`.
+fn addresses_text(raw: &str) -> Result<String, MailError> {
+    let addresses: Vec<Address> = from_json(raw)?;
+    Ok(addresses
+        .iter()
+        .map(|address| {
+            [
+                address.name.clone().unwrap_or_default(),
+                address.email.clone(),
+            ]
+            .join(" ")
+            .trim()
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(" "))
+}
+
+/// The `messages.rowid` the FTS index keys on. Read after the write: an upsert
+/// that took the `UPDATE` path gets no `last_insert_rowid`.
+fn rowid_of(
+    conn: &Connection,
+    account_id: &str,
+    folder_path: &str,
+    uid: u32,
+) -> Result<i64, MailError> {
+    conn.query_row(
+        "SELECT rowid FROM messages WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
+        params![account_id, folder_path, uid],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
+/// Drops the index entries of the messages `condition` selects, before the rows
+/// themselves go: the index is keyed by `messages.rowid`, which dies with them.
+fn drop_search_index(
+    conn: &Connection,
+    condition: &str,
+    values: &[&dyn ToSql],
+) -> Result<(), MailError> {
+    conn.execute(
+        &format!(
+            "DELETE FROM messages_fts WHERE rowid IN \
+             (SELECT rowid FROM messages WHERE {condition})"
+        ),
+        values,
+    )?;
+    Ok(())
+}
+
+/// Fills `has_attachment` for the mailboxes written before the column existed:
+/// what was opened carries its stored attachments, what never was stays `0`.
+fn backfill_attachment_flags(conn: &Connection) -> Result<(), MailError> {
+    conn.execute(
+        "UPDATE messages SET has_attachment = 1 WHERE has_attachment = 0 \
+         AND EXISTS (SELECT 1 FROM attachments WHERE \
+             attachments.account_id = messages.account_id \
+             AND attachments.folder_path = messages.folder_path \
+             AND attachments.uid = messages.uid)",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Indexes a mailbox written before the index existed, rowid batch after rowid
+/// batch.
+fn backfill_search_index(conn: &Connection) -> Result<(), MailError> {
+    let mut last = 0;
+    loop {
+        let rowids: Vec<i64> = {
+            let mut statement = conn
+                .prepare("SELECT rowid FROM messages WHERE rowid > ?1 ORDER BY rowid LIMIT ?2")?;
+            let rows = statement
+                .query_map(params![last, REINDEX_BATCH], |row| row.get(0))?
+                .collect::<Result<_, _>>()?;
+            rows
+        };
+        let Some(batch_end) = rowids.last() else {
+            return Ok(());
+        };
+        last = *batch_end;
+        for rowid in rowids {
+            index_message(conn, rowid)?;
+        }
+    }
+}
+
 fn to_json<T: Serialize>(value: &T) -> Result<String, MailError> {
     Ok(serde_json::to_string(value)?)
 }
@@ -1234,6 +1545,12 @@ fn add_missing_columns(conn: &Connection) -> Result<(), MailError> {
     }
     if !column_exists(conn, "folders", "delimiter")? {
         conn.execute("ALTER TABLE folders ADD COLUMN delimiter TEXT", [])?;
+    }
+    if !column_exists(conn, "messages", "has_attachment")? {
+        conn.execute(
+            "ALTER TABLE messages ADD COLUMN has_attachment INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
     }
     if !column_exists(conn, "accounts", "pgp")? {
         conn.execute(
@@ -1446,5 +1763,129 @@ mod tests {
         assert_eq!(pgp, 1, "l'interrupteur est ouvert par défaut");
 
         add_missing_columns(&conn).expect("migrate again");
+    }
+
+    /// The bundled SQLite must carry FTS5 (`ENABLE_FTS5`) with
+    /// `contentless_delete`: the local search has no fallback.
+    #[test]
+    fn the_bundled_sqlite_compiles_fts5() {
+        let store = Store::open_in_memory().expect("open");
+        let conn = store.conn().expect("lock");
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE probe USING fts5(body, content='', contentless_delete=1, \
+             tokenize=\"unicode61 remove_diacritics 2\"); \
+             INSERT INTO probe (rowid, body) VALUES (1, 'zèbre');",
+        )
+        .expect("FTS5 compilé");
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM probe WHERE probe MATCH '\"ZEBRE\"'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("requête");
+        assert_eq!(hits, 1);
+        conn.execute("DELETE FROM probe WHERE rowid = 1", [])
+            .expect("contentless_delete");
+    }
+
+    /// A mailbox written before the index existed: `migrate` indexes what is
+    /// stored, and the messages opened before the column existed keep their
+    /// attachments.
+    #[test]
+    fn migrating_an_older_database_indexes_it_and_backfills_the_attachment_flag() {
+        let conn = legacy_database();
+        conn.pragma_update(None, "user_version", 6)
+            .expect("version");
+        conn.execute_batch(
+            "CREATE TABLE attachments (account_id TEXT, folder_path TEXT, uid INTEGER, \
+             idx INTEGER, filename TEXT, mime TEXT, size INTEGER, inline INTEGER, \
+             PRIMARY KEY (account_id, folder_path, uid, idx)); \
+             INSERT INTO messages (account_id, folder_path, uid, uidvalidity, thread_id, \
+             message_id, in_reply_to, references_json, from_json, to_json, cc_json, subject, \
+             date, unread, starred, answered, size, pgp, preview, body_text, body_html) \
+             VALUES ('perso', 'INBOX', 1, 7, 't1', '<m1@x>', NULL, '[]', \
+             '{\"name\":\"Léa\",\"email\":\"lea@mail.fr\"}', '[]', '[]', 'Zèbre rayé', \
+             '2026-01-02T10:00:00Z', 1, 0, 0, 10, 'none', '', 'corps xylophone', NULL); \
+             INSERT INTO attachments VALUES ('perso', 'INBOX', 1, 0, 'a.pdf', \
+             'application/pdf', 4, 0);",
+        )
+        .expect("base ancienne");
+        let store = Store::from_connection(conn).expect("store");
+        store.migrate().expect("migrate");
+
+        assert!(
+            column_exists(&store.conn().expect("lock"), "messages", "has_attachment")
+                .expect("probe")
+        );
+        assert_eq!(
+            store
+                .search_messages("perso", "zebre", 10)
+                .expect("sujet")
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .search_messages("perso", "xylophone", 10)
+                .expect("corps")
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .search_messages("perso", "lea@mail", 10)
+                .expect("expéditeur")
+                .len(),
+            1
+        );
+        let attached = store
+            .search(
+                "perso",
+                &SearchFilter {
+                    has_attachment: Some(true),
+                    limit: 10,
+                    ..SearchFilter::default()
+                },
+            )
+            .expect("pièces jointes");
+        assert_eq!(attached.len(), 1);
+        store.migrate().expect("migrate again");
+        assert_eq!(
+            store
+                .search_messages("perso", "zebre", 10)
+                .expect("sujet")
+                .len(),
+            1
+        );
+    }
+
+    /// The backfill walks a mailbox bigger than one batch without stopping on
+    /// the way.
+    #[test]
+    fn the_backfill_walks_a_mailbox_batch_after_batch() {
+        let conn = legacy_database();
+        conn.pragma_update(None, "user_version", 6)
+            .expect("version");
+        conn.execute_batch(
+            "WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5001) \
+             INSERT INTO messages (account_id, folder_path, uid, uidvalidity, thread_id, \
+             message_id, in_reply_to, references_json, from_json, to_json, cc_json, subject, \
+             date, unread, starred, answered, size, pgp, preview, body_text, body_html) \
+             SELECT 'perso', 'INBOX', i, 7, 't' || i, NULL, NULL, '[]', \
+             '{\"name\":null,\"email\":\"marc@mail.fr\"}', '[]', '[]', 'corps ' || i, \
+             '2026-01-02T10:00:00Z', 0, 0, 0, 10, 'none', '', 'xylophone ' || i, NULL FROM n;",
+        )
+        .expect("grosse boîte");
+        let store = Store::from_connection(conn).expect("store");
+        store.migrate().expect("migrate");
+
+        assert_eq!(
+            store
+                .search_messages("perso", "xylophone", -1)
+                .expect("corps")
+                .len(),
+            5001
+        );
     }
 }

@@ -1,17 +1,20 @@
-//! `/api/accounts/{id}/search`: local full-text-ish search across every folder,
-//! completed by a server-side `UID SEARCH TEXT` when the store falls short.
+//! `/api/accounts/{id}/search`: the local full-text index, narrowed by
+//! structured filters and paged, completed by a server-side `UID SEARCH` when
+//! the index falls short.
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
+use chrono::NaiveDate;
 use lavande_mail::config::AccountConfig;
 use lavande_mail::error::MailError;
-use lavande_mail::imap;
+use lavande_mail::imap::{self, SearchCriteria};
 use lavande_mail::model::{Folder, Message};
-use lavande_mail::store::Store;
+use lavande_mail::store::{SearchFilter, Store};
 use lavande_mail::tls::TlsOptions;
 use serde::Deserialize;
 
@@ -28,43 +31,142 @@ const MIN_SERVER_QUERY: usize = 3;
 /// Le repli serveur ne traite jamais plus de `SERVER_BUDGET × limit` UID.
 const SERVER_BUDGET: usize = 2;
 
+/// Un serveur lent ne retient pas la requête : passé ce délai, les résultats
+/// locaux sont rendus tels quels.
+const SERVER_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/api/accounts/{id}/search", get(search))
 }
 
 #[derive(Deserialize)]
 struct SearchQuery {
-    q: String,
+    q: Option<String>,
     limit: Option<usize>,
+    offset: Option<usize>,
+    folder: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+    subject: Option<String>,
+    unread: Option<String>,
+    starred: Option<String>,
+    has_attachment: Option<String>,
+    before: Option<String>,
+    after: Option<String>,
 }
 
 async fn search(
     Path(id): Path<String>,
-    Query(query): Query<SearchQuery>,
+    Query(params): Query<SearchQuery>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<Message>>, ApiError> {
     state.ensure_account(&id)?;
-    let trimmed = query.q.trim();
-    if trimmed.is_empty() {
-        return Ok(Json(Vec::new()));
+    let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let offset = params.offset.unwrap_or(0);
+    let unread = flag("unread", params.unread.as_deref())?;
+    let starred = flag("starred", params.starred.as_deref())?;
+    let has_attachment = flag("has_attachment", params.has_attachment.as_deref())?;
+    let before = day("before", params.before.as_deref())?;
+    let after = day("after", params.after.as_deref())?;
+    let before_instant = start_of_day(before);
+    let after_instant = start_of_day(after);
+    let query = params.q.as_deref().unwrap_or("").trim();
+    let filter = SearchFilter {
+        q: query,
+        folder: non_empty(params.folder.as_deref()),
+        from: non_empty(params.from.as_deref()),
+        to: non_empty(params.to.as_deref()),
+        subject: non_empty(params.subject.as_deref()),
+        unread,
+        starred,
+        has_attachment,
+        before: before_instant.as_deref(),
+        after: after_instant.as_deref(),
+        limit: limit as i64,
+        offset: offset as i64,
+    };
+    let mut messages = state.store().search(&id, &filter)?;
+    let server_can_help = offset == 0
+        && messages.len() < limit
+        && has_attachment.is_none()
+        && query.chars().count() >= MIN_SERVER_QUERY;
+    if !server_can_help {
+        return Ok(Json(messages));
     }
-    let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-    let mut messages = state.store().search_messages(&id, trimmed, limit as i64)?;
-    if messages.len() < limit && trimmed.chars().count() >= MIN_SERVER_QUERY {
-        let found = server_search(&state, &id, trimmed, limit).await;
-        messages = merge(messages, found, limit);
+    let criteria = SearchCriteria {
+        text: Some(query),
+        subject: filter.subject,
+        from: filter.from,
+        to: filter.to,
+        unread,
+        starred,
+        before,
+        after,
+    };
+    match tokio::time::timeout(
+        SERVER_TIMEOUT,
+        server_search(&state, &id, &criteria, filter.folder, limit),
+    )
+    .await
+    {
+        Ok(found) => {
+            messages = merge(messages, found, limit);
+        }
+        Err(_) => {
+            tracing::warn!(account = %id, "recherche serveur : délai dépassé, résultats locaux seuls");
+        }
     }
     Ok(Json(messages))
 }
 
-/// Le repli serveur : `UID SEARCH TEXT` sur chaque dossier connu du compte,
-/// import des en-têtes des UID que le store ignore, puis relecture locale. Tout
-/// échec est best-effort — la recherche locale reste le contrat, le serveur
-/// n'est qu'un enrichissement.
+/// A boolean query parameter. Absent or empty is "no filter"; anything but
+/// `true`/`false`/`1`/`0` is refused rather than silently ignored.
+fn flag(name: &str, raw: Option<&str>) -> Result<Option<bool>, ApiError> {
+    match raw {
+        None | Some("") => Ok(None),
+        Some("true") | Some("1") => Ok(Some(true)),
+        Some("false") | Some("0") => Ok(Some(false)),
+        Some(other) => Err(ApiError::bad_request(
+            "search",
+            format!("{name} : booléen attendu, reçu « {other} »"),
+        )),
+    }
+}
+
+/// A `YYYY-MM-DD` query parameter.
+fn day(name: &str, raw: Option<&str>) -> Result<Option<NaiveDate>, ApiError> {
+    match raw {
+        None | Some("") => Ok(None),
+        Some(raw) => NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+            .map(Some)
+            .map_err(|_| {
+                ApiError::bad_request(
+                    "search",
+                    format!("{name} : date attendue au format AAAA-MM-JJ, reçu « {raw} »"),
+                )
+            }),
+    }
+}
+
+/// The instant a `before`/`after` day starts at, in the RFC 3339 UTC shape the
+/// store writes dates in.
+fn start_of_day(day: Option<NaiveDate>) -> Option<String> {
+    day.map(|day| format!("{}T00:00:00Z", day.format("%Y-%m-%d")))
+}
+
+fn non_empty(raw: Option<&str>) -> Option<&str> {
+    raw.filter(|value| !value.is_empty())
+}
+
+/// The server-side fallback: `UID SEARCH` on the folders known to the store,
+/// import of the headers of the UID it does not know, then a local re-read. Any
+/// failure is best-effort — the local index stays the contract, the server is
+/// only an enrichment.
 async fn server_search(
     state: &AppState,
     account_id: &str,
-    query: &str,
+    criteria: &SearchCriteria<'_>,
+    folder: Option<&str>,
     limit: usize,
 ) -> Vec<Message> {
     let store = state.store();
@@ -81,6 +183,13 @@ async fn server_search(
             tracing::warn!(account = account_id, %error, "recherche serveur : dossiers illisibles");
             return Vec::new();
         }
+    };
+    let folders: Vec<Folder> = match folder {
+        Some(path) => folders
+            .into_iter()
+            .filter(|known| known.path == path)
+            .collect(),
+        None => folders,
     };
     if folders.is_empty() {
         return Vec::new();
@@ -104,7 +213,7 @@ async fn server_search(
             state.tls(),
             &config,
             folder,
-            query,
+            criteria,
             budget,
         )
         .await;
@@ -133,19 +242,19 @@ async fn server_search(
     found
 }
 
-/// Cherche `query` dans un dossier, importe les en-têtes des UID que le store ne
-/// connaît pas encore, puis relit les lignes locales. Rend les messages trouvés
-/// et le nombre d'UID serveur traités.
+/// Searches one folder to the criteria, imports the headers of the UID the store
+/// does not know yet, then re-reads the local rows. Returns the messages found
+/// and how many server UID were handled.
 async fn search_folder(
     session: &mut imap::ImapSession,
     store: &Store,
     tls: &TlsOptions,
     config: &AccountConfig,
     folder: &Folder,
-    query: &str,
+    criteria: &SearchCriteria<'_>,
     budget: usize,
 ) -> Result<(Vec<Message>, usize), MailError> {
-    let uids: Vec<u32> = imap::select_and_search(session, &folder.path, query)
+    let uids: Vec<u32> = imap::select_and_search(session, &folder.path, criteria)
         .await?
         .into_iter()
         .take(budget)
@@ -180,23 +289,28 @@ async fn search_folder(
     Ok((messages, uids.len()))
 }
 
-/// Fusionne les résultats serveur dans les résultats locaux : dédoublonne par
-/// `(folder_path, uid)`, trie du plus récent au plus ancien comme le store, et
-/// tronque à `limit`.
+/// Fuses the server hits into the local ones: one row per message (`message_id`
+/// when it has one, `(folder_path, uid)` otherwise) and the local row wins, as
+/// it carries the body and the attachments. Newest first, like the store, then
+/// truncated to `limit`.
 fn merge(local: Vec<Message>, found: Vec<Message>, limit: usize) -> Vec<Message> {
     let mut messages = local;
-    let mut seen: HashSet<(String, u32)> = messages
-        .iter()
-        .map(|message| (message.folder_path.clone(), message.uid))
-        .collect();
+    let mut seen: HashSet<String> = messages.iter().map(dedup_key).collect();
     for message in found {
-        if seen.insert((message.folder_path.clone(), message.uid)) {
+        if seen.insert(dedup_key(&message)) {
             messages.push(message);
         }
     }
     messages.sort_by(|left, right| right.date.cmp(&left.date).then(right.uid.cmp(&left.uid)));
     messages.truncate(limit);
     messages
+}
+
+fn dedup_key(message: &Message) -> String {
+    match message.message_id.as_deref() {
+        Some(message_id) if !message_id.is_empty() => message_id.to_string(),
+        _ => format!("{}:{}", message.folder_path, message.uid),
+    }
 }
 
 #[cfg(test)]
@@ -254,5 +368,37 @@ mod tests {
         let merged = merge(vec![local], vec![message("INBOX", 5, 10)], 10);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].body_text.as_deref(), Some("corps local"));
+    }
+
+    /// The same message filed twice (INBOX and its archive) is one hit; the
+    /// local copy is the one kept.
+    #[test]
+    fn a_known_message_id_is_deduplicated() {
+        let mut archived = message("Archives", 7, 9);
+        archived.message_id = Some("<m1@x>".to_string());
+        let mut inbox = message("INBOX", 3, 10);
+        inbox.message_id = Some("<m1@x>".to_string());
+        let merged = merge(vec![inbox], vec![archived], 10);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].folder_path, "INBOX");
+    }
+
+    #[test]
+    fn an_invalid_date_is_refused() {
+        assert!(day("before", Some("2026-13-01")).is_err());
+        assert!(day("after", Some("hier")).is_err());
+        assert_eq!(
+            day("after", Some("2026-03-04"))
+                .expect("valide")
+                .map(|day| { start_of_day(Some(day)).expect("instant") }),
+            Some("2026-03-04T00:00:00Z".to_string())
+        );
+    }
+
+    #[test]
+    fn an_invalid_flag_is_refused() {
+        assert!(flag("unread", Some("oui")).is_err());
+        assert_eq!(flag("unread", Some("")).expect("vide"), None);
+        assert_eq!(flag("starred", Some("false")).expect("faux"), Some(false));
     }
 }

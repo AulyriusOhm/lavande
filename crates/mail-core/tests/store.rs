@@ -4,7 +4,7 @@ use chrono::{TimeZone, Utc};
 use lavande_mail::mime;
 use lavande_mail::model::{Address, AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState};
 use lavande_mail::pgp::PgpDetail;
-use lavande_mail::store::FolderCount;
+use lavande_mail::store::{FolderCount, SearchFilter};
 use lavande_mail::Store;
 
 fn open() -> Store {
@@ -1435,4 +1435,347 @@ fn a_fresh_tombstone_survives_a_prune() {
     store.tombstone_uid("perso", "INBOX", 4);
     store.prune_tombstones(Instant::now());
     assert!(store.is_tombstoned("perso", "INBOX", 4));
+}
+
+#[test]
+fn search_folds_accents_and_case() {
+    let store = open();
+    let mut zebra = message(1, "t1", "Marc", "Zèbre rayé", 10);
+    zebra.body_text = Some("Une harde à l'aube".to_string());
+    let other = message(2, "t2", "Lea", "Planning", 11);
+    for mail in [&zebra, &other] {
+        store.upsert_message(mail).expect("insert");
+    }
+
+    for needle in ["zebre", "ZÈBRE", "Zebre", "zébr"] {
+        let hits = store.search_messages("perso", needle, 10).expect("search");
+        assert_eq!(hits.len(), 1, "{needle}");
+        assert_eq!(hits[0].uid, 1);
+    }
+    let body = store.search_messages("perso", "harde", 10).expect("search");
+    assert_eq!(body.len(), 1);
+    assert_eq!(body[0].uid, 1);
+}
+
+#[test]
+fn search_matches_the_recipients_and_the_copies() {
+    let store = open();
+    let mut mail = message(1, "t1", "Marc", "Planning", 10);
+    mail.to = vec![Address {
+        name: Some("Camille".to_string()),
+        email: "camille@studio.fr".to_string(),
+    }];
+    mail.cc = vec![Address {
+        name: None,
+        email: "theo@studio.fr".to_string(),
+    }];
+    store.upsert_message(&mail).expect("insert");
+
+    assert_eq!(
+        store
+            .search_messages("perso", "camille", 10)
+            .expect("to")
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .search_messages("perso", "theo@studio", 10)
+            .expect("cc")
+            .len(),
+        1
+    );
+}
+
+fn uids(store: &Store, filter: &SearchFilter<'_>) -> Vec<u32> {
+    let mut uids: Vec<u32> = store
+        .search("perso", filter)
+        .expect("search")
+        .iter()
+        .map(|mail| mail.uid)
+        .collect();
+    uids.sort_unstable();
+    uids
+}
+
+#[test]
+fn search_filters_narrow_the_result() {
+    let store = open();
+    let mut unread = message(1, "t1", "Marc", "Facture mars", 10);
+    unread.flags = Flags {
+        unread: true,
+        starred: false,
+        answered: false,
+    };
+    let mut starred = message(2, "t2", "Lea", "Facture avril", 12);
+    starred.flags = Flags {
+        unread: false,
+        starred: true,
+        answered: false,
+    };
+    let mut sent = message(3, "t3", "Marc", "Facture mai", 14);
+    sent.folder_path = "Sent".to_string();
+    sent.flags = Flags {
+        unread: true,
+        starred: true,
+        answered: false,
+    };
+    sent.attachments = vec![AttachmentMeta {
+        filename: "facture.pdf".to_string(),
+        mime: "application/pdf".to_string(),
+        size: 4,
+        inline: false,
+    }];
+    for mail in [&unread, &starred, &sent] {
+        store.upsert_message(mail).expect("insert");
+    }
+
+    let page = |filter: SearchFilter<'_>| uids(&store, &filter);
+    assert_eq!(
+        page(SearchFilter {
+            q: "facture",
+            limit: 10,
+            ..SearchFilter::default()
+        }),
+        [1, 2, 3]
+    );
+    assert_eq!(
+        page(SearchFilter {
+            q: "facture",
+            unread: Some(true),
+            limit: 10,
+            ..SearchFilter::default()
+        }),
+        [1, 3]
+    );
+    assert_eq!(
+        page(SearchFilter {
+            q: "facture",
+            starred: Some(true),
+            limit: 10,
+            ..SearchFilter::default()
+        }),
+        [2, 3]
+    );
+    assert_eq!(
+        page(SearchFilter {
+            folder: Some("Sent"),
+            limit: 10,
+            ..SearchFilter::default()
+        }),
+        [3]
+    );
+    assert_eq!(
+        page(SearchFilter {
+            has_attachment: Some(true),
+            limit: 10,
+            ..SearchFilter::default()
+        }),
+        [3]
+    );
+    assert_eq!(
+        page(SearchFilter {
+            q: "facture",
+            after: Some("2026-11-12T00:00:00Z"),
+            limit: 10,
+            ..SearchFilter::default()
+        }),
+        [2, 3]
+    );
+    assert_eq!(
+        page(SearchFilter {
+            q: "facture",
+            before: Some("2026-11-12T00:00:00Z"),
+            limit: 10,
+            ..SearchFilter::default()
+        }),
+        [1]
+    );
+    assert_eq!(
+        page(SearchFilter {
+            from: Some("lea"),
+            limit: 10,
+            ..SearchFilter::default()
+        }),
+        [2]
+    );
+    assert_eq!(
+        page(SearchFilter {
+            subject: Some("avril"),
+            limit: 10,
+            ..SearchFilter::default()
+        }),
+        [2]
+    );
+    assert_eq!(
+        page(SearchFilter {
+            subject: Some("facture"),
+            to: Some("camille"),
+            limit: 10,
+            ..SearchFilter::default()
+        }),
+        Vec::<u32>::new()
+    );
+}
+
+#[test]
+fn search_pages_with_offset() {
+    let store = open();
+    for uid in 1..=3 {
+        store
+            .upsert_message(&message(uid, "t1", "Marc", "Facture", uid))
+            .expect("insert");
+    }
+    let page = |offset: i64| {
+        store
+            .search(
+                "perso",
+                &SearchFilter {
+                    q: "facture",
+                    limit: 2,
+                    offset,
+                    ..SearchFilter::default()
+                },
+            )
+            .expect("search")
+            .iter()
+            .map(|mail| mail.uid)
+            .collect::<Vec<u32>>()
+    };
+    assert_eq!(page(0), [3, 2]);
+    assert_eq!(page(2), [1]);
+    assert!(page(4).is_empty());
+}
+
+#[test]
+fn an_evicted_body_leaves_the_index_but_its_subject_stays() {
+    let store = open();
+    let mut old = message(1, "t1", "Marc", "Rapport annuel", 1);
+    old.body_text = Some("xylophone argentin".to_string());
+    store.upsert_message(&old).expect("insert");
+    assert_eq!(
+        store
+            .search_messages("perso", "xylophone", 10)
+            .expect("search")
+            .len(),
+        1
+    );
+
+    assert_eq!(
+        store
+            .evict_bodies_before("perso", "2026-11-10T00:00:00Z")
+            .expect("éviction"),
+        1
+    );
+    assert!(store
+        .search_messages("perso", "xylophone", 10)
+        .expect("search")
+        .is_empty());
+    assert_eq!(
+        store
+            .search_messages("perso", "rapport", 10)
+            .expect("search")
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_query_without_any_word_finds_nothing_and_never_fails() {
+    let store = open();
+    store
+        .upsert_message(&message(1, "t1", "Marc", "Facture", 10))
+        .expect("insert");
+    for needle in [
+        "%", "\"", "(", ")", "'", "-", "\\", "***", "AND", "NEAR(", "%_",
+    ] {
+        assert!(
+            store
+                .search_messages("perso", needle, 10)
+                .expect(needle)
+                .is_empty(),
+            "{needle}"
+        );
+    }
+    assert_eq!(
+        store
+            .search_messages("perso", "facture", 10)
+            .expect("search")
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn the_attachment_flag_widens_from_the_headers_then_follows_the_body() {
+    let store = open();
+    let headers = message(1, "t1", "Marc", "Scan", 10);
+    store
+        .upsert_message_with_attachment(&headers, true)
+        .expect("en-têtes");
+    let attached = |store: &Store| {
+        store
+            .search(
+                "perso",
+                &SearchFilter {
+                    has_attachment: Some(true),
+                    limit: 10,
+                    ..SearchFilter::default()
+                },
+            )
+            .expect("search")
+            .len()
+    };
+    assert_eq!(attached(&store), 1);
+
+    store
+        .upsert_message(&message(1, "t1", "Marc", "Scan", 10))
+        .expect("re-synchronisation");
+    assert_eq!(attached(&store), 1, "un en-tête ne dément pas l'index");
+
+    let parsed = mime::parse_message(RAW_BODY).expect("parse");
+    store.set_body("perso", "INBOX", 1, &parsed).expect("corps");
+    assert_eq!(attached(&store), 1, "la pièce jointe est réelle");
+
+    let bodyless = mime::parse_message(
+        b"From: marc@mail.fr\r\nSubject: Note\r\nContent-Type: text/plain\r\n\r\ncorps\r\n",
+    )
+    .expect("parse");
+    store
+        .set_body("perso", "INBOX", 1, &bodyless)
+        .expect("corps");
+    assert_eq!(attached(&store), 0, "le corps dit la vérité");
+}
+
+#[test]
+fn deleting_a_message_clears_its_index_entry() {
+    let store = open();
+    store
+        .upsert_message(&message(1, "t1", "Marc", "Facture", 10))
+        .expect("insert");
+    store
+        .upsert_message(&message(2, "t1", "Marc", "Facture aussi", 11))
+        .expect("insert");
+    assert_eq!(
+        store
+            .search_messages("perso", "facture", 10)
+            .expect("search")
+            .len(),
+        2
+    );
+
+    store
+        .delete_message("perso", "INBOX", 1)
+        .expect("suppression");
+    let left = store
+        .search_messages("perso", "facture", 10)
+        .expect("search");
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].uid, 2);
+
+    store.clear_folder("perso", "INBOX").expect("vidage");
+    assert!(store
+        .search_messages("perso", "facture", 10)
+        .expect("search")
+        .is_empty());
 }

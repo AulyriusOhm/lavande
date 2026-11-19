@@ -1777,3 +1777,55 @@ async fn an_unreachable_calendar_url_is_a_502() {
     assert_eq!(status, StatusCode::BAD_GATEWAY, "{body:?}");
     assert_eq!(json(&body)["kind"], "calendar");
 }
+
+#[tokio::test]
+async fn search_refuses_an_invalid_date_or_flag() {
+    let directory = tempfile::tempdir().expect("répertoire temporaire");
+    seed(directory.path(), &[account("perso")]);
+    let state = state_in(directory.path()).await;
+    for uri in [
+        "/api/accounts/perso/search?q=facture&before=2026-13-01",
+        "/api/accounts/perso/search?q=facture&after=hier",
+        "/api/accounts/perso/search?q=facture&unread=oui",
+        "/api/accounts/perso/search?q=facture&has_attachment=1x",
+    ] {
+        let (status, body) = call(&state, get(uri)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+        assert_eq!(json(&body)["kind"], "search", "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn search_answers_the_filtered_page_of_the_local_index() {
+    let directory = tempfile::tempdir().expect("répertoire temporaire");
+    seed(directory.path(), &[account("perso")]);
+    let state = state_in(directory.path()).await;
+    state
+        .store()
+        .upsert_message(&text_message())
+        .expect("message");
+
+    let (status, body) = call(&state, get("/api/accounts/perso/search?q=soldes")).await;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    assert_eq!(json(&body).as_array().expect("liste").len(), 1);
+
+    for uri in [
+        "/api/accounts/perso/search?q=soldes&unread=true",
+        "/api/accounts/perso/search?q=soldes&folder=Sent",
+        "/api/accounts/perso/search?q=soldes&before=2020-01-01",
+        "/api/accounts/perso/search?q=absent",
+        "/api/accounts/perso/search?q=%25",
+    ] {
+        let (status, body) = call(&state, get(uri)).await;
+        assert_eq!(status, StatusCode::OK, "{uri} : {body:?}");
+        assert!(json(&body).as_array().expect("liste").is_empty(), "{uri}");
+    }
+
+    let (status, body) = call(
+        &state,
+        get("/api/accounts/perso/search?folder=INBOX&from=camille&subject=soldes"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    assert_eq!(json(&body).as_array().expect("liste").len(), 1);
+}

@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS messages (
     body_text TEXT,
     body_html TEXT,
     pgp_detail TEXT,
+    has_attachment INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (account_id, folder_path, uid)
 );
 
@@ -54,6 +55,16 @@ CREATE TABLE IF NOT EXISTS attachments (
     size INTEGER,
     inline INTEGER,
     PRIMARY KEY (account_id, folder_path, uid, idx)
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+    subject,
+    sender,
+    recipients,
+    body,
+    content = '',
+    contentless_delete = 1,
+    tokenize = "unicode61 remove_diacritics 2"
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_folder_date

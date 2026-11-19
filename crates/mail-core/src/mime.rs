@@ -98,6 +98,16 @@ pub fn parse_headers(raw: &[u8]) -> Result<ParsedMessage, MailError> {
     Ok(parsed)
 }
 
+/// Whether a raw header block announces an attachment. A sync only reads
+/// headers: `multipart/mixed` is the one hint a message never opened gives, so
+/// an attachment carried by a `multipart/alternative` stays invisible until the
+/// message is opened and `set_body` writes the real list.
+pub fn announces_attachments(raw: &[u8]) -> bool {
+    String::from_utf8_lossy(raw)
+        .to_ascii_lowercase()
+        .contains("multipart/mixed")
+}
+
 /// Parses the headers of a message and derives an aperçu from the first bytes
 /// of its body: `body_text`, `body_html` and the attachments stay empty, the
 /// body itself is never kept. `snippet` is the raw `BODY[TEXT]` fragment the

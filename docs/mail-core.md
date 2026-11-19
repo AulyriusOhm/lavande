@@ -16,7 +16,7 @@ contrat des commandes à écrire.
 | Envoi SMTP (lettre) avec pièces jointes, texte + HTML ; PGP réel (signature/chiffrement) | Pas de décompression bzip2 des payloads OpenPGP ; voir « PGP & rédaction » |
 | Parsing MIME complet (encodage de transfert, RFC 2047, pièces jointes, aperçu) ; flux OAuth2 navigateur (PKCE) | Pas de `client_id` d'application embarqué (Google/Microsoft) : à enregistrer ou fournir au service |
 | Threading déterministe par `References` / `In-Reply-To` / sujet normalisé ; IDLE sur INBOX + push SSE | Pas de CONDSTORE/QRESYNC : chaque synchro refait une passe métadonnées complète du dossier |
-| Store SQLite (WAL, `user_version`), threads agrégés en Rust à la lecture ; recherche côté démon sur tous les dossiers, complétée par un `UID SEARCH TEXT` serveur quand l'index local ne remplit pas la limite | Le repli serveur n'importe que des en-têtes : jamais de corps, jamais de déchiffrement PGP |
+| Store SQLite (WAL, `user_version`), threads agrégés en Rust à la lecture ; recherche locale FTS5 (accents/casse repliés) sur tous les dossiers, filtres structurés et pagination, complétée par un `UID SEARCH` serveur quand l'index local ne remplit pas la page | Le repli serveur n'importe que des en-têtes : jamais de corps, jamais de déchiffrement PGP ; `has_attachment` y est une heuristique d'en-tête |
 
 ## Arborescence
 
@@ -421,7 +421,8 @@ Comportements à connaître :
   8. `store.upsert_folder` avec `uidvalidity`, `uidnext` et `last_sync_at = now()`.
   9. En fin de synchro de compte, **éviction** : les corps chargés depuis plus de 30 jours
      (`EVICT_BODY_DAYS`) repassent à NULL (`store.evict_bodies_before`), aperçu conservé, favoris et
-     brouillons exclus ; les rouvrir les relit du serveur (`fetch_body`).
+     brouillons exclus ; les lignes touchées sont **réindexées sans leur corps** (un mot du corps
+     évincé ne matche plus), et les rouvrir les relit du serveur (`fetch_body`).
   Coût réseau : `SELECT` + la passe métadonnées (linéaire en nombre de messages du dossier) +
   ⌈nouveaux / 500⌉ requêtes d'en-têtes ; un dossier inchangé ne coûte que la passe métadonnées, sans
   un octet de corps. `SyncReport` ne compte que les lignes réellement touchées.
@@ -586,11 +587,14 @@ Détails :
 
 - `from_connection` (privé) active `PRAGMA foreign_keys` et tente `journal_mode=WAL` (échec ignoré :
   une base `:memory:` le refuse).
-- `migrate` est idempotent, piloté par `PRAGMA user_version` (`SCHEMA_VERSION = 4`). Il faut
+- `migrate` est idempotent, piloté par `PRAGMA user_version` (`SCHEMA_VERSION = 7`). Il faut
   l'appeler une fois à l'ouverture : il applique `schema.sql` (`CREATE TABLE IF NOT EXISTS`) puis
   `add_missing_columns`, qui ajoute à une base existante les colonnes apparues depuis
-  (`messages.pgp_detail`, `folders.modseq`, `accounts.pgp`) après un `PRAGMA table_info`, sans
-  toucher aux données.
+  (`messages.pgp_detail`, `messages.has_attachment`, `folders.modseq`, `folders.delimiter`,
+  `accounts.pgp`) après un `PRAGMA table_info`, sans toucher aux données. Une base antérieure à la
+  v7 reçoit en plus le remplissage de l'index de recherche (`backfill_search_index`, par lots de
+  5000 `rowid`, pour ne pas bloquer le démarrage du démon ni le widget Android) et de
+  `has_attachment` depuis la table `attachments` (`backfill_attachment_flags`).
 - **Interrupteur PGP par compte** : `accounts.pgp` (`INTEGER NOT NULL DEFAULT 1`). `pgp_enabled`
   rend `true` pour un compte que la base ne connaît pas (défaut ouvert, jamais de fermeture
   silencieuse) ; `set_pgp_enabled` remonte `InvalidData("account not found")` si la ligne n'existe
@@ -717,7 +721,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_thread
   après coup par `relink_replies` (appelé à chaque insertion qui porte un `Message-ID`).
 - `folders` porte l'état de synchro : `uidnext` = `UIDNEXT` annoncé par le serveur au dernier
   passage (valeur informative : la réconciliation ne repart pas de là), `last_sync_at` = dernier
-  passage réussi. `migrate` ne touche pas aux données, `user_version = 4` sert de garde.
+  passage réussi. `migrate` ne touche pas aux données, `user_version = 7` sert de garde.
 - **La base reflète l'état serveur après chaque synchro.** Disparitions (UID absent côté serveur)
   supprimées par `delete_messages`, flags alignés par `set_flags_batch`, nouveaux UID insérés;
   `UIDVALIDITY` changé → `clear_folder` puis réinsertion complète. Corollaire : un UID stocké sans
@@ -778,9 +782,11 @@ Côté front : `src/lib/mail.ts` (`Mail`, `FolderId`, `PgpState`, `TONES`) et `s
 - Un type compte issu de `AccountConfig` : `accounts.ts` porte `provider`, `color`, `tone`, `synced`
   que le crate ne connaît pas (pur affichage).
 - L'affichage HTML (`body_html`) et les pièces jointes binaires : aujourd'hui rien ne les consomme.
-- La recherche : `mailMatches` filtre en mémoire sur `MAILS`. Le démon, lui, expose
-  `/api/accounts/{id}/search` (locale + repli `UID SEARCH TEXT`), mais le front n'a pas encore
-  branché `searchMails` dessus.
+- La recherche : `searchMails` (`src/lib/store.tsx`) appelle déjà
+  `/api/accounts/{id}/search` pour chaque compte (`mailApi.search(id, query)`, `src/lib/api.ts`).
+  Les filtres structurés du démon (`folder`, `from`, `to`, `subject`, `unread`, `starred`,
+  `has_attachment`, `before`, `after`) et la pagination (`offset`) ne sont pas encore exposés côté
+  TS : `api.ts` n'envoie que `q` et `limit`.
 
 ## Contrat HTTP du démon local (implémenté)
 
@@ -859,7 +865,7 @@ jamais un reset silencieux.
 | GET | `/api/accounts/{id}/folders` | — | `[Folder]` |
 | POST | `/api/accounts/{id}/sync` | `{ "folder_path"? }` | `{ "reports": [{ folder_path, inserted, flags_updated, removed, uidvalidity_changed, uidnext }] }` |
 | GET | `/api/accounts/{id}/folders/{path}/threads?limit=50&offset=0` | — | `[Thread]` (limit plafonné à 200) |
-| GET | `/api/accounts/{id}/search?q=…&limit=50` | — | `[Message]` : recherche locale, complétée par le serveur si elle ne remplit pas la limite (limit plafonné à 200) |
+| GET | `/api/accounts/{id}/search?q=…&limit=50&offset=0&folder=…&from=…&to=…&subject=…&unread=…&starred=…&has_attachment=…&before=…&after=…` | — | `[Message]` : recherche locale FTS5 + filtres + page, complétée par le serveur si elle ne remplit pas la page (limit plafonné à 200) |
 | GET | `/api/accounts/{id}/folders/{path}/messages/{uid}?fetch_body=true` | — | `Message` (corps rapatrié à la demande) |
 | POST | `/api/accounts/{id}/flags` | `{ folder_path, uid, unread, starred }` | 204 (serveur d'abord, store ensuite) |
 | POST | `/api/accounts/{id}/move` | `{ from_path, uid, to_path }` | 204 (UID local réaligné sur celui du serveur) |
@@ -879,41 +885,91 @@ rien n'est persisté si le serveur refuse. Les corps et réponses sont les types
 
 ### Recherche (`GET /api/accounts/{id}/search`)
 
-`?q=…&limit=50` (limit plafonné à 200) → `[Message]`. Le front n'a rien à faire de particulier :
-son debounce de 250 ms appelle la même route.
+Tous les paramètres sont optionnels ; la réponse est toujours un `[Message]`, trié
+`date DESC, uid DESC`.
 
-1. **Locale d'abord** : `store.search_messages` filtre `subject`, `preview`, `body_text` et
-   `from_json` (LIKE échappé, `ORDER BY date DESC, uid DESC`).
-2. **Repli serveur** seulement si `messages.len() < limit` **et** `q` fait au moins 3 caractères
-   (comptés en `chars`, pas en octets) : un motif d'un ou deux caractères ramènerait la moitié de
-   la boîte.
-3. Une **seule** session (`imap::connect_with`), puis pour chaque dossier **connu en base**
-   (`store.list_folders`, donc le périmètre déjà synchronisé) : `SELECT` puis
-   `UID SEARCH CHARSET UTF-8 TEXT "…"` (`imap::select_and_search`). Aucun `LIST` : un dossier jamais
-   vu par la synchro n'est pas cherché.
-4. **Échappement** de la requête pour la chaîne entre guillemets IMAP : `\` → `\\`, `"` → `\"`,
-   CR/LF → espace (une chaîne entre guillemets ne peut pas les porter) ; l'UTF-8 passe tel quel.
-5. **Repli CHARSET** : async-imap avale le `BAD`/`NO` étiqueté et rend un ensemble **vide**, pas une
-   erreur. Une réponse vide à une requête ASCII est donc rejouée sans `CHARSET UTF-8`
-   (`TEXT "…"`) avant d'être tenue pour « aucun résultat » ; une requête non ASCII n'a pas ce repli.
-6. **Bornes** : au plus `2 × limit` UID serveur traités au total, dossiers parcourus dans l'ordre de
-   `list_folders` (par chemin) ; le budget s'épuise, la boucle s'arrête.
-7. **Import des inconnus seulement** : pour chaque UID trouvé, `store.flags_in_folder` dit s'il est
-   déjà en base. Les absents passent par `imap::import_headers`
-   (`UID FETCH … (UID FLAGS RFC822.SIZE BODY.PEEK[HEADER])` → `parse_headers` → `upsert_message` +
-   `relink_replies`) : **en-têtes seuls, jamais de corps**, même contrat que la synchro. Puis
-   `fetch_previews` (best-effort) sur ces UID, pour que les résultats aient un aperçu.
-8. **Fusion** : chaque UID trouvé est relu en base (`store.get_message`) et fusionné avec les
-   résultats locaux — dédoublonnage par `(folder_path, uid)` (la ligne locale gagne, elle porte son
-   corps et ses pièces jointes), tri `date DESC, uid DESC`, troncature à `limit`.
-9. **Best-effort de bout en bout** : compte illisible, connexion impossible, `SELECT`/`SEARCH` refusé,
-   dossier en erreur → `tracing::warn` et les résultats locaux sont rendus tels quels ; jamais
-   d'erreur HTTP pour ça. Un dossier en échec laisse la session désalignée : le suivant repart d'une
-   connexion neuve (même pattern que `sync_account`).
-10. **Aucun corps, aucun déchiffrement** : ce chemin ne télécharge que des en-têtes, donc le gate PGP
+| Paramètre | Sémantique |
+| --- | --- |
+| `q` | texte libre, **littéral** (aucune grammaire d'opérateurs côté serveur : le front la parsera lui-même) |
+| `limit` | défaut 50, borné à `1..=200` |
+| `offset` | défaut 0 |
+| `folder` | chemin exact de dossier |
+| `from`, `to`, `subject` | restreint le champ correspondant (`to` couvre `to` **et** `cc`) |
+| `unread`, `starred`, `has_attachment` | booléens (`true`/`false`/`1`/`0`, vide = pas de filtre) ; `unread=true` ne garde que les non-lus, `false` que les lus (idem `starred`) |
+| `before`, `after` | `AAAA-MM-JJ`, sur la date d'en-tête UTC : `after` garde `date >= jour 00:00:00Z`, `before` garde `date < jour 00:00:00Z` |
+
+Une valeur invalide (`before=2026-13-01`, `unread=oui`) est un **400** `kind: "search"`, jamais un
+filtre silencieusement ignoré. `q` vide avec des filtres = listing filtré ; aucun paramètre = page
+des messages les plus récents du compte.
+
+1. **Index FTS5 local d'abord**. `store.search` interroge `messages_fts` (table FTS5
+   *contentless* : `content=''`, `contentless_delete=1`,
+   `tokenize="unicode61 remove_diacritics 2"`), dont le `rowid` est celui de `messages`. Colonnes
+   indexées : `subject`, `sender` (« nom email » de `from_json`), `recipients` (`to_json` +
+   `cc_json` aplatis) et `body` (= `body_text`, **jamais** `body_html`). Casse et accents sont donc
+   repliés des deux côtés (`zèbre` ↔ `ZEBRE`).
+2. **Requête construite, jamais concaténée brute** : chaque mot de l'utilisateur (suite de
+   caractères alphanumériques) devient une phrase FTS5 citée et préfixée (`"fact"*`), les mots sont
+   joints par `AND`. Aucun caractère saisi n'atteint la grammaire FTS5 : `%`, `"`, `(`, `NEAR(` ou
+   `AND` ne peuvent pas produire d'erreur SQL (donc jamais de 500). `from`, `to` et `subject`
+   passent par les filtres de colonne de FTS5 (`subject : ("mars"*)`), `folder`, les booléens et les
+   dates par du SQL sur `messages`, le tout dans la même requête. Un `q` non vide **sans aucun mot**
+   (ponctuation seule, `%`, `"`) rend une liste vide, sans repli.
+3. **Pagination en SQL** (`LIMIT ? OFFSET ?`), après le tri.
+4. **Repli serveur** seulement si `offset == 0`, que la page locale n'est pas pleine, que `q` fait
+   au moins 3 caractères (comptés en `chars`) **et** qu'aucun `has_attachment` n'est demandé (aucun
+   équivalent IMAP fiable : le repli est simplement désactivé pour ce filtre).
+5. Une **seule** session (`imap::connect_with`), puis pour chaque dossier **connu en base**
+   (`store.list_folders`, donc le périmètre déjà synchronisé, restreint à `folder` s'il est donné) :
+   `SELECT` puis `UID SEARCH CHARSET UTF-8 …` (`imap::select_and_search`). Aucun `LIST` : un dossier
+   jamais vu par la synchro n'est pas cherché.
+6. **Grammaire IMAP** (`imap::SearchCriteria`) : `q` → `TEXT`, `from` → `FROM`, `to` → `TO`,
+   `subject` → `SUBJECT`, `unread` → `UNSEEN` (ou `SEEN` si `false`), `starred` → `FLAGGED` (ou
+   `UNFLAGGED`), `before` → `BEFORE 04-Mar-2026`, `after` → `SINCE 04-Mar-2026` ; rien → `ALL`.
+7. **Échappement** de chaque valeur pour la chaîne entre guillemets IMAP : `\` → `\\`,
+   `"` → `\"`, CR/LF → espace ; l'UTF-8 passe tel quel.
+8. **Repli CHARSET** : async-imap avale le `BAD`/`NO` étiqueté et rend un ensemble **vide**, pas une
+   erreur. Une réponse vide à une requête ASCII est donc rejouée sans `CHARSET UTF-8` avant d'être
+   tenue pour « aucun résultat » ; une requête non ASCII n'a pas ce repli.
+9. **Bornes** : au plus `2 × limit` UID serveur traités au total, dossiers parcourus dans l'ordre de
+   `list_folders` (par chemin) ; le budget s'épuise, la boucle s'arrête. Un
+   `tokio::time::timeout(10 s)` global entoure tout le repli : passé ce délai, les résultats locaux
+   sont rendus tels quels.
+10. **Import des inconnus seulement** : pour chaque UID trouvé, `store.flags_in_folder` dit s'il est
+    déjà en base. Les absents passent par `imap::import_headers`
+    (`UID FETCH … (UID FLAGS RFC822.SIZE BODY.PEEK[HEADER])` → `parse_headers` →
+    `upsert_message_with_attachment` + `relink_replies`) : **en-têtes seuls, jamais de corps**, même
+    contrat que la synchro. Puis `fetch_previews` (best-effort) sur ces UID, pour que les résultats
+    aient un aperçu.
+11. **Fusion** : chaque UID trouvé est relu en base (`store.get_message`) et fusionné avec les
+    résultats locaux — dédoublonnage par `message_id` (repli `(folder_path, uid)` quand le message
+    n'en a pas), la ligne locale gagne (elle porte son corps et ses pièces jointes), tri
+    `date DESC, uid DESC`, troncature à `limit`.
+12. **Best-effort de bout en bout** : compte illisible, connexion impossible, `SELECT`/`SEARCH`
+    refusé, dossier en erreur, délai dépassé → `tracing::warn` et les résultats locaux sont rendus
+    tels quels ; jamais d'erreur HTTP pour ça. Un dossier en échec laisse la session désalignée : le
+    suivant repart d'une connexion neuve (même pattern que `sync_account`).
+13. **Aucun corps, aucun déchiffrement** : ce chemin ne télécharge que des en-têtes, donc le gate PGP
     reste intact et les résultats du repli arrivent avec `body_text: null` — le corps se relit à
-    l'ouverture (`?fetch_body=true`). Un mot qui ne vit que dans un corps chiffré reste introuvable,
-    comme avant.
+    l'ouverture (`?fetch_body=true`). Un mot qui ne vit que dans un corps chiffré reste introuvable.
+
+**Limites assumées de l'index**
+
+- **Corps évincés** : `evict_bodies_before` (corps > 30 jours, non étoilés, hors brouillons) remet
+  `body_text`/`body_html` à `NULL` **et réindexe la ligne sans son corps** — un mot qui ne vivait
+  que dans ce corps cesse de matcher, le sujet et les correspondants restent trouvables. Rouvrir le
+  message réindexe son corps.
+- **Pièces jointes des messages jamais ouverts** : la synchro ne lit que les en-têtes et ne fait
+  aucun `BODYSTRUCTURE`. `has_attachment` est donc dérivé à l'import de l'en-tête `Content-Type`
+  (`multipart/mixed` ⇒ 1) — heuristique : une pièce jointe portée par un `multipart/alternative`
+  pur, ou un message jamais ouvert sans `multipart/mixed` visible, peut être manqué. `set_body`
+  réécrit la colonne depuis la liste réelle des pièces jointes dès que le message est ouvert.
+- **Pas de sous-chaîne** : FTS5 est un index de mots, pas un `LIKE '%…%'`. La recherche porte sur
+  des mots entiers ou des **préfixes** (`fact` trouve `facture`), pas sur un fragment interne
+  (`acture` ne trouve rien). `preview` n'est pas indexé (il est dérivé du corps).
+- **Le repli serveur reste un enrichissement** : il ne couvre que les dossiers déjà connus en base,
+  il est borné (`2 × limit` UID, 10 s) et il ne voit pas dans un corps chiffré : `UID SEARCH TEXT`
+  cherche dans le texte que le serveur stocke, donc le ciphertext PGP.
 
 ### Découverte des serveurs (`GET /api/discover`)
 
@@ -1126,7 +1182,7 @@ n'écoutant que sur la boucle locale.
 
 ## Tests
 
-### Hors-ligne (374 tests, `cargo test --workspace`)
+### Hors-ligne (437 tests, `cargo test --workspace`)
 
 Presque tout est dans `tests/`, sans réseau ; les `#[cfg(test)] mod tests` de `src/` couvrent le
 store (pièces jointes emportées par `delete_messages`, `Store: Send + Sync`, migrations de colonnes),
@@ -1139,9 +1195,9 @@ le MIME (assainissement HTML), `sync::auto_syncs` et le `Content-Disposition` de
 | `tests/sanitize.rs` | 18 | `style` inline préservé et normalisé, valeurs qui chargent/exécutent refusées (`url(`, `expression(`, `position`, `behavior`, `-moz-binding`, `javascript:`), obfuscation (échappements CSS, commentaires intercalés, casse mixte, `image-set(url())`), déclarations mal fermées, `display` restreint, blocs `<style>` assainis et hissés avant le corps, `@media` conservé, `@import`/`@font-face`/`@supports` supprimés, évasion `</style>` neutralisée, attributs de table conservés/validés, `center`/`font`/`caption`, fixture « mail marketing » (table 600 px, styles inline, bloc `<style>`, `bgcolor`) et pixel de tracking toujours retiré du corps stocké |
 | `tests/threading.rs` | 7 | `References` prioritaire, repli `In-Reply-To`, repli sujet (préfixes + accents), isolation par compte, `Message-ID` de repli, `split_ids` |
 | `tests/oauth.rs` | 4 | payload XOAUTH2, cache de l'access token, rafraîchissement après expiration, message d'erreur lisible sans secret (serveur HTTP local) |
-| `tests/store.rs` | 28 | upsert idempotent, flags/corps/`delete_message`, `flags_in_folder`, `delete_messages` (vide → 0, UID inconnus ignorés, pièces jointes emportées), `set_flags_batch`, `list_accounts`/`list_folders`/`delete_account`, tri `date DESC` + pagination, agrégation des threads, absence de préfixe expéditeur dans `Sent`, migration rejouable, `relink_replies`, `clear_folder`, interrupteur PGP (défaut ouvert, par compte, survit à `upsert_account`, compte inconnu refusé) et `close_encrypted_bodies` (messages chiffrés seuls, état PGP conservé) |
-| `src/store/mod.rs` (`mod tests`) | 4 | pièces jointes emportées par `delete_messages`, `Store: Send + Sync`, migration `folders.modseq` et `accounts.pgp` sur une base ancienne |
-| `crates/mail-api/tests/http.rs` | 43 | routeur sans socket : `/api/health`, 400 config/JSON invalide, 409 id déjà pris, aucun secret dans `GET /api/accounts`, connexion échouée n'écrit rien, 404 inconnus, chemin de dossier percent-encodé, mapping `MailError` → statut, sélection de dossiers, `PATCH /api/accounts/{id}/pgp` (défaut ouvert, bascule par compte, corps chiffrés déjà déchiffrés effacés, 404 compte inconnu) |
+| `tests/store.rs` | 48 | upsert idempotent, recherche FTS (accents/casse, destinataires, filtres dossier/non-lu/étoilé/PJ/dates, dédoublonnage, offset, corps évincé, requête de ponctuation, `has_attachment` en-têtes puis corps, suppression nettoyant l'index), flags/corps/`delete_message`, `flags_in_folder`, `delete_messages` (vide → 0, UID inconnus ignorés, pièces jointes emportées), `set_flags_batch`, `list_accounts`/`list_folders`/`delete_account`, tri `date DESC` + pagination, agrégation des threads, absence de préfixe expéditeur dans `Sent`, migration rejouable, `relink_replies`, `clear_folder`, interrupteur PGP (défaut ouvert, par compte, survit à `upsert_account`, compte inconnu refusé) et `close_encrypted_bodies` (messages chiffrés seuls, état PGP conservé) |
+| `src/store/mod.rs` (`mod tests`) | 8 | pièces jointes emportées par `delete_messages`, `Store: Send + Sync`, migration `folders.modseq`, `folders.delimiter` et `accounts.pgp` sur une base ancienne, FTS5 compilé (`ENABLE_FTS5` + `contentless_delete`), migration 6→7 (backfill de l'index et de `has_attachment`, plusieurs lots) |
+| `crates/mail-api/tests/http.rs` | 70 | routeur sans socket : `/api/health`, 400 config/JSON invalide, 409 id déjà pris, aucun secret dans `GET /api/accounts`, connexion échouée n'écrit rien, 404 inconnus, chemin de dossier percent-encodé, mapping `MailError` → statut, sélection de dossiers, `PATCH /api/accounts/{id}/pgp` (défaut ouvert, bascule par compte, corps chiffrés déjà déchiffrés effacés, 404 compte inconnu), `GET /search` (400 sur date ou booléen invalide, page filtrée de l'index local) |
 | `crates/mail-api/tests/pgp_gate.rs` | 3 | gate du trousseau, hors réseau : compte ouvert → `keyring_for` complet et corps déchiffré ; compte fermé → trousseau vide, corps/HTML/aperçu/pièces jointes fermés (`Clé secrète manquante`), `html_with_images` → `None` ; l'interrupteur est lu par compte |
 | `crates/mail-api/tests/discovery.rs` | 10 (+2 réseau) | parsing ISPDB Gmail/LaPoste et autoconfig lanro.eu, `SSL`/`STARTTLS`, `%EMAILADDRESS%`/`%EMAILLOCALPART%`, chaîne HTTP avec serveur local (`source: ispdb`), adresse invalide, domaine inconnu |
 | `tests/live.rs` (mail-core + mail-api) | 27 | réseau GreenMail, `#[ignore]` (voir ci-dessous) |
@@ -1262,10 +1318,10 @@ Variables lues par `scripts/mail-test-server.sh` : `LAVANDE_MAIL_TEST_DIR`, `…
 - **Pas de pool, pas de PGP réel, pas de flux navigateur OAuth2.** Voir la vue d'ensemble. Le
   trousseau système existe (desktop Linux) ; Android utilise le fichier chiffré en attendant un
   Keystore matériel.
-- **La recherche serveur est un enrichissement, pas un index.** Elle ne couvre que les dossiers déjà
-  connus en base, elle est bornée (`2 × limit` UID) et elle ne voit pas dans un corps chiffré :
-  `UID SEARCH TEXT` cherche dans le texte que le serveur stocke, donc le ciphertext PGP. Un mot
-  présent seulement dans un corps déchiffré reste introuvable une fois ce corps évincé.
+- **L'index local est un index de mots** (FTS5, voir « Recherche ») : pas de sous-chaîne interne,
+  `preview` non indexé, corps évincés (> 30 j) désindexés. **Le repli serveur est un
+  enrichissement, pas un index** : dossiers déjà connus en base seulement, borné (`2 × limit` UID,
+  10 s), et il ne voit pas dans un corps chiffré (`UID SEARCH TEXT` cherche le ciphertext PGP).
 - **`Store` incomplet pour l'IPC** : ni `list_accounts`, ni liste des dossiers d'un compte, ni
   suppression de compte.
 - **`OutgoingMessage`/`OutgoingAttachment` ne sont pas `Deserialize`** : le DTO Tauri est à écrire
@@ -1276,7 +1332,7 @@ Variables lues par `scripts/mail-test-server.sh` : `LAVANDE_MAIL_TEST_DIR`, `…
   sous-chaîne.
 - **Migration par colonnes ajoutées, pas par étapes numérotées** : `schema.sql` (dont le
   `CREATE TABLE IF NOT EXISTS`) puis `add_missing_columns` (`PRAGMA table_info` + `ALTER TABLE`)
-  amènent une base ancienne à `user_version = 4`. Une colonne renommée, une contrainte changée ou
+  amènent une base ancienne à `user_version = 7`. Une colonne renommée, une contrainte changée ou
   une donnée à réécrire demanderont une vraie étape de migration.
 - **L'interrupteur PGP ne couvre que la réception.** Fermer un compte n'empêche pas le démon de
   signer ou chiffrer à l'envoi (`submit` garde le trousseau complet) : la composition est gatée côté

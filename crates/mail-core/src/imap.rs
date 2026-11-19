@@ -14,7 +14,7 @@ use async_imap::types::{Fetch, Flag, Name};
 use async_imap::{Client, Session};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use chrono::Utc;
+use chrono::{NaiveDate, Utc};
 use futures::TryStreamExt;
 use rustls::pki_types::ServerName;
 use rustls::RootCertStore;
@@ -664,7 +664,7 @@ fn store_header(
         body_html: parsed.body_html,
         attachments: parsed.attachments,
     };
-    store.upsert_message(&message)?;
+    store.upsert_message_with_attachment(&message, mime::announces_attachments(raw))?;
     let thread_id = match message.in_reply_to.as_deref() {
         Some(in_reply_to) => match store.thread_of_message(account_id, in_reply_to)? {
             Some(parent_thread) if parent_thread != message.thread_id => {
@@ -768,28 +768,85 @@ pub async fn import_headers(
     Ok(inserted)
 }
 
-/// `SELECT` then `UID SEARCH TEXT` on one folder: the server matches bodies and
+/// A server-side `SEARCH`, one field per IMAP key: the server matches bodies and
 /// headers, which the local store cannot do for a message whose body was never
-/// downloaded. The uids come back newest first.
+/// downloaded. `text` becomes `TEXT`, the rest map one-to-one onto the keys of
+/// RFC 3501. Empty: `ALL`.
+#[derive(Clone, Debug, Default)]
+pub struct SearchCriteria<'a> {
+    pub text: Option<&'a str>,
+    pub subject: Option<&'a str>,
+    pub from: Option<&'a str>,
+    pub to: Option<&'a str>,
+    pub unread: Option<bool>,
+    pub starred: Option<bool>,
+    pub before: Option<NaiveDate>,
+    pub after: Option<NaiveDate>,
+}
+
+impl SearchCriteria<'_> {
+    /// The `SEARCH` arguments. Every value goes through `escape_search`: what
+    /// the user typed is data, never grammar.
+    pub fn to_imap(&self) -> String {
+        let mut keys: Vec<String> = Vec::new();
+        for (key, value) in [
+            ("TEXT", self.text),
+            ("SUBJECT", self.subject),
+            ("FROM", self.from),
+            ("TO", self.to),
+        ] {
+            if let Some(value) = value.filter(|value| !value.is_empty()) {
+                keys.push(format!("{key} \"{}\"", escape_search(value)));
+            }
+        }
+        for (key, value) in [("UNSEEN", self.unread), ("FLAGGED", self.starred)] {
+            if let Some(value) = value {
+                let key = match (key, value) {
+                    ("UNSEEN", false) => "SEEN",
+                    ("FLAGGED", false) => "UNFLAGGED",
+                    (key, _) => key,
+                };
+                keys.push(key.to_string());
+            }
+        }
+        for (key, value) in [("BEFORE", self.before), ("SINCE", self.after)] {
+            if let Some(value) = value {
+                keys.push(format!("{key} {}", value.format("%d-%b-%Y")));
+            }
+        }
+        if keys.is_empty() {
+            return "ALL".to_string();
+        }
+        keys.join(" ")
+    }
+
+    /// Whether every value is ASCII: the only case where a server that refuses
+    /// `CHARSET UTF-8` can still answer.
+    fn is_ascii(&self) -> bool {
+        [self.text, self.subject, self.from, self.to]
+            .iter()
+            .flatten()
+            .all(|value| value.is_ascii())
+    }
+}
+
+/// `SELECT` then `UID SEARCH` on one folder. The uids come back newest first.
 pub async fn select_and_search(
     session: &mut ImapSession,
     folder_path: &str,
-    query: &str,
+    criteria: &SearchCriteria<'_>,
 ) -> Result<Vec<u32>, MailError> {
     session.select(folder_path).await.map_err(imap_error)?;
-    let escaped = escape_search(query);
+    let query = criteria.to_imap();
     let uids = session
-        .uid_search(format!("CHARSET UTF-8 TEXT \"{escaped}\""))
+        .uid_search(format!("CHARSET UTF-8 {query}"))
         .await
         .map_err(imap_error)?;
     // Un serveur qui refuse CHARSET rend une réponse vide, pas une erreur :
     // async-imap avale le BAD/NO étiqueté. Une requête ASCII vide repart donc
     // sans le préfixe avant d'être tenue pour « aucun résultat ».
-    let uids = if uids.is_empty() && query.is_ascii() {
-        session
-            .uid_search(format!("TEXT \"{escaped}\""))
-            .await
-            .map_err(imap_error)?
+    let uids = if uids.is_empty() && criteria.is_ascii() {
+        session.uid_search(query).await.map_err(imap_error)?
     } else {
         uids
     };
@@ -1638,6 +1695,79 @@ mod tests {
         assert_eq!(folder_label("&2Dzf5g-"), "🏦");
         assert_eq!(folder_label("[Gmail]/&2Dzf5g- perso"), "🏦 perso");
         assert_eq!(folder_label("Projets/&2Dzf5g-"), "🏦");
+    }
+
+    fn day(year: i32, month: u32, day: u32) -> Option<NaiveDate> {
+        NaiveDate::from_ymd_opt(year, month, day)
+    }
+
+    #[test]
+    fn search_criteria_map_onto_the_imap_keys() {
+        let criteria = SearchCriteria {
+            text: Some("facture mars"),
+            subject: Some("planning"),
+            from: Some("lea@mail.fr"),
+            to: Some("roman"),
+            unread: Some(true),
+            starred: Some(true),
+            before: day(2026, 3, 4),
+            after: day(2026, 1, 2),
+        };
+        assert_eq!(
+            criteria.to_imap(),
+            "TEXT \"facture mars\" SUBJECT \"planning\" FROM \"lea@mail.fr\" \
+             TO \"roman\" UNSEEN FLAGGED BEFORE 04-Mar-2026 SINCE 02-Jan-2026"
+        );
+    }
+
+    #[test]
+    fn a_negative_filter_asks_for_the_opposite_key() {
+        let criteria = SearchCriteria {
+            unread: Some(false),
+            starred: Some(false),
+            ..SearchCriteria::default()
+        };
+        assert_eq!(criteria.to_imap(), "SEEN UNFLAGGED");
+    }
+
+    #[test]
+    fn an_empty_search_criteria_asks_for_everything() {
+        assert_eq!(SearchCriteria::default().to_imap(), "ALL");
+        assert_eq!(
+            SearchCriteria {
+                subject: Some(""),
+                ..SearchCriteria::default()
+            }
+            .to_imap(),
+            "ALL"
+        );
+    }
+
+    #[test]
+    fn every_search_value_is_escaped() {
+        let criteria = SearchCriteria {
+            text: Some("a \"b\" \\ c"),
+            subject: Some("\"("),
+            ..SearchCriteria::default()
+        };
+        assert_eq!(
+            criteria.to_imap(),
+            "TEXT \"a \\\"b\\\" \\\\ c\" SUBJECT \"\\\"(\""
+        );
+    }
+
+    #[test]
+    fn a_non_ascii_search_has_no_charset_fallback() {
+        assert!(SearchCriteria {
+            text: Some("zebre"),
+            ..SearchCriteria::default()
+        }
+        .is_ascii());
+        assert!(!SearchCriteria {
+            text: Some("zèbre"),
+            ..SearchCriteria::default()
+        }
+        .is_ascii());
     }
 
     #[test]
