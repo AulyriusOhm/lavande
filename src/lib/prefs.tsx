@@ -21,8 +21,9 @@ export const THREAD_VIEWS: { id: ThreadView; label: string; hint: string }[] = [
 
 const STORAGE_KEY = "lavande.prefs";
 
-import { endpointHost, recordUsage } from "@/lib/ai-stats";
-import { EMPTY_LLM, setUsageSink, type LlmConfig } from "@/lib/llm";
+import { recordUsage } from "@/lib/ai-stats";
+import { refreshCopilotSession } from "@/lib/copilot";
+import { EMPTY_LLM, llmDomain, setUsageSink, type LlmConfig } from "@/lib/llm";
 import { demoReadOnly } from "@/lib/mail-backend";
 import { setMcpRights } from "@/lib/mcp";
 import { DEFAULT_AI_TASKS, DEFAULT_SUMMARY, type AiTasksConfig, type SummaryConfig } from "@/lib/summary";
@@ -262,13 +263,15 @@ export const asTeamContext = (value: unknown): Record<string, AccountTeamContext
   return out;
 };
 
-const asLlm = (value: unknown): LlmConfig => {
+export const asLlm = (value: unknown): LlmConfig => {
   if (!value || typeof value !== "object") return EMPTY_LLM;
-  const { endpoint, apiKey, model } = value as Record<string, unknown>;
+  const { provider, endpoint, apiKey, model, copilotClientId } = value as Record<string, unknown>;
   return {
+    provider: provider === "openai" || provider === "copilot" ? provider : "custom",
     endpoint: typeof endpoint === "string" ? endpoint : "",
     apiKey: typeof apiKey === "string" ? apiKey : "",
     model: typeof model === "string" ? model : "",
+    copilotClientId: typeof copilotClientId === "string" ? copilotClientId : "",
   };
 };
 
@@ -509,9 +512,14 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
   }, [prefs.mcpEnabled, prefs.mcpAlwaysAllow, prefs.mcpConfirmSend]);
 
   useEffect(() => {
-    setUsageSink((usage) => recordUsage(prefs.llm.model, endpointHost(prefs.llm.endpoint), usage));
+    setUsageSink((usage) => recordUsage(prefs.llm.model, llmDomain(prefs.llm), usage));
     return () => setUsageSink(null);
-  }, [prefs.llm.model, prefs.llm.endpoint]);
+  }, [prefs.llm.model, prefs.llm.endpoint, prefs.llm.provider]);
+
+  useEffect(() => {
+    if (prefs.llm.provider !== "copilot") return;
+    void refreshCopilotSession().catch(() => undefined);
+  }, [prefs.llm.provider]);
 
   /** Démo vitrine : les réglages s'affichent mais ne s'écrivent pas. */
   const write = useCallback((update: (current: Prefs) => Prefs) => {

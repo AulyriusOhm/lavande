@@ -13,6 +13,7 @@ use lavande_mail::tls::TlsOptions;
 
 use crate::calendar_sources::{self, CalendarSource};
 use crate::config_file::{self, StoredAccount};
+use crate::copilot::{self, CopilotTokens};
 use crate::discovery::{Discovery, DiscoveryEndpoints};
 use crate::error::ApiError;
 use crate::events::Events;
@@ -34,6 +35,8 @@ pub struct AppState {
     tls: TlsOptions,
     discovery: Discovery,
     sessions: Sessions,
+    copilot: copilot::Settings,
+    copilot_sessions: copilot::Sessions,
     events: Events,
     pgp: PgpStore,
     public_url: String,
@@ -76,6 +79,8 @@ impl AppState {
             tls,
             discovery: Discovery::new(endpoints)?,
             sessions: Sessions::default(),
+            copilot: copilot::Settings::default(),
+            copilot_sessions: copilot::Sessions::default(),
             events: Events::default(),
             pgp,
             public_url: env_url(),
@@ -117,6 +122,18 @@ impl AppState {
 
     pub fn sessions(&self) -> &Sessions {
         &self.sessions
+    }
+
+    pub fn copilot(&self) -> &copilot::Settings {
+        &self.copilot
+    }
+
+    pub fn set_copilot(&mut self, settings: copilot::Settings) {
+        self.copilot = settings;
+    }
+
+    pub fn copilot_sessions(&self) -> &copilot::Sessions {
+        &self.copilot_sessions
     }
 
     pub fn events(&self) -> &Events {
@@ -496,6 +513,47 @@ impl AppState {
         self.secrets
             .delete(&sync_secrets::account_secret_id(account_id))
             .await
+    }
+
+    /// Jetons GitHub Copilot de l'agent IA, `None` tant que le compte GitHub
+    /// n'est pas connecté.
+    pub async fn copilot_tokens(&self) -> Result<Option<CopilotTokens>, ApiError> {
+        match self.secrets.get(copilot::SECRET_ID).await? {
+            Some(AccountSecrets::LlmCopilot {
+                github_token,
+                copilot_token,
+                expires_at,
+                login,
+            }) => Ok(Some(CopilotTokens {
+                github_token,
+                copilot_token,
+                expires_at,
+                login,
+            })),
+            Some(_) => Err(ApiError::internal(
+                "copilot",
+                "secret Copilot incompatible : jeton GitHub attendu",
+            )),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn set_copilot_tokens(&self, tokens: &CopilotTokens) -> Result<(), ApiError> {
+        self.secrets
+            .put(
+                copilot::SECRET_ID,
+                &AccountSecrets::LlmCopilot {
+                    github_token: tokens.github_token.clone(),
+                    copilot_token: tokens.copilot_token.clone(),
+                    expires_at: tokens.expires_at,
+                    login: tokens.login.clone(),
+                },
+            )
+            .await
+    }
+
+    pub async fn remove_copilot_tokens(&self) -> Result<(), ApiError> {
+        self.secrets.delete(copilot::SECRET_ID).await
     }
 }
 

@@ -58,6 +58,14 @@ pub enum AccountSecrets {
     SyncAccount {
         token: String,
     },
+    /// Jetons de l'agent IA GitHub Copilot, rangés sous `llm:copilot` : le jeton
+    /// GitHub du device flow et le jeton Copilot qui en dérive.
+    LlmCopilot {
+        github_token: String,
+        copilot_token: Option<String>,
+        expires_at: Option<i64>,
+        login: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

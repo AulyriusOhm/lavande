@@ -1,11 +1,47 @@
 import { isTauriShell } from "@/lib/open-external";
 import { READ_ONLY_NOTICE, demoReadOnly } from "@/lib/mail-backend";
+import { ApiError, mailApi } from "@/lib/api";
+import { endpointHost } from "@/lib/ai-stats";
+import {
+  NOT_CONNECTED,
+  copilotConnected,
+  copilotModels,
+  refreshCopilotSession,
+} from "@/lib/copilot";
 
-export type LlmConfig = { endpoint: string; apiKey: string; model: string };
+/** `copilot` passe par le démon (jetons côté agent) ; les autres parlent REST en direct. */
+export type LlmProvider = "custom" | "openai" | "copilot";
+
+export type LlmConfig = {
+  endpoint: string;
+  apiKey: string;
+  model: string;
+  provider?: LlmProvider;
+  /** Client ID GitHub Copilot propre à l'utilisateur ; vide = celui du démon. */
+  copilotClientId?: string;
+};
 
 export type LlmUsage = { prompt: number; completion: number };
 
-export const EMPTY_LLM: LlmConfig = { endpoint: "", apiKey: "", model: "" };
+export const EMPTY_LLM: LlmConfig = {
+  endpoint: "",
+  apiKey: "",
+  model: "",
+  provider: "custom",
+  copilotClientId: "",
+};
+
+export const OPENAI_ENDPOINT = "https://api.openai.com/v1";
+
+/** Fournisseurs proposés dans les réglages, dans l'ordre d'affichage. */
+export const LLM_PROVIDERS: { id: LlmProvider; label: string }[] = [
+  { id: "custom", label: "Custom" },
+  { id: "openai", label: "OpenAI" },
+  { id: "copilot", label: "GitHub Copilot" },
+];
+
+export const providerOf = (config: { provider?: LlmProvider }): LlmProvider =>
+  config.provider ?? "custom";
 
 const PROBE_TIMEOUT = 20_000;
 
@@ -38,7 +74,14 @@ function opencodeSession(): string {
 }
 
 export function llmReady(config: LlmConfig | null | undefined): boolean {
-  return Boolean(config?.endpoint?.trim() && config?.apiKey?.trim() && config?.model?.trim());
+  if (!config?.model?.trim()) return false;
+  if (providerOf(config) === "copilot") return copilotConnected();
+  return Boolean(config.endpoint?.trim() && config.apiKey?.trim());
+}
+
+/** Domaine compté dans les stats : Copilot passe par le proxy du démon. */
+export function llmDomain(config: LlmConfig): string {
+  return providerOf(config) === "copilot" ? "api.githubcopilot.com" : endpointHost(config.endpoint);
 }
 
 /**
@@ -61,6 +104,28 @@ export async function llmChat(
   signal?: AbortSignal,
 ): Promise<string> {
   if (demoReadOnly) throw new Error(READ_ONLY_NOTICE);
+  if (providerOf(config) === "copilot") {
+    const reply = await mailApi
+      .aiChat(
+        {
+          model: config.model.trim(),
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ],
+          temperature: 0.6,
+        },
+        signal,
+      )
+      .catch((failure: unknown) => {
+        if (failure instanceof ApiError && failure.status === 409) throw new Error(NOT_CONNECTED);
+        throw failure;
+      });
+    publishUsage(reply.usage);
+    const content = reply.choices?.[0]?.message?.content;
+    if (typeof content !== "string" || !content.trim()) throw new Error("Réponse du modèle vide");
+    return content.trim();
+  }
   const base = config.endpoint.trim().replace(/\/+$/, "");
   const response = await llmFetch(`${base}/chat/completions`, {
     method: "POST",
@@ -96,8 +161,11 @@ export async function llmChat(
 }
 
 /** Modèles proposés par l'endpoint (`GET {base}/models`), triés ; la saisie libre reste possible. */
-export async function llmModels(config: Pick<LlmConfig, "endpoint" | "apiKey">): Promise<string[]> {
+export async function llmModels(
+  config: Pick<LlmConfig, "endpoint" | "apiKey" | "provider">,
+): Promise<string[]> {
   if (demoReadOnly) throw new Error(READ_ONLY_NOTICE);
+  if (providerOf(config) === "copilot") return copilotModels();
   const base = config.endpoint.trim().replace(/\/+$/, "");
   if (base === "") throw new Error("Endpoint du modèle requis pour charger la liste");
   const response = await llmFetch(`${base}/models`, {
@@ -131,6 +199,11 @@ export async function llmModels(config: Pick<LlmConfig, "endpoint" | "apiKey">):
 
 /** Test de connexion depuis les réglages : un aller-retour minimal, borné dans le temps. */
 export async function llmProbe(config: LlmConfig): Promise<string> {
+  if (providerOf(config) === "copilot") {
+    const session = await refreshCopilotSession();
+    if (!session.connected) throw new Error(NOT_CONNECTED);
+    return session.login ? `Compte GitHub connecté · ${session.login}` : "Compte GitHub connecté";
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT);
   try {

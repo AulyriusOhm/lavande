@@ -32,7 +32,17 @@ import {
   Users,
 } from "lucide-react";
 import { ACCENT_PRESETS, accentContrast, useTheme, type ThemeMode } from "@/lib/theme";
-import { llmModels, llmProbe, llmReady, type LlmConfig } from "@/lib/llm";
+import {
+  LLM_PROVIDERS,
+  OPENAI_ENDPOINT,
+  llmModels,
+  llmProbe,
+  llmReady,
+  providerOf,
+  type LlmProvider,
+} from "@/lib/llm";
+import { DEFAULT_COPILOT_CLIENT_ID, copilotModels, useCopilotSession } from "@/lib/copilot";
+import { openExternal } from "@/lib/open-external";
 import { formatTokens, lastDays, resetAiStats, topModels } from "@/lib/ai-stats";
 import { useAiUsage } from "@/lib/ai-sync";
 import {
@@ -85,7 +95,9 @@ import {
 } from "@/lib/background-sync";
 import { useBackLayer } from "@/lib/back";
 
-const LLM_FIELDS: { key: keyof LlmConfig; label: string; aria: string; placeholder: string; password?: boolean }[] = [
+type LlmField = "endpoint" | "model" | "apiKey" | "copilotClientId";
+
+const LLM_FIELDS: { key: LlmField; label: string; aria: string; placeholder: string; password?: boolean }[] = [
   { key: "endpoint", label: "Endpoint", aria: "Endpoint du modèle", placeholder: "https://api.openai.com/v1" },
   { key: "model", label: "Modèle", aria: "Nom du modèle", placeholder: "gpt-4o-mini" },
   { key: "apiKey", label: "Clé API", aria: "Clé API", placeholder: "sk-…", password: true },
@@ -183,6 +195,8 @@ export function SettingsScreen({
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
+  const copilot = useCopilotSession(llm.copilotClientId);
+  const copilotProvider = providerOf(llm) === "copilot";
   const aiUsage = useAiUsage();
   const aiDays = lastDays(aiUsage.combined);
   const aiPeak = Math.max(...aiDays.map((day) => day.usage.calls), 1);
@@ -259,13 +273,24 @@ export function SettingsScreen({
     }
   };
 
-  const updateLlm = (key: keyof LlmConfig, value: string) => {
+  const updateLlm = (key: LlmField, value: string) => {
     setProbe(null);
     if (key !== "model") {
       setModels([]);
       setModelsError(null);
     }
     setLlm({ ...llm, [key]: value });
+  };
+
+  const pickProvider = (provider: LlmProvider) => {
+    setProbe(null);
+    setModels([]);
+    setModelsError(null);
+    if (provider === "openai" && !llm.endpoint.trim()) {
+      setLlm({ ...llm, provider, endpoint: OPENAI_ENDPOINT });
+      return;
+    }
+    setLlm({ ...llm, provider });
   };
 
   const loadModels = async () => {
@@ -1064,33 +1089,153 @@ export function SettingsScreen({
           <BlurFade delay={0.08}>
             <Card className="mx-5 space-y-3 p-3.5">
               <p className="text-[12px] leading-relaxed font-medium text-ink-muted">
-                Branche un modèle compatible OpenAI pour les suggestions de réponse, la réécriture et les
-                résumés. Sans configuration, Lavande propose des réponses locales.
+                {copilotProvider
+                  ? "GitHub Copilot répond par le démon, qui garde les jetons : connecte ton compte GitHub, puis choisis un modèle."
+                  : "Branche un modèle compatible OpenAI pour les suggestions de réponse, la réécriture et les résumés. Sans configuration, Lavande propose des réponses locales."}
               </p>
-              {LLM_FIELDS.map((field) => (
-                <label key={field.key} className="block">
-                  <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
-                    {field.label}
-                  </span>
-                  <input
-                    aria-label={field.aria}
-                    type={field.password ? "password" : "text"}
-                    list={field.key === "model" ? "llm-models" : undefined}
-                    autoComplete="off"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                    placeholder={field.placeholder}
-                    value={llm[field.key]}
-                    onChange={(event) => updateLlm(field.key, event.target.value)}
-                    className="focus-ring mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
-                  />
-                </label>
-              ))}
-              <datalist id="llm-models">
-                {models.map((model) => (
-                  <option key={model} value={model} />
+              <div role="group" aria-label="Fournisseur du modèle IA" className="flex flex-wrap gap-1.5">
+                {LLM_PROVIDERS.map((entry) => (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    aria-pressed={providerOf(llm) === entry.id}
+                    onClick={() => pickProvider(entry.id)}
+                    className={cn(
+                      "focus-ring min-h-9 rounded-full border px-3 text-[12px] font-bold transition-colors",
+                      providerOf(llm) === entry.id
+                        ? "border-accent bg-accent-soft text-accent-ink"
+                        : "border-line bg-surface text-ink-soft",
+                    )}
+                  >
+                    {entry.label}
+                  </button>
                 ))}
-              </datalist>
+              </div>
+              {copilotProvider ? (
+                <div className="space-y-3">
+                  <div className="rounded-2xl border border-line bg-surface-2/60 p-3">
+                    {copilot.connected ? (
+                      <div className="space-y-2">
+                        <p className="text-[12.5px] font-semibold text-ink">
+                          {`Connecté · ${copilot.login ?? "GitHub"}`}
+                        </p>
+                        <button
+                          type="button"
+                          disabled={copilot.busy}
+                          onClick={() => copilot.disconnect()}
+                          className="focus-ring min-h-11 w-full rounded-full border border-line bg-surface px-4 text-[12.5px] font-bold text-ink-soft disabled:opacity-40"
+                        >
+                          Se déconnecter
+                        </button>
+                      </div>
+                    ) : copilot.userCode ? (
+                      <div className="space-y-2">
+                        <p className="text-[12px] font-semibold text-ink-soft">
+                          Recopie ce code sur la page GitHub ouverte :
+                        </p>
+                        <p className="text-center font-mono text-[22px] font-bold tracking-[0.18em] text-ink">
+                          {copilot.userCode}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => copilot.verificationUri && openExternal(copilot.verificationUri)}
+                          className="focus-ring min-h-11 w-full rounded-full border border-line bg-surface px-4 text-[12.5px] font-bold text-ink-soft"
+                        >
+                          Ouvrir la page GitHub
+                        </button>
+                        <p className="text-center text-[11.5px] font-semibold text-ink-muted">
+                          en attente de validation…
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <p className="text-[12px] font-semibold text-ink-soft">
+                          Aucun compte GitHub connecté.
+                        </p>
+                        <button
+                          type="button"
+                          disabled={copilot.busy}
+                          onClick={() => copilot.connect()}
+                          className="focus-ring min-h-11 w-full rounded-full bg-accent px-4 text-[12.5px] font-bold text-accent-contrast disabled:opacity-40"
+                        >
+                          {copilot.busy ? "Connexion…" : "Se connecter à GitHub"}
+                        </button>
+                      </div>
+                    )}
+                    {copilot.error ? (
+                      <p className="mt-2 rounded-2xl bg-rose-500/10 px-3 py-2 text-[12px] leading-relaxed font-semibold break-words text-rose-600 dark:text-rose-300">
+                        {copilot.error}
+                      </p>
+                    ) : null}
+                  </div>
+                  <label className="block">
+                    <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                      Modèle
+                    </span>
+                    <input
+                      aria-label="Nom du modèle"
+                      list="copilot-models"
+                      autoComplete="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                      placeholder="gpt-4o"
+                      value={llm.model}
+                      onChange={(event) => updateLlm("model", event.target.value)}
+                      className="focus-ring mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
+                    />
+                    <datalist id="copilot-models">
+                      {copilotModels().map((model) => (
+                        <option key={model} value={model} />
+                      ))}
+                    </datalist>
+                  </label>
+                  <label className="block">
+                    <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                      Client ID GitHub Copilot
+                    </span>
+                    <input
+                      aria-label="Client ID GitHub Copilot"
+                      autoComplete="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                      placeholder={DEFAULT_COPILOT_CLIENT_ID}
+                      value={llm.copilotClientId ?? ""}
+                      onChange={(event) => updateLlm("copilotClientId", event.target.value)}
+                      className="focus-ring mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
+                    />
+                    <span className="mt-1 block text-[11px] font-medium text-ink-muted">
+                      Vide · l'application Copilot par défaut est utilisée.
+                    </span>
+                  </label>
+                </div>
+              ) : (
+                <>
+                  {LLM_FIELDS.map((field) => (
+                    <label key={field.key} className="block">
+                      <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                        {field.label}
+                      </span>
+                      <input
+                        aria-label={field.aria}
+                        type={field.password ? "password" : "text"}
+                        list={field.key === "model" ? "llm-models" : undefined}
+                        autoComplete="off"
+                        autoCapitalize="none"
+                        spellCheck={false}
+                        placeholder={field.placeholder}
+                        value={llm[field.key]}
+                        onChange={(event) => updateLlm(field.key, event.target.value)}
+                        className="focus-ring mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
+                      />
+                    </label>
+                  ))}
+                  <datalist id="llm-models">
+                    {models.map((model) => (
+                      <option key={model} value={model} />
+                    ))}
+                  </datalist>
+                </>
+              )}
               <button
                 type="button"
                 disabled={!llmReady(llm) || probing}
@@ -1099,14 +1244,16 @@ export function SettingsScreen({
               >
                 {probing ? "Test en cours…" : "Tester la connexion"}
               </button>
-              <button
-                type="button"
-                disabled={!llm.endpoint.trim() || !llm.apiKey.trim() || loadingModels}
-                onClick={() => void loadModels()}
-                className="focus-ring min-h-11 w-full rounded-full border border-line bg-surface px-4 text-[12.5px] font-bold text-ink-soft transition-colors disabled:opacity-40"
-              >
-                {loadingModels ? "Chargement…" : "Charger les modèles"}
-              </button>
+              {copilotProvider ? null : (
+                <button
+                  type="button"
+                  disabled={!llm.endpoint.trim() || !llm.apiKey.trim() || loadingModels}
+                  onClick={() => void loadModels()}
+                  className="focus-ring min-h-11 w-full rounded-full border border-line bg-surface px-4 text-[12.5px] font-bold text-ink-soft transition-colors disabled:opacity-40"
+                >
+                  {loadingModels ? "Chargement…" : "Charger les modèles"}
+                </button>
+              )}
               {modelsError ? (
                 <p className="rounded-2xl bg-rose-500/10 px-3 py-2 text-[12px] leading-relaxed font-semibold break-words text-rose-600 dark:text-rose-300">
                   {`Liste indisponible · ${modelsError}`}
@@ -1121,7 +1268,11 @@ export function SettingsScreen({
                       : "bg-rose-500/10 text-rose-600 dark:text-rose-300",
                   )}
                 >
-                  {probe.ok ? `Réponse du modèle · ${probe.text}` : `Échec · ${probe.text}`}
+                  {probe.ok
+                    ? copilotProvider
+                      ? probe.text
+                      : `Réponse du modèle · ${probe.text}`
+                    : `Échec · ${probe.text}`}
                 </p>
               ) : null}
               <p className="text-[11.5px] leading-relaxed font-medium text-ink-muted">

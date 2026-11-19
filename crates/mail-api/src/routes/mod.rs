@@ -2,6 +2,7 @@
 //! read-only calendar import, the stored CalDAV sources and the contact list.
 
 pub mod accounts;
+pub mod ai;
 pub mod calendars;
 pub mod contacts;
 pub mod counts;

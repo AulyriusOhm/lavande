@@ -669,7 +669,7 @@ fn escape(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn token(bytes: usize) -> String {
+pub(crate) fn token(bytes: usize) -> String {
     let mut buffer = vec![0u8; bytes];
     rand::thread_rng().fill_bytes(&mut buffer);
     URL_SAFE_NO_PAD.encode(buffer)

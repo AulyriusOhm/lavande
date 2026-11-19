@@ -88,7 +88,17 @@ import {
 } from "@/lib/team";
 import { requestNotifications } from "@/lib/notify";
 import { APP_VERSION, phaseLabel, useUpdater } from "@/lib/updater";
-import { llmModels, llmProbe, llmReady } from "@/lib/llm";
+import {
+  LLM_PROVIDERS,
+  OPENAI_ENDPOINT,
+  llmModels,
+  llmProbe,
+  llmReady,
+  providerOf,
+  type LlmProvider,
+} from "@/lib/llm";
+import { DEFAULT_COPILOT_CLIENT_ID, copilotModels, useCopilotSession } from "@/lib/copilot";
+import { openExternal } from "@/lib/open-external";
 import { formatTokens, lastDays, resetAiStats, topModels } from "@/lib/ai-stats";
 import { useAiUsage } from "@/lib/ai-sync";
 import type { SummaryConfig } from "@/lib/summary";
@@ -908,6 +918,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   const [savingRename, setSavingRename] = useState(false);
   const [probing, setProbing] = useState(false);
   const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(null);
+  const copilot = useCopilotSession(llm.copilotClientId);
+  const copilotProvider = providerOf(llm) === "copilot";
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
@@ -1019,13 +1031,29 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     }
   };
 
-  const updateLlm = (patch: { endpoint?: string; model?: string; apiKey?: string }) => {
+  const updateLlm = (patch: {
+    endpoint?: string;
+    model?: string;
+    apiKey?: string;
+    copilotClientId?: string;
+  }) => {
     setProbe(null);
     if (patch.endpoint !== undefined || patch.apiKey !== undefined) {
       setModels([]);
       setModelsError(null);
     }
     setLlm(patch);
+  };
+
+  const pickProvider = (provider: LlmProvider) => {
+    setProbe(null);
+    setModels([]);
+    setModelsError(null);
+    if (provider === "openai" && !llm.endpoint.trim()) {
+      setLlm({ provider, endpoint: OPENAI_ENDPOINT });
+      return;
+    }
+    setLlm({ provider });
   };
 
   const loadModels = async () => {
@@ -2020,45 +2048,159 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
               <Block id="ia" label="Intelligence artificielle" hint="suggestions & réécriture">
                 <Surface className="p-4">
                   <p className="text-[12px] font-semibold leading-relaxed text-ink-soft">
-                    Branche un modèle compatible OpenAI pour les suggestions de réponse et la réécriture.
-                    Sans configuration, Lavande propose des réponses locales.
+                    {copilotProvider
+                      ? "GitHub Copilot répond par le démon, qui garde les jetons : connecte ton compte GitHub, puis choisis un modèle."
+                      : "Branche un modèle compatible OpenAI pour les suggestions de réponse et la réécriture. Sans configuration, Lavande propose des réponses locales."}
                   </p>
-                  <div className="mt-3 grid gap-2.5">
-                    <label className="grid gap-1">
-                      <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Endpoint</span>
-                      <TextInput
-                        aria-label="Endpoint du modèle"
-                        placeholder="https://api.openai.com/v1"
-                        value={llm.endpoint}
-                        onChange={(event) => updateLlm({ endpoint: event.target.value })}
-                      />
-                    </label>
-                    <label className="grid gap-1">
-                      <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Modèle</span>
-                      <TextInput
-                        aria-label="Nom du modèle"
-                        list="llm-models"
-                        placeholder="gpt-4o-mini"
-                        value={llm.model}
-                        onChange={(event) => updateLlm({ model: event.target.value })}
-                      />
-                      <datalist id="llm-models">
-                        {models.map((model) => (
-                          <option key={model} value={model} />
-                        ))}
-                      </datalist>
-                    </label>
-                    <label className="grid gap-1">
-                      <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Clé API</span>
-                      <TextInput
-                        aria-label="Clé API"
-                        type="password"
-                        placeholder="sk-…"
-                        value={llm.apiKey}
-                        onChange={(event) => updateLlm({ apiKey: event.target.value })}
-                      />
-                    </label>
+                  <div
+                    role="group"
+                    aria-label="Fournisseur du modèle IA"
+                    className="mt-3 flex flex-wrap gap-1.5"
+                  >
+                    {LLM_PROVIDERS.map((entry) => (
+                      <button
+                        key={entry.id}
+                        type="button"
+                        aria-pressed={providerOf(llm) === entry.id}
+                        onClick={() => pickProvider(entry.id)}
+                        className={cn(
+                          "focus-ring h-8 rounded-full border px-3 text-[12px] font-bold transition-colors",
+                          providerOf(llm) === entry.id
+                            ? "border-accent bg-accent-soft text-accent-ink"
+                            : "border-line bg-surface text-ink-soft hover:bg-surface-2",
+                        )}
+                      >
+                        {entry.label}
+                      </button>
+                    ))}
                   </div>
+                  {copilotProvider ? (
+                    <div className="mt-3 grid gap-2.5">
+                      <div className="rounded-xl border border-line bg-surface-2/60 p-3">
+                        {copilot.connected ? (
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-[12.5px] font-semibold text-ink">
+                              {`Connecté · ${copilot.login ?? "GitHub"}`}
+                            </p>
+                            <DButton
+                              variant="soft"
+                              size="sm"
+                              disabled={copilot.busy}
+                              onClick={() => copilot.disconnect()}
+                            >
+                              Se déconnecter
+                            </DButton>
+                          </div>
+                        ) : copilot.userCode ? (
+                          <div className="grid gap-2">
+                            <p className="text-[12.5px] font-semibold text-ink-soft">
+                              Recopie ce code sur la page GitHub ouverte :
+                            </p>
+                            <p className="font-mono text-[20px] font-bold tracking-[0.18em] text-ink">
+                              {copilot.userCode}
+                            </p>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <DButton
+                                variant="soft"
+                                size="sm"
+                                onClick={() =>
+                                  copilot.verificationUri && openExternal(copilot.verificationUri)
+                                }
+                              >
+                                Ouvrir la page GitHub
+                              </DButton>
+                              <Badge tone="sky">en attente de validation…</Badge>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-[12.5px] font-semibold text-ink-soft">
+                              Aucun compte GitHub connecté.
+                            </p>
+                            <DButton
+                              variant="primary"
+                              size="sm"
+                              disabled={copilot.busy}
+                              onClick={() => copilot.connect()}
+                            >
+                              {copilot.busy ? "Connexion…" : "Se connecter à GitHub"}
+                            </DButton>
+                          </div>
+                        )}
+                        {copilot.error ? (
+                          <p className="mt-2 rounded-xl bg-rose-500/10 px-2.5 py-2 text-[12.5px] leading-relaxed font-semibold break-words text-rose-600 dark:text-rose-300">
+                            {copilot.error}
+                          </p>
+                        ) : null}
+                      </div>
+                      <label className="grid gap-1">
+                        <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Modèle</span>
+                        <TextInput
+                          aria-label="Nom du modèle"
+                          list="copilot-models"
+                          placeholder="gpt-4o"
+                          value={llm.model}
+                          onChange={(event) => updateLlm({ model: event.target.value })}
+                        />
+                        <datalist id="copilot-models">
+                          {copilotModels().map((model) => (
+                            <option key={model} value={model} />
+                          ))}
+                        </datalist>
+                      </label>
+                      <label className="grid gap-1">
+                        <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                          Client ID GitHub Copilot
+                        </span>
+                        <TextInput
+                          aria-label="Client ID GitHub Copilot"
+                          placeholder={DEFAULT_COPILOT_CLIENT_ID}
+                          value={llm.copilotClientId ?? ""}
+                          onChange={(event) => updateLlm({ copilotClientId: event.target.value })}
+                        />
+                        <span className="text-[11px] font-medium text-ink-muted">
+                          Vide · l'application Copilot par défaut est utilisée.
+                        </span>
+                      </label>
+                    </div>
+                  ) : (
+                    <div className="mt-3 grid gap-2.5">
+                      <label className="grid gap-1">
+                        <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Endpoint</span>
+                        <TextInput
+                          aria-label="Endpoint du modèle"
+                          placeholder="https://api.openai.com/v1"
+                          value={llm.endpoint}
+                          onChange={(event) => updateLlm({ endpoint: event.target.value })}
+                        />
+                      </label>
+                      <label className="grid gap-1">
+                        <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Modèle</span>
+                        <TextInput
+                          aria-label="Nom du modèle"
+                          list="llm-models"
+                          placeholder="gpt-4o-mini"
+                          value={llm.model}
+                          onChange={(event) => updateLlm({ model: event.target.value })}
+                        />
+                        <datalist id="llm-models">
+                          {models.map((model) => (
+                            <option key={model} value={model} />
+                          ))}
+                        </datalist>
+                      </label>
+                      <label className="grid gap-1">
+                        <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Clé API</span>
+                        <TextInput
+                          aria-label="Clé API"
+                          type="password"
+                          placeholder="sk-…"
+                          value={llm.apiKey}
+                          onChange={(event) => updateLlm({ apiKey: event.target.value })}
+                        />
+                      </label>
+                    </div>
+                  )}
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <DButton
                       variant="primary"
@@ -2073,19 +2215,21 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                       )}
                       {probing ? "Test en cours…" : "Tester la connexion"}
                     </DButton>
-                    <DButton
-                      variant="soft"
-                      size="sm"
-                      disabled={!llm.endpoint.trim() || !llm.apiKey.trim() || loadingModels}
-                      onClick={() => void loadModels()}
-                    >
-                      {loadingModels ? (
-                        <Loader2 className="size-3.5 animate-spin" />
-                      ) : (
-                        <RefreshCw className="size-3.5" />
-                      )}
-                      {loadingModels ? "Chargement…" : "Charger les modèles"}
-                    </DButton>
+                    {copilotProvider ? null : (
+                      <DButton
+                        variant="soft"
+                        size="sm"
+                        disabled={!llm.endpoint.trim() || !llm.apiKey.trim() || loadingModels}
+                        onClick={() => void loadModels()}
+                      >
+                        {loadingModels ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="size-3.5" />
+                        )}
+                        {loadingModels ? "Chargement…" : "Charger les modèles"}
+                      </DButton>
+                    )}
                     {probe ? (
                       <Badge tone={probe.ok ? "green" : "rose"}>
                         {probe.ok ? "connexion établie" : "échec"}
@@ -2109,7 +2253,11 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                           : "bg-rose-500/10 text-rose-600 dark:text-rose-300",
                       )}
                     >
-                      {probe.ok ? `Réponse du modèle · ${probe.text}` : `Échec · ${probe.text}`}
+                      {probe.ok
+                        ? copilotProvider
+                          ? probe.text
+                          : `Réponse du modèle · ${probe.text}`
+                        : `Échec · ${probe.text}`}
                     </p>
                   ) : null}
                   <p className="mt-2.5 text-[12.5px] leading-snug font-semibold text-ink-muted">

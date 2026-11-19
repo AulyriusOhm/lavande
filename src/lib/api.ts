@@ -192,6 +192,33 @@ export type ApiOAuthStatus = {
   error?: string;
 };
 
+/** Device flow GitHub Copilot : le démon garde les jetons, le front ne voit que le code. */
+export type ApiCopilotStart = {
+  session: string;
+  verification_uri: string;
+  user_code: string;
+  interval: number;
+  expires_in: number;
+};
+
+export type ApiCopilotStatus = {
+  status: "pending" | "done" | "failed" | "expired";
+  interval: number;
+  error?: string;
+  login?: string | null;
+};
+
+export type ApiCopilotSession = { connected: boolean; login: string | null };
+
+export type AiChatMessage = { role: "system" | "user" | "assistant"; content: string };
+
+export type AiChatInput = { model: string; messages: AiChatMessage[]; temperature?: number };
+
+export type AiChatReply = {
+  choices?: { message?: { content?: string } }[];
+  usage?: unknown;
+};
+
 export type OAuthStartInput = {
   provider: "google" | "microsoft" | "custom";
   email: string;
@@ -402,6 +429,8 @@ const inShell = typeof window !== "undefined" && ("isTauri" in window || "__TAUR
 const BASE = inShell ? "http://127.0.0.1:8790/api" : `${import.meta.env.BASE_URL}api`;
 const SHORT_TIMEOUT = 15_000;
 const LONG_TIMEOUT = 180_000;
+/** Le démon borne un appel Copilot à 60 s : la marge laisse la réponse arriver. */
+const AI_TIMEOUT = 90_000;
 
 /**
  * Jeton du démon. Dans la coquille, la commande Rust le lit dans le répertoire
@@ -751,6 +780,24 @@ export const mailApi = {
 
   oauthStatus: (session: string) =>
     request<ApiOAuthStatus>(`/oauth/status?session=${encodeURIComponent(session)}`),
+
+  copilotStart: (clientId?: string) =>
+    request<ApiCopilotStart>("/ai/copilot/start", {
+      method: "POST",
+      body: clientId?.trim() ? { client_id: clientId.trim() } : {},
+    }),
+
+  copilotStatus: (session: string) =>
+    request<ApiCopilotStatus>(`/ai/copilot/status?session=${encodeURIComponent(session)}`),
+
+  /** Jamais de jeton : seulement le drapeau et le login GitHub. */
+  copilotSession: () => request<ApiCopilotSession>("/ai/copilot/session"),
+
+  copilotLogout: () => request<{ ok: boolean }>("/ai/copilot/logout", { method: "POST" }),
+
+  /** Réponse au format OpenAI, obtenue par le proxy du démon. */
+  aiChat: (input: AiChatInput, signal?: AbortSignal) =>
+    request<AiChatReply>("/ai/chat", { method: "POST", body: input, timeout: AI_TIMEOUT, signal }),
 
   oauthComplete: (session: string) =>
     request<ApiOAuthStatus>("/oauth/complete", {

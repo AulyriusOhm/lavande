@@ -139,7 +139,9 @@ du moteur (800 ms) absorbe la fréquence. L'affichage additionne le doc local et
 
 **La clé API n'est jamais synchronisée** : `prefs.llm.apiKey` reste dans `lavande.prefs` sur l'appareil, le
 doc `settings` ne porte que `endpoint` et `model`. À la réception d'un doc `settings` plus récent, le client
-applique `setLlm({endpoint, model})` et n'émet pas d'écho (garde sur `updatedAt` du doc).
+applique `setLlm({endpoint, model})` et n'émet pas d'écho (garde sur `updatedAt` du doc). Le fournisseur
+(`provider`, dont GitHub Copilot) et `copilotClientId` ne sont pas synchronisés non plus : chaque appareil
+choisit le sien, et une session Copilot est liée au démon de la machine.
 
 ## 3. Journal d'opérations
 
