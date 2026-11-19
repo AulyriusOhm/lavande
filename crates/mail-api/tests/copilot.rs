@@ -7,7 +7,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use lavande_mail::tls::TlsOptions;
 use lavande_mail_api::app;
-use lavande_mail_api::copilot::{CopilotTokens, Settings};
+use lavande_mail_api::copilot::{CopilotTokens, Settings, EDITOR_VERSION};
 use lavande_mail_api::secrets::{AccountSecrets, SecretBackend};
 use lavande_mail_api::state::AppState;
 use serde_json::{json, Value};
@@ -466,7 +466,7 @@ async fn a_completed_flow_stores_both_tokens_and_the_login() {
         "{copilot_request}"
     );
     assert!(
-        copilot_request.contains("editor-version: Lavande/0.2.16"),
+        copilot_request.contains(&format!("editor-version: {EDITOR_VERSION}")),
         "{copilot_request}"
     );
 
@@ -605,7 +605,7 @@ async fn chat_proxies_to_copilot_with_its_headers() {
         "{upstream}"
     );
     assert!(
-        upstream.contains("editor-version: Lavande/0.2.16"),
+        upstream.contains(&format!("editor-version: {EDITOR_VERSION}")),
         "{upstream}"
     );
     assert!(

@@ -198,6 +198,7 @@ describe("menu contextuel des dossiers", () => {
     await openRail();
 
     rightClick(TRASH);
+    await waitFor(() => expect(labels()).toContain("Vider la corbeille"));
     click("Vider la corbeille");
 
     expect(menu()).not.toBeNull();

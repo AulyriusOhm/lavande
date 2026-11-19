@@ -100,6 +100,9 @@ PY
   sed -i "s/$old_pattern/$VERSION/g" site-vitrine/src/components/download.tsx
   grep -q "$VERSION" site-vitrine/src/components/download.tsx ||
     die "site-vitrine/src/components/download.tsx : $VERSION absent après remplacement de $OLD_VERSION"
+  sed -i "s/Lavande\/$old_pattern/Lavande\/$VERSION/" crates/mail-api/src/copilot.rs
+  grep -q "Lavande/$VERSION" crates/mail-api/src/copilot.rs ||
+    die "crates/mail-api/src/copilot.rs : Lavande/$VERSION absent après remplacement de Lavande/$OLD_VERSION"
 fi
 echo "   version publiée : $VERSION"
 
