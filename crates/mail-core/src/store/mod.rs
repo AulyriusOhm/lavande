@@ -15,7 +15,7 @@ use crate::mime::ParsedMessage;
 use crate::model::{AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState, Thread};
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const MESSAGE_COLUMNS: &str = "account_id, folder_path, uid, uidvalidity, thread_id, message_id, \
      in_reply_to, references_json, from_json, to_json, cc_json, subject, date, unread, starred, \
      answered, size, pgp, preview, body_text, body_html, pgp_detail";
@@ -77,6 +77,10 @@ impl Store {
             conn.execute_batch(SCHEMA)?;
             add_missing_columns(&conn)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        let healed = heal_reply_threads_on(&conn)?;
+        if healed > 0 {
+            tracing::info!(healed, "fils de réponse réalignés sur leur parent");
         }
         Ok(())
     }
@@ -420,6 +424,28 @@ impl Store {
         Ok(found)
     }
 
+    /// Thread the message carrying this `Message-ID` belongs to, if stored.
+    pub fn thread_of_message(
+        &self,
+        account_id: &str,
+        message_id: &str,
+    ) -> Result<Option<String>, MailError> {
+        let conn = self.conn()?;
+        thread_of_message_on(&conn, account_id, message_id)
+    }
+
+    /// Moves one message to `thread_id`; `false` when it already was there.
+    pub fn rethread(
+        &self,
+        account_id: &str,
+        folder_path: &str,
+        uid: u32,
+        thread_id: &str,
+    ) -> Result<bool, MailError> {
+        let conn = self.conn()?;
+        rethread_on(&conn, account_id, folder_path, uid, thread_id)
+    }
+
     /// Marks a message answered locally; returns whether a row matched.
     pub fn mark_answered(
         &self,
@@ -617,7 +643,7 @@ impl Store {
     }
 
     /// Moves the messages replying to `message_id` into `thread_id`. Returns
-    /// how many rows changed.
+    /// how many rows changed thread.
     pub fn relink_replies(
         &self,
         account_id: &str,
@@ -625,13 +651,16 @@ impl Store {
         thread_id: &str,
     ) -> Result<usize, MailError> {
         let conn = self.conn()?;
-        let updated = conn.execute(
-            "UPDATE messages SET thread_id = ?3 WHERE account_id = ?1 \
-             AND (in_reply_to = ?2 OR EXISTS (\
-                 SELECT 1 FROM json_each(messages.references_json) WHERE value = ?2))",
-            params![account_id, message_id, thread_id],
-        )?;
-        Ok(updated)
+        relink_replies_on(&conn, account_id, message_id, thread_id)
+    }
+
+    /// Aligns every stored reply whose parent lives in another thread, and
+    /// drags the replies of each realigned message along. A reply imported
+    /// before its parent, a split left by an older schema: one pass heals what
+    /// is stored. Idempotent; returns how many replies were realigned.
+    pub fn heal_reply_threads(&self) -> Result<usize, MailError> {
+        let conn = self.conn()?;
+        heal_reply_threads_on(&conn)
     }
 
     /// Messages of a folder, newest first. `limit <= 0` returns everything.
@@ -849,6 +878,83 @@ fn build_thread(
         messages,
         primary,
     })
+}
+
+fn thread_of_message_on(
+    conn: &Connection,
+    account_id: &str,
+    message_id: &str,
+) -> Result<Option<String>, MailError> {
+    Ok(conn
+        .query_row(
+            "SELECT thread_id FROM messages \
+             WHERE account_id = ?1 AND message_id = ?2 LIMIT 1",
+            params![account_id, message_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+fn rethread_on(
+    conn: &Connection,
+    account_id: &str,
+    folder_path: &str,
+    uid: u32,
+    thread_id: &str,
+) -> Result<bool, MailError> {
+    let updated = conn.execute(
+        "UPDATE messages SET thread_id = ?4 \
+         WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3 AND thread_id IS NOT ?4",
+        params![account_id, folder_path, uid, thread_id],
+    )?;
+    Ok(updated > 0)
+}
+
+fn relink_replies_on(
+    conn: &Connection,
+    account_id: &str,
+    message_id: &str,
+    thread_id: &str,
+) -> Result<usize, MailError> {
+    let updated = conn.execute(
+        "UPDATE messages SET thread_id = ?3 WHERE account_id = ?1 \
+         AND (in_reply_to = ?2 OR EXISTS (\
+             SELECT 1 FROM json_each(messages.references_json) WHERE value = ?2)) \
+         AND thread_id IS NOT ?3",
+        params![account_id, message_id, thread_id],
+    )?;
+    Ok(updated)
+}
+
+fn heal_reply_threads_on(conn: &Connection) -> Result<usize, MailError> {
+    let split: Vec<(String, String, u32, Option<String>, String)> = {
+        let mut statement = conn.prepare(
+            "SELECT m.account_id, m.folder_path, m.uid, m.message_id, m.in_reply_to \
+             FROM messages m WHERE m.in_reply_to IS NOT NULL AND m.in_reply_to <> '' \
+             AND EXISTS (SELECT 1 FROM messages p WHERE p.account_id = m.account_id \
+                 AND p.message_id = m.in_reply_to AND p.thread_id IS NOT m.thread_id)",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (account_id, folder_path, uid, message_id, in_reply_to) in &split {
+        let Some(parent_thread) = thread_of_message_on(conn, account_id, in_reply_to)? else {
+            continue;
+        };
+        rethread_on(conn, account_id, folder_path, *uid, &parent_thread)?;
+        if let Some(message_id) = message_id {
+            relink_replies_on(conn, account_id, message_id, &parent_thread)?;
+        }
+    }
+    Ok(split.len())
 }
 
 fn get_folder_on(

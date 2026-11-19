@@ -61,3 +61,6 @@ CREATE INDEX IF NOT EXISTS idx_messages_folder_date
 
 CREATE INDEX IF NOT EXISTS idx_messages_thread
     ON messages (account_id, thread_id);
+
+CREATE INDEX IF NOT EXISTS idx_messages_message_id
+    ON messages (account_id, message_id);

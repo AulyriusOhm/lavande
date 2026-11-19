@@ -480,6 +480,39 @@ fn migration_is_replayable_on_existing_database() {
 }
 
 #[test]
+fn reopening_an_existing_database_heals_split_replies() {
+    let path = std::env::temp_dir().join(format!("lavande-mail-heal-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let root = lavande_mail::thread_id("perso", "Planning", Some("root@x"), None, &[]);
+
+    {
+        let store = Store::open(&path).expect("open");
+        store.migrate().expect("migrate");
+        let mut parent = message(1, &root, "Marc", "Planning", 10);
+        parent.message_id = Some("parent@x".to_string());
+        store.upsert_message(&parent).expect("parent");
+        let mut split = message(2, "computed", "Lea", "Re: Planning", 11);
+        split.message_id = Some("reply@x".to_string());
+        split.in_reply_to = Some("parent@x".to_string());
+        split.references = vec!["parent@x".to_string()];
+        store.upsert_message(&split).expect("split");
+    }
+    {
+        let store = Store::open(&path).expect("reopen");
+        store.migrate().expect("migrate again");
+        let stored = store
+            .get_message("perso", "INBOX", 2)
+            .expect("get")
+            .expect("present");
+        assert_eq!(stored.thread_id, root);
+    }
+
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(path.with_extension("db-wal"));
+    let _ = std::fs::remove_file(path.with_extension("db-shm"));
+}
+
+#[test]
 fn reads_folders_back() {
     let store = open();
     let folder = store
@@ -628,6 +661,143 @@ fn relink_replies_joins_a_parent_seen_later() {
     assert_eq!(threads.len(), 1);
     assert_eq!(threads[0].id, root);
     assert_eq!(threads[0].count, 2);
+}
+
+#[test]
+fn a_reply_adopts_the_thread_of_its_parent() {
+    let store = open();
+    let root = lavande_mail::thread_id("perso", "Planning", Some("root@x"), None, &[]);
+
+    let mut parent = message(3, &root, "Marc", "Planning", 10);
+    parent.message_id = Some("parent@x".to_string());
+    parent.in_reply_to = Some("root@x".to_string());
+    parent.references = Vec::new();
+    assert_eq!(parent.thread_id, root);
+    store.upsert_message(&parent).expect("parent");
+
+    let mut reply = message(2, "computed", "Lea", "Re: Planning", 11);
+    reply.message_id = Some("reply@x".to_string());
+    reply.in_reply_to = Some("parent@x".to_string());
+    reply.references = vec!["parent@x".to_string()];
+    reply.thread_id = lavande_mail::thread_id(
+        "perso",
+        "Re: Planning",
+        Some("reply@x"),
+        Some("parent@x"),
+        &["parent@x".to_string()],
+    );
+    assert_ne!(reply.thread_id, root);
+
+    let mut child = message(4, "child-root", "Roman", "Re: Planning", 12);
+    child.message_id = Some("child@x".to_string());
+    child.in_reply_to = Some("reply@x".to_string());
+    child.references = vec!["reply@x".to_string()];
+
+    store.upsert_message(&reply).expect("reply");
+    store.upsert_message(&child).expect("child");
+
+    let parent_thread = store
+        .thread_of_message("perso", "parent@x")
+        .expect("parent thread")
+        .expect("present");
+    assert_eq!(parent_thread, root);
+    assert!(store
+        .rethread("perso", "INBOX", 2, &parent_thread)
+        .expect("rethread"));
+    assert!(!store
+        .rethread("perso", "INBOX", 2, &parent_thread)
+        .expect("rethread again"));
+    assert_eq!(
+        store
+            .relink_replies("perso", "reply@x", &parent_thread)
+            .expect("relink"),
+        1
+    );
+
+    for uid in [2, 4] {
+        let stored = store
+            .get_message("perso", "INBOX", uid)
+            .expect("get")
+            .expect("present");
+        assert_eq!(stored.thread_id, root);
+    }
+    assert!(store
+        .thread_of_message("perso", "absent@x")
+        .expect("absent")
+        .is_none());
+    let threads = store
+        .threads_in_folder("perso", "INBOX", -1, 0)
+        .expect("threads");
+    assert_eq!(threads.len(), 1);
+    assert_eq!(threads[0].id, root);
+    assert_eq!(threads[0].count, 3);
+}
+
+#[test]
+fn heal_reply_threads_aligns_split_replies() {
+    let store = open();
+    let root = lavande_mail::thread_id("perso", "Planning", Some("root@x"), None, &[]);
+
+    let mut parent = message(1, &root, "Marc", "Planning", 10);
+    parent.message_id = Some("parent@x".to_string());
+    store.upsert_message(&parent).expect("parent");
+
+    let mut split = message(2, "computed", "Lea", "Re: Planning", 11);
+    split.message_id = Some("reply@x".to_string());
+    split.in_reply_to = Some("parent@x".to_string());
+    split.references = vec!["parent@x".to_string()];
+    store.upsert_message(&split).expect("split");
+
+    let lonely = message(3, "lonely", "Marc", "Vacances", 12);
+    store.upsert_message(&lonely).expect("lonely");
+
+    assert_eq!(store.heal_reply_threads().expect("heal"), 1);
+    let healed = store
+        .get_message("perso", "INBOX", 2)
+        .expect("get")
+        .expect("present");
+    assert_eq!(healed.thread_id, root);
+    let untouched = store
+        .get_message("perso", "INBOX", 3)
+        .expect("get")
+        .expect("present");
+    assert_eq!(untouched.thread_id, "lonely");
+    assert_eq!(store.heal_reply_threads().expect("heal again"), 0);
+}
+
+#[test]
+fn heal_reply_threads_drags_the_replies_of_a_healed_message() {
+    let store = open();
+    let root = lavande_mail::thread_id("perso", "Planning", Some("root@x"), None, &[]);
+
+    let mut parent = message(1, &root, "Marc", "Planning", 10);
+    parent.message_id = Some("parent@x".to_string());
+    store.upsert_message(&parent).expect("parent");
+
+    let mut reply = message(2, "reply-own", "Lea", "Re: Planning", 11);
+    reply.message_id = Some("reply@x".to_string());
+    reply.in_reply_to = Some("parent@x".to_string());
+    store.upsert_message(&reply).expect("reply");
+
+    let mut child = message(3, "child-own", "Roman", "Re: Planning", 12);
+    child.message_id = Some("child@x".to_string());
+    child.in_reply_to = Some("reply@x".to_string());
+    store.upsert_message(&child).expect("child");
+    assert_eq!(store.heal_reply_threads().expect("heal"), 2);
+
+    for uid in [2, 3] {
+        let stored = store
+            .get_message("perso", "INBOX", uid)
+            .expect("get")
+            .expect("present");
+        assert_eq!(stored.thread_id, root);
+    }
+    let threads = store
+        .threads_in_folder("perso", "INBOX", -1, 0)
+        .expect("threads");
+    assert_eq!(threads.len(), 1);
+    assert_eq!(threads[0].count, 3);
+    assert_eq!(store.heal_reply_threads().expect("heal again"), 0);
 }
 
 #[test]

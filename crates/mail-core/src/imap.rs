@@ -665,8 +665,18 @@ fn store_header(
         attachments: parsed.attachments,
     };
     store.upsert_message(&message)?;
+    let thread_id = match message.in_reply_to.as_deref() {
+        Some(in_reply_to) => match store.thread_of_message(account_id, in_reply_to)? {
+            Some(parent_thread) if parent_thread != message.thread_id => {
+                store.rethread(account_id, folder_path, uid, &parent_thread)?;
+                parent_thread
+            }
+            _ => message.thread_id.clone(),
+        },
+        None => message.thread_id.clone(),
+    };
     if let Some(message_id) = &message.message_id {
-        store.relink_replies(account_id, message_id, &message.thread_id)?;
+        store.relink_replies(account_id, message_id, &thread_id)?;
     }
     Ok(true)
 }
