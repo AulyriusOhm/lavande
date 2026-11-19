@@ -1,4 +1,5 @@
 import type { ApiPgpDetail } from "@/lib/api";
+import type { SearchCriteria } from "@/lib/search-query";
 
 export type PgpState = "none" | "signed" | "encrypted";
 
@@ -40,6 +41,11 @@ export function folderLabel(id: FolderId) {
   return FOLDER_LABELS[id] ?? FOLDER_LABELS.inbox;
 }
 
+/** L'étiquette affichée : le nom du dossier réel prime sur le rôle générique. */
+export function mailFolderLabel(mail: Mail) {
+  return mail.folderName ?? folderLabel(mail.folder);
+}
+
 export function normalize(value: string) {
   return value
     .normalize("NFD")
@@ -47,11 +53,41 @@ export function normalize(value: string) {
     .toLowerCase();
 }
 
-export function mailMatches(mail: Mail, query: string) {
-  const needle = normalize(query.trim());
-  if (!needle) return false;
-  return [mail.name, mail.email, mail.subject, mail.preview, ...mail.body].some((field) =>
-    normalize(field).includes(needle),
+function dayOf(value: string): number {
+  return new Date(`${value}T00:00:00`).getTime();
+}
+
+function folderNames(mail: Mail): string[] {
+  return [mail.folder, mail.folderName ?? "", folderLabel(mail.folder), mail.source?.folderPath ?? ""];
+}
+
+/** Mêmes critères que le démon, sur les fixtures : une seule grammaire en démo aussi. */
+export function mailMatches(mail: Mail, criteria: SearchCriteria) {
+  const text = normalize(criteria.text?.trim() ?? "");
+  const words = text.split(/\s+/).filter(Boolean);
+  const fields = [mail.name, mail.email, mail.subject, mail.preview, ...mail.body].map(normalize);
+  const matchesText = words.every((word) => fields.some((field) => field.includes(word)));
+
+  const matches = (value: string | undefined, needle: string | undefined) =>
+    needle === undefined || normalize(value ?? "").includes(normalize(needle));
+
+  const folder = criteria.folder;
+  const stamp = mail.timestamp;
+  const inRange =
+    (criteria.after === undefined || (stamp !== undefined && stamp >= dayOf(criteria.after))) &&
+    (criteria.before === undefined || (stamp !== undefined && stamp < dayOf(criteria.before)));
+
+  return (
+    matchesText &&
+    matches([mail.name, mail.email].join(" "), criteria.from) &&
+    matches([mail.to, mail.cc].filter(Boolean).join(" "), criteria.to) &&
+    matches(mail.subject, criteria.subject) &&
+    (folder === undefined || folderNames(mail).some((name) => normalize(name) === normalize(folder))) &&
+    (criteria.unread === undefined || mail.unread === criteria.unread) &&
+    (criteria.starred === undefined || mail.starred === criteria.starred) &&
+    (criteria.hasAttachment === undefined ||
+      Boolean(mail.attachments?.length) === criteria.hasAttachment) &&
+    inRange
   );
 }
 
@@ -79,6 +115,8 @@ export type Mail = {
   id: string;
   account: string;
   folder: FolderId;
+  /** Nom réel du dossier quand il n'a pas de rôle (dossier personnalisé). */
+  folderName?: string;
   threadId?: string;
   previousFolder?: FolderId;
   source?: MailSource;

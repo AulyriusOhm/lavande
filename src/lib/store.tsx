@@ -19,6 +19,8 @@ import { ACCOUNTS, ALL_ACCOUNTS } from "@/lib/accounts";
 import type { Account } from "@/lib/accounts";
 import { MAILS, UNIFIED_FOLDERS, folderLabel, mailMatches, normalize } from "@/lib/mail";
 import type { FolderId, Mail, MailSource } from "@/lib/mail";
+import { hasCriteria, mergeCriteria, parseSearchQuery } from "@/lib/search-query";
+import type { SearchCriteria, SearchFilter } from "@/lib/search-query";
 import { threadOf } from "@/lib/threads";
 import type { Thread } from "@/lib/threads";
 import type { MailSuggestion, Task } from "@/lib/tasks";
@@ -429,7 +431,13 @@ export type MailStoreValue = {
   syncFolder: () => void;
   /** Relève un dossier du rail, quel que soit le dossier consulté. */
   syncFolderAt: (role: FolderId, path: string | null) => void;
-  searchMails: (query: string) => Promise<Mail[]>;
+  /** `input` : la requête tapée (grammaire `search-query`) ou des critères déjà lus.
+   * `filters` s'ajoute aux critères (scopes « Non lus », « Fichiers »). */
+  searchMails: (input: string | SearchCriteria, filters?: SearchFilter) => Promise<Mail[]>;
+  /** La page suivante, mêmes critères ; rend la liste complète à jour. */
+  loadMoreSearch: () => Promise<Mail[]>;
+  /** La dernière page reçue était pleine : il y a peut-être une suite. */
+  searchHasMore: boolean;
   openConnect: () => void;
   closeConnect: () => void;
   createAccount: (input: NewAccount) => Promise<string>;
@@ -446,6 +454,22 @@ export type MailStoreValue = {
   folderOrder: string[];
   setFolderOrder: (paths: string[]) => void;
 };
+
+/** Une page de recherche par compte : le démon plafonne à 200. */
+const SEARCH_PAGE = 50;
+
+/** Tri global des résultats, tous comptes confondus, dédoublonnés par messageId. */
+function orderSearchResults(mails: Mail[]): Mail[] {
+  const seen = new Set<string>();
+  return mails
+    .filter((mail) => {
+      const key = mail.messageId ?? mail.id;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
+}
 
 const MailStoreContext = createContext<MailStoreValue | null>(null);
 
@@ -491,6 +515,12 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const [fullThread, setFullThread] = useState<Mail[] | null>(null);
   const [bodyFetching, setBodyFetching] = useState<string | null>(null);
   const [searchResults, setSearchResults] = useState<Mail[]>([]);
+  const [searchHasMore, setSearchHasMore] = useState(false);
+  const searchResultsRef = useRef<Mail[]>([]);
+  /** Jeton de la recherche courante : une réponse antérieure ne s'affiche pas. */
+  const searchSeq = useRef(0);
+  const searchCriteria = useRef<SearchCriteria | null>(null);
+  const searchOffset = useRef(0);
   const [notices, setNotices] = useState<NoticeData[]>([]);
   const [composeOpen, setComposeOpen] = useState(false);
   const [persistedCompose] = useState(loadPersistedCompose);
@@ -739,7 +769,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           return;
         }
         const loadedMails = loaded.flatMap((threads) =>
-          threads.flatMap((thread) => threadToMails(thread, folderRecords, folder)),
+          threads.flatMap((thread) => threadToMails(thread, folderRecords)),
         );
         setMails(loadedMails);
         for (const group of pendingPreviews(loadedMails, previewAttempts.current)) {
@@ -1241,7 +1271,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       mailApi
         .message(source.accountId, source.folderPath, source.uid)
         .then((message) => {
-          const fetched = messageToMail(message, folderRecords, mail.folder);
+          const fetched = messageToMail(message, folderRecords);
           setMails((current) =>
             current.map((entry) =>
               entry.id === fetched.id ? { ...fetched, folder: entry.folder, unread: entry.unread } : entry,
@@ -2153,32 +2183,85 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   }, [readOnlyBlocked]);
   const closeConnect = useCallback(() => setConnectOpen(false), []);
 
+  const applySearchResults = useCallback((next: Mail[]) => {
+    searchResultsRef.current = next;
+    setSearchResults(next);
+  }, []);
+
+  const searchPage = useCallback(
+    async (criteria: SearchCriteria, offset: number): Promise<{ mails: Mail[]; full: boolean }> => {
+      const { text, ...filters } = criteria;
+      const results = await Promise.allSettled(
+        mailAccounts.map((entry) =>
+          mailApi.search(entry.id, text ?? "", SEARCH_PAGE, { ...filters, offset }),
+        ),
+      );
+      const mails: Mail[] = [];
+      let full = false;
+
+      results.forEach((result, index) => {
+        if (result.status === "rejected") {
+          const entry = mailAccounts[index];
+          notify(`Recherche incomplète : le compte ${entry.label || entry.id} n'a pas répondu`);
+          return;
+        }
+        if (result.value.length >= SEARCH_PAGE) full = true;
+        mails.push(...result.value.map((message) => messageToMail(message, folderRecords)));
+      });
+
+      return { mails, full };
+    },
+    [folderRecords, mailAccounts, notify],
+  );
+
   const searchMails = useCallback(
-    async (query: string): Promise<Mail[]> => {
-      const trimmed = query.trim();
-      if (!trimmed) {
-        setSearchResults([]);
+    async (input: string | SearchCriteria, filters: SearchFilter = {}): Promise<Mail[]> => {
+      const criteria = mergeCriteria(
+        typeof input === "string" ? parseSearchQuery(input) : input,
+        filters,
+      );
+      searchSeq.current += 1;
+      const seq = searchSeq.current;
+      searchOffset.current = 0;
+      searchCriteria.current = hasCriteria(criteria) ? criteria : null;
+
+      if (!searchCriteria.current) {
+        applySearchResults([]);
+        setSearchHasMore(false);
         return [];
       }
+
       if (mode !== "api") {
         const visible = new Set(mailAccounts.map((entry) => entry.id));
-        const found = MAILS.filter((mail) => visible.has(mail.account) && mailMatches(mail, trimmed));
-        setSearchResults(found);
-        return found;
+        const found = MAILS.filter(
+          (mail) => visible.has(mail.account) && mailMatches(mail, criteria),
+        );
+        setSearchHasMore(false);
+        applySearchResults(orderSearchResults(found));
+        return searchResultsRef.current;
       }
-      const results = await Promise.allSettled(
-        mailAccounts.map((entry) => mailApi.search(entry.id, trimmed)),
-      );
-      const found = results.flatMap((result) =>
-        result.status === "fulfilled"
-          ? result.value.map((message) => messageToMail(message, folderRecords, "inbox"))
-          : [],
-      );
-      setSearchResults(found);
-      return found;
+
+      const page = await searchPage(criteria, 0);
+      if (seq !== searchSeq.current) return [];
+      searchOffset.current = SEARCH_PAGE;
+      setSearchHasMore(page.full);
+      applySearchResults(orderSearchResults(page.mails));
+      return searchResultsRef.current;
     },
-    [folderRecords, mailAccounts, mode],
+    [applySearchResults, mailAccounts, mode, searchPage],
   );
+
+  const loadMoreSearch = useCallback(async (): Promise<Mail[]> => {
+    const criteria = searchCriteria.current;
+    if (!criteria || mode !== "api") return searchResultsRef.current;
+    const seq = searchSeq.current;
+    const page = await searchPage(criteria, searchOffset.current);
+    if (seq !== searchSeq.current) return searchResultsRef.current;
+    searchOffset.current += SEARCH_PAGE;
+    setSearchHasMore(page.full);
+    applySearchResults(orderSearchResults([...searchResultsRef.current, ...page.mails]));
+    return searchResultsRef.current;
+  }, [applySearchResults, mode, searchPage]);
 
   const createAccount = useCallback(
     async (input: NewAccount) => {
@@ -2738,7 +2821,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         const source = mail.source;
         if (!body.trim() && mode === "api" && source) {
           const message = await mailApi.message(source.accountId, source.folderPath, source.uid);
-          body = messageToMail(message, folderRecords, mail.folder).body.join("\n");
+          body = messageToMail(message, folderRecords).body.join("\n");
         }
         const samples = mode === "demo" ? [] : await sentSamples(mail.account);
         const style = await styleProfile(llm, mail.account, samples, storage);
@@ -2962,6 +3045,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       syncFolder,
       syncFolderAt,
       searchMails,
+      loadMoreSearch,
+      searchHasMore,
       openConnect,
       closeConnect,
       createAccount,
@@ -3057,6 +3142,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       syncFolder,
       syncFolderAt,
       searchMails,
+      loadMoreSearch,
+      searchHasMore,
       openConnect,
       closeConnect,
       createAccount,

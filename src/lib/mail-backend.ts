@@ -150,8 +150,8 @@ export function folderPathOf(
   return records.find((record) => record.accountId === accountId && record.role === role)?.path;
 }
 
-function roleOf(records: FolderRecord[], accountId: string, path: string): FolderId | undefined {
-  return records.find((record) => record.accountId === accountId && record.path === path)?.role;
+function leafOf(path: string): string {
+  return path.split(/[/.]/).filter(Boolean).pop() ?? path;
 }
 
 const time = new Intl.DateTimeFormat("fr-FR", { hour: "2-digit", minute: "2-digit" });
@@ -204,16 +204,18 @@ export function bodyParagraphs(text: string | null): string[] {
     .filter((paragraph) => paragraph.trim() !== "");
 }
 
-export function messageToMail(
-  message: ApiMessage,
-  records: FolderRecord[],
-  fallback: FolderId,
-): Mail {
+export function messageToMail(message: ApiMessage, records: FolderRecord[]): Mail {
   const body = bodyParagraphs(message.body_text);
+  const record = records.find(
+    (entry) => entry.accountId === message.account_id && entry.path === message.folder_path,
+  );
+  const folder = record?.role ?? "other";
   return {
     id: `${message.account_id}:${message.folder_path}:${message.uid}`,
     account: message.account_id,
-    folder: roleOf(records, message.account_id, message.folder_path) ?? fallback,
+    folder,
+    folderName:
+      folder === "other" ? record?.name || leafOf(message.folder_path) : undefined,
     threadId: message.thread_id,
     source: {
       accountId: message.account_id,
@@ -250,12 +252,8 @@ export function messageToMail(
   };
 }
 
-export function threadToMails(
-  thread: ApiThread,
-  records: FolderRecord[],
-  fallback: FolderId,
-): Mail[] {
-  return thread.messages.map((message) => messageToMail(message, records, fallback));
+export function threadToMails(thread: ApiThread, records: FolderRecord[]): Mail[] {
+  return thread.messages.map((message) => messageToMail(message, records));
 }
 
 /** Le fil complet d'un message, tous dossiers du compte confondus. */
@@ -264,7 +262,7 @@ export async function threadMails(
   threadId: string,
   records: FolderRecord[],
 ): Promise<Mail[]> {
-  return threadToMails(await mailApi.thread(accountId, threadId), records, "inbox");
+  return threadToMails(await mailApi.thread(accountId, threadId), records);
 }
 
 /** Politique PGP poussée par le store : `false` = compte laissé fermé. */

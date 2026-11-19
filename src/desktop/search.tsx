@@ -3,33 +3,35 @@ import { AnimatePresence, motion } from "motion/react";
 import { Archive, Search, Star, Trash2, X } from "lucide-react";
 import { useMailStore } from "@/lib/store";
 import { useEscapeLayer } from "@/desktop/escape";
-import { RECENT_SEARCHES, folderLabel } from "@/lib/mail";
+import { frequentContacts, mailFolderLabel } from "@/lib/mail";
 import type { Mail } from "@/lib/mail";
+import { readRecentSearches, writeRecentSearches } from "@/lib/recent-searches";
+import { parseSearchQuery, searchTerms } from "@/lib/search-query";
 import { buildThreads } from "@/lib/threads";
 import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/primitives";
 import { Badge, DIconButton, EmptyState, Kbd, SectionLabel } from "@/desktop/ui";
 
-const RECENT_KEY = "lavande.recent-searches";
+const OPERATORS = "from: to: subject: in: is:unread is:starred has:attachment before:2026-01-31 after:2026-01-01";
 
-function readRecent(): string[] {
-  try {
-    const raw = window.localStorage.getItem(RECENT_KEY);
-    if (raw === null) return RECENT_SEARCHES;
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return RECENT_SEARCHES;
-    return parsed.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
-  } catch {
-    return RECENT_SEARCHES;
-  }
-}
+const escapeTerm = (term: string) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-function writeRecent(next: string[]) {
-  try {
-    window.localStorage.setItem(RECENT_KEY, JSON.stringify(next));
-  } catch {
-    return;
-  }
+function Highlight({ text, terms }: { text: string; terms: string[] }) {
+  if (!terms.length) return <>{text}</>;
+  const pattern = new RegExp(`(${terms.map(escapeTerm).join("|")})`, "gi");
+  return (
+    <>
+      {text.split(pattern).map((part, index) =>
+        index % 2 === 1 ? (
+          <mark key={index} className="rounded-[3px] bg-accent-soft px-0.5 text-ink">
+            {part}
+          </mark>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
 }
 
 function RowAction({
@@ -55,14 +57,17 @@ function RowAction({
 }
 
 export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { mails, openMessage, toggleStar, mailAction, accountById, searchMails } = useMailStore();
+  const { mails, openMessage, toggleStar, mailAction, accountById, searchMails, loadMoreSearch, searchHasMore } =
+    useMailStore();
   const [query, setQuery] = useState("");
-  const [recent, setRecent] = useState<string[]>(readRecent);
+  const [recent, setRecent] = useState<string[]>(readRecentSearches);
   const [selected, setSelected] = useState(0);
   const [results, setResults] = useState<Mail[]>([]);
   const [searching, setSearching] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const trimmed = query.trim();
+  const terms = useMemo(() => searchTerms(parseSearchQuery(trimmed).text ?? ""), [trimmed]);
 
   useEffect(() => {
     if (!trimmed) {
@@ -87,18 +92,7 @@ export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () =>
 
   const threads = useMemo(() => buildThreads(results), [results]);
 
-  const contacts = useMemo(() => {
-    const seen = new Map<string, { name: string; email: string; tone: number; count: number }>();
-    mails.forEach((mail) => {
-      if (mail.folder === "sent") return;
-      const entry = seen.get(mail.email) ?? { name: mail.name, email: mail.email, tone: mail.tone, count: 0 };
-      entry.count += 1;
-      seen.set(mail.email, entry);
-    });
-    return Array.from(seen.values())
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 6);
-  }, [mails]);
+  const contacts = useMemo(() => frequentContacts(mails).slice(0, 6), [mails]);
 
   useEffect(() => {
     setSelected(0);
@@ -109,13 +103,21 @@ export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () =>
   const commit = (value: string) => {
     const next = [value, ...recent.filter((entry) => entry !== value)].slice(0, 6);
     setRecent(next);
-    writeRecent(next);
+    writeRecentSearches(next);
   };
 
   const forget = (value: string) => {
     const next = recent.filter((entry) => entry !== value);
     setRecent(next);
-    writeRecent(next);
+    writeRecentSearches(next);
+  };
+
+  const loadMore = () => {
+    setLoadingMore(true);
+    void loadMoreSearch().then((merged) => {
+      setResults(merged);
+      setLoadingMore(false);
+    });
   };
 
   const openThread = (index: number) => {
@@ -170,7 +172,7 @@ export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () =>
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
             className="relative flex max-h-[min(620px,calc(100vh-12rem))] w-[min(760px,100%)] flex-col overflow-hidden rounded-[26px] border border-line bg-canvas shadow-[0_50px_120px_-50px_var(--accent)]"
           >
-            <div className="flex shrink-0 items-center gap-3 border-b border-line px-4 py-3">
+            <div className="flex shrink-0 items-center gap-3 px-4 py-3">
               <Search className="size-4.5 shrink-0 text-ink-muted" strokeWidth={2.2} />
               <input
                 autoFocus
@@ -196,6 +198,10 @@ export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () =>
               </DIconButton>
             </div>
 
+            <p className="shrink-0 border-b border-line px-4 pb-2 text-[10.5px] font-semibold text-ink-muted">
+              Opérateurs : {OPERATORS}
+            </p>
+
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
               {trimmed === "" ? (
                 <div className="space-y-5 px-1.5 pt-2 pb-3">
@@ -207,7 +213,7 @@ export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () =>
                           type="button"
                           onClick={() => {
                             setRecent([]);
-                            writeRecent([]);
+                            writeRecentSearches([]);
                           }}
                           className="focus-ring rounded-full px-1 text-[11px] font-bold text-accent-ink"
                         >
@@ -272,7 +278,7 @@ export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () =>
                   <p role="status" className="px-2.5 pt-1.5 pb-2 text-[11.5px] font-semibold text-ink-muted">
                     {searching
                       ? `Recherche de « ${trimmed} »…`
-                      : `${threads.length} résultat${threads.length > 1 ? "s" : ""} pour « ${trimmed} »`}
+                      : `${results.length} résultat${results.length > 1 ? "s" : ""} pour « ${trimmed} »`}
                   </p>
 
                   <div className="space-y-0.5">
@@ -316,13 +322,13 @@ export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () =>
                               </span>
                               <span className="mt-0.5 flex items-center gap-1.5">
                                 <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-ink-soft">
-                                  {thread.subject}
+                                  <Highlight text={thread.subject} terms={terms} />
                                 </span>
                                 <Badge tone="accent">{accountById(primary.account)?.label ?? primary.account}</Badge>
-                                <Badge>{folderLabel(primary.folder)}</Badge>
+                                <Badge>{mailFolderLabel(primary)}</Badge>
                               </span>
                               <span className="mt-0.5 block truncate text-[11.5px] font-medium text-ink-muted">
-                                {thread.preview}
+                                <Highlight text={thread.preview} terms={terms} />
                               </span>
                             </span>
                           </button>
@@ -355,6 +361,17 @@ export function DesktopSearch({ open, onClose }: { open: boolean; onClose: () =>
                       );
                     })}
                   </div>
+
+                  {searchHasMore && !searching ? (
+                    <button
+                      type="button"
+                      onClick={loadMore}
+                      disabled={loadingMore}
+                      className="focus-ring mx-auto mt-2 block rounded-full border border-line bg-surface px-4 py-1.5 text-[12px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink disabled:opacity-60"
+                    >
+                      {loadingMore ? "Chargement…" : "Charger plus"}
+                    </button>
+                  ) : null}
 
                   {threads.length === 0 && !searching ? (
                     <EmptyState

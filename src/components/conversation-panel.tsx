@@ -71,7 +71,7 @@ export function ConversationPanel({
     mailApi
       .message(source.accountId, source.folderPath, source.uid)
       .then((message) => {
-        const fetched = messageToMail(message, records, mail.folder);
+        const fetched = messageToMail(message, records);
         setBodies((current) => ({ ...current, [mail.id]: { mail: fetched } }));
       })
       .catch((error: unknown) => {

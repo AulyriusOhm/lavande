@@ -1,4 +1,6 @@
 import { READ_ONLY_NOTICE, demoReadOnly } from "@/lib/demo-mode";
+import { searchParams } from "@/lib/search-query";
+import type { SearchFilter } from "@/lib/search-query";
 
 /**
  * Client HTTP du démon mail local (`lavande-maild`).
@@ -578,10 +580,8 @@ export const mailApi = {
   thread: (id: string, threadId: string) =>
     request<ApiThread>(`${accountPath(id)}/threads/${encodeURIComponent(threadId)}`),
 
-  search: (id: string, query: string, limit = 50) =>
-    request<ApiMessage[]>(
-      `${accountPath(id)}/search?q=${encodeURIComponent(query)}&limit=${limit}`,
-    ),
+  search: (id: string, query: string, limit = 50, filter: SearchFilter & { offset?: number } = {}) =>
+    request<ApiMessage[]>(`${accountPath(id)}/search?${searchParams(query, limit, filter)}`),
 
   message: (id: string, folderPath: string, uid: number) =>
     request<ApiMessage>(

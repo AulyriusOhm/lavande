@@ -10,6 +10,7 @@ import {
   setAccountDecryptPolicy,
 } from "@/lib/mail-backend";
 import type { FolderRecord } from "@/lib/mail-backend";
+import { mailFolderLabel } from "@/lib/mail";
 import type { ApiMessage } from "@/lib/api";
 import type { ComposeDraft } from "@/lib/draft";
 import { baseDraft } from "@/lib/draft";
@@ -178,7 +179,6 @@ describe("messageToMail", () => {
         ],
       }),
       RECORDS,
-      "inbox",
     );
 
     expect(mail.to).toBe("roman@test.fr, equipe@test.fr");
@@ -186,7 +186,7 @@ describe("messageToMail", () => {
   });
 
   it("laisse les destinataires indéfinis quand les listes sont vides", () => {
-    const mail = messageToMail(apiMessage({ to: [], cc: [] }), RECORDS, "inbox");
+    const mail = messageToMail(apiMessage({ to: [], cc: [] }), RECORDS);
 
     expect(mail.to).toBeUndefined();
     expect(mail.cc).toBeUndefined();
@@ -196,7 +196,6 @@ describe("messageToMail", () => {
     const mail = messageToMail(
       apiMessage({ flags: { unread: false, starred: false, answered: true } }),
       RECORDS,
-      "inbox",
     );
 
     expect(mail.answered).toBe(true);
@@ -206,10 +205,37 @@ describe("messageToMail", () => {
     const mail = messageToMail(
       apiMessage({ flags: { unread: true, starred: false, answered: false } }),
       RECORDS,
-      "inbox",
     );
 
     expect(mail.answered).toBe(false);
+  });
+
+  it("étiquette un dossier personnalisé de son nom réel, jamais « Boîte de réception »", () => {
+    const mail = messageToMail(apiMessage({ folder_path: "Projets" }), [
+      ...RECORDS,
+      record("perso", "other", "Projets", "Projets"),
+    ]);
+
+    expect(mail.folder).toBe("other");
+    expect(mail.folderName).toBe("Projets");
+    expect(mailFolderLabel(mail)).toBe("Projets");
+  });
+
+  it("garde le rôle connu sans nom de dossier", () => {
+    const mail = messageToMail(apiMessage({ folder_path: "INBOX" }), RECORDS);
+
+    expect(mail.folder).toBe("inbox");
+    expect(mail.folderName).toBeUndefined();
+    expect(mailFolderLabel(mail)).toBe("Boîte de réception");
+  });
+
+  it("repli sur le dernier segment du chemin quand le dossier n'est pas encore connu", () => {
+    const mail = messageToMail(apiMessage({ folder_path: "Archive/2024" }), [
+      record("perso", "inbox", "INBOX", "Boîte de réception"),
+    ]);
+
+    expect(mail.folder).toBe("other");
+    expect(mailFolderLabel(mail)).toBe("2024");
   });
 });
 

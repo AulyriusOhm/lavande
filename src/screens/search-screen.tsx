@@ -2,19 +2,29 @@ import { useEffect, useMemo, useState } from "react";
 import { RotateCcw, Search, X } from "lucide-react";
 import type { Mail } from "@/lib/mail";
 import { frequentContacts, normalize } from "@/lib/mail";
+import type { SearchFilter } from "@/lib/search-query";
 import { readRecentSearches, writeRecentSearches } from "@/lib/recent-searches";
 import { buildThreads } from "@/lib/threads";
 import { useMailStore } from "@/lib/store";
-import { useTheme } from "@/lib/theme";
 import { Avatar, Chip } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
-import { ShinyText } from "@/components/ui/animated-text";
 import { MeshGlow } from "@/components/ui/backdrops";
 import { ThreadRow } from "@/components/thread-row";
 
 const SCOPES = ["Tout", "Non lus", "Fichiers", "Contacts"] as const;
 
 type Scope = (typeof SCOPES)[number];
+
+/** Les scopes qui filtrent la recherche côté démon. */
+const SCOPE_FILTERS: Record<Scope, SearchFilter> = {
+  Tout: {},
+  "Non lus": { unread: true },
+  Fichiers: { hasAttachment: true },
+  Contacts: {},
+};
+
+const OPERATORS =
+  "from: to: subject: in: is:unread is:starred has:attachment before:2026-01-31 after:2026-01-01";
 
 export function SearchScreen({
   onOpen,
@@ -31,7 +41,6 @@ export function SearchScreen({
   onNotSpam?: (mail: Mail) => void;
   onRestore?: (mail: Mail) => void;
 }) {
-  const { brand } = useTheme();
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<Scope>("Tout");
   const [recent, setRecent] = useState<string[]>(readRecentSearches);
@@ -56,7 +65,7 @@ export function SearchScreen({
     setSearching(true);
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      void searchMails(trimmed).then((messages) => {
+      void searchMails(trimmed, SCOPE_FILTERS[scope]).then((messages) => {
         if (cancelled) return;
         setFound(messages);
         setSearching(false);
@@ -66,16 +75,9 @@ export function SearchScreen({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [trimmed, searchMails]);
+  }, [trimmed, scope, searchMails]);
 
-  const results = useMemo(() => {
-    if (!trimmed || scope === "Contacts") return [];
-    return found.filter((mail) => {
-      if (scope === "Non lus") return mail.unread;
-      if (scope === "Fichiers") return Boolean(mail.attachments?.length);
-      return true;
-    });
-  }, [found, scope, trimmed]);
+  const results = useMemo(() => (scope === "Contacts" ? [] : found), [found, scope]);
 
   const threads = useMemo(
     () => (scope === "Contacts" ? [] : buildThreads(results)),
@@ -213,12 +215,10 @@ export function SearchScreen({
           </div>
 
           <BlurFade delay={0.15}>
-            <div className="mx-5 mt-7 rounded-3xl border border-dashed border-accent-ring/70 bg-accent-soft/50 p-5 text-center">
-              <p className="text-[13px] font-bold text-ink">
-                <ShinyText>Cherche en langage naturel</ShinyText>
-              </p>
-              <p className="mx-auto mt-1.5 max-w-[240px] text-[11.5px] leading-relaxed font-medium text-ink-soft">
-                « les factures de mars non payées » — {brand} comprend l'intention, pas juste les mots.
+            <div className="mx-5 mt-7 rounded-3xl border border-dashed border-line bg-surface/60 p-4 text-center">
+              <p className="text-[11.5px] font-bold text-ink">Opérateurs de recherche</p>
+              <p className="mx-auto mt-1.5 max-w-[280px] text-[11px] leading-relaxed font-medium text-ink-muted">
+                {OPERATORS}
               </p>
             </div>
           </BlurFade>
