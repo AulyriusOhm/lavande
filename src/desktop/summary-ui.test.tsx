@@ -67,7 +67,11 @@ const briefing = (overrides: Partial<SummaryResult> = {}): SummaryResult => ({
 
 function renderSummary(
   summary: SummaryResult,
-  handlers: { onOpen?: (id: string) => void; onReply?: (mail: Mail) => void; onPropose?: (ref: { mailId: string; reason: string; due?: string }) => void } = {},
+  handlers: {
+    onOpen?: (id: string) => void;
+    onReply?: (mail: Mail) => void;
+    onPropose?: (ref: { mailId: string; reason: string; due?: string }) => "added" | "existing";
+  } = {},
 ) {
   return render(
     <MorningSummary
@@ -83,7 +87,7 @@ function renderSummary(
       onOpen={handlers.onOpen ?? (() => {})}
       onRefresh={() => {}}
       onReply={handlers.onReply ?? (() => {})}
-      onPropose={handlers.onPropose ?? (() => {})}
+      onPropose={handlers.onPropose ?? (() => "added")}
     />,
   );
 }
@@ -110,18 +114,17 @@ describe("Résumé du matin · briefing structuré", () => {
     expect(card.textContent).toContain("mails analysés");
   });
 
-  it("affiche les pièces jointes de chaque mail résumé", async () => {
+  it("n'affiche pas de chips pièces jointes dans le briefing", async () => {
     stubBackend();
     mount(<DesktopInbox onOpenSearch={() => {}} />);
 
     const card = await screen.findByTestId("morning-summary");
     await waitFor(() => expect(within(card).getByTestId("summary-attachments")).toBeTruthy());
 
-    const chips = within(card).getByTestId("summary-attachments");
-    expect(chips.textContent).toContain("inbox-v3.fig");
-    expect(chips.textContent).toContain("4,2 Mo");
-    expect(chips.textContent).toContain("specs-mobile.pdf");
-    expect(chips.querySelectorAll("button[title]").length).toBeGreaterThan(0);
+    const groups = within(card).getByTestId("summary-attachments");
+    expect(groups.querySelectorAll("button[title]")).toHaveLength(0);
+    expect(groups.textContent).not.toContain("inbox-v3.fig");
+    expect(groups.textContent).not.toContain("specs-mobile.pdf");
   });
 
   it("rend les actions, les informations et les notifications repliées", () => {
@@ -154,24 +157,22 @@ describe("Résumé du matin · briefing structuré", () => {
     expect(fold.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("ouvre le mail depuis l'objet, une pièce jointe ou « Voir le mail »", () => {
+  it("ouvre le mail depuis l'objet ou « Voir le mail »", () => {
     const onOpen = vi.fn();
     renderSummary(briefing(), { onOpen });
     const card = screen.getByTestId("morning-summary");
 
     fireEvent.click(within(card).getByRole("button", { name: "Devis signé — retour de ma part" }));
-    const chip = card.querySelector<HTMLButtonElement>('button[title="inbox-v3.fig · 4,2 Mo"]');
-    fireEvent.click(chip as HTMLButtonElement);
     const seeMail = within(card)
       .getAllByRole("button", { name: "Voir le mail" })
       .at(0) as HTMLButtonElement;
     fireEvent.click(seeMail);
 
-    expect(onOpen.mock.calls.map((call) => call[0])).toEqual(["3", "1", "3"]);
+    expect(onOpen.mock.calls.map((call) => call[0])).toEqual(["3", "3"]);
   });
 
   it("propose la ligne en planification et répond au mail", () => {
-    const onPropose = vi.fn();
+    const onPropose = vi.fn(() => "added" as const);
     const onReply = vi.fn();
     renderSummary(briefing(), { onPropose, onReply });
     const card = screen.getByTestId("morning-summary");
@@ -182,6 +183,34 @@ describe("Résumé du matin · briefing structuré", () => {
     expect(onPropose).toHaveBeenCalledWith({ mailId: "3", reason: "Renvoyer l'avenant signé", due: isoToday(0) });
     expect(onReply).toHaveBeenCalledTimes(1);
     expect((onReply.mock.calls[0][0] as Mail).id).toBe("8");
+  });
+
+  it("confirme l'ajout en planification et n'ajoute qu'une suggestion", () => {
+    const onPropose = vi.fn(() => "added" as const);
+    renderSummary(briefing(), { onPropose });
+    const card = screen.getByTestId("morning-summary");
+
+    expect(within(card).getAllByRole("button", { name: "Planification" })).toHaveLength(2);
+
+    fireEvent.click(within(card).getAllByRole("button", { name: "Planification" })[0]);
+
+    const done = within(card).getByRole("button", { name: "Ajouté" }) as HTMLButtonElement;
+    expect(done.disabled).toBe(true);
+    expect(within(card).getAllByRole("button", { name: "Planification" })).toHaveLength(1);
+    expect(onPropose).toHaveBeenCalledTimes(1);
+  });
+
+  it("signale une suggestion déjà proposée sans la dupliquer", () => {
+    const onPropose = vi.fn(() => "existing" as const);
+    renderSummary(briefing(), { onPropose });
+    const card = screen.getByTestId("morning-summary");
+
+    fireEvent.click(within(card).getAllByRole("button", { name: "Planification" })[0]);
+
+    const done = within(card).getByRole("button", { name: "Déjà proposé" }) as HTMLButtonElement;
+    expect(done.disabled).toBe(true);
+    expect(within(card).queryByRole("button", { name: "Ajouté" })).toBeNull();
+    expect(within(card).getAllByRole("button", { name: "Planification" })).toHaveLength(1);
   });
 
   it("ignore les lignes dont le mail a disparu de la boîte", () => {

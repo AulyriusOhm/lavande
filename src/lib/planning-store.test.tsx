@@ -280,6 +280,24 @@ describe("suggestions · fenêtre temporelle", () => {
     expect(suggestionsInWindow(list, 999, now).map((entry) => entry.id)).toEqual(["demo", "recente", "vieille"]);
   });
 
+  it("retourne true à la première proposition, false sur le doublon", () => {
+    const { result } = mount(createMemoryStorage());
+    const proposed = suggestion("doublon");
+
+    let first = false;
+    let second = true;
+    act(() => {
+      first = result.current.proposeSuggestion(proposed);
+    });
+    act(() => {
+      second = result.current.proposeSuggestion(proposed);
+    });
+
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+    expect(result.current.suggestions.filter((entry) => entry.proposal === proposed.proposal)).toHaveLength(1);
+  });
+
   it("projette les fixtures démo comme non-IA, avec leur compte", () => {
     const { result } = mount(createMemoryStorage());
 
