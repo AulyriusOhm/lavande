@@ -24,6 +24,8 @@ const DEFAULT_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
 const SCOPE: &str = "read:user";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 pub const EDITOR_VERSION: &str = "Lavande/0.2.18";
+const EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.26.7";
+const COPILOT_USER_AGENT: &str = "GitHubCopilotChat/0.26.7";
 const INTEGRATION_ID: &str = "vscode-chat";
 const SESSION_TTL: Duration = Duration::from_secs(600);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -207,6 +209,7 @@ pub async fn start(state: &AppState, request: StartRequest) -> Result<StartRespo
     let response = http_client(REQUEST_TIMEOUT)?
         .post(format!("{}/login/device/code", state.copilot().github))
         .header(header::ACCEPT, "application/json")
+        .header(header::USER_AGENT, COPILOT_USER_AGENT)
         .form(&[("client_id", client_id.as_str()), ("scope", SCOPE)])
         .send()
         .await
@@ -317,6 +320,8 @@ pub async fn chat(state: &AppState, request: ChatRequest) -> Result<Value, ApiEr
         .header(header::CONTENT_TYPE, "application/json")
         .header("Copilot-Integration-Id", INTEGRATION_ID)
         .header("Editor-Version", EDITOR_VERSION)
+        .header("Editor-Plugin-Version", EDITOR_PLUGIN_VERSION)
+        .header(header::USER_AGENT, COPILOT_USER_AGENT)
         .body(body.to_string())
         .send()
         .await
@@ -340,7 +345,19 @@ pub async fn chat(state: &AppState, request: ChatRequest) -> Result<Value, ApiEr
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(refusal(status, &text));
+        tracing::warn!(
+            status = status.as_u16(),
+            body = %text.chars().take(300).collect::<String>(),
+            "refus GitHub Copilot"
+        );
+        let error = refusal(status, &text);
+        return Err(match tokens.login.as_deref() {
+            Some(login) if !error.is_transient() => ApiError::gateway(
+                "copilot",
+                format!("Compte GitHub « {login} » : {}", error.message()),
+            ),
+            _ => error,
+        });
     }
     let payload: Value = serde_json::from_str(&text).map_err(|error| {
         ApiError::gateway("copilot", format!("réponse du modèle illisible : {error}"))
@@ -503,6 +520,7 @@ async fn poll_device(settings: &Settings, attempt: &Attempt) -> Result<Polled, A
     let response = http_client(REQUEST_TIMEOUT)?
         .post(format!("{}/login/oauth/access_token", settings.github))
         .header(header::ACCEPT, "application/json")
+        .header(header::USER_AGENT, COPILOT_USER_AGENT)
         .form(&[
             ("client_id", attempt.client_id.as_str()),
             ("device_code", attempt.device_code.as_str()),
@@ -541,6 +559,8 @@ async fn fetch_copilot_token(
         .header(header::ACCEPT, "application/json")
         .header(header::AUTHORIZATION, format!("token {github_token}"))
         .header("Editor-Version", EDITOR_VERSION)
+        .header("Editor-Plugin-Version", EDITOR_PLUGIN_VERSION)
+        .header(header::USER_AGENT, COPILOT_USER_AGENT)
         .header("Copilot-Integration-Id", INTEGRATION_ID)
         .send()
         .await
@@ -550,6 +570,11 @@ async fn fetch_copilot_token(
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {
+        tracing::warn!(
+            status = status.as_u16(),
+            body = %body.chars().take(300).collect::<String>(),
+            "refus GitHub Copilot"
+        );
         return Err(refusal(status, &body));
     }
     let payload: Value = serde_json::from_str(&body).map_err(|error| {
@@ -585,6 +610,7 @@ async fn fetch_login(settings: &Settings, github_token: &str) -> Result<String, 
         .get(format!("{}/user", settings.api))
         .header(header::ACCEPT, "application/json")
         .header(header::AUTHORIZATION, format!("token {github_token}"))
+        .header(header::USER_AGENT, COPILOT_USER_AGENT)
         .send()
         .await
         .map_err(|error| ApiError::transport("copilot", format!("GitHub injoignable : {error}")))?;
@@ -617,7 +643,12 @@ fn report(state: &AppState, id: &str) -> Result<StatusResponse, ApiError> {
 }
 
 fn refusal(status: reqwest::StatusCode, body: &str) -> ApiError {
-    let suffix = refusal_reason(body)
+    let reason = refusal_reason(body).or_else(|| {
+        let collapsed = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        let trimmed: String = collapsed.chars().take(160).collect();
+        (!trimmed.is_empty()).then_some(trimmed)
+    });
+    let suffix = reason
         .map(|reason| format!(" — {reason}"))
         .unwrap_or_default();
     match status.as_u16() {

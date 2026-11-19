@@ -461,6 +461,11 @@ async fn a_completed_flow_stores_both_tokens_and_the_login() {
     assert_eq!(payload["status"], "done", "{payload}");
     assert_eq!(payload["login"], "roman");
 
+    let user_request = fake.find("GET /user");
+    assert!(
+        user_request.contains("user-agent: GitHubCopilotChat/0.26.7"),
+        "{user_request}"
+    );
     let copilot_request = fake.find("GET /copilot_internal/v2/token");
     assert!(
         copilot_request.contains("authorization: token gh-token"),
@@ -472,6 +477,14 @@ async fn a_completed_flow_stores_both_tokens_and_the_login() {
     );
     assert!(
         copilot_request.contains(&format!("editor-version: {EDITOR_VERSION}")),
+        "{copilot_request}"
+    );
+    assert!(
+        copilot_request.contains("editor-plugin-version: copilot-chat/0.26.7"),
+        "{copilot_request}"
+    );
+    assert!(
+        copilot_request.contains("user-agent: GitHubCopilotChat/0.26.7"),
         "{copilot_request}"
     );
 
@@ -517,6 +530,31 @@ async fn a_refused_exchange_names_the_account_and_the_github_reason() {
         "{message}"
     );
     assert!(state.copilot_tokens().await.expect("coffre").is_none());
+}
+
+#[tokio::test]
+async fn a_non_json_refusal_body_is_surfaced() {
+    let fake = serve(|request| match path(request) {
+        "/login/device/code" => (200, DEVICE_CODE.to_string()),
+        "/login/oauth/access_token" => (200, authorized()),
+        "/user" => (200, json!({ "login": "roman" }).to_string()),
+        "/copilot_internal/v2/token" => (
+            403,
+            "Request forbidden by administrative rules. Please make sure your request has a User-Agent header."
+                .to_string(),
+        ),
+        _ => (404, "{}".to_string()),
+    })
+    .await;
+    let (_directory, state) = state(settings(&fake)).await;
+    let session = started(&state).await;
+
+    let (_, payload) = status(&state, &session).await;
+
+    assert_eq!(payload["status"], "failed", "{payload}");
+    let message = payload["error"].as_str().expect("message");
+    assert!(message.contains("User-Agent"), "{message}");
+    assert!(message.contains("roman"), "{message}");
 }
 
 #[tokio::test]
@@ -643,6 +681,14 @@ async fn chat_proxies_to_copilot_with_its_headers() {
         "{upstream}"
     );
     assert!(
+        upstream.contains("editor-plugin-version: copilot-chat/0.26.7"),
+        "{upstream}"
+    );
+    assert!(
+        upstream.contains("user-agent: GitHubCopilotChat/0.26.7"),
+        "{upstream}"
+    );
+    assert!(
         upstream.contains("content-type: application/json"),
         "{upstream}"
     );
@@ -735,7 +781,7 @@ async fn a_refused_chat_is_a_502_with_an_actionable_message() {
     assert_eq!(payload["kind"], "copilot");
     assert_eq!(
         payload["error"],
-        "GitHub a refusé le jeton Copilot (401) — unauthorized : reconnecte ton compte dans les réglages IA."
+        "Compte GitHub « roman » : GitHub a refusé le jeton Copilot (401) — unauthorized : reconnecte ton compte dans les réglages IA."
     );
 }
 

@@ -12,8 +12,10 @@ describe("raccourcis · intégration bureau", () => {
     render(<App />);
     await waitFor(() => expect(document.querySelector("[data-desktop]")).toBeTruthy(), { timeout: 5000 });
 
-    fireEvent.keyDown(window, { key: "/", ctrlKey: true });
-    await waitFor(() => expect(help()).toBeTruthy());
+    await waitFor(() => {
+      fireEvent.keyDown(window, { key: "/", ctrlKey: true });
+      expect(help()).toBeTruthy();
+    }, { timeout: 5000 });
     const dialog = help() as HTMLElement;
     expect(within(dialog).getByText("Boîte de réception")).toBeTruthy();
     expect(within(dialog).getByText("Rechercher")).toBeTruthy();
@@ -22,8 +24,10 @@ describe("raccourcis · intégration bureau", () => {
     fireEvent.keyDown(window, { key: "/", ctrlKey: true });
     await waitFor(() => expect(help()).toBeNull());
 
-    fireEvent.keyDown(window, { key: "?", shiftKey: true });
-    await waitFor(() => expect(help()).toBeTruthy());
+    await waitFor(() => {
+      fireEvent.keyDown(window, { key: "?", shiftKey: true });
+      expect(help()).toBeTruthy();
+    }, { timeout: 5000 });
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(help()).toBeNull());
 

@@ -1,5 +1,8 @@
 use url::Url;
 
+#[cfg(not(target_os = "linux"))]
+use tauri_plugin_opener::OpenerExt;
+
 #[cfg(target_os = "linux")]
 use std::{collections::HashMap, time::Duration};
 
@@ -23,13 +26,13 @@ fn validate_http_url(raw: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn open_external(url: String) -> Result<(), String> {
+pub async fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
     validate_http_url(&url)?;
-    launcher_open(url).await
+    launcher_open(app, url).await
 }
 
 #[cfg(target_os = "linux")]
-async fn launcher_open(url: String) -> Result<(), String> {
+async fn launcher_open(_app: tauri::AppHandle, url: String) -> Result<(), String> {
     if let Ok(Ok(())) = tokio::time::timeout(PORTAL_TIMEOUT, portal_open(&url)).await {
         return Ok(());
     }
@@ -58,8 +61,10 @@ async fn portal_open(url: &str) -> Result<(), zbus::Error> {
 }
 
 #[cfg(not(target_os = "linux"))]
-async fn launcher_open(url: String) -> Result<(), String> {
-    tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|error| error.to_string())
+async fn launcher_open(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    app.opener()
+        .open_url(&url, None::<&str>)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
