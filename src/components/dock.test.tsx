@@ -1,20 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { Dock, type TabId } from "@/components/dock";
+import { haptic } from "@/lib/haptics";
 import { isNativeShell } from "@/lib/native";
 import { PrefsProvider } from "@/lib/prefs";
 
 vi.mock("@/lib/native", () => ({ isNativeShell: vi.fn(() => false) }));
+vi.mock("@/lib/haptics", () => ({ haptic: vi.fn() }));
 
 const nativeMock = vi.mocked(isNativeShell);
+const hapticMock = vi.mocked(haptic);
 
-function renderDock(active: TabId = "inbox") {
+function renderDock(active: TabId = "inbox", onCompose: () => void = () => {}) {
   return render(
     <PrefsProvider>
       <Dock
         active={active}
         onChange={() => {}}
-        onCompose={() => {}}
+        onCompose={onCompose}
         onNewTask={() => {}}
         onNewEvent={() => {}}
       />
@@ -60,6 +63,16 @@ describe("Dock", () => {
     const wrapper = button.parentElement as HTMLElement;
     expect(wrapper.className).toBe("flex items-center overflow-hidden");
     expect(wrapper.getAttribute("style")).toBeNull();
+  });
+
+  it("vibre sur le FAB puis lance l'action", () => {
+    nativeMock.mockReturnValue(true);
+    const onCompose = vi.fn(() => expect(hapticMock).toHaveBeenCalledWith("medium"));
+    renderDock("inbox", onCompose);
+
+    fireEvent.click(fabButton());
+
+    expect(onCompose).toHaveBeenCalledTimes(1);
   });
 
   it("suit l'onglet actif aussi en coquille native", () => {

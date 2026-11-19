@@ -322,11 +322,18 @@ le dock est visible, c'est le premier suspect.
   se rapprocher des icônes. Le fond reste transparent, donc le lavande de l'app passe dessous.
 - **Bas mesuré, non validé sur appareil physique** : le pont renvoie la barre de navigation et le clavier,
   mais rien n'a été mesuré sur un téléphone réel ; en mode `?app` ces marges valent 0 par construction.
-- **Pas de gestes ni d'haptique natifs** : seuls les gestes WebView existants (swipe d'onglets, swipe de
-  ligne) sont disponibles ; pas de retour haptique, pas de tiroir natif.
-- **Bouton retour Android = historique WebView** : chaque couche ouverte pousse un état d'historique
-  (`pushState` dans `src/App.tsx`), donc retour ferme la couche du dessus (message, feuille, overlay) ;
-  sans couche ouverte, il sort de l'app.
+- **Pas de gestes natifs, haptique par la WebView** : seuls les gestes WebView existants (swipe d'onglets,
+  swipe de ligne) sont disponibles, pas de tiroir natif ; le retour haptique passe par
+  `navigator.vibrate` (`src/lib/haptics.ts`), inactif sans la permission `android.permission.VIBRATE`
+  ajoutée par `scripts/patch-android.mjs`.
+- **Bouton retour Android intercepté en JS** : `onBackButtonPress` (`src/lib/back.ts`) prend la main sur
+  le retour système et l'app décide seule — aucun retour WebView implicite. Ordre de dépilement :
+  couches des composants (drill-in des réglages, confirmation de fermeture, popup de mise à jour) →
+  couches de l'app (`layers` dans `src/App.tsx` : feuilles, lecteur de message…) → retour à l'onglet
+  Boîte → sortie de l'app (`exit(0)`).
+- **Pièces jointes ouvertes par le plugin Kotlin** `LavandeAttachmentsPlugin` (`FileProvider` + `ACTION_VIEW`,
+  copie dans le cache de l'app, purgeable par le système — pas un fichier « Téléchargements ») ; sur PC
+  elles sont enregistrées dans le dossier de téléchargements, chemin affiché et bouton « Ouvrir le dossier ».
 - **Démon mail embarqué** : API locale `127.0.0.1:8790`, données dans le stockage privé de l'app ;
   planification synchronisée (voir ci-dessous) ; thème, accent et préférences de gestes en `localStorage`.
 - Pas de `--split-per-abi`, pas de CI Android : l'APK arm64 est signé par `scripts/build-android-release.sh`.

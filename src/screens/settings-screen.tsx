@@ -83,6 +83,7 @@ import {
   useMutedAccountsSync,
   writeBackgroundSync,
 } from "@/lib/background-sync";
+import { useBackLayer } from "@/lib/back";
 
 const LLM_FIELDS: { key: keyof LlmConfig; label: string; aria: string; placeholder: string; password?: boolean }[] = [
   { key: "endpoint", label: "Endpoint", aria: "Endpoint du modèle", placeholder: "https://api.openai.com/v1" },
@@ -233,6 +234,8 @@ export function SettingsScreen({
     setOpenGroup(id);
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   };
+
+  useBackLayer(openGroup !== null, () => showGroup(null));
 
   useEffect(() => {
     if (!backgroundSyncOn) return;

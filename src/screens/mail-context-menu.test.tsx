@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import App from "@/App";
+import { haptic } from "@/lib/haptics";
 
 vi.stubEnv("VITE_MAIL_BACKEND", "demo");
+vi.mock("@/lib/haptics", () => ({ haptic: vi.fn() }));
+
+const hapticMock = vi.mocked(haptic);
 
 if (!window.matchMedia) {
   Object.defineProperty(window, "matchMedia", {
@@ -121,11 +125,13 @@ describe("appui long mobile", () => {
   it("exécute une action puis referme la feuille", async () => {
     await openMobile();
     await hold(MAQUETTES);
+    expect(hapticMock).toHaveBeenCalledWith("medium");
 
     fireEvent.click(within(menu()!).getByRole("menuitem", { name: "Archiver" }));
 
     await waitFor(() => expect(menu()).toBeNull());
     await waitFor(() => expect(screen.getByText("Message archivé")).toBeTruthy());
+    expect(hapticMock).toHaveBeenCalledWith("light");
   });
 
   it("se ferme sur « Annuler »", async () => {

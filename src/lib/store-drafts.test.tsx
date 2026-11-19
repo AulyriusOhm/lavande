@@ -10,6 +10,11 @@ import { MAILS } from "@/lib/mail";
 import type { Mail, MailSource } from "@/lib/mail";
 import { loadPersistedCompose, persistCompose } from "@/lib/compose-bus";
 import { baseDraft } from "@/lib/draft";
+import { haptic } from "@/lib/haptics";
+
+vi.mock("@/lib/haptics", () => ({ haptic: vi.fn() }));
+
+const hapticMock = vi.mocked(haptic);
 
 const apiAccount = (id: string): ApiAccount => ({
   id,
@@ -282,6 +287,7 @@ describe("ancien brouillon effacé après enregistrement ou envoi", () => {
     expect(backend.sent).toHaveLength(1);
     expect(result.current.draftSource).toBeNull();
     expect(result.current.composeDraft).toBeNull();
+    expect(hapticMock).toHaveBeenCalledWith("success");
   });
 
   it("un brouillon écrit de zéro n'efface rien sur le serveur", async () => {
@@ -337,6 +343,7 @@ describe("envoi · un seul départ par brouillon", () => {
     const draft = result.current.composeDraft!;
 
     await act(async () => result.current.sendDraft(draft));
+    expect(hapticMock).toHaveBeenCalledWith("error");
 
     await waitFor(() => expect(result.current.composeSendError).toContain("Envoi impossible"));
     expect(result.current.composeSendError).toContain("imap · relais SMTP refusé");

@@ -146,6 +146,7 @@ const REQUIRED_PERMISSIONS = [
   "android.permission.POST_NOTIFICATIONS",
   "android.permission.REQUEST_INSTALL_PACKAGES",
   "android.permission.RECEIVE_BOOT_COMPLETED",
+  "android.permission.VIBRATE",
 ];
 
 function patchPermissions(source) {
@@ -760,6 +761,85 @@ class BackgroundSyncPlugin(private val activity: Activity) : Plugin(activity) {
     val result = JSObject()
     result.put("ok", true)
     invoke.resolve(result)
+  }
+}
+`;
+
+const ATTACHMENTS_PLUGIN_KT = `package mail.lavande.app
+
+import android.app.Activity
+import android.content.Intent
+import android.util.Base64
+import androidx.core.content.FileProvider
+import app.tauri.annotation.Command
+import app.tauri.annotation.InvokeArg
+import app.tauri.annotation.TauriPlugin
+import app.tauri.plugin.Invoke
+import app.tauri.plugin.JSObject
+import app.tauri.plugin.Plugin
+import java.io.File
+
+@InvokeArg
+class OpenAttachmentArgs { lateinit var name: String; var mime: String = ""; lateinit var dataBase64: String }
+
+/**
+ * Une ancre de téléchargement n'écrit rien dans la WebView Android (aucun
+ * DownloadListener) : le front envoie donc les octets ici, le fichier part dans
+ * le cache — couvert par le FileProvider déclaré au manifeste — et le système
+ * l'ouvre avec l'application qui sait le lire.
+ */
+@TauriPlugin
+class LavandeAttachmentsPlugin(private val activity: Activity) : Plugin(activity) {
+
+  @Command
+  fun openAttachment(invoke: Invoke) {
+    val args = invoke.parseArgs(OpenAttachmentArgs::class.java)
+    if (args.mime == "application/vnd.android.package-archive") {
+      invoke.reject("installation d'APK refusée : passe par la mise à jour de l'application"); return
+    }
+    val bytes = try {
+      Base64.decode(args.dataBase64, Base64.DEFAULT)
+    } catch (e: IllegalArgumentException) {
+      invoke.reject("pièce jointe illisible : \${e.message}"); return
+    }
+    if (bytes.size > 25 * 1024 * 1024) {
+      invoke.reject("pièce jointe trop lourde : 25 Mo maximum"); return
+    }
+    try {
+      val dir = File(activity.cacheDir, "attachments")
+      dir.mkdirs()
+      val dest = freeFile(dir, cleanName(args.name))
+      dest.writeBytes(bytes)
+      val uri = FileProvider.getUriForFile(activity, "\${activity.packageName}.fileprovider", dest)
+      val intent = Intent(Intent.ACTION_VIEW)
+        .setDataAndType(uri, args.mime.ifEmpty { "application/octet-stream" })
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+      activity.startActivity(Intent.createChooser(intent, "Ouvrir la pièce jointe"))
+      val result = JSObject(); result.put("path", dest.absolutePath); invoke.resolve(result)
+    } catch (e: Exception) {
+      invoke.reject("ouverture impossible : \${e.message}")
+    }
+  }
+
+  private fun cleanName(raw: String): String {
+    val cleaned = raw.map { c ->
+      if (c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' || c == '-' || c == '_' || c == '.' || c == ' ' || c == '(' || c == ')') c else '_'
+    }.joinToString("").trim().trim('.')
+    return if (cleaned.isEmpty()) "piece-jointe" else cleaned
+  }
+
+  private fun freeFile(dir: File, name: String): File {
+    val first = File(dir, name)
+    if (!first.exists()) return first
+    val dot = name.lastIndexOf('.')
+    val stem = if (dot > 0) name.substring(0, dot) else name
+    val extension = if (dot > 0) name.substring(dot) else ""
+    var index = 1
+    while (true) {
+      val next = File(dir, "\$stem (\$index)\$extension")
+      if (!next.exists()) return next
+      index += 1
+    }
   }
 }
 `;
@@ -1682,6 +1762,11 @@ await writeStatic(
   path.join(kotlinDir, "BackgroundSyncPlugin.kt"),
   BG_PLUGIN_KT,
   "java/mail/lavande/app/BackgroundSyncPlugin.kt",
+);
+await writeStatic(
+  path.join(kotlinDir, "LavandeAttachmentsPlugin.kt"),
+  ATTACHMENTS_PLUGIN_KT,
+  "java/mail/lavande/app/LavandeAttachmentsPlugin.kt",
 );
 await writeStatic(
   path.join(kotlinDir, "LavandeSyncWorker.kt"),

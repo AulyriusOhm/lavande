@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DesktopInbox } from "@/desktop/inbox";
-import type { ApiAccount, ApiFolder, ApiMessage, ApiThread } from "@/lib/api";
+import type { ApiAccount, ApiAttachment, ApiFolder, ApiMessage, ApiThread } from "@/lib/api";
 import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { MailStoreProvider } from "@/lib/store";
@@ -10,6 +10,14 @@ import { ThemeProvider } from "@/lib/theme";
 import { createMemoryStorage } from "@/lib/sync/storage";
 
 vi.stubEnv("VITE_MAIL_BACKEND", "api");
+
+const { downloadAttachmentMock, revealItemInDirMock } = vi.hoisted(() => ({
+  downloadAttachmentMock: vi.fn(),
+  revealItemInDirMock: vi.fn(async () => {}),
+}));
+
+vi.mock("@/lib/attachments", () => ({ downloadAttachment: downloadAttachmentMock }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: revealItemInDirMock }));
 
 if (!window.matchMedia) {
   Object.defineProperty(window, "matchMedia", {
@@ -177,6 +185,87 @@ describe("Lecteur PC · fil complet", () => {
     expect(await screen.findByText("Corps envoyé")).toBeTruthy();
     expect(calls).toContain(`/api/accounts/${ACCOUNT}/threads/${THREAD}`);
     expect(calls).toContain(`/api/accounts/${ACCOUNT}/folders/${SENT}/messages/2?fetch_body=true`);
+  });
+});
+
+describe("Lecteur PC · pièce jointe enregistrée", () => {
+  const ATTACHMENT: ApiAttachment = {
+    filename: "facture.pdf",
+    mime: "application/pdf",
+    size: 5,
+    inline: false,
+  };
+
+  const downloadAttachmentChip = async () => {
+    const row = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>(`[data-mail-row="${ACCOUNT}:${THREAD}"]`);
+      if (!found) throw new Error("fil absent de la liste");
+      return found;
+    });
+    fireEvent.click(row);
+    fireEvent.click(await screen.findByLabelText("Télécharger facture.pdf (5 o)"));
+  };
+
+  beforeEach(() => {
+    downloadAttachmentMock.mockReset();
+    revealItemInDirMock.mockReset();
+    mockBackend(apiMessage({ attachments: [ATTACHMENT] }));
+  });
+
+  it("ouvre le dossier du fichier enregistré", async () => {
+    downloadAttachmentMock.mockResolvedValue({
+      message: "« facture.pdf » enregistré dans /tmp/x/facture.pdf",
+      path: "/tmp/x/facture.pdf",
+    });
+    mount();
+
+    await downloadAttachmentChip();
+
+    expect(
+      await screen.findByText("« facture.pdf » enregistré dans /tmp/x/facture.pdf"),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Ouvrir le dossier/ }));
+    await waitFor(() => expect(revealItemInDirMock).toHaveBeenCalledWith("/tmp/x/facture.pdf"));
+  });
+
+  it("n'offre pas le dossier quand aucun chemin n'est rendu", async () => {
+    downloadAttachmentMock.mockResolvedValue({ message: "« facture.pdf » téléchargé", path: null });
+    mount();
+
+    await downloadAttachmentChip();
+
+    expect(await screen.findByText("« facture.pdf » téléchargé")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Ouvrir le dossier/ })).toBeNull();
+  });
+});
+
+describe("Lecteur PC · marque répondu", () => {
+  const openRow = async () => {
+    const row = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>(`[data-mail-row="${ACCOUNT}:${THREAD}"]`);
+      if (!found) throw new Error("fil absent de la liste");
+      return found;
+    });
+    fireEvent.click(row);
+    await screen.findByText("1 message antérieur");
+  };
+
+  it("signale le mail auquel on a déjà répondu", async () => {
+    mockBackend(apiMessage({ flags: { unread: false, starred: false, answered: true } }));
+    mount();
+
+    await openRow();
+
+    expect(screen.getByText("Répondu")).toBeTruthy();
+  });
+
+  it("ne dit rien d'un mail sans réponse", async () => {
+    mockBackend();
+    mount();
+
+    await openRow();
+
+    expect(screen.queryByText("Répondu")).toBeNull();
   });
 });
 

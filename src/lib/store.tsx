@@ -54,6 +54,7 @@ import { teamContextOf, teamPromptBlock } from "@/lib/team";
 import { mailApi, errorText } from "@/lib/api";
 import type { LiveEvent } from "@/lib/api";
 import type { NewAccount } from "@/lib/api";
+import { haptic } from "@/lib/haptics";
 import { shellLayout } from "@/lib/native";
 import {
   READ_ONLY_NOTICE,
@@ -231,6 +232,9 @@ function nearDuplicate(existing: DuplicateCandidate[], candidate: DuplicateCandi
     return shared / new Set([...tokens, ...others]).size >= 0.6;
   });
 }
+
+/** Mail auquel l'utilisateur a déjà répondu : plus rien à en tirer. */
+const alreadyReplied = (mail: Mail | undefined): boolean => mail?.answered === true;
 
 const AI_RUNS_KEY = "lavande.ai.runs.v1";
 const AI_RUNS_MAX = 16;
@@ -1144,6 +1148,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const mailAction = useCallback(
     (kind: "delete" | "archive" | "read", mail: Mail) => {
       if (readOnlyBlocked()) return;
+      if (kind !== "read") haptic(kind === "delete" ? "medium" : "light");
       if (kind === "read") {
         setMails((current) =>
           current.map((entry) => (entry.id === mail.id ? { ...entry, unread: !entry.unread } : entry)),
@@ -1977,6 +1982,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
             setComposeOpen(false);
             setComposeDraft(null);
             if (source) forgetDraftSource(source);
+            haptic("success");
             notify("Message envoyé");
             setRevision((value) => value + 1);
             composeBus.current?.post({ kind: "sent" });
@@ -1986,6 +1992,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
             composeSendingRef.current = false;
             setComposeSending(false);
             setComposeSendError(message);
+            haptic("error");
             notify(message);
             composeBus.current?.post({ kind: "send-failed", message });
           });
@@ -2030,6 +2037,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       setComposeOpen(false);
       setComposeDraft(null);
       forgetDraftSource(null);
+      haptic("success");
       notify("Message envoyé");
       composeBus.current?.post({ kind: "sent" });
     },
@@ -2378,13 +2386,15 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     [excludedAccounts, inboxMails],
   );
 
-  /** Suggestions affichées : celles de la fenêtre, hors des comptes exclus. */
+  /** Suggestions affichées : celles de la fenêtre, hors comptes exclus et mails déjà traités. */
   const suggestions = useMemo(() => {
     const visible = suggestionsInWindow(storedSuggestions, prefs.aiTasks.windowHours);
-    return excludedAccounts.size === 0
-      ? visible
-      : visible.filter((suggestion) => !excludedAccounts.has(suggestion.account));
-  }, [excludedAccounts, storedSuggestions, prefs.aiTasks.windowHours]);
+    const kept =
+      excludedAccounts.size === 0
+        ? visible
+        : visible.filter((suggestion) => !excludedAccounts.has(suggestion.account));
+    return kept.filter((suggestion) => !alreadyReplied(inboxIndex.get(suggestion.mailId)));
+  }, [excludedAccounts, inboxIndex, storedSuggestions, prefs.aiTasks.windowHours]);
 
   /** Entrée minimale du moteur : expéditeur, objet, aperçu et horodatage, rien d'autre. */
   const summaryInputs = useCallback(
@@ -2430,6 +2440,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       ];
       for (const task of proposed) {
         const mail = task.mailId ? byId.get(task.mailId) : undefined;
+        if (alreadyReplied(mail)) continue;
         const suggestion = summarySuggestion(task, mail, label);
         const key = `${suggestion.mailId}:${normalize(suggestion.proposal)}`;
         if (known.has(key)) continue;
@@ -2638,13 +2649,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         })),
       ];
       for (const event of proposed) {
+        const mail = event.mailId ? byId.get(event.mailId) : undefined;
+        if (alreadyReplied(mail)) continue;
         const dedup = key(event.mailId ?? "", event.title, event.date);
         if (known.has(dedup)) continue;
         const candidate = { mailId: event.mailId ?? "", title: event.title, when: event.date };
         if (nearDuplicate(existing, candidate)) continue;
         known.add(dedup);
         existing.push(candidate);
-        const mail = event.mailId ? byId.get(event.mailId) : undefined;
         planning.proposeSuggestion(eventSuggestion(event, mail, label));
       }
     },
@@ -2838,7 +2850,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [folderRecords, mode, openMailAccount, openMailId, openMailThreadId]);
+  }, [folderRecords, mode, openMailAccount, openMailId, openMailThreadId, revision]);
 
   const resolvedOpenMail = useMemo(
     () => (openMail ? (mails.find((entry) => entry.id === openMail.id) ?? openMail) : null),
@@ -2847,7 +2859,12 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const openThread = useMemo(() => {
     if (!resolvedOpenMail) return undefined;
     const enriched = fullThread ? threadOf(fullThread, resolvedOpenMail) : undefined;
-    return enriched ?? threadOf(mails, resolvedOpenMail);
+    const thread = enriched ?? threadOf(mails, resolvedOpenMail);
+    if (!thread) return undefined;
+    /* Le fil rafraîchi arrive dans l'ordre chronologique : le message ouvert
+       reste celui qu'on affiche, la réponse envoyée passe dans les antérieurs. */
+    const opened = thread.messages.find((message) => message.id === resolvedOpenMail.id);
+    return opened && opened.id !== thread.primary.id ? { ...thread, primary: opened } : thread;
   }, [fullThread, mails, resolvedOpenMail]);
 
   const value = useMemo<MailStoreValue>(

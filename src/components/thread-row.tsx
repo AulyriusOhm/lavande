@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { Archive, CornerUpLeft, MailOpen, RotateCcw, ShieldCheck, Star, Trash2 } from "lucide-react";
 import { useMailStore } from "@/lib/store";
+import { haptic } from "@/lib/haptics";
 import type { Thread } from "@/lib/threads";
 import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/primitives";
@@ -183,6 +184,7 @@ export function ThreadRow({
           const timer = window.setTimeout(() => {
             press.current = null;
             held.current = true;
+            haptic("medium");
             onLongPress();
           }, LONG_PRESS_MS);
           press.current = { timer, x, y };
@@ -252,6 +254,16 @@ export function ThreadRow({
             </div>
 
             <span className="flex shrink-0 items-center gap-1.5">
+              {mail.answered ? (
+                <span
+                  role="img"
+                  aria-label="Répondu"
+                  title="Répondu"
+                  className="grid shrink-0 place-items-center text-ink-muted"
+                >
+                  <CornerUpLeft className="size-3.5" strokeWidth={2.4} />
+                </span>
+              ) : null}
               <span className={cn("text-[11px]", unread ? "font-semibold text-accent-ink" : "text-ink-muted")}>
                 {thread.time}
               </span>

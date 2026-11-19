@@ -37,7 +37,14 @@ const apiFolder = (accountId = ALPHA): ApiFolder => ({
   last_sync_at: null,
 });
 
-const apiThread = (uid: number, from: string, subject: string, date: string, accountId = ALPHA): ApiThread => {
+const apiThread = (
+  uid: number,
+  from: string,
+  subject: string,
+  date: string,
+  accountId = ALPHA,
+  answered = false,
+): ApiThread => {
   const primary: ApiMessage = {
     account_id: accountId,
     folder_path: "INBOX",
@@ -52,7 +59,7 @@ const apiThread = (uid: number, from: string, subject: string, date: string, acc
     cc: [],
     subject,
     date,
-    flags: { unread: true, starred: false, answered: false },
+    flags: { unread: true, starred: false, answered },
     size: 512,
     pgp: "none",
     preview: `Aperçu ${uid}`,
@@ -214,6 +221,19 @@ describe("suggestions de rendez-vous IA · génération", () => {
     expect(calls[0].user).toContain("Maquettes v3");
   });
 
+  it("ne propose aucun rendez-vous pour un mail déjà traité, sans l'écarter du modèle", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: true, events: true, windowHours: 48 });
+    const llmCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED, ALPHA, true)], [event()]);
+    const { result } = mount();
+
+    await waitFor(() => expect(eventCalls(llmCalls)).toHaveLength(1), { timeout: 3000 });
+    await new Promise((resolve) => window.setTimeout(resolve, 30));
+
+    expect(eventCalls(llmCalls)[0].user).toContain("Maquettes v3");
+    expect(result.current.suggestions).toHaveLength(0);
+  });
+
   it("ne demande aucun rendez-vous quand l'extraction n'est pas activée", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs({ enabled: true, windowHours: 48 });
@@ -366,6 +386,37 @@ describe("suggestions de rendez-vous IA · exclusion par compte", () => {
 
     expect(eventCalls(llmCalls).every((call) => !call.user.includes("Accès serveur"))).toBe(true);
     expect(result.current.suggestions.some((entry) => entry.account === BETA)).toBe(false);
+  });
+
+  it("masque un rendez-vous dont le mail source a été traité depuis", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: false, events: false, windowHours: 48 });
+    mockBackend(
+      [
+        apiThread(1, "Camille", "Maquettes v3", RECEIVED, ALPHA, true),
+        apiThread(2, "Marc", "Accès serveur", RECEIVED),
+      ],
+      [],
+    );
+    const base = emptyState(createDevice("test", "test"));
+    const traite = eventDoc("sg:traite");
+    const ouvert = eventDoc("sg:ouvert");
+    const docs = {
+      [docKey("suggestion", "sg:traite")]: {
+        ...traite,
+        raw: { ...traite.raw, mailId: MAIL_ID, account: ALPHA, proposal: "Point maquettes v3" },
+      },
+      [docKey("suggestion", "sg:ouvert")]: {
+        ...ouvert,
+        raw: { ...ouvert.raw, mailId: `${ALPHA}:INBOX:2`, account: ALPHA, proposal: "Point serveur" },
+      },
+    };
+    const { result } = mount(createMemoryStorage({ ...base, docs }));
+
+    await waitFor(() => expect(result.current.mails).toHaveLength(2), { timeout: 3000 });
+    await waitFor(() => expect(result.current.suggestions.map((entry) => entry.proposal)).toEqual([
+      "Point serveur",
+    ]));
   });
 
   it("masque les rendez-vous déjà stockés d'un compte exclu", () => {

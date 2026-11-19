@@ -34,6 +34,7 @@ import { llmReady } from "@/lib/llm";
 import { ReplySuggestSheet, RewriteSheet } from "@/screens/assist-sheet";
 import { IconButton } from "@/components/ui/primitives";
 import { useEscapeLayer } from "@/desktop/escape";
+import { useBackLayer } from "@/lib/back";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { RichEditor } from "@/components/ui/rich-editor";
 import { ensureHtml, extractImageTokens, htmlToText, restoreImageTokens, textToHtml, isHtmlEmpty, sanitizeHtml } from "@/lib/rich-text";
@@ -181,6 +182,7 @@ export function ComposeScreen({
   };
 
   useEscapeLayer(confirmClose, cancelClose);
+  useBackLayer(confirmClose, cancelClose);
 
   const requestClose = () => {
     if (dirty && !sent) {

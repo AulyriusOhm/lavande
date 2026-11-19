@@ -231,6 +231,59 @@ describe("corps à la demande", () => {
   });
 });
 
+describe("marque « répondu »", () => {
+  it("signale le mail auquel on a déjà répondu", () => {
+    renderScreen({ ...MAIL, answered: true });
+
+    expect(screen.getByText("Répondu")).toBeTruthy();
+  });
+
+  it("ne dit rien d'un mail sans réponse", () => {
+    renderScreen();
+
+    expect(screen.queryByText("Répondu")).toBeNull();
+  });
+});
+
+describe("ancre le mail ouvert dans le fil", () => {
+  const REPLY: Mail = {
+    ...MAIL,
+    id: "perso:Sent:13",
+    folder: "sent",
+    source: { accountId: "perso", folderPath: "Sent", uid: 13 },
+    name: "Roman Lavande",
+    email: "roman@lavande.mail",
+    preview: "Ma réponse",
+    body: ["Ma réponse"],
+    time: "10:12",
+    attachments: [],
+  };
+
+  const renderThread = () =>
+    render(
+      <PrefsProvider>
+        <MessageScreen
+          thread={{ ...THREAD, messages: [MAIL, REPLY], primary: MAIL, count: 2 }}
+          onClose={() => {}}
+          onToggleStar={() => {}}
+          onReply={() => {}}
+        />
+      </PrefsProvider>,
+    );
+
+  it("garde le mail ouvert en tête et range la réponse plus récente dans les antérieurs", () => {
+    renderThread();
+
+    expect(screen.getByText("Les factures du mois.")).toBeTruthy();
+    expect(screen.queryByLabelText("Afficher le message de Camille Rousseau")).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("Déplier les 1 message antérieur"));
+
+    expect(screen.getByLabelText("Afficher le message de Roman Lavande")).toBeTruthy();
+    expect(screen.queryByLabelText("Afficher le message de Camille Rousseau")).toBeNull();
+  });
+});
+
 describe("téléchargement des pièces jointes", () => {
   it("récupère les octets du démon et enregistre le fichier", async () => {
     const blob = new Blob(["hello"], { type: "application/pdf" });

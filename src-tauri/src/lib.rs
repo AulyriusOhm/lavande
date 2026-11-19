@@ -1,5 +1,6 @@
 use tauri::Manager;
 
+pub mod attachment;
 pub mod open_external;
 
 #[cfg(target_os = "android")]
@@ -14,6 +15,9 @@ struct UpdaterPluginHandle(tauri::plugin::PluginHandle<tauri::Wry>);
 
 #[cfg(target_os = "android")]
 struct SyncPluginHandle(tauri::plugin::PluginHandle<tauri::Wry>);
+
+#[cfg(target_os = "android")]
+struct AttachmentsPluginHandle(tauri::plugin::PluginHandle<tauri::Wry>);
 
 /// Boucle locale : la coquille Tauri embarque le routeur HTTP du démon mail.
 const BIND: &str = "127.0.0.1:8790";
@@ -96,10 +100,18 @@ fn android_update_endpoint(app: tauri::AppHandle) -> Result<String, String> {
         .ok_or("aucun endpoint updater configuré".to_string())
 }
 
+#[tauri::command]
+fn update_host() -> serde_json::Value {
+    serde_json::json!({
+        "immutable": std::path::Path::new("/run/ostree-booted").exists(),
+        "bundle": tauri::utils::platform::bundle_type().map(|b| format!("{b:?}").to_lowercase()),
+    })
+}
+
 /// Relais des commandes du plugin Kotlin `LavandeUpdaterPlugin`.
 #[cfg(target_os = "android")]
 mod android_commands {
-    use super::{SyncPluginHandle, UpdaterPluginHandle};
+    use super::{AttachmentsPluginHandle, SyncPluginHandle, UpdaterPluginHandle};
     use serde_json::Value;
     use tauri::State;
 
@@ -183,6 +195,21 @@ mod android_commands {
     pub async fn sync_now(sync: State<'_, SyncPluginHandle>) -> Result<Value, String> {
         forward(&sync.0, "syncNow", Value::Null).await
     }
+
+    #[tauri::command]
+    pub async fn open_attachment(
+        attachments: State<'_, AttachmentsPluginHandle>,
+        name: String,
+        mime: String,
+        data_base64: String,
+    ) -> Result<Value, String> {
+        forward(
+            &attachments.0,
+            "openAttachment",
+            serde_json::json!({ "name": name, "mime": mime, "dataBase64": data_base64 }),
+        )
+        .await
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -231,12 +258,28 @@ pub fn run() {
             ])
             .build(),
     );
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<_, ()>::new("lavandeattachments")
+            .setup(|app, api| {
+                let handle =
+                    api.register_android_plugin("mail.lavande.app", "LavandeAttachmentsPlugin")?;
+                app.manage(AttachmentsPluginHandle(handle));
+                Ok(())
+            })
+            .invoke_handler(tauri::generate_handler![
+                android_commands::open_attachment
+            ])
+            .build(),
+    );
     builder
         .invoke_handler(tauri::generate_handler![
             open_external::open_external,
+            attachment::save_attachment,
             mail_daemon_token,
             verify_android_update,
-            android_update_endpoint
+            android_update_endpoint,
+            update_host
         ])
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;

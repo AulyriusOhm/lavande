@@ -6,6 +6,7 @@ import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { createMemoryStorage } from "@/lib/sync/storage";
+import { baseDraft } from "@/lib/draft";
 
 const ACCOUNT = "perso";
 const INBOX = "INBOX";
@@ -98,6 +99,8 @@ type Backend = {
   /** Messages servis par la route de fil complet. */
   threadMessages: ApiMessage[];
   threadStatus: number;
+  /** Corps des envois reçus par la route d'envoi. */
+  sent: unknown[];
 };
 
 function mockBackend(options: { threadMessages?: ApiMessage[]; threadStatus?: number } = {}): Backend {
@@ -105,11 +108,16 @@ function mockBackend(options: { threadMessages?: ApiMessage[]; threadStatus?: nu
     calls: [],
     threadMessages: options.threadMessages ?? [sentMessage(), apiMessage()],
     threadStatus: options.threadStatus ?? 200,
+    sent: [],
   };
-  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
     const path = decodeURIComponent(url.pathname) + url.search;
     backend.calls.push(path);
+    if (/\/send$/.test(path) && init?.method === "POST") {
+      backend.sent.push(JSON.parse(String(init.body)));
+      return reply({});
+    }
     if (path === "/api/accounts") return reply([apiAccount]);
     if (path === `/api/accounts/${ACCOUNT}/folders`) {
       return reply([apiFolder(INBOX, "inbox"), apiFolder(SENT, "sent")]);
@@ -210,6 +218,39 @@ describe("fil complet du message ouvert", () => {
     );
     await waitFor(() => expect(hook.result.current.openThread).toBeDefined());
     expect(hook.result.current.openThread?.messages.map((message) => message.id)).toEqual([LOCAL_ID]);
+  });
+});
+
+describe("envoi d'une réponse dans le fil ouvert", () => {
+  it("relit le fil après l'envoi et y montre la réponse, le mail ouvert restant affiché", async () => {
+    const backend = mockBackend({ threadMessages: [apiMessage()] });
+    const hook = await openFirstMail();
+    await waitFor(() => expect(hook.result.current.openThread?.messages).toHaveLength(1));
+
+    backend.threadMessages = [sentMessage(), apiMessage()];
+    act(() =>
+      hook.result.current.sendDraft({
+        ...baseDraft(ACCOUNT, false, false, THREAD),
+        to: "camille@test.fr",
+        subject: "Re: Planning",
+        body: "Ma réponse",
+        inReplyTo: "<m1@test.fr>",
+        references: ["<m1@test.fr>"],
+      }),
+    );
+
+    await waitFor(() =>
+      expect(hook.result.current.openThread?.messages.map((message) => message.id)).toEqual([
+        LOCAL_ID,
+        SENT_ID,
+      ]),
+    );
+    const threadCalls = backend.calls.filter(
+      (call) => call === `/api/accounts/${ACCOUNT}/threads/${THREAD}`,
+    );
+    expect(threadCalls.length).toBeGreaterThanOrEqual(2);
+    expect(backend.sent).toHaveLength(1);
+    expect(hook.result.current.openThread?.primary.id).toBe(LOCAL_ID);
   });
 });
 

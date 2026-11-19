@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Download, Mail, RotateCw, Sparkles, TrendingUp, Wrench, type LucideIcon } from "lucide-react";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { useEscapeLayer } from "@/desktop/escape";
+import { useBackLayer } from "@/lib/back";
 import { useUpdater } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 
@@ -73,6 +74,7 @@ export function UpdatePopup() {
   };
 
   useEscapeLayer(version !== null && !postponed && running === null, dismiss);
+  useBackLayer(version !== null && !postponed && running === null, dismiss);
 
   if (!supported || version === null || postponed) return null;
   if (available === null && running === null && failure === null) return null;

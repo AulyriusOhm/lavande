@@ -32,7 +32,7 @@ const PLATFORMS: Platform[] = [
     name: "Linux · RPM",
     os: "Fedora · RHEL",
     brand: "linux",
-    copy: "Paquet système pour Fedora et dérivés RHEL. Installation et mises à jour via polkit ou sudo.",
+    copy: "Paquet système pour Fedora et dérivés RHEL. Installation et mises à jour via polkit ou sudo. Sur Fedora Atomic, Bazzite ou Silverblue (système immuable), prenez l’AppImage : c’est le seul format qui se met à jour en place.",
     file: "Lavande-0.2.15-1.x86_64.rpm",
     href: "/updates/Lavande-0.2.15-1.x86_64.rpm",
     cta: "Télécharger le RPM",

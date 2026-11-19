@@ -140,7 +140,7 @@ describe("folderTargets", () => {
   });
 });
 
-describe("messageToMail · destinataires", () => {
+describe("messageToMail", () => {
   const apiMessage = (over: Partial<ApiMessage> = {}): ApiMessage => ({
     account_id: "perso",
     folder_path: "INBOX",
@@ -190,6 +190,26 @@ describe("messageToMail · destinataires", () => {
 
     expect(mail.to).toBeUndefined();
     expect(mail.cc).toBeUndefined();
+  });
+
+  it("transmet le drapeau « répondu » du serveur", () => {
+    const mail = messageToMail(
+      apiMessage({ flags: { unread: false, starred: false, answered: true } }),
+      RECORDS,
+      "inbox",
+    );
+
+    expect(mail.answered).toBe(true);
+  });
+
+  it("garde « répondu » à faux pour un mail sans réponse", () => {
+    const mail = messageToMail(
+      apiMessage({ flags: { unread: true, starred: false, answered: false } }),
+      RECORDS,
+      "inbox",
+    );
+
+    expect(mail.answered).toBe(false);
   });
 });
 

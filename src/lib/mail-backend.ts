@@ -236,6 +236,7 @@ export function messageToMail(
     timestamp: parseDate(message.date)?.getTime(),
     unread: message.flags.unread,
     starred: message.flags.starred,
+    answered: message.flags.answered,
     pgp: message.pgp,
     pgp_detail: message.pgp_detail ?? null,
     attachments: message.attachments.map((file, index) => ({

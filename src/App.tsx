@@ -37,6 +37,7 @@ import {
 } from "@/lib/ics";
 import { useWidgetAgendaSync } from "@/lib/background-sync";
 import { useAiSync } from "@/lib/ai-sync";
+import { haptic } from "@/lib/haptics";
 import { shellLayout } from "@/lib/native";
 import { AccountRemoveDialog, BackendBanner, BackendLoading, ReadOnlyBanner } from "@/components/backend-status";
 import { ConnectScreen } from "@/screens/connect-screen";
@@ -45,6 +46,7 @@ import { appShortcuts, type MailNavigation } from "@/lib/app-shortcuts";
 import { ShortcutsOverlay } from "@/components/shortcuts-overlay";
 import { UpdatePopup } from "@/components/update-popup";
 import { useExternalLinks } from "@/lib/open-external";
+import { closeTopBackLayer, onAndroidBack } from "@/lib/back";
 
 const InboxScreen = memo(InboxView);
 const CalendarScreen = memo(CalendarView);
@@ -241,6 +243,7 @@ function PhoneApp({ native }: { native?: boolean }) {
     [taskDraftOpen, () => setTaskDraftOpen(false)],
     [accountsOpen, () => setAccountsOpen(false)],
     [foldersOpen, () => setFoldersOpen(false)],
+    [Boolean(contextMail), () => setContextMail(null)],
     [Boolean(movingTask), () => setMovingTask(null)],
     [Boolean(openMail), () => closeMessage()],
     [Boolean(detail), () => setDetail(null)],
@@ -254,6 +257,8 @@ function PhoneApp({ native }: { native?: boolean }) {
   const depthRef = useRef(depth);
   depthRef.current = depth;
   const sentinel = useRef(false);
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
 
   useEffect(() => {
     const closeTop = () => layerStack.current.find(([open]) => open)?.[1]();
@@ -320,9 +325,27 @@ function PhoneApp({ native }: { native?: boolean }) {
   };
 
   const changeTab = useCallback((next: TabId) => {
+    haptic("light");
     setTab(next);
     setMovingTask(null);
   }, []);
+
+  useEffect(() => {
+    const closeTop = () => layerStack.current.find(([open]) => open)?.[1]();
+
+    return onAndroidBack(() => {
+      if (closeTopBackLayer()) return;
+      if (depthRef.current > 0) {
+        closeTop();
+        return;
+      }
+      if (tabRef.current !== "inbox") {
+        changeTab("inbox");
+        return;
+      }
+      void import("@tauri-apps/plugin-process").then(({ exit }) => exit(0));
+    });
+  }, [changeTab]);
 
   const openAccounts = useCallback(() => setAccountsOpen(true), []);
   const openFolders = useCallback(() => setFoldersOpen(true), []);

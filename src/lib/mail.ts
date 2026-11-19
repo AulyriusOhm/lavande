@@ -99,6 +99,7 @@ export type Mail = {
   timestamp?: number;
   unread: boolean;
   starred: boolean;
+  answered?: boolean;
   pgp: PgpState;
   pgp_detail?: ApiPgpDetail | null;
   attachments?: MailAttachment[];

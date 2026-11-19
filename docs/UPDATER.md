@@ -217,6 +217,29 @@ Exemple de manifeste :
 - Aucune limite de débit ni authentification côté serveur : le manifeste est
   public, les paquets sont signés.
 
+### Fedora Atomic / Bazzite
+
+- **Détection.** La commande Tauri `update_host` (`src-tauri/src/lib.rs`) renvoie
+  `{ immutable, bundle }` : `immutable` est la présence de `/run/ostree-booted`
+  (marqueur d'un hôte ostree), `bundle` le type de paquet compilé dans le binaire
+  (`tauri::utils::platform::bundle_type()`, formaté en minuscules : `rpm`, `deb`,
+  `appimage`, ou `null` hors binaire empaqueté).
+- **Pourquoi `rpm -U` ne peut pas aboutir.** L'installation RPM réécrit des
+  fichiers sous `/usr`, monté en lecture seule sur un hôte ostree : elle échoue
+  après trois invitations polkit/sudo. Quand `immutable` est vrai **et** que
+  `bundle` vaut `rpm`, `tauriUpdater()` renvoie la mise à jour avec un `install()`
+  qui échoue immédiatement (`OSTREE_RPM`) sans rien télécharger ; le message
+  s'affiche dans la popup de mise à jour et les deux écrans de réglages, sans UI
+  supplémentaire. Si la commande échoue, le flux normal reprend : la garde est
+  purement additive.
+- **AppImage = seule mise à jour en place.** C'est le format à installer sur ces
+  systèmes : l'updater remplace le fichier `.AppImage` lui-même, sans toucher au
+  système. Sous Fedora 41+, `libfuse2` n'est plus fourni : si l'AppImage refuse de
+  démarrer, lancer `APPIMAGE_EXTRACT_AND_RUN=1 ./Lavande_<version>_amd64.AppImage`.
+- **Voie manuelle, non automatisée.** `rpm-ostree install ./Lavande-<version>-1.x86_64.rpm`
+  puis redémarrage : le paquet est intégré à la nouvelle deployment au reboot.
+  L'updater ne tente aucune automatisation `rpm-ostree`.
+
 ## Ce qui manque pour activer l'auto-updater (à faire)
 
 Le code est en place, mais **aucune mise à jour ne peut encore être distribuée**
@@ -235,9 +258,11 @@ tant que les points ci-dessous ne sont pas faits :
    `package.json`, ex. 0.1.0 → 0.2.0), construire les paquets, lancer
    `npm run release:updater -- --notes "…"`, puis déposer `latest.json` + paquets +
    `.sig` sur l'endpoint. Sans une version supérieure publiée, l'app restera « à jour ».
-4. **Construire l'AppImage.** Le build actuel ne produit que le RPM. L'AppImage est
-   le format le plus fiable pour l'auto-update Linux (mise à jour en place). Le
-   bundler télécharge `linuxdeploy`/`appimagetool` (réseau requis au build).
+4. **Construire l'AppImage.** L'AppImage est construite et publiée depuis la 0.2.x
+   (`scripts/release.sh`, clé `linux-x86_64-appimage` dans le manifeste produit par
+   `scripts/release-updater.mjs`). C'est le format le plus fiable pour l'auto-update
+   Linux (mise à jour en place). Le bundler télécharge `linuxdeploy`/`appimagetool`
+   (réseau requis au build).
 5. **Tester le flux de bout en bout.** Vérifier avec une vraie mise à jour hébergée :
    détection → téléchargement → vérification de signature → installation →
    redémarrage. Pas encore fait.

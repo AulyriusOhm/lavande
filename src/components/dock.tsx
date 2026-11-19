@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { CalendarDays, CalendarPlus, Inbox, ListChecks, PenLine, Plus, Settings2 } from "lucide-react";
+import { haptic } from "@/lib/haptics";
 import { isNativeShell } from "@/lib/native";
 import { usePrefs } from "@/lib/prefs";
 import { cn } from "@/lib/utils";
@@ -46,7 +47,10 @@ export function Dock({
       <div className="mx-1 h-6 w-px shrink-0 bg-line" />
       <button
         type="button"
-        onClick={fab.run}
+        onClick={() => {
+          haptic("medium");
+          fab.run();
+        }}
         aria-label={fab.label}
         className={cn(
           "focus-ring group relative grid size-12 shrink-0 place-items-center overflow-hidden rounded-full",

@@ -80,7 +80,7 @@ export function MessageScreen({
 
   const mail = thread.primary;
   const bodyLoading = bodyFetching === mail.id;
-  const previous = thread.messages.slice(0, -1);
+  const previous = thread.messages.filter((message) => message.id !== mail.id);
   const oldest = thread.messages[0];
   const folderMail = thread.messages.find((message) => message.folder !== "sent") ?? mail;
   const inSpam = folderMail.folder === "spam";
@@ -99,8 +99,8 @@ export function MessageScreen({
   const runDownload = async (message: Mail, file: MailAttachment) => {
     setDownload({ mailId: message.id, file: file.name });
     setHint({ mailId: message.id, text: `Téléchargement de « ${file.name} »…` });
-    const text = await downloadAttachment(message, file);
-    setHint({ mailId: message.id, text });
+    const result = await downloadAttachment(message, file);
+    setHint({ mailId: message.id, text: result.message });
     setDownload(null);
   };
 
@@ -206,6 +206,12 @@ export function MessageScreen({
             <span className="rounded-full bg-accent-soft px-2.5 py-1 text-[10.5px] font-bold text-accent-ink">
               {folderLabel(folderMail.folder)}
             </span>
+            {mail.answered ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-[10.5px] font-semibold text-ink-muted">
+                <CornerUpLeft className="size-3" />
+                Répondu
+              </span>
+            ) : null}
             {thread.attachments > 0 ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-[10.5px] font-semibold text-ink-soft">
                 <Paperclip className="size-3" />

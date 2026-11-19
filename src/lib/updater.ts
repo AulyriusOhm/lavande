@@ -15,6 +15,10 @@ import { isTauriShell } from "@/lib/open-external";
 /** Version du front, affichée quand la coquille ne peut pas la donner. */
 export const APP_VERSION: string = packageJson.version;
 
+/** Un paquet RPM ne peut pas se réécrire dans un `/usr` monté en lecture seule. */
+export const OSTREE_RPM =
+  "Cette installation RPM ne peut pas se mettre à jour sur un système immuable (Fedora Atomic, Bazzite, Silverblue). Téléchargez l'AppImage sur lavande.lanro.eu : elle se met à jour toute seule.";
+
 export type UpdateTone = "neutral" | "accent" | "green" | "amber" | "rose";
 
 export type UpdatePhase =
@@ -140,10 +144,16 @@ export function tauriUpdater(): UpdaterBackend {
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check({ timeout: 20_000 });
       if (!update) return null;
+      const { invoke } = await import("@tauri-apps/api/core");
+      const host = await invoke<{ immutable: boolean; bundle: string | null }>("update_host").catch(
+        () => null,
+      );
+      const blocked = host?.immutable === true && host.bundle === "rpm";
       return {
         version: update.version,
         notes: update.body?.trim() ?? "",
         install: (onProgress) => {
+          if (blocked) return Promise.reject(new Error(OSTREE_RPM));
           let total = 0;
           let received = 0;
           return update.downloadAndInstall((event) => {

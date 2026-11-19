@@ -23,7 +23,7 @@ const rgbToHex = (value: string) => {
     .join("")}`;
 };
 
-function mount() {
+function renderRow(thread = THREAD) {
   const wrapper = ({ children }: { children: React.ReactNode }) => (
     <PrefsProvider>
       <ThemeProvider>
@@ -33,9 +33,29 @@ function mount() {
       </ThemeProvider>
     </PrefsProvider>
   );
-  render(<ThreadRow thread={THREAD} showAccount onOpen={() => {}} onToggleStar={() => {}} />, { wrapper });
+  render(<ThreadRow thread={thread} showAccount onOpen={() => {}} onToggleStar={() => {}} />, { wrapper });
+}
+
+function mount() {
+  renderRow();
   return screen.getByText(ACCOUNT.label);
 }
+
+describe("ligne de mail · marque répondu", () => {
+  it("signale d'une flèche le mail auquel on a répondu", () => {
+    renderRow({ ...THREAD, primary: { ...THREAD.primary, answered: true } });
+
+    const mark = screen.getByLabelText("Répondu");
+    expect(mark.getAttribute("title")).toBe("Répondu");
+    expect(mark.className).toContain("text-ink-muted");
+  });
+
+  it("n'ajoute aucune marque sans réponse", () => {
+    renderRow();
+
+    expect(screen.queryByLabelText("Répondu")).toBeNull();
+  });
+});
 
 describe("étiquette de compte de la ligne de mail", () => {
   it("rend une encre calculée, plus jamais l'hexadécimal figé", () => {

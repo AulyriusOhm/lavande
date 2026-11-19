@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import {
   APP_VERSION,
+  OSTREE_RPM,
   androidUpdater,
   checkForUpdate,
   compareVersions,
   installAndRelaunch,
   messageOf,
   phaseLabel,
+  tauriUpdater,
   updaterSupported,
   useUpdater,
   type PendingUpdate,
@@ -15,15 +17,21 @@ import {
   type UpdaterBackend,
 } from "@/lib/updater";
 
-const { invokeMock, fetchMock, getVersionMock } = vi.hoisted(() => ({
-  invokeMock: vi.fn(),
-  fetchMock: vi.fn(),
-  getVersionMock: vi.fn(),
-}));
+const { invokeMock, fetchMock, getVersionMock, pluginCheckMock, pluginRelaunchMock } = vi.hoisted(
+  () => ({
+    invokeMock: vi.fn(),
+    fetchMock: vi.fn(),
+    getVersionMock: vi.fn(),
+    pluginCheckMock: vi.fn(),
+    pluginRelaunchMock: vi.fn(),
+  }),
+);
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 vi.mock("@tauri-apps/plugin-http", () => ({ fetch: fetchMock }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: getVersionMock }));
+vi.mock("@tauri-apps/plugin-updater", () => ({ check: pluginCheckMock }));
+vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: pluginRelaunchMock }));
 
 const ANDROID_ENDPOINT = "https://lavande.lanro.eu/updates/latest.json";
 const APK_URL = "https://lavande.lanro.eu/updates/Lavande.apk";
@@ -351,6 +359,96 @@ describe("androidUpdater.install", () => {
     const pending = await androidUpdater().check();
     invokeMock.mockRejectedValueOnce("téléchargement interrompu");
     await expect(pending?.install(() => undefined)).rejects.toThrow("téléchargement interrompu");
+  });
+});
+
+function hostProbe(response: { immutable: boolean; bundle: string | null } | Error) {
+  const commands: string[] = [];
+  invokeMock.mockImplementation(async (command: string) => {
+    commands.push(command);
+    if (command !== "update_host") return null;
+    if (response instanceof Error) throw response;
+    return response;
+  });
+  return commands;
+}
+
+function pluginUpdate() {
+  const downloadAndInstall = vi.fn(async (onEvent: (event: unknown) => void) => {
+    onEvent({ event: "Started", data: { contentLength: 200 } });
+    onEvent({ event: "Progress", data: { chunkLength: 100 } });
+    onEvent({ event: "Finished", data: {} });
+  });
+  pluginCheckMock.mockResolvedValue({
+    version: "0.3.0",
+    body: "  Nouveautés  ",
+    downloadAndInstall,
+    close: vi.fn(async () => undefined),
+  });
+  return downloadAndInstall;
+}
+
+describe("tauriUpdater sur un hôte ostree", () => {
+  beforeEach(() => {
+    shellOn("desktop");
+    pluginRelaunchMock.mockResolvedValue(undefined);
+  });
+
+  it("RPM sur système immuable : installation refusée sans téléchargement", async () => {
+    const commands = hostProbe({ immutable: true, bundle: "rpm" });
+    const downloadAndInstall = pluginUpdate();
+
+    const pending = await tauriUpdater().check();
+
+    expect(commands).toEqual(["update_host"]);
+    expect(pending?.version).toBe("0.3.0");
+    expect(pending?.notes).toBe("Nouveautés");
+    await expect(pending?.install(() => undefined)).rejects.toThrow(OSTREE_RPM);
+    expect(downloadAndInstall).not.toHaveBeenCalled();
+  });
+
+  it("AppImage sur système immuable : installation normale", async () => {
+    hostProbe({ immutable: true, bundle: "appimage" });
+    const downloadAndInstall = pluginUpdate();
+
+    const pending = await tauriUpdater().check();
+    const percents: (number | null)[] = [];
+    await pending?.install((percent) => percents.push(percent));
+
+    expect(downloadAndInstall).toHaveBeenCalledTimes(1);
+    expect(percents).toEqual([0, 50, 100]);
+  });
+
+  it("RPM sur système classique : installation normale", async () => {
+    hostProbe({ immutable: false, bundle: "rpm" });
+    const downloadAndInstall = pluginUpdate();
+
+    const pending = await tauriUpdater().check();
+    await pending?.install(() => undefined);
+
+    expect(downloadAndInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("sonde indisponible : le flux normal reprend", async () => {
+    hostProbe(new Error("commande inconnue"));
+    const downloadAndInstall = pluginUpdate();
+
+    const pending = await tauriUpdater().check();
+    await pending?.install(() => undefined);
+
+    expect(downloadAndInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("le refus remonte dans l'état d'échec de installAndRelaunch", async () => {
+    hostProbe({ immutable: true, bundle: "rpm" });
+    pluginUpdate();
+    const { phases, report } = recorder();
+
+    const pending = await tauriUpdater().check();
+    await installAndRelaunch(tauriUpdater(), pending as PendingUpdate, report);
+
+    expect(phases.at(-1)).toEqual({ kind: "error", message: OSTREE_RPM });
+    expect(pluginRelaunchMock).not.toHaveBeenCalled();
   });
 });
 

@@ -18,6 +18,12 @@ fn main() {
                         "sync_now",
                     ])
                     .default_permission(tauri_build::DefaultPermissionRule::AllowAllCommands),
+            )
+            .plugin(
+                "lavandeattachments",
+                tauri_build::InlinedPlugin::new()
+                    .commands(&["open_attachment"])
+                    .default_permission(tauri_build::DefaultPermissionRule::AllowAllCommands),
             ),
     )
     .expect("failed to run tauri-build");

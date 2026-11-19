@@ -8,6 +8,7 @@ import {
   CornerUpLeft,
   CornerUpRight,
   Download,
+  FolderOpen,
   Forward,
   Inbox,
   Layers,
@@ -782,6 +783,7 @@ export function DesktopInbox({
   const [pgpKeys, setPgpKeys] = useState<PgpKey[] | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
+  const [downloadPath, setDownloadPath] = useState<string | null>(null);
   const [cursor, setCursor] = useState<number | null>(null);
   const [menu, setMenu] = useState<{ mail: Mail; x: number; y: number } | null>(null);
   const [folderMenu, setFolderMenu] = useState<{ entry: FolderOption; x: number; y: number } | null>(
@@ -846,9 +848,22 @@ export function DesktopInbox({
   const runDownload = async (mail: Mail, file: MailAttachment) => {
     const key = `${mail.id}:${file.name}`;
     setDownloading(key);
+    setDownloadPath(null);
     setDownloadNotice(`Téléchargement de « ${file.name} »…`);
-    setDownloadNotice(await downloadAttachment(mail, file));
+    const { message, path } = await downloadAttachment(mail, file);
+    setDownloadNotice(message);
+    setDownloadPath(path);
     setDownloading(null);
+  };
+
+  const openDownloadFolder = async (path: string) => {
+    try {
+      const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+      await revealItemInDir(path);
+    } catch {
+      setDownloadNotice("Ouverture du dossier impossible");
+      setDownloadPath(null);
+    }
   };
 
   const threads = threadsInFolder(mails, folder, account);
@@ -1649,10 +1664,18 @@ export function DesktopInbox({
                     <h1 className="line-clamp-2 text-[24px] leading-[1.22] font-extrabold tracking-[-0.035em] text-ink">
                       {mail.subject}
                     </h1>
-                    <p className="mt-1 truncate text-[12.5px] font-semibold text-ink-muted">
-                      {folderLabel(mail.folder)}
-                      {openThread && openThread.count > 1 ? ` · ${openThread.count} messages` : ""}
-                    </p>
+                    <div className="mt-1 flex min-w-0 items-center gap-2">
+                      <p className="truncate text-[12.5px] font-semibold text-ink-muted">
+                        {folderLabel(mail.folder)}
+                        {openThread && openThread.count > 1 ? ` · ${openThread.count} messages` : ""}
+                      </p>
+                      {mail.answered ? (
+                        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-semibold text-ink-muted">
+                          <CornerUpLeft className="size-3" />
+                          Répondu
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
                   <div className={cn("flex shrink-0 items-center gap-1", tier === "narrow" && "flex-wrap justify-end")}>
                     {readerActions.map(renderAction)}
@@ -1797,6 +1820,16 @@ export function DesktopInbox({
                       <p role="status" aria-live="polite" className="text-[11px] font-medium text-ink-muted">
                         {downloadNotice ?? "Les fichiers sont relus sur le serveur au moment du téléchargement."}
                       </p>
+                      {downloadPath ? (
+                        <button
+                          type="button"
+                          onClick={() => void openDownloadFolder(downloadPath)}
+                          className="focus-ring inline-flex items-center gap-1.5 text-[11px] font-semibold text-accent-ink transition-colors duration-200 hover:text-accent"
+                        >
+                          <FolderOpen className="size-3.5" />
+                          Ouvrir le dossier
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
 

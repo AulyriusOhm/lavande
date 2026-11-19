@@ -40,6 +40,7 @@ const apiThread = (
   subject: string,
   date: string,
   accountId = ALPHA,
+  answered = false,
 ): ApiThread => {
   const primary: ApiMessage = {
     account_id: accountId,
@@ -55,7 +56,7 @@ const apiThread = (
     cc: [],
     subject,
     date,
-    flags: { unread: true, starred: false, answered: false },
+    flags: { unread: true, starred: false, answered },
     size: 512,
     pgp: "none",
     preview: `Aperçu ${uid}`,
@@ -241,6 +242,19 @@ describe("suggestions de tâches IA · fenêtre des 48 h", () => {
     expect(result.current.suggestions).toHaveLength(0);
   });
 
+  it("ne propose aucune tâche pour un mail déjà traité, sans l'écarter du modèle", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: true, windowHours: 48 });
+    const llmCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED, ALPHA, true)]);
+    const { result } = mount();
+
+    await waitFor(() => expect(llmCalls).toHaveLength(1), { timeout: 3000 });
+    await new Promise((resolve) => window.setTimeout(resolve, 30));
+
+    expect(llmCalls[0].user).toContain("Maquettes v3");
+    expect(result.current.suggestions).toHaveLength(0);
+  });
+
   it("ne sollicite pas le modèle quand la préférence est désactivée", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs({ enabled: false, windowHours: 48 });
@@ -360,6 +374,32 @@ describe("suggestions de tâches IA · filtre d'affichage", () => {
     const { result } = mount(storage);
 
     expect(result.current.suggestions.map((entry) => entry.proposal)).toEqual(["Relance du jour"]);
+  });
+
+  it("masque une suggestion dont le mail source a été traité depuis", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: false, windowHours: 48 });
+    mockBackend([
+      apiThread(1, "Camille", "Maquettes v3", RECEIVED, ALPHA, true),
+      apiThread(2, "Marc", "Accès serveur", RECEIVED),
+    ]);
+    const base = emptyState(createDevice("test", "test"));
+    const traitee = suggestionDoc("sg:traitee", "Envoyer le compte rendu", Date.now() - H);
+    const ouverte = suggestionDoc("sg:ouverte", "Relancer Marc", Date.now() - H);
+    const docs = {
+      [docKey("suggestion", "sg:traitee")]: {
+        ...traitee,
+        raw: { ...traitee.raw, mailId: MAIL_ID, account: ALPHA },
+      },
+      [docKey("suggestion", "sg:ouverte")]: {
+        ...ouverte,
+        raw: { ...ouverte.raw, mailId: `${ALPHA}:INBOX:2`, account: ALPHA },
+      },
+    };
+    const { result } = mount(createMemoryStorage({ ...base, docs }));
+
+    await waitFor(() => expect(result.current.mails).toHaveLength(2), { timeout: 3000 });
+    await waitFor(() => expect(result.current.suggestions.map((entry) => entry.proposal)).toEqual(["Relancer Marc"]));
   });
 
   it("masque les suggestions déjà stockées d'un compte exclu", () => {
