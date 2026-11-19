@@ -150,7 +150,7 @@ const MAX_EVENTS = 12;
 const MAX_LOCATION = 120;
 const MAX_SUBJECT = 200;
 const MAX_FROM = 120;
-const ISO_DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+export const ISO_DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 /** Retire balises et caractères de contrôle, borne la longueur : rendu texte uniquement. */
@@ -330,7 +330,7 @@ type RawSummary = {
 };
 
 /** Extrait l'objet JSON même entouré de texte/markdown ; refuse tout le reste. */
-function parseJsonObject(raw: string): Record<string, unknown> {
+export function parseJsonObject(raw: string): Record<string, unknown> {
   const cleaned = raw.replace(/```(?:json)?/gi, "").trim();
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");

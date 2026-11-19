@@ -5,17 +5,13 @@ import type { SummaryEvent } from "@/lib/summary";
 import type { MailAnalyse } from "@/lib/store";
 import type { Mail } from "@/lib/mail";
 import { dueToneFor, formatDueDate } from "@/lib/tasks";
+import { clockOf } from "@/lib/utils";
 import { isoTime } from "@/lib/calendar";
 import { Badge, DButton, DIconButton } from "@/desktop/ui";
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 const TONES = { late: "rose", soon: "amber", soft: "accent", none: "neutral" } as const;
-
-function clockLabel(timestamp: number): string {
-  const date = new Date(timestamp);
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-}
 
 function slotLabel(slot: FreeSlot): string {
   return `${slot.start}–${slot.end}`;
@@ -264,7 +260,7 @@ export function AnalysePanel({
 
           <div className="flex items-center justify-between gap-2 border-t border-line pt-2">
             <p className="text-[10.5px] font-bold text-ink-muted tabular-nums">
-              {`Généré à ${clockLabel(result.generatedAt)} · ${result.source === "llm" ? "IA" : "local"}`}
+              {`Généré à ${clockOf(result.generatedAt)} · ${result.source === "llm" ? "IA" : "local"}`}
             </p>
             <DButton size="sm" variant="ghost" className="max-sm:min-h-11" onClick={onRetry}>
               Réanalyser

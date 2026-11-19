@@ -33,11 +33,6 @@ export type ComposeInput = {
 /** Sections fiables (hors marqueurs) ajoutées au prompt système de la réponse. */
 export type AssistSections = { team?: string; style?: string };
 
-function systemWithSections(base: string, sections: AssistSections | undefined): string {
-  const extra = [sections?.team?.trim() ?? "", sections?.style?.trim() ?? ""].filter((entry) => entry !== "");
-  return extra.length === 0 ? base : [base, ...extra].join("\n\n");
-}
-
 export async function aiComposeReply(
   config: LlmConfig,
   input: ComposeInput,
@@ -55,7 +50,9 @@ export async function aiComposeReply(
     "",
     `Consigne pour la réponse : ${brief}`,
   ].join("\n");
-  const text = await llmChat(config, systemWithSections(REPLY_SYSTEM, opts), user);
+  const extra = [opts?.team?.trim() ?? "", opts?.style?.trim() ?? ""].filter((entry) => entry !== "");
+  const system = extra.length === 0 ? REPLY_SYSTEM : [REPLY_SYSTEM, ...extra].join("\n\n");
+  const text = await llmChat(config, system, user);
   return { id: "custom", badge: "IA", text };
 }
 

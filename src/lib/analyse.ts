@@ -1,6 +1,7 @@
 import { isoDay, overlappingEvents, type CalendarEvent } from "@/lib/calendar";
+import { minutesOf } from "@/lib/calendar-views";
 import { llmChat, llmReady, type LlmConfig } from "@/lib/llm";
-import { fingerprint, parseEventOutput, sanitizeText, type SummaryEvent, type SummaryTask } from "@/lib/summary";
+import { fingerprint, parseEventOutput, parseJsonObject, sanitizeText, type SummaryEvent, type SummaryTask } from "@/lib/summary";
 
 /**
  * Analyse à la demande d'un mail : tâches (avec destinataire), rendez-vous
@@ -10,7 +11,6 @@ import { fingerprint, parseEventOutput, sanitizeText, type SummaryEvent, type Su
  * façon déterministe — le modèle ne décide jamais d'un chevauchement.
  */
 
-/** Une tâche extraite, éventuellement attribuée à quelqu'un de l'équipe. */
 export type AnalyseTask = SummaryTask & { assignee?: string };
 
 export type AnalyseConflict = { proposed: SummaryEvent; event: CalendarEvent };
@@ -31,10 +31,6 @@ export type AnalyseResult = {
 const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 const ONE_HOUR = 60;
 const MINUTES_PER_DAY = 24 * 60;
-
-function minutesOf(clock: string): number {
-  return Number(clock.slice(0, 2)) * 60 + Number(clock.slice(3));
-}
 
 function clockOf(minutes: number): string {
   const bounded = Math.min(Math.max(minutes, 0), MINUTES_PER_DAY - 1);
@@ -71,7 +67,6 @@ const DAY_END = "19:00";
 const MIN_SLOT = 30;
 const MAX_SLOTS = 4;
 
-/** Créneaux libres d'une journée : 08:00–19:00 moins les occupations de l'agenda. */
 export function freeSlots(events: CalendarEvent[], date: string): FreeSlot[] {
   const busy = overlappingEvents(events, date, DAY_START, DAY_END)
     .map((event) => ({ start: event.start, end: endOf(event.start, event.end) }))
@@ -118,7 +113,6 @@ function agendaLine(event: CalendarEvent): string {
   return `${event.date} ${event.start || "--:--"}-${endOf(event.start, event.end)} ${title}`.trim();
 }
 
-/** Agenda des 14 prochains jours, une ligne compacte par événement. */
 export function agendaLines(events: CalendarEvent[], now = Date.now()): string[] {
   const first = isoDayOffset(0, now);
   const last = isoDayOffset(AGENDA_DAYS, now);
@@ -170,32 +164,12 @@ function extractionUser(
   ].join("\n");
 }
 
-type RawAnalyse = { taches?: unknown };
-
-/** Extrait l'objet JSON même entouré de texte/markdown ; refuse tout le reste. */
-function parseJsonObject(raw: string): Record<string, unknown> {
-  const cleaned = raw.replace(/```(?:json)?/gi, "").trim();
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) throw new Error("Réponse du modèle : JSON introuvable");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned.slice(start, end + 1));
-  } catch {
-    throw new Error("Réponse du modèle : JSON invalide");
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Réponse du modèle : JSON invalide");
-  }
-  return parsed as Record<string, unknown>;
-}
-
 /**
  * Tâches validées : chaque champ est assaini, le mailId est forcé à celui du
  * mail analysé (une injection ne peut pas rattacher une tâche à un autre mail).
  */
 export function parseAnalyseTasks(raw: string, mailId: string): AnalyseTask[] {
-  const parsed = parseJsonObject(raw) as RawAnalyse;
+  const parsed = parseJsonObject(raw) as { taches?: unknown };
   const tasks: AnalyseTask[] = [];
   if (!Array.isArray(parsed.taches)) return tasks;
   for (const entry of parsed.taches.slice(0, MAX_TASKS)) {
@@ -220,11 +194,6 @@ function parseAnalyseEvents(raw: string, mailId: string): SummaryEvent[] {
   return parseEventOutput(raw)
     .slice(0, MAX_EVENTS)
     .map((event) => (event.mailId && event.mailId !== mailId ? { ...event, mailId: undefined } : event));
-}
-
-function slotsFor(proposed: SummaryEvent[], events: CalendarEvent[]): FreeSlot[] {
-  const dates = [...new Set(proposed.map((event) => event.date))].sort();
-  return dates.flatMap((date) => freeSlots(events, date));
 }
 
 const REPLY_SYSTEM = [
@@ -405,7 +374,9 @@ export async function analyseMail(
   }
 
   const conflicts = computeConflicts(proposed, events);
-  const slots = slotsFor(proposed, events);
+  const slots = [...new Set(proposed.map((event) => event.date))]
+    .sort()
+    .flatMap((date) => freeSlots(events, date));
   let reply: string | undefined;
   if (conflicts.length > 0) {
     const drafted = await draftReply(llm, input, conflicts[0], slots, opts.style, opts.signal).catch(() => "");

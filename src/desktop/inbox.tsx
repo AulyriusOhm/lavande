@@ -32,7 +32,7 @@ import {
 } from "lucide-react";
 import type { FolderId, Mail, MailAttachment } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
-import type { SummaryRef, SummaryResult } from "@/lib/summary";
+import { ISO_DAY, type SummaryRef, type SummaryResult } from "@/lib/summary";
 import { dueToneFor, formatDueDate } from "@/lib/tasks";
 import { downloadAttachment } from "@/lib/attachments";
 import type { Thread } from "@/lib/threads";
@@ -77,8 +77,6 @@ import {
 type Filter = "all" | "unread" | "starred" | "encrypted" | "attachments";
 
 const SUMMARY_FILE_CHIPS = 3;
-const ISO_DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
-
 const SUMMARY_DUE_TONE: Record<ReturnType<typeof dueToneFor>, "rose" | "amber" | "green"> = {
   late: "rose",
   soon: "amber",
