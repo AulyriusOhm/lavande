@@ -357,8 +357,11 @@ export type MailStoreValue = {
   /** Mails analysés par le résumé en cours, retrouvés dans la liste vivante. */
   summaryMails: Mail[];
   refreshSummary: (force?: boolean) => Promise<void>;
-  /** Transforme une action du résumé en suggestion en attente (jamais une tâche). */
-  proposeSummaryAction: (ref: SummaryRef) => void;
+  /**
+   * Transforme une action du résumé en suggestion en attente (jamais une tâche).
+   * « added » quand une suggestion est née, « existing » quand la dédup l'a déjà.
+   */
+  proposeSummaryAction: (ref: SummaryRef) => "added" | "existing";
   /** Analyse à la demande du mail ouvert, avec son cache par mail. */
   analyse: MailAnalyse | null;
   runAnalyse: (mail: Mail, force?: boolean) => Promise<void>;
@@ -2421,7 +2424,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
    * une même action ne devient jamais deux suggestions.
    */
   const proposeTasks = useCallback(
-    (proposed: SummaryTask[], byId: Map<string, Mail>, label: string) => {
+    (proposed: SummaryTask[], byId: Map<string, Mail>, label: string): number => {
       const known = new Set([
         ...planning.suggestions.map((entry) => `${entry.mailId}:${normalize(entry.proposal)}`),
         ...planning.tasks.map((entry) => `${entry.mailId ?? ""}:${normalize(entry.title)}`),
@@ -2438,6 +2441,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           when: entry.due,
         })),
       ];
+      let added = 0;
       for (const task of proposed) {
         const mail = task.mailId ? byId.get(task.mailId) : undefined;
         if (alreadyReplied(mail)) continue;
@@ -2448,17 +2452,18 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         if (nearDuplicate(existing, candidate)) continue;
         known.add(key);
         existing.push(candidate);
-        planning.proposeSuggestion(suggestion);
+        if (planning.proposeSuggestion(suggestion)) added += 1;
       }
+      return added;
     },
     [planning],
   );
 
   /** Une action du briefing : une suggestion à valider, passée par le même circuit de dédup. */
   const proposeSummaryAction = useCallback(
-    (ref: SummaryRef) => {
+    (ref: SummaryRef): "added" | "existing" => {
       const mail = inboxIndex.get(ref.mailId);
-      proposeTasks(
+      const added = proposeTasks(
         [
           {
             title: ref.reason.trim() || mail?.subject || "Action à traiter",
@@ -2470,6 +2475,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         inboxIndex,
         summary?.period.label ?? "Résumé",
       );
+      return added > 0 ? "added" : "existing";
     },
     [inboxIndex, proposeTasks, summary?.period.label],
   );

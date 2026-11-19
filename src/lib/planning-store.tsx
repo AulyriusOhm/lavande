@@ -54,7 +54,7 @@ export type PlanningValue = {
   setTasks: Dispatch<SetStateAction<Task[]>>;
   setEvents: Dispatch<SetStateAction<CalendarEvent[]>>;
   addSuggestion: (suggestion: MailSuggestion) => void;
-  proposeSuggestion: (suggestion: MailSuggestion) => void;
+  proposeSuggestion: (suggestion: MailSuggestion) => boolean;
   dismissSuggestion: (suggestion: MailSuggestion) => void;
   readOnlyIds: Set<string>;
   sync: SyncStatus;
@@ -493,8 +493,9 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
     (suggestion: MailSuggestion) => {
       const id = suggestionDocId(suggestion);
       const known = visibleDocs(syncStorage.read().docs, "suggestion");
-      if (known.some((doc) => doc.id === id)) return;
+      if (known.some((doc) => doc.id === id)) return false;
       emit("suggestion", id, suggestionFields(suggestion, "pending"));
+      return true;
     },
     [emit, syncStorage],
   );

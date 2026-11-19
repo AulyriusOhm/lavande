@@ -120,16 +120,15 @@ beforeEach(() => {
 });
 
 describe("Boîte de réception mobile · résumé périodique", () => {
-  it("affiche l'accroche, les informations et les pièces jointes de chaque mail", async () => {
+  it("affiche l'accroche et les informations sans chips pièces jointes", async () => {
     mount();
 
-    const chips = await screen.findByTestId("summary-attachments-mobile");
+    const body = await screen.findByTestId("summary-attachments-mobile");
 
-    expect(chips.textContent).toContain("Pour info");
-    expect(chips.textContent).toContain("inbox-v3.fig");
-    expect(chips.textContent).toContain("4,2 Mo");
-    expect(chips.textContent).toContain("specs-mobile.pdf");
-    expect(chips.querySelectorAll("button[title]").length).toBeGreaterThan(0);
+    expect(body.textContent).toContain("Pour info");
+    expect(body.querySelectorAll("button[title]")).toHaveLength(0);
+    expect(body.textContent).not.toContain("inbox-v3.fig");
+    expect(body.textContent).not.toContain("specs-mobile.pdf");
     expect(screen.getByTestId("summary-source-mobile").textContent).toBe("local");
     expect(screen.getByTestId("summary-footer-mobile").textContent).toContain("Généré à");
     expect(screen.getByTestId("summary-footer-mobile").textContent).toContain("local");
@@ -184,7 +183,7 @@ describe("Boîte de réception mobile · résumé périodique", () => {
     expect((onReply.mock.calls[0][0] as Mail).id).toBe("3");
   });
 
-  it("propose l'action mobile en suggestion de planification", async () => {
+  it("propose l'action mobile en suggestion et confirme l'ajout", async () => {
     seedSummary("7 mails sur 24 h · 1 action attendue.", {
       actions: [{ mailId: "3", reason: "Renvoyer l'avenant signé", due: isoToday(2) }],
       infos: [],
@@ -198,6 +197,29 @@ describe("Boîte de réception mobile · résumé périodique", () => {
     fireEvent.click(within(body).getByRole("button", { name: "Planification" }));
 
     await waitFor(() => expect(screen.getByTestId("suggestions").textContent).toContain("Renvoyer l'avenant signé"));
+    const done = await within(body).findByRole("button", { name: "Ajouté" });
+    expect((done as HTMLButtonElement).disabled).toBe(true);
+    expect(within(body).queryByRole("button", { name: "Planification" })).toBeNull();
+  });
+
+  it("signale une suggestion déjà proposée sans la dupliquer", async () => {
+    seedSummary("7 mails sur 24 h · 1 action attendue.", {
+      actions: [{ mailId: "1", reason: "Répondre à Camille", due: "aucune" }],
+      infos: [],
+      notifications: [],
+    });
+    mount();
+
+    const body = await screen.findByTestId("summary-attachments-mobile");
+    await waitFor(() => expect(within(body).getByText("Répondre à Camille")).toBeTruthy());
+
+    fireEvent.click(within(body).getByRole("button", { name: "Planification" }));
+
+    const done = await within(body).findByRole("button", { name: "Déjà proposé" });
+    expect((done as HTMLButtonElement).disabled).toBe(true);
+    expect(within(body).queryByRole("button", { name: "Ajouté" })).toBeNull();
+    const proposals = (screen.getByTestId("suggestions").textContent ?? "").split("|");
+    expect(proposals.filter((entry) => entry === "Répondre à Camille")).toHaveLength(1);
   });
 
   it("garde le bouton de régénération comme seule relance manuelle", async () => {

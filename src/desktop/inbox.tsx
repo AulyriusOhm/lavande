@@ -77,7 +77,6 @@ import {
 
 type Filter = "all" | "unread" | "starred" | "encrypted" | "attachments";
 
-const SUMMARY_FILE_CHIPS = 3;
 const SUMMARY_DUE_TONE: Record<ReturnType<typeof dueToneFor>, "rose" | "amber" | "green"> = {
   late: "rose",
   soon: "amber",
@@ -89,6 +88,8 @@ const SUMMARY_CHIP =
   "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-line bg-surface px-2.5 text-[10.5px] font-bold text-ink-soft transition-colors duration-200 hover:border-accent-ring hover:text-ink";
 const SUMMARY_CHIP_FILLED =
   "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-accent px-2.5 text-[10.5px] font-bold text-accent-contrast transition-colors duration-200 hover:bg-accent-ink";
+const SUMMARY_CHIP_DONE =
+  "inline-flex h-6 shrink-0 cursor-default items-center gap-1 rounded-full border border-accent-ring/60 bg-accent-soft px-2.5 text-[10.5px] font-bold text-accent-ink";
 const SUMMARY_SUBJECT =
   "focus-ring block max-w-full truncate text-left text-[12.5px] leading-[1.4] font-bold text-accent-ink underline decoration-[1.5px] underline-offset-2 transition-colors duration-200 hover:text-accent";
 
@@ -293,9 +294,10 @@ export function MorningSummary({
   onOpen: (id: string) => void;
   onRefresh: () => void;
   onReply: (mail: Mail) => void;
-  onPropose: (ref: SummaryRef) => void;
+  onPropose: (ref: SummaryRef) => "added" | "existing";
 }) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [proposed, setProposed] = useState<Record<string, "added" | "existing">>({});
   const label = summary?.period.label ?? "Résumé du matin";
   const source = summary ? (summary.source === "llm" ? "IA" : "local") : null;
   const byId = useMemo(() => new Map(mails.map((mail) => [mail.id, mail])), [mails]);
@@ -332,19 +334,6 @@ export function MorningSummary({
       >
         {mail.subject}
       </button>
-      {(mail.attachments ?? []).map((file, index) => (
-        <button
-          key={`${file.name}-${index}`}
-          type="button"
-          onClick={() => onOpen(mail.id)}
-          title={`${file.name} · ${file.size}`}
-          className="focus-ring inline-flex h-5 max-w-[150px] shrink-0 items-center gap-1 rounded-full border border-accent-ring/60 bg-surface/85 px-2 text-[10px] font-bold text-ink-soft transition-colors duration-200 hover:border-accent-ring hover:text-accent-ink"
-        >
-          <Paperclip className="size-2.5 shrink-0 text-accent-ink" strokeWidth={2.6} />
-          <span className="truncate">{file.name}</span>
-          <span className="shrink-0 font-semibold text-ink-muted">{file.size}</span>
-        </button>
-      ))}
       <span className="shrink-0 text-[10.5px] font-semibold text-ink-muted tabular-nums">
         {summaryClock(mail)}
       </span>
@@ -415,19 +404,22 @@ export function MorningSummary({
         {summary ? (
           <>
             <p className="mt-1 text-[12.5px] leading-[1.55] font-medium text-ink-soft">{summary.headline}</p>
-            <div data-testid="summary-attachments" className="mt-2 space-y-2.5">
+            <div
+              data-testid="summary-attachments"
+              className="mt-2 max-h-[min(42vh,360px)] space-y-2.5 overflow-y-auto pr-1"
+            >
               {actions.length > 0 ? (
                 <section>
                   <SummaryGroupTitle label="À traiter" count={actions.length} />
-                  <div className="space-y-1.5">
+                  <div className="space-y-1">
                     {actions.map(({ ref, mail }) => {
                       const due = ref.due && ISO_DAY.test(ref.due) ? ref.due : null;
                       return (
                         <article
                           key={ref.mailId}
-                          className="flex gap-2.5 rounded-[14px] border border-line bg-surface px-3 py-2.5"
+                          className="flex gap-2.5 rounded-[14px] border border-line bg-surface px-2.5 py-2"
                         >
-                          <span className="grid size-[30px] shrink-0 place-items-center rounded-[10px] border border-accent-ring bg-accent-soft text-[10.5px] font-bold text-accent-ink">
+                          <span className="grid size-[26px] shrink-0 place-items-center rounded-[10px] border border-accent-ring bg-accent-soft text-[10.5px] font-bold text-accent-ink">
                             {initials(mail.name)}
                           </span>
                           <div className="min-w-0 flex-1">
@@ -441,17 +433,29 @@ export function MorningSummary({
                               {mail.subject}
                             </button>
                             {ref.reason ? (
-                              <p className="mt-1 text-[11.5px] leading-[1.5] font-medium text-ink-soft">{ref.reason}</p>
+                              <p className="mt-1 line-clamp-2 text-[11.5px] leading-[1.5] font-medium text-ink-soft">
+                                {ref.reason}
+                              </p>
                             ) : null}
-                            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => onPropose(ref)}
-                                className={SUMMARY_CHIP_FILLED}
-                              >
-                                <Plus className="size-3" strokeWidth={2.8} />
-                                Planification
-                              </button>
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                              {proposed[ref.mailId] ? (
+                                <button type="button" disabled className={SUMMARY_CHIP_DONE}>
+                                  <Check className="size-3 shrink-0" strokeWidth={2.8} />
+                                  {proposed[ref.mailId] === "added" ? "Ajouté" : "Déjà proposé"}
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const outcome = onPropose(ref);
+                                    setProposed((current) => ({ ...current, [ref.mailId]: outcome }));
+                                  }}
+                                  className={SUMMARY_CHIP_FILLED}
+                                >
+                                  <Plus className="size-3" strokeWidth={2.8} />
+                                  Planification
+                                </button>
+                              )}
                               <button type="button" onClick={() => onReply(mail)} className={SUMMARY_CHIP}>
                                 <CornerUpLeft className="size-3" strokeWidth={2.4} />
                                 Répondre
@@ -459,19 +463,6 @@ export function MorningSummary({
                               <button type="button" onClick={() => onOpen(mail.id)} className={SUMMARY_CHIP}>
                                 Voir le mail
                               </button>
-                              {(mail.attachments ?? []).slice(0, SUMMARY_FILE_CHIPS).map((file, index) => (
-                                <button
-                                  key={`${file.name}-${index}`}
-                                  type="button"
-                                  onClick={() => onOpen(mail.id)}
-                                  title={`${file.name} · ${file.size}`}
-                                  className={SUMMARY_CHIP}
-                                >
-                                  <Paperclip className="size-3 shrink-0 text-accent-ink" strokeWidth={2.6} />
-                                  <span className="max-w-[120px] truncate">{file.name}</span>
-                                  <span className="shrink-0 font-semibold text-ink-muted">{file.size}</span>
-                                </button>
-                              ))}
                               {due ? (
                                 <Badge tone={SUMMARY_DUE_TONE[dueToneFor(due)]}>{formatDueDate(due)}</Badge>
                               ) : null}

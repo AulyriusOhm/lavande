@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { animate, motion, useMotionValue, useSpring, useTransform } from "motion/react";
-import { Archive, ChevronDown, ChevronUp, CornerUpLeft, Inbox, Layers, Loader2, Paperclip, PenLine, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2, type LucideIcon } from "lucide-react";
+import { Archive, Check, ChevronDown, ChevronUp, CornerUpLeft, Inbox, Layers, Loader2, PenLine, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2, type LucideIcon } from "lucide-react";
 import type { FolderId, Mail } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
 import type { SummaryRef } from "@/lib/summary";
@@ -32,14 +32,14 @@ const SUMMARY_CHIP =
   "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-line bg-surface px-2 text-[10px] font-bold text-ink-soft transition-colors duration-200";
 const SUMMARY_CHIP_FILLED =
   "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-accent px-2 text-[10px] font-bold text-accent-contrast transition-colors duration-200";
+const SUMMARY_CHIP_DONE =
+  "inline-flex h-6 shrink-0 cursor-default items-center gap-1 rounded-full border border-accent-ring/60 bg-accent-soft px-2 text-[10px] font-bold text-accent-ink";
 const SUMMARY_DUE_TONE: Record<ReturnType<typeof dueToneFor>, string> = {
   late: "bg-rose-500/12 text-rose-700 dark:text-rose-300",
   soon: "bg-amber-500/14 text-amber-700 dark:text-amber-300",
   soft: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
   none: "bg-surface-2 text-ink-muted",
 };
-
-const SUMMARY_FILE_CHIPS = 3;
 
 function summaryClock(mail: Mail) {
   return typeof mail.timestamp === "number" ? clockOf(mail.timestamp) : mail.time;
@@ -96,6 +96,7 @@ export function InboxScreen({
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [sizes, setSizes] = useState({ hero: 0, card: 0, bar: 0 });
   const [cursor, setCursor] = useState<number | null>(null);
+  const [proposed, setProposed] = useState<Record<string, "added" | "existing">>({});
   const rowsRef = useRef<HTMLDivElement>(null);
   const wasOpen = useRef(false);
 
@@ -215,19 +216,6 @@ export function InboxScreen({
       >
         {mail.subject}
       </button>
-      {(mail.attachments ?? []).map((file, index) => (
-        <button
-          key={`${file.name}-${index}`}
-          type="button"
-          onClick={() => onOpen(mail)}
-          title={`${file.name} · ${file.size}`}
-          className="focus-ring inline-flex h-5 max-w-[120px] shrink-0 items-center gap-1 rounded-full bg-surface px-1.5 text-[9.5px] font-bold text-ink-soft"
-        >
-          <Paperclip className="size-2.5 shrink-0 text-accent-ink" strokeWidth={2.6} />
-          <span className="truncate">{file.name}</span>
-          <span className="shrink-0 font-semibold text-ink-muted">{file.size}</span>
-        </button>
-      ))}
       <span className="shrink-0 text-[9.5px] font-semibold text-ink-muted tabular-nums">
         {summaryClock(mail)}
       </span>
@@ -508,7 +496,7 @@ export function InboxScreen({
                               return (
                                 <article
                                   key={ref.mailId}
-                                  className="flex gap-2 rounded-[14px] bg-surface px-2.5 py-2"
+                                  className="flex gap-2 rounded-[14px] bg-surface px-2.5 py-1.5"
                                 >
                                   <span className="grid size-7 shrink-0 place-items-center rounded-[9px] bg-accent/15 text-[9.5px] font-bold text-accent-ink">
                                     {initials(mail.name)}
@@ -530,19 +518,29 @@ export function InboxScreen({
                                       {mail.subject}
                                     </button>
                                     {ref.reason ? (
-                                      <p className="mt-1 text-[11px] leading-[1.45] font-medium text-ink-soft">
+                                      <p className="mt-1 line-clamp-2 text-[11px] leading-[1.45] font-medium text-ink-soft">
                                         {ref.reason}
                                       </p>
                                     ) : null}
-                                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                                      <button
-                                        type="button"
-                                        onClick={() => proposeSummaryAction(ref)}
-                                        className={SUMMARY_CHIP_FILLED}
-                                      >
-                                        <Plus className="size-3" strokeWidth={2.8} />
-                                        Planification
-                                      </button>
+                                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                      {proposed[ref.mailId] ? (
+                                        <button type="button" disabled className={SUMMARY_CHIP_DONE}>
+                                          <Check className="size-3 shrink-0" strokeWidth={2.8} />
+                                          {proposed[ref.mailId] === "added" ? "Ajouté" : "Déjà proposé"}
+                                        </button>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const outcome = proposeSummaryAction(ref);
+                                            setProposed((current) => ({ ...current, [ref.mailId]: outcome }));
+                                          }}
+                                          className={SUMMARY_CHIP_FILLED}
+                                        >
+                                          <Plus className="size-3" strokeWidth={2.8} />
+                                          Planification
+                                        </button>
+                                      )}
                                       <button
                                         type="button"
                                         onClick={() => onReply(mail)}
@@ -551,19 +549,6 @@ export function InboxScreen({
                                         <CornerUpLeft className="size-3" strokeWidth={2.4} />
                                         Répondre
                                       </button>
-                                      {(mail.attachments ?? []).slice(0, SUMMARY_FILE_CHIPS).map((file, index) => (
-                                        <button
-                                          key={`${file.name}-${index}`}
-                                          type="button"
-                                          onClick={() => onOpen(mail)}
-                                          title={`${file.name} · ${file.size}`}
-                                          className={SUMMARY_CHIP}
-                                        >
-                                          <Paperclip className="size-3 shrink-0 text-accent-ink" strokeWidth={2.6} />
-                                          <span className="max-w-[90px] truncate">{file.name}</span>
-                                          <span className="shrink-0 font-semibold text-ink-muted">{file.size}</span>
-                                        </button>
-                                      ))}
                                       {due ? (
                                         <span
                                           className={cn(
