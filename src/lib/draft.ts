@@ -1,4 +1,6 @@
-import { isHtmlEmpty } from "@/lib/rich-text";
+import type { Mail } from "@/lib/mail";
+import { replyRecipients } from "@/lib/mail";
+import { buildQuotedHtml, isHtmlEmpty, textToHtml } from "@/lib/rich-text";
 
 /** Une pièce jointe du brouillon : les octets voyagent en base64. */
 export type DraftAttachment = {
@@ -23,6 +25,8 @@ export type ComposeDraft = {
   threadId?: string;
   inReplyTo?: string;
   references?: string[];
+  /** Message du fil auquel ce brouillon répond : la cible, pas forcément le dernier. */
+  replyTargetId?: string;
 };
 
 /** 25 Mo par fichier, et autant pour l'ensemble : le démon encode tout en base64. */
@@ -141,4 +145,34 @@ export function emptyDraft(draft: ComposeDraft) {
 
 export function baseDraft(account: string, pgpEncrypt: boolean, pgpSign: boolean, threadId?: string): ComposeDraft {
   return { to: "", cc: "", cci: "", subject: "", body: "", account, pgpEncrypt, pgpSign, includeSignature: true, threadId };
+}
+
+/**
+ * En-têtes et citation d'une réponse à un message précis : la même règle pour
+ * une réponse neuve et pour un brouillon réorienté vers un autre message.
+ */
+export function replyFields(mail: Mail, all: boolean, self?: string) {
+  return {
+    to: replyRecipients(mail, all, self),
+    cc: all ? (mail.cc ?? "") : "",
+    subject: /^re\s*:/i.test(mail.subject.trim()) ? mail.subject : `Re: ${mail.subject}`,
+    quoted: buildQuotedHtml(
+      `Le ${mail.date ?? mail.time}, ${mail.name} a écrit :`,
+      textToHtml(mail.body.join("\n")),
+    ),
+    inReplyTo: mail.messageId,
+    references: [...(mail.references ?? []), ...(mail.messageId ? [mail.messageId] : [])],
+    threadId: mail.threadId ?? mail.id,
+    replyTargetId: mail.id,
+  };
+}
+
+/** Réoriente un brouillon vers un autre message sans toucher au corps saisi. */
+export function retargetDraft(
+  draft: ComposeDraft,
+  mail: Mail,
+  all: boolean,
+  self?: string,
+): ComposeDraft {
+  return { ...draft, ...replyFields(mail, all, self) };
 }

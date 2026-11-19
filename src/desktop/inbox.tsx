@@ -21,6 +21,7 @@ import {
   PenLine,
   Plus,
   RefreshCw,
+  ReplyAll,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -32,7 +33,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { FolderId, Mail, MailAttachment } from "@/lib/mail";
-import { folderLabel } from "@/lib/mail";
+import { canReplyAll, folderLabel } from "@/lib/mail";
 import { ISO_DAY, type SummaryRef, type SummaryResult } from "@/lib/summary";
 import { dueToneFor, formatDueDate } from "@/lib/tasks";
 import { downloadAttachment } from "@/lib/attachments";
@@ -1108,29 +1109,167 @@ export function DesktopInbox({
     }
   }, [mail, selectedThreadId, focusRow]);
 
-  const previous = openThread && mail ? openThread.messages.filter((message) => message.id !== mail.id) : [];
-  const allExpanded = previous.every((message) => !collapsedPrevious.includes(message.id));
+  /* Le fil est chronologique : ce qui précède le message ouvert est antérieur,
+     ce qui le suit est postérieur — un message plus récent n'est pas un antérieur. */
+  const threadMessages = openThread?.messages ?? [];
+  const openIndex = mail ? threadMessages.findIndex((message) => message.id === mail.id) : -1;
+  const earlier =
+    openIndex >= 0
+      ? threadMessages.slice(0, openIndex)
+      : threadMessages.filter((message) => message.id !== mail?.id);
+  const later = openIndex >= 0 ? threadMessages.slice(openIndex + 1) : [];
+  const history = [...earlier, ...later];
 
   const togglePrevious = (id: string) =>
     setCollapsedPrevious((current) =>
       current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id],
     );
-  const toggleAllPrevious = () =>
-    setCollapsedPrevious(allExpanded ? previous.map((message) => message.id) : []);
+  const allExpanded = (list: Mail[]) =>
+    list.every((message) => !collapsedPrevious.includes(message.id));
+  const toggleAllPrevious = (list: Mail[]) =>
+    setCollapsedPrevious(allExpanded(list) ? list.map((message) => message.id) : []);
 
-  // Les antérieurs sont dépliés par défaut : leur corps se lit dès qu'ils sont
-  // visibles. La clé est la liste des corps manquants, pas `previous` (nouveau
-  // tableau à chaque rendu) : une lecture ratée n'est pas rejouée en boucle.
-  const pendingBodies = previous
+  // Les messages du fil sont dépliés par défaut : leur corps se lit dès qu'ils
+  // sont visibles. La clé est la liste des corps manquants, pas `history`
+  // (nouveau tableau à chaque rendu) : une lecture ratée n'est pas rejouée.
+  const pendingBodies = history
     .filter((message) => !collapsedPrevious.includes(message.id) && !message.bodyFetched)
     .map((message) => message.id)
     .join(",");
   useEffect(() => {
     for (const id of pendingBodies.split(",").filter(Boolean)) {
-      const message = previous.find((entry) => entry.id === id);
+      const message = history.find((entry) => entry.id === id);
       if (message) fetchBody(message);
     }
   }, [pendingBodies]);
+
+  const messageCard = (message: Mail) => {
+    const expanded = !collapsedPrevious.includes(message.id);
+    const who = message.folder === "sent" ? "Moi" : message.name;
+    const replyAll = canReplyAll(message, accountById(message.account)?.email);
+    return (
+      <div key={message.id} className="overflow-hidden rounded-[18px] border border-line bg-surface">
+        <button
+          type="button"
+          onClick={() => togglePrevious(message.id)}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            setMenu({ mail: message, x: event.clientX, y: event.clientY });
+          }}
+          aria-expanded={expanded}
+          aria-label={expanded ? `Replier le message de ${who}` : `Déplier le message de ${who}`}
+          className="focus-ring flex w-full items-center gap-2.5 px-4 py-2.5 text-left"
+        >
+          <Avatar name={who} tone={message.tone} size={32} rounded="rounded-full" />
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-1.5">
+              <span className="truncate text-[12.5px] font-bold text-ink">{who}</span>
+              {accountById(message.account) ? (
+                <Badge tone={accountTone(message.account)}>{accountById(message.account)?.label}</Badge>
+              ) : null}
+              {message.pgp === "encrypted" ? (
+                <Lock className="size-3 shrink-0 text-emerald-700 dark:text-emerald-300" strokeWidth={2.6} />
+              ) : message.pgp === "signed" ? (
+                <ShieldCheck className="size-3 shrink-0 text-sky-700 dark:text-sky-300" strokeWidth={2.6} />
+              ) : null}
+              <span className="ml-auto shrink-0 text-[11.5px] font-semibold text-ink-muted">
+                {message.date ?? message.time}
+              </span>
+            </span>
+          </span>
+          <ChevronDown
+            className={cn(
+              "size-4 shrink-0 text-ink-muted transition-transform duration-300",
+              expanded && "rotate-180",
+            )}
+          />
+        </button>
+
+        {expanded ? (
+          <div className="max-w-[78ch] space-y-2.5 px-4 pb-4">
+            {bodyFetching === message.id ? (
+              <MailBodyLoading className="text-[13.5px] leading-[1.7]" />
+            ) : message.body.length > 0 || message.html ? (
+              <MailBody
+                className="text-[13.5px] leading-[1.7]"
+                html={message.html}
+                paragraphs={message.body}
+                source={message.source}
+                encrypted={message.pgp === "encrypted"}
+              />
+            ) : message.pgp === "encrypted" && !resolvePgp(prefs, message.account).enabled ? (
+              <p className="text-[12.5px] leading-snug font-medium text-ink-muted">
+                Message chiffré · PGP désactivé pour ce compte
+              </p>
+            ) : null}
+
+            {readOnly ? null : (
+              <div className="flex flex-wrap items-center gap-1">
+                <DButton
+                  size="sm"
+                  onClick={() => replyTo(message)}
+                  aria-label={`Répondre au message de ${who}`}
+                  className="px-2 text-[11.5px]"
+                >
+                  <CornerUpLeft className="size-3.5" />
+                  Répondre
+                </DButton>
+                {replyAll ? (
+                  <DButton
+                    size="sm"
+                    onClick={() => replyTo(message, true)}
+                    aria-label={`Répondre à tous les destinataires du message de ${who}`}
+                    className="px-2 text-[11.5px]"
+                  >
+                    <ReplyAll className="size-3.5" />
+                    Répondre à tous
+                  </DButton>
+                ) : null}
+                <DButton
+                  size="sm"
+                  onClick={() => forwardMail(message)}
+                  aria-label={`Transférer le message de ${who}`}
+                  className="px-2 text-[11.5px]"
+                >
+                  <CornerUpRight className="size-3.5" />
+                  Transférer
+                </DButton>
+                <DButton
+                  size="sm"
+                  onClick={() => openMessage(message)}
+                  aria-label={`Ouvrir le message de ${who}`}
+                  className="px-2 text-[11.5px]"
+                >
+                  <MailIcon className="size-3.5" />
+                  Ouvrir
+                </DButton>
+              </div>
+            )}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const historySection = (label: string, list: Mail[], suffix: string) =>
+    list.length === 0 ? null : (
+      <div className="mt-7 border-t border-line pt-4">
+        <div className="flex items-center gap-2">
+          <SectionLabel>{label}</SectionLabel>
+          <button
+            type="button"
+            onClick={() => toggleAllPrevious(list)}
+            aria-label={`${allExpanded(list) ? "Tout replier" : "Tout déplier"} les messages ${suffix}`}
+            className="focus-ring relative ml-auto rounded-full px-2 py-0.5 text-[11.5px] font-bold text-ink-muted transition-colors duration-200 before:absolute before:-inset-2 before:rounded-full before:content-[''] hover:bg-surface-2 hover:text-ink"
+          >
+            {allExpanded(list) ? "Tout replier" : "Tout déplier"}
+          </button>
+        </div>
+
+        <div className="mt-2.5 space-y-2.5">{list.map(messageCard)}</div>
+      </div>
+    );
+
 
   const readerActions: QuickAction[] = mail && !readOnly
     ? [
@@ -1700,6 +1839,12 @@ export function DesktopInbox({
                         <CornerUpLeft className="size-3.5" />
                         Répondre
                       </ShimmerButton>
+                      {canReplyAll(mail, accountById(mail.account)?.email) ? (
+                        <DButton variant="ghost" size="sm" onClick={() => replyTo(mail, true)}>
+                          <ReplyAll className="size-3.5" />
+                          Répondre à tous
+                        </DButton>
+                      ) : null}
                       <DButton variant="ghost" size="sm" onClick={() => forwardMail(mail)}>
                         <CornerUpRight className="size-3.5" />
                         Transférer
@@ -1858,94 +2003,20 @@ export function DesktopInbox({
                     />
                   )}
 
-                  {previous.length > 0 ? (
-                    <div className="mt-7 border-t border-line pt-4">
-                      <div className="flex items-center gap-2">
-                        <SectionLabel>
-                          {previous.length} message{previous.length > 1 ? "s" : ""} antérieur
-                          {previous.length > 1 ? "s" : ""}
-                        </SectionLabel>
-                        <button
-                          type="button"
-                          onClick={toggleAllPrevious}
-                          aria-label={allExpanded ? "Tout replier les messages antérieurs" : "Tout déplier les messages antérieurs"}
-                          className="focus-ring relative ml-auto rounded-full px-2 py-0.5 text-[11.5px] font-bold text-ink-muted transition-colors duration-200 before:absolute before:-inset-2 before:rounded-full before:content-[''] hover:bg-surface-2 hover:text-ink"
-                        >
-                          {allExpanded ? "Tout replier" : "Tout déplier"}
-                        </button>
-                      </div>
-
-                      <div className="mt-2.5 space-y-2.5">
-                        {previous.map((message) => {
-                          const expanded = !collapsedPrevious.includes(message.id);
-                          const who = message.folder === "sent" ? "Moi" : message.name;
-                          return (
-                            <div
-                              key={message.id}
-                              className="overflow-hidden rounded-[18px] border border-line bg-surface"
-                            >
-                              <button
-                                type="button"
-                                onClick={() => togglePrevious(message.id)}
-                                aria-expanded={expanded}
-                                aria-label={
-                                  expanded ? `Replier le message de ${who}` : `Déplier le message de ${who}`
-                                }
-                                className="focus-ring flex w-full items-center gap-2.5 px-4 py-2.5 text-left"
-                              >
-                                <Avatar name={who} tone={message.tone} size={32} rounded="rounded-full" />
-                                <span className="min-w-0 flex-1">
-                                  <span className="flex items-center gap-1.5">
-                                    <span className="truncate text-[12.5px] font-bold text-ink">{who}</span>
-                                    {accountById(message.account) ? (
-                                      <Badge tone={accountTone(message.account)}>
-                                        {accountById(message.account)?.label}
-                                      </Badge>
-                                    ) : null}
-                                    {message.pgp === "encrypted" ? (
-                                      <Lock className="size-3 shrink-0 text-emerald-700 dark:text-emerald-300" strokeWidth={2.6} />
-                                    ) : message.pgp === "signed" ? (
-                                      <ShieldCheck className="size-3 shrink-0 text-sky-700 dark:text-sky-300" strokeWidth={2.6} />
-                                    ) : null}
-                                    <span className="ml-auto shrink-0 text-[11.5px] font-semibold text-ink-muted">
-                                      {message.date ?? message.time}
-                                    </span>
-                                  </span>
-                                </span>
-                                <ChevronDown
-                                  className={cn(
-                                    "size-4 shrink-0 text-ink-muted transition-transform duration-300",
-                                    expanded && "rotate-180",
-                                  )}
-                                />
-                              </button>
-
-                              {expanded ? (
-                                <div className="max-w-[78ch] space-y-2.5 px-4 pb-4">
-                                  {bodyFetching === message.id ? (
-                                    <MailBodyLoading className="text-[13.5px] leading-[1.7]" />
-                                  ) : message.body.length > 0 || message.html ? (
-                                    <MailBody
-                                      className="text-[13.5px] leading-[1.7]"
-                                      html={message.html}
-                                      paragraphs={message.body}
-                                      source={message.source}
-                                      encrypted={message.pgp === "encrypted"}
-                                    />
-                                  ) : message.pgp === "encrypted" &&
-                                    !resolvePgp(prefs, message.account).enabled ? (
-                                    <p className="text-[12.5px] leading-snug font-medium text-ink-muted">
-                                      Message chiffré · PGP désactivé pour ce compte
-                                    </p>
-                                  ) : null}
-                                </div>
-                              ) : null}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ) : null}
+                  {historySection(
+                    `${earlier.length} message${earlier.length > 1 ? "s" : ""} antérieur${
+                      earlier.length > 1 ? "s" : ""
+                    }`,
+                    earlier,
+                    "antérieurs",
+                  )}
+                  {historySection(
+                    `${later.length} message${later.length > 1 ? "s" : ""} suivant${
+                      later.length > 1 ? "s" : ""
+                    }`,
+                    later,
+                    "suivants",
+                  )}
                 </BlurFade>
               </div>
             </>

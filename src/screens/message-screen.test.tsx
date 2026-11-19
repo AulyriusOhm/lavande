@@ -271,13 +271,14 @@ describe("ancre le mail ouvert dans le fil", () => {
       </PrefsProvider>,
     );
 
-  it("garde le mail ouvert en tête et range la réponse plus récente dans les antérieurs", () => {
+  it("garde le mail ouvert en tête et range la réponse plus récente dans les suivants", () => {
     renderThread();
 
     expect(screen.getByText("Les factures du mois.")).toBeTruthy();
     expect(screen.queryByLabelText("Afficher le message de Camille Rousseau")).toBeNull();
+    expect(screen.queryByLabelText("Déplier les 1 message antérieur")).toBeNull();
 
-    fireEvent.click(screen.getByLabelText("Déplier les 1 message antérieur"));
+    fireEvent.click(screen.getByLabelText("Déplier les 1 message suivant"));
 
     expect(screen.getByLabelText("Afficher le message de Roman Lavande")).toBeTruthy();
     expect(screen.queryByLabelText("Afficher le message de Camille Rousseau")).toBeNull();
@@ -430,5 +431,129 @@ describe("destinataires du message", () => {
     renderScreen();
 
     expect(screen.queryByTestId("mail-recipients")).toBeNull();
+  });
+});
+
+describe("actions par message du fil", () => {
+  const OLDER: Mail = {
+    ...MAIL,
+    id: "perso:INBOX:9",
+    source: { accountId: "perso", folderPath: "INBOX", uid: 9 },
+    name: "Marc Delaunay",
+    email: "marc@test.fr",
+    to: "roman@lavande.mail, equipe@test.fr",
+    body: ["Premier mot"],
+    attachments: [],
+  };
+  const NEWER: Mail = {
+    ...MAIL,
+    id: "perso:Sent:13",
+    folder: "sent",
+    source: { accountId: "perso", folderPath: "Sent", uid: 13 },
+    name: "Roman Lavande",
+    email: "roman@lavande.mail",
+    to: "camille@studio-lilas.fr",
+    body: ["Ma réponse"],
+    attachments: [],
+  };
+
+  const renderFil = (options: { readOnly?: boolean; handlers?: Record<string, unknown> } = {}) => {
+    render(
+      <PrefsProvider>
+        <MessageScreen
+          thread={{ ...THREAD, messages: [OLDER, MAIL, NEWER], primary: MAIL, count: 3 }}
+          readOnly={options.readOnly}
+          selfEmail="roman@lavande.mail"
+          onClose={() => {}}
+          onToggleStar={() => {}}
+          onReply={() => {}}
+          {...options.handlers}
+        />
+      </PrefsProvider>,
+    );
+  };
+
+  it("sépare antérieurs et suivants autour du message ouvert", () => {
+    renderFil();
+
+    expect(screen.getByLabelText("Déplier les 1 message antérieur")).toBeTruthy();
+    expect(screen.getByLabelText("Déplier les 1 message suivant")).toBeTruthy();
+  });
+
+  it("répond au message déplié, pas au dernier du fil", () => {
+    const onReply = vi.fn();
+    renderFil({ handlers: { onReply } });
+
+    fireEvent.click(screen.getByLabelText("Déplier les 1 message antérieur"));
+    fireEvent.click(screen.getByLabelText("Afficher le message de Marc Delaunay"));
+    fireEvent.click(screen.getByLabelText("Répondre au message de Marc Delaunay"));
+
+    expect(onReply).toHaveBeenCalledWith(OLDER);
+  });
+
+  it("répond à tous, transfère et ouvre depuis la barre d'un message", () => {
+    const onReplyAll = vi.fn();
+    const onForward = vi.fn();
+    const onOpen = vi.fn();
+    renderFil({ handlers: { onReplyAll, onForward, onOpen } });
+
+    fireEvent.click(screen.getByLabelText("Déplier les 1 message antérieur"));
+    fireEvent.click(screen.getByLabelText("Afficher le message de Marc Delaunay"));
+    fireEvent.click(
+      screen.getByLabelText("Répondre à tous les destinataires du message de Marc Delaunay"),
+    );
+    fireEvent.click(screen.getByLabelText("Transférer le message de Marc Delaunay"));
+    fireEvent.click(screen.getByLabelText("Ouvrir le message de Marc Delaunay"));
+
+    expect(onReplyAll).toHaveBeenCalledWith(OLDER);
+    expect(onForward).toHaveBeenCalledWith(OLDER);
+    expect(onOpen).toHaveBeenCalledWith(OLDER);
+  });
+
+  it("n'offre pas « répondre à tous » sans autre destinataire", () => {
+    render(
+      <PrefsProvider>
+        <MessageScreen
+          thread={{
+            ...THREAD,
+            messages: [{ ...OLDER, to: "roman@lavande.mail" }, MAIL],
+            primary: MAIL,
+            count: 2,
+          }}
+          selfEmail="roman@lavande.mail"
+          onClose={() => {}}
+          onToggleStar={() => {}}
+          onReply={() => {}}
+          onReplyAll={() => {}}
+        />
+      </PrefsProvider>,
+    );
+
+    fireEvent.click(screen.getByLabelText("Déplier les 1 message antérieur"));
+    fireEvent.click(screen.getByLabelText("Afficher le message de Marc Delaunay"));
+
+    expect(screen.queryByLabelText(/Répondre à tous les destinataires/)).toBeNull();
+  });
+
+  it("ouvre le menu d'un message à l'appui long sur son en-tête", () => {
+    const onOpenMenu = vi.fn();
+    renderFil({ handlers: { onOpenMenu } });
+
+    fireEvent.click(screen.getByLabelText("Déplier les 1 message antérieur"));
+    fireEvent.contextMenu(screen.getByLabelText("Afficher le message de Marc Delaunay"));
+
+    expect(onOpenMenu).toHaveBeenCalledWith(OLDER);
+  });
+
+  it("cache les actions par message en démo lecture seule", () => {
+    renderFil({ readOnly: true });
+
+    fireEvent.click(screen.getByLabelText("Déplier les 1 message antérieur"));
+    fireEvent.click(screen.getByLabelText("Afficher le message de Marc Delaunay"));
+
+    expect(screen.queryByLabelText("Répondre au message de Marc Delaunay")).toBeNull();
+    expect(screen.queryByLabelText("Transférer le message de Marc Delaunay")).toBeNull();
+    expect(screen.queryByLabelText("Ouvrir le message de Marc Delaunay")).toBeNull();
+    expect(screen.queryByLabelText("Répondre à tous")).toBeNull();
   });
 });

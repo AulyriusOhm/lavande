@@ -10,9 +10,11 @@ import { mailApi, errorText } from "@/lib/api";
 import { sendInputOf } from "@/lib/mail-backend";
 import { activeSignature, usePrefs } from "@/lib/prefs";
 import type { ComposeDraft } from "@/lib/draft";
+import { retargetDraft } from "@/lib/draft";
+import type { Mail } from "@/lib/mail";
 
 export function DesktopComposePage() {
-  const { mode, phase } = useMailStore();
+  const { mode, phase, accountById } = useMailStore();
   const { signatures } = usePrefs();
   const [state, setState] = useState<ComposeState>(() => {
     const persisted = loadPersistedCompose();
@@ -123,6 +125,18 @@ export function DesktopComposePage() {
     busRef.current?.post({ kind: "edit", draft });
   };
 
+  /* Réorientation vers un autre message du fil : le brouillon repart vers la
+     fenêtre principale, qui garde la main sur l'état partagé. */
+  const onRetarget = (mail: Mail) => {
+    const draft = state.draft;
+    if (!draft) return;
+    const next = retargetDraft(draft, mail, false, accountById(draft.account)?.email);
+    const title = "Répondre";
+    setState((current) => ({ ...current, draft: next, title }));
+    setSendError(null);
+    busRef.current?.post({ kind: "edit", draft: next, title });
+  };
+
   const onSend = (draft: ComposeDraft) => {
     if (sendingRef.current || sent) return;
     setSendError(null);
@@ -176,6 +190,7 @@ export function DesktopComposePage() {
         title={state.title}
         draft={state.draft}
         onDraftChange={onDraftChange}
+        onRetarget={onRetarget}
         onSend={onSend}
         onClose={closeSelf}
         sent={sent}

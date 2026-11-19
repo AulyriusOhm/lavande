@@ -76,8 +76,14 @@ describe("actions du menu contextuel selon le dossier", () => {
     expect(labels()).toContain("Répondre");
   });
 
-  it("ne propose pas « Répondre à tous » depuis un message envoyé", () => {
+  it("propose « Répondre à tous » depuis un message envoyé qui a des correspondants", () => {
     mount(SENT);
+
+    expect(labels()).toContain("Répondre à tous");
+  });
+
+  it("ne propose pas « Répondre à tous » depuis un message envoyé sans autre destinataire", () => {
+    mount({ ...SENT, to: "roman@lavande.mail", cc: "" });
 
     expect(labels()).not.toContain("Répondre à tous");
   });

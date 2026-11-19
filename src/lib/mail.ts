@@ -46,6 +46,48 @@ export function mailFolderLabel(mail: Mail) {
   return mail.folderName ?? folderLabel(mail.folder);
 }
 
+/** Une liste d'adresses (« À », « Cc ») éclatée en boîtes distinctes. */
+export function splitAddresses(value: string): string[] {
+  return value
+    .split(/[\s,;]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+/** Les destinataires d'un message autres que soi-même, « À » et « Cc » confondus. */
+function otherRecipients(mail: Mail, self?: string): string[] {
+  const own = self?.toLowerCase();
+  return splitAddresses(`${mail.to ?? ""} ${mail.cc ?? ""}`).filter(
+    (address) => address.toLowerCase() !== own,
+  );
+}
+
+/**
+ * Répondre à tous n'a de sens que s'il reste quelqu'un d'autre que soi : vrai
+ * aussi pour un message envoyé, dont les « À » sont les correspondants.
+ */
+export function canReplyAll(mail: Mail, self?: string): boolean {
+  return mail.folder !== "drafts" && otherRecipients(mail, self).length > 0;
+}
+
+/**
+ * Destinataires d'une réponse : l'expéditeur seul, ou pour « à tous » et pour
+ * un message qu'on a soi-même envoyé, les correspondants sans soi ni doublon.
+ */
+export function replyRecipients(mail: Mail, all: boolean, self?: string): string {
+  if (!all && mail.folder !== "sent") return mail.email;
+  const own = self?.toLowerCase();
+  const seen = new Set<string>();
+  return [mail.email, ...splitAddresses(mail.to ?? "")]
+    .filter((address) => {
+      const key = address.toLowerCase();
+      if (key === own || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .join(", ");
+}
+
 export function normalize(value: string) {
   return value
     .normalize("NFD")

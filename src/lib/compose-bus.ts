@@ -15,7 +15,8 @@ export type ComposeState = {
 export type ComposeMessage =
   | { kind: "state"; state: ComposeState }
   | { kind: "hello" }
-  | { kind: "edit"; draft: ComposeDraft }
+  /** `title` suit une réorientation de brouillon (« Répondre à tous »). */
+  | { kind: "edit"; draft: ComposeDraft; title?: string }
   | { kind: "send"; draft: ComposeDraft }
   | { kind: "sent" }
   | { kind: "send-failed"; message: string }

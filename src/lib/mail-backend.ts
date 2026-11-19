@@ -10,7 +10,7 @@ import type { Account } from "@/lib/accounts";
 import type { ComposeDraft } from "@/lib/draft";
 import { formatBytes } from "@/lib/draft";
 import type { FolderId, Mail, MailSource } from "@/lib/mail";
-import { TONES, UNIFIED_FOLDERS, folderLabel } from "@/lib/mail";
+import { TONES, UNIFIED_FOLDERS, folderLabel, splitAddresses } from "@/lib/mail";
 import { ensureHtml, htmlToText } from "@/lib/rich-text";
 
 export { demoReadOnly, mailMode, READ_ONLY_NOTICE } from "@/lib/demo-mode";
@@ -313,13 +313,6 @@ export function syncNotice(reports: { inserted: number; flags_updated: number; r
   if (report.flags_updated > 0) parts.push(`${report.flags_updated} drapeau${report.flags_updated > 1 ? "x" : ""} mis à jour`);
   if (report.removed > 0) parts.push(`${report.removed} supprimé${report.removed > 1 ? "s" : ""}`);
   return `Synchro · ${parts.join(" · ")}`;
-}
-
-export function splitAddresses(value: string): string[] {
-  return value
-    .split(/[\s,;]+/)
-    .map((token) => token.trim())
-    .filter(Boolean);
 }
 
 export function sendInputOf(draft: ComposeDraft, signatureHtml?: string | null): SendInput {

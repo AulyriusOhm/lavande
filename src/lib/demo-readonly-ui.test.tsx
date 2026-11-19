@@ -76,7 +76,12 @@ describe("démo lecture seule · coquille PC", () => {
 
     await waitFor(() => expect(document.querySelector("[data-desktop]")).toBeTruthy());
     expect(screen.queryByRole("button", { name: "Répondre" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Répondre à tous" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Transférer" })).toBeNull();
+    expect(screen.queryAllByLabelText(/^Répondre au message de /)).toHaveLength(0);
+    expect(screen.queryAllByLabelText(/^Répondre à tous les destinataires/)).toHaveLength(0);
+    expect(screen.queryAllByLabelText(/^Transférer le message de /)).toHaveLength(0);
+    expect(screen.queryAllByLabelText(/^Ouvrir le message de /)).toHaveLength(0);
     expect(screen.getAllByText("Démo · données d'exemple").length).toBeGreaterThan(0);
 
     fireEvent.keyDown(window, { key: "Delete" });

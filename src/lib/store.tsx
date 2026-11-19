@@ -11,6 +11,7 @@ import {
   mimeOf,
   persistedDraft,
   readBase64,
+  retargetDraft,
 } from "@/lib/draft";
 import { buildQuotedHtml, htmlToText, splitQuotedBody, textToHtml } from "@/lib/rich-text";
 import { notifyNewMail, setUnreadBadge } from "@/lib/notify";
@@ -71,7 +72,6 @@ import {
   PREVIEW_PENDING,
   sendInputOf,
   setAccountDecryptPolicy,
-  splitAddresses,
   syncNotice,
   threadMails,
   threadToMails,
@@ -313,20 +313,6 @@ function eventSuggestion(event: SummaryEvent, mail: Mail | undefined, label: str
   return suggestion;
 }
 
-/** Destinataires d'une réponse à tous : expéditeur + « À », sans soi-même ni doublon. */
-function replyAllRecipients(mail: Mail, self?: string): string {
-  const own = self?.toLowerCase();
-  const seen = new Set<string>();
-  return [mail.email, ...splitAddresses(mail.to ?? "")]
-    .filter((address) => {
-      const key = address.toLowerCase();
-      if (key === own || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .join(", ");
-}
-
 export type MailStoreValue = {
   mails: Mail[];
   account: string;
@@ -423,6 +409,8 @@ export type MailStoreValue = {
   dockCompose: () => void;
   detachClosed: () => void;
   replyTo: (mail: Mail, all?: boolean, body?: string) => void;
+  /** Réoriente le brouillon courant vers un autre message du fil, corps conservé. */
+  setReplyTarget: (mail: Mail, all?: boolean) => void;
   forwardMail: (mail: Mail) => void;
   sendDraft: (draft: ComposeDraft) => void;
   retryBackend: () => void;
@@ -1845,7 +1833,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           composeBus.current?.post({ kind: "state", state: composeStateRef.current });
           break;
         case "edit":
-          if (composeStateRef.current.draft) setComposeDraft(message.draft);
+          if (!composeStateRef.current.draft) break;
+          setComposeDraft(message.draft);
+          if (message.title) setComposeTitle(message.title);
           break;
         case "send":
           if (composeStateRef.current.draft) sendDraftRef.current(message.draft);
@@ -1927,22 +1917,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       const start = () => {
         resetDraftSource();
         const pgp = resolvePgp(pgpPrefs, mail.account);
-        const references = [
-          ...(mail.references ?? []),
-          ...(mail.messageId ? [mail.messageId] : []),
-        ];
         setComposeDraft({
-          ...baseDraft(mail.account, pgp.encrypt, pgp.sign, mail.threadId ?? mail.id),
-          to: all ? replyAllRecipients(mail, accountById(mail.account)?.email) : mail.email,
-          ...(all ? { cc: mail.cc ?? "" } : {}),
-          subject: /^re\s*:/i.test(mail.subject.trim()) ? mail.subject : `Re: ${mail.subject}`,
-          body: body ? textToHtml(body) : "",
-          quoted: buildQuotedHtml(
-            `Le ${mail.date ?? mail.time}, ${mail.name} a écrit :`,
-            textToHtml(mail.body.join("\n")),
+          ...retargetDraft(
+            baseDraft(mail.account, pgp.encrypt, pgp.sign),
+            mail,
+            all,
+            accountById(mail.account)?.email,
           ),
-          inReplyTo: mail.messageId,
-          references,
+          body: body ? textToHtml(body) : "",
         });
         setComposeTitle(all ? "Répondre à tous" : "Répondre");
         setComposeOpen(true);
@@ -1955,6 +1937,27 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       start();
     },
     [accountById, composeDetached, composeDraft, notify, pgpPrefs, readOnlyBlocked, resetDraftSource],
+  );
+
+  /**
+   * « Répondre à ce message » depuis le brouillon : seule la cible change, le
+   * corps, les pièces jointes et le compte déjà choisis restent en place.
+   */
+  const setReplyTarget = useCallback(
+    (mail: Mail, all = false) => {
+      if (readOnlyBlocked()) return;
+      const current = composeDraft;
+      if (!current) {
+        replyTo(mail, all);
+        return;
+      }
+      const account = current.account || mail.account;
+      setComposeDraft(retargetDraft(current, mail, all, accountById(account)?.email));
+      setComposeTitle(all ? "Répondre à tous" : "Répondre");
+      setComposeOpen(true);
+      if (composeDetached) composeBus.current?.post({ kind: "focus" });
+    },
+    [accountById, composeDetached, composeDraft, readOnlyBlocked, replyTo],
   );
 
   /**
@@ -3035,6 +3038,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       dockCompose,
       detachClosed,
       replyTo,
+      setReplyTarget,
       forwardMail,
       openReplyWithBody,
       sendDraft,
@@ -3133,6 +3137,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       dockCompose,
       detachClosed,
       replyTo,
+      setReplyTarget,
       forwardMail,
       openReplyWithBody,
       sendDraft,

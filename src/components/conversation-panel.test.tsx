@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ApiMessage, ApiThread } from "@/lib/api";
 import { baseDraft } from "@/lib/draft";
+import type { Mail } from "@/lib/mail";
 import type { MailMode } from "@/lib/demo-mode";
 import { setAccountDecryptPolicy, type FolderRecord } from "@/lib/mail-backend";
 import { ConversationPanel } from "@/components/conversation-panel";
@@ -96,15 +97,23 @@ function stubBackend(
 const QUOTED = "<blockquote>Le 9 novembre, Support a écrit : Bonjour</blockquote>";
 
 function mount(
-  overrides: { threadId?: string; quoted?: string } = {},
+  overrides: {
+    threadId?: string;
+    quoted?: string;
+    replyTargetId?: string;
+    onRetarget?: (mail: Mail) => void;
+    readOnly?: boolean;
+  } = {},
   mode: MailMode = "api",
 ) {
-  const { threadId = THREAD, quoted } = overrides;
+  const { threadId = THREAD, quoted, replyTargetId, onRetarget, readOnly } = overrides;
   return render(
     <ConversationPanel
-      draft={{ ...baseDraft(ACCOUNT, false, false, threadId), quoted }}
+      draft={{ ...baseDraft(ACCOUNT, false, false, threadId), quoted, replyTargetId }}
       mode={mode}
       records={RECORDS}
+      onRetarget={onRetarget}
+      readOnly={readOnly}
     />,
   );
 }
@@ -156,7 +165,7 @@ describe("panneau conversation · fil du brouillon", () => {
 
     const sent = rows()[1];
     expect(sent.textContent).not.toContain("Corps relu sur le serveur");
-    fireEvent.click(within(sent).getByRole("button"));
+    fireEvent.click(within(sent).getByLabelText("Déplier le message de Moi"));
 
     await waitFor(() =>
       expect(calls).toContain(`/api/accounts/${ACCOUNT}/folders/${SENT}/messages/2?fetch_body=true`),
@@ -172,7 +181,7 @@ describe("panneau conversation · fil du brouillon", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Voir la conversation · 2 messages" }));
 
     const sent = rows()[1];
-    fireEvent.click(within(sent).getByRole("button"));
+    fireEvent.click(within(sent).getByLabelText("Déplier le message de Moi"));
 
     expect(sent.textContent).toContain("Message chiffré · PGP désactivé pour ce compte");
     expect(calls.filter((call) => call.includes(`/folders/${SENT}/messages/2`))).toEqual([]);
@@ -211,5 +220,55 @@ describe("panneau conversation · fil du brouillon", () => {
   it("ne rend rien sans fil ni citation", () => {
     const { container } = mount({ threadId: undefined });
     expect(container.innerHTML).toBe("");
+  });
+});
+
+describe("panneau conversation · cible du brouillon", () => {
+  it("déplie et signale la ligne du message visé", async () => {
+    stubBackend();
+    mount({ replyTargetId: `${ACCOUNT}:${SENT}:2` });
+
+    const target = await waitFor(() => {
+      const found = rows().find((row) => row.dataset.current === "true");
+      if (!found) throw new Error("ligne visée absente");
+      return found;
+    });
+
+    expect(target.textContent).toContain("Moi");
+    expect(target.textContent).toContain("Corps relu sur le serveur");
+    expect(rows().filter((row) => row.dataset.current === "true")).toHaveLength(1);
+  });
+
+  it("réoriente le brouillon vers le message cliqué", async () => {
+    const onRetarget = vi.fn();
+    stubBackend();
+    mount({ onRetarget });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Voir la conversation · 2 messages" }));
+    fireEvent.click(within(rows()[0]).getByLabelText("Déplier le message de Camille"));
+    fireEvent.click(within(rows()[0]).getByLabelText("Répondre à ce message · Camille"));
+
+    expect(onRetarget).toHaveBeenCalledTimes(1);
+    expect(onRetarget.mock.calls[0][0].id).toBe(`${ACCOUNT}:${INBOX}:1`);
+  });
+
+  it("n'offre pas la réorientation en démo lecture seule", async () => {
+    stubBackend();
+    mount({ onRetarget: () => {}, readOnly: true });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Voir la conversation · 2 messages" }));
+    fireEvent.click(within(rows()[0]).getByLabelText("Déplier le message de Camille"));
+
+    expect(screen.queryByLabelText(/Répondre à ce message/)).toBeNull();
+  });
+
+  it("n'offre rien sans gestionnaire de réorientation", async () => {
+    stubBackend();
+    mount();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Voir la conversation · 2 messages" }));
+    fireEvent.click(within(rows()[0]).getByLabelText("Déplier le message de Camille"));
+
+    expect(screen.queryByLabelText(/Répondre à ce message/)).toBeNull();
   });
 });

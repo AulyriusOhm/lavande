@@ -15,7 +15,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useMailStore } from "@/lib/store";
-import { splitAddresses } from "@/lib/mail-backend";
+import { canReplyAll } from "@/lib/mail";
 import type { Mail } from "@/lib/mail";
 import { useEscapeLayer } from "@/desktop/escape";
 import { AnchoredMenu, MenuItem, type MenuAction } from "@/components/anchored-menu";
@@ -44,11 +44,7 @@ export function MailContextMenu({
   } = useMailStore();
   const sheetRef = useRef<HTMLDivElement>(null);
 
-  const self = accountById(mail.account)?.email.toLowerCase();
-  const otherRecipient = splitAddresses(`${mail.to ?? ""} ${mail.cc ?? ""}`).some(
-    (address) => address.toLowerCase() !== self,
-  );
-  const canReplyAll = mail.folder !== "sent" && mail.folder !== "drafts" && otherRecipient;
+  const replyAll = canReplyAll(mail, accountById(mail.account)?.email);
 
   const actions: MenuAction[] = [
     { label: "Ouvrir", icon: MailIcon, run: () => openMessage(mail) },
@@ -58,7 +54,7 @@ export function MailContextMenu({
       actions.push({ label: "Reprendre le brouillon", icon: PenLine, run: () => resumeDraft(mail) });
     } else {
       actions.push({ label: "Répondre", icon: CornerUpLeft, run: () => replyTo(mail) });
-      if (canReplyAll) {
+      if (replyAll) {
         actions.push({
           label: "Répondre à tous",
           icon: CornerUpRight,

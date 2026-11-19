@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import type { ChangeEvent, KeyboardEvent } from "react";
 import { useContacts } from "@/lib/contacts";
 import type { ContactSuggestion } from "@/lib/contacts";
-import { splitAddresses } from "@/lib/mail-backend";
+import { splitAddresses } from "@/lib/mail";
 import { cn } from "@/lib/utils";
 
 export type RecipientField = "to" | "cc" | "cci";

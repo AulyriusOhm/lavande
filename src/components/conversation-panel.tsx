@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, CornerUpLeft } from "lucide-react";
 import { errorText, mailApi } from "@/lib/api";
 import type { MailMode } from "@/lib/demo-mode";
 import type { ComposeDraft } from "@/lib/draft";
@@ -29,10 +29,16 @@ export function ConversationPanel({
   draft,
   mode,
   records,
+  onRetarget,
+  readOnly = false,
 }: {
   draft: ComposeDraft;
   mode: MailMode;
   records: FolderRecord[];
+  /** Réoriente le brouillon vers ce message, corps saisi conservé. */
+  onRetarget?: (mail: Mail) => void;
+  /** Démo vitrine : la conversation se lit, elle ne se réoriente pas. */
+  readOnly?: boolean;
 }) {
   const { account, threadId } = draft;
   const [messages, setMessages] = useState<Mail[]>([]);
@@ -85,6 +91,17 @@ export function ConversationPanel({
     if (!isOpen) readBody(mail);
   };
 
+  /* Le brouillon vise un message précis : sa ligne s'ouvre et se signale. */
+  const targetId = draft.replyTargetId;
+  useEffect(() => {
+    if (!targetId) return;
+    const target = messages.find((mail) => mail.id === targetId);
+    if (!target) return;
+    setOpen(true);
+    setExpanded((current) => (current.includes(targetId) ? current : [...current, targetId]));
+    readBody(target);
+  }, [messages, targetId]);
+
   if (!threadId || messages.length === 0) return <QuotedBlock quoted={draft.quoted} />;
 
   const summary = `Voir la conversation · ${messages.length} message${messages.length > 1 ? "s" : ""}`;
@@ -117,12 +134,21 @@ export function ConversationPanel({
               <div
                 key={mail.id}
                 data-testid="conversation-message"
-                className="overflow-hidden rounded-2xl border border-line bg-surface-2"
+                data-current={mail.id === draft.replyTargetId ? "true" : undefined}
+                className={cn(
+                  "overflow-hidden rounded-2xl border bg-surface-2",
+                  mail.id === draft.replyTargetId ? "border-accent-ring" : "border-line",
+                )}
               >
                 <button
                   type="button"
                   onClick={() => toggleMessage(mail)}
                   aria-expanded={isOpen}
+                  aria-label={
+                    isOpen
+                      ? `Replier le message de ${mail.folder === "sent" ? "Moi" : mail.name}`
+                      : `Déplier le message de ${mail.folder === "sent" ? "Moi" : mail.name}`
+                  }
                   className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left"
                 >
                   <span className="min-w-0 flex-1 leading-tight">
@@ -160,6 +186,17 @@ export function ConversationPanel({
                       <p className="mt-2 text-[12.5px] leading-snug font-medium text-ink-muted">
                         Message chiffré · PGP désactivé pour ce compte
                       </p>
+                    ) : null}
+                    {onRetarget && !readOnly ? (
+                      <button
+                        type="button"
+                        onClick={() => onRetarget(mail)}
+                        aria-label={`Répondre à ce message · ${mail.folder === "sent" ? "Moi" : mail.name}`}
+                        className="mt-2 inline-flex min-h-11 items-center gap-1.5 rounded-full bg-accent-soft px-3 text-[11.5px] font-bold text-accent-ink"
+                      >
+                        <CornerUpLeft className="size-3.5" strokeWidth={2.6} />
+                        Répondre à ce message
+                      </button>
                     ) : null}
                   </div>
                 )}

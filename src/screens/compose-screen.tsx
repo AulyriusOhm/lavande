@@ -41,7 +41,8 @@ import { ensureHtml, extractImageTokens, htmlToText, restoreImageTokens, textToH
 import { activeSignature, resolvePgp, usePrefs } from "@/lib/prefs";
 import { ConversationPanel } from "@/components/conversation-panel";
 import { QuotedBlock } from "@/components/quoted-block";
-import { splitAddresses } from "@/lib/mail-backend";
+import { splitAddresses } from "@/lib/mail";
+import type { Mail } from "@/lib/mail";
 import {
   RecipientSuggestions,
   useRecipientAutocomplete,
@@ -70,6 +71,7 @@ export function ComposeScreen({
   headerActions,
   onHeaderPointerDown,
   onHeaderDoubleClick,
+  onRetarget,
 }: {
   onClose: () => void;
   draft: ComposeDraft;
@@ -83,8 +85,20 @@ export function ComposeScreen({
   headerActions?: ReactNode;
   onHeaderPointerDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
   onHeaderDoubleClick?: () => void;
+  /** Réorienter le brouillon vers un autre message ; à défaut, le store s'en charge. */
+  onRetarget?: (mail: Mail) => void;
 }) {
-  const { mailAccounts, mails, openThread, saveToDrafts, mode, folderRecords } = useMailStore();
+  const {
+    mailAccounts,
+    mails,
+    openThread,
+    saveToDrafts,
+    mode,
+    folderRecords,
+    readOnly,
+    setReplyTarget,
+  } = useMailStore();
+  const retarget = onRetarget ?? setReplyTarget;
   const prefs = usePrefs();
   const { signatures, llm, aiReplyEnabled, threadView } = prefs;
   const accountSignature = activeSignature(signatures, draft.account);
@@ -546,7 +560,13 @@ export function ComposeScreen({
         ) : null}
 
         {threadView === "tidy" ? (
-          <ConversationPanel draft={draft} mode={mode} records={folderRecords} />
+          <ConversationPanel
+            draft={draft}
+            mode={mode}
+            records={folderRecords}
+            onRetarget={retarget}
+            readOnly={readOnly}
+          />
         ) : (
           <QuotedBlock quoted={draft.quoted} />
         )}

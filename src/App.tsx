@@ -139,6 +139,7 @@ function PhoneApp({ native }: { native?: boolean }) {
   const {
     mails,
     account,
+    accountById,
     folder,
     tasks,
     suggestions,
@@ -592,7 +593,11 @@ function PhoneApp({ native }: { native?: boolean }) {
                 onClose={() => closeMessage()}
                 onToggleStar={() => toggleStar(openMail.id)}
                 onReply={replyTo}
+                onReplyAll={(mail) => replyTo(mail, true)}
                 onForward={forwardMail}
+                onOpen={openMessage}
+                onOpenMenu={setContextMail}
+                selfEmail={accountById(openMail.account)?.email}
                 onAnalyse={(mail) => void runAnalyse(mail)}
                 onResume={resumeDraft}
                 onArchive={(mail) => {

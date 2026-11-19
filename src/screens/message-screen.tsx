@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowLeft,
@@ -12,6 +12,7 @@ import {
   Lock,
   Paperclip,
   PenLine,
+  ReplyAll,
   RotateCcw,
   ShieldCheck,
   ShieldOff,
@@ -21,7 +22,7 @@ import {
 } from "lucide-react";
 import { downloadAttachment } from "@/lib/attachments";
 import type { Mail, MailAttachment } from "@/lib/mail";
-import { folderLabel } from "@/lib/mail";
+import { canReplyAll, folderLabel } from "@/lib/mail";
 import { messagePgpStatus } from "@/lib/pgp";
 import { resolvePgp, usePrefs } from "@/lib/prefs";
 import type { Thread } from "@/lib/threads";
@@ -48,6 +49,10 @@ export function MessageScreen({
   onRestore,
   onOpenPgp,
   onFetchBody,
+  onReplyAll,
+  onOpen,
+  onOpenMenu,
+  selfEmail,
   bodyFetching = null,
   readOnly = false,
 }: {
@@ -66,6 +71,14 @@ export function MessageScreen({
   onOpenPgp?: () => void;
   /** Lit le corps d'un message antérieur déplié, resté en-têtes seuls. */
   onFetchBody?: (mail: Mail) => void;
+  /** Réponse à tous depuis un message du fil, pas forcément le dernier. */
+  onReplyAll?: (mail: Mail) => void;
+  /** Ouvre un autre message du fil dans ce lecteur. */
+  onOpen?: (mail: Mail) => void;
+  /** Clic droit ou appui long sur l'en-tête d'un message : menu de ce message. */
+  onOpenMenu?: (mail: Mail) => void;
+  /** Adresse du compte : elle ne compte pas comme un autre destinataire. */
+  selfEmail?: string;
   /** Message dont le corps est en cours de lecture sur le serveur. */
   bodyFetching?: string | null;
   /** Démo vitrine : le lecteur affiche, il ne modifie rien. */
@@ -74,13 +87,21 @@ export function MessageScreen({
   const prefs = usePrefs();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [followingOpen, setFollowingOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [download, setDownload] = useState<{ mailId: string; file: string } | null>(null);
   const [hint, setHint] = useState<{ mailId: string; text: string } | null>(null);
 
   const mail = thread.primary;
   const bodyLoading = bodyFetching === mail.id;
-  const previous = thread.messages.filter((message) => message.id !== mail.id);
+  /* Le fil est chronologique : ce qui précède le message ouvert est antérieur,
+     ce qui le suit est postérieur. */
+  const openIndex = thread.messages.findIndex((message) => message.id === mail.id);
+  const earlier =
+    openIndex >= 0
+      ? thread.messages.slice(0, openIndex)
+      : thread.messages.filter((message) => message.id !== mail.id);
+  const later = openIndex >= 0 ? thread.messages.slice(openIndex + 1) : [];
   const oldest = thread.messages[0];
   const folderMail = thread.messages.find((message) => message.folder !== "sent") ?? mail;
   const inSpam = folderMail.folder === "spam";
@@ -139,6 +160,149 @@ export function MessageScreen({
         <p role="status" aria-live="polite" className="px-1 text-[12px] leading-snug font-medium text-ink-muted">
           {hintText ?? "Les fichiers sont relus sur le serveur au moment du téléchargement."}
         </p>
+      </div>
+    );
+  };
+
+  const pressTimer = useRef(0);
+  const menuFired = useRef(false);
+
+  /* Clic droit ou appui long sur l'en-tête : le menu du message, pas du fil. */
+  const menuHandlers = (message: Mail) => ({
+    onContextMenu: (event: React.MouseEvent) => {
+      event.preventDefault();
+      onOpenMenu?.(message);
+    },
+    onPointerDown: () => {
+      if (!onOpenMenu) return;
+      menuFired.current = false;
+      pressTimer.current = window.setTimeout(() => {
+        menuFired.current = true;
+        onOpenMenu(message);
+      }, 500);
+    },
+    onPointerUp: () => window.clearTimeout(pressTimer.current),
+    onPointerLeave: () => window.clearTimeout(pressTimer.current),
+    onPointerCancel: () => window.clearTimeout(pressTimer.current),
+  });
+
+  const messageActions = (message: Mail) => {
+    const label = message.name;
+    return (
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => onReply(message)}
+          aria-label={`Répondre au message de ${label}`}
+          className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[12px] font-bold text-ink-soft"
+        >
+          <CornerUpLeft className="size-4" />
+          Répondre
+        </button>
+        {canReplyAll(message, selfEmail) ? (
+          <button
+            type="button"
+            onClick={() => onReplyAll?.(message)}
+            disabled={!onReplyAll}
+            aria-label={`Répondre à tous les destinataires du message de ${label}`}
+            className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[12px] font-bold text-ink-soft disabled:opacity-40"
+          >
+            <ReplyAll className="size-4" />
+            Répondre à tous
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => onForward?.(message)}
+          disabled={!onForward}
+          aria-label={`Transférer le message de ${label}`}
+          className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[12px] font-bold text-ink-soft disabled:opacity-40"
+        >
+          <CornerUpRight className="size-4" />
+          Transférer
+        </button>
+        <button
+          type="button"
+          onClick={() => onOpen?.(message)}
+          disabled={!onOpen}
+          aria-label={`Ouvrir le message de ${label}`}
+          className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[12px] font-bold text-ink-soft disabled:opacity-40"
+        >
+          <CornerUpLeft className="size-4 -scale-x-100" />
+          Ouvrir
+        </button>
+      </div>
+    );
+  };
+
+  const messageCard = (message: Mail) => {
+    const expanded = expandedId === message.id;
+    return (
+      <div key={message.id} className="overflow-hidden rounded-2xl border border-line bg-surface">
+        <button
+          type="button"
+          onClick={() => {
+            if (menuFired.current) {
+              menuFired.current = false;
+              return;
+            }
+            setExpandedId(expanded ? null : message.id);
+            if (!expanded) onFetchBody?.(message);
+          }}
+          {...menuHandlers(message)}
+          aria-expanded={expanded}
+          aria-label={
+            expanded ? `Replier le message de ${message.name}` : `Afficher le message de ${message.name}`
+          }
+          className="flex min-h-11 w-full items-center gap-2.5 px-3 py-2.5 text-left"
+        >
+          <Avatar name={message.name} tone={message.tone} size={34} rounded="rounded-full" />
+          <span className="min-w-0 flex-1 leading-tight">
+            <span className="block truncate text-[12px] font-bold text-ink">
+              {message.folder === "sent" ? "Moi" : message.name} · {message.time}
+            </span>
+            <span className="block truncate text-[12.5px] text-ink-muted">{message.body[0]}</span>
+          </span>
+          <ChevronDown
+            className={cn(
+              "size-3.5 shrink-0 text-ink-muted transition-transform",
+              expanded && "rotate-180",
+            )}
+          />
+        </button>
+
+        <AnimatePresence initial={false}>
+          {expanded && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+              className="overflow-hidden"
+            >
+              <div className="px-3 pb-3">
+                {pgpBanner(message)}
+                {bodyFetching === message.id ? (
+                  <MailBodyLoading className="mt-2" />
+                ) : message.body.length > 0 || message.html ? (
+                  <MailBody
+                    className="mt-2 text-[13px] leading-[1.7] font-medium text-ink-soft"
+                    html={message.html}
+                    paragraphs={message.body}
+                    source={message.source}
+                    encrypted={message.pgp === "encrypted"}
+                  />
+                ) : message.pgp === "encrypted" && !resolvePgp(prefs, message.account).enabled ? (
+                  <p className="mt-2 text-[12.5px] leading-snug font-medium text-ink-muted">
+                    Message chiffré · PGP désactivé pour ce compte
+                  </p>
+                ) : null}
+                {attachmentList(message)}
+                {readOnly ? null : messageActions(message)}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     );
   };
@@ -226,7 +390,7 @@ export function MessageScreen({
           </h1>
         </BlurFade>
 
-        {thread.count > 1 && (
+        {earlier.length > 0 && (
           <BlurFade delay={0.04}>
             <button
               type="button"
@@ -235,8 +399,8 @@ export function MessageScreen({
               aria-label={
                 historyOpen
                   ? "Replier les messages antérieurs"
-                  : `Déplier les ${previous.length} message${previous.length > 1 ? "s" : ""} antérieur${
-                      previous.length > 1 ? "s" : ""
+                  : `Déplier les ${earlier.length} message${earlier.length > 1 ? "s" : ""} antérieur${
+                      earlier.length > 1 ? "s" : ""
                     }`
               }
               className="mt-3 flex w-full items-center gap-3 rounded-2xl border border-line bg-surface-2/70 px-3 py-2.5 text-left"
@@ -255,8 +419,8 @@ export function MessageScreen({
               </span>
               <span className="min-w-0 flex-1 leading-tight">
                 <span className="block text-[12.5px] font-bold text-ink">
-                  {previous.length} message{previous.length > 1 ? "s" : ""} antérieur
-                  {previous.length > 1 ? "s" : ""}
+                  {earlier.length} message{earlier.length > 1 ? "s" : ""} antérieur
+                  {earlier.length > 1 ? "s" : ""}
                 </span>
                 <span className="block truncate text-[10.5px] font-medium text-ink-muted">
                   {thread.participants.join(", ")} · depuis {oldest.time.toLowerCase()}
@@ -279,85 +443,59 @@ export function MessageScreen({
                   transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
                   className="overflow-hidden"
                 >
-                  <div className="mt-2 space-y-1.5">
-                    {previous.map((message) => {
-                      const expanded = expandedId === message.id;
-                      return (
-                        <div
-                          key={message.id}
-                          className="overflow-hidden rounded-2xl border border-line bg-surface"
-                        >
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setExpandedId(expanded ? null : message.id);
-                              if (!expanded) onFetchBody?.(message);
-                            }}
-                            aria-expanded={expanded}
-                            aria-label={
-                              expanded
-                                ? `Replier le message de ${message.name}`
-                                : `Afficher le message de ${message.name}`
-                            }
-                            className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left"
-                          >
-                            <Avatar name={message.name} tone={message.tone} size={34} rounded="rounded-full" />
-                            <span className="min-w-0 flex-1 leading-tight">
-                              <span className="block truncate text-[12px] font-bold text-ink">
-                                {message.folder === "sent" ? "Moi" : message.name} · {message.time}
-                              </span>
-                              <span className="block truncate text-[12.5px] text-ink-muted">{message.body[0]}</span>
-                            </span>
-                            <ChevronDown
-                              className={cn(
-                                "size-3.5 shrink-0 text-ink-muted transition-transform",
-                                expanded && "rotate-180",
-                              )}
-                            />
-                          </button>
-
-                          <AnimatePresence initial={false}>
-                            {expanded && (
-                              <motion.div
-                                initial={{ height: 0, opacity: 0 }}
-                                animate={{ height: "auto", opacity: 1 }}
-                                exit={{ height: 0, opacity: 0 }}
-                                transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-                                className="overflow-hidden"
-                              >
-                                <div className="px-3 pb-3">
-                                  {pgpBanner(message)}
-                                  {bodyFetching === message.id ? (
-                                    <MailBodyLoading className="mt-2" />
-                                  ) : message.body.length > 0 || message.html ? (
-                                    <MailBody
-                                      className="mt-2 text-[13px] leading-[1.7] font-medium text-ink-soft"
-                                      html={message.html}
-                                      paragraphs={message.body}
-                                      source={message.source}
-                                      encrypted={message.pgp === "encrypted"}
-                                    />
-                                  ) : message.pgp === "encrypted" &&
-                                    !resolvePgp(prefs, message.account).enabled ? (
-                                    <p className="mt-2 text-[12.5px] leading-snug font-medium text-ink-muted">
-                                      Message chiffré · PGP désactivé pour ce compte
-                                    </p>
-                                  ) : null}
-                                  {attachmentList(message)}
-                                </div>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <div className="mt-2 space-y-1.5">{earlier.map(messageCard)}</div>
                 </motion.div>
               )}
             </AnimatePresence>
           </BlurFade>
         )}
 
+        {later.length > 0 && (
+          <BlurFade delay={0.05}>
+            <button
+              type="button"
+              onClick={() => setFollowingOpen((value) => !value)}
+              aria-expanded={followingOpen}
+              aria-label={
+                followingOpen
+                  ? "Replier les messages suivants"
+                  : `Déplier les ${later.length} message${later.length > 1 ? "s" : ""} suivant${
+                      later.length > 1 ? "s" : ""
+                    }`
+              }
+              className="mt-3 flex w-full items-center gap-3 rounded-2xl border border-line bg-surface-2/70 px-3 py-2.5 text-left"
+            >
+              <span className="min-w-0 flex-1 leading-tight">
+                <span className="block text-[12.5px] font-bold text-ink">
+                  {later.length} message{later.length > 1 ? "s" : ""} suivant{later.length > 1 ? "s" : ""}
+                </span>
+                <span className="block truncate text-[10.5px] font-medium text-ink-muted">
+                  {folderLabel(later[later.length - 1].folder)} · {later[later.length - 1].time}
+                </span>
+              </span>
+              <ChevronDown
+                className={cn(
+                  "size-4 shrink-0 text-ink-muted transition-transform duration-300",
+                  followingOpen && "rotate-180",
+                )}
+              />
+            </button>
+
+            <AnimatePresence initial={false}>
+              {followingOpen && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                  className="overflow-hidden"
+                >
+                  <div className="mt-2 space-y-1.5">{later.map(messageCard)}</div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </BlurFade>
+        )}
         <BlurFade delay={0.06}>
           <div className="mt-4 flex items-center gap-3">
             <Avatar name={mail.name} tone={mail.tone} size={40} rounded="rounded-full" />
@@ -498,6 +636,17 @@ export function MessageScreen({
                 <CornerUpLeft className="size-4" />
                 Répondre
               </ShimmerButton>
+              {canReplyAll(mail, selfEmail) ? (
+                <button
+                  type="button"
+                  onClick={() => onReplyAll?.(mail)}
+                  disabled={!onReplyAll}
+                  className="grid size-11 place-items-center rounded-full border border-line bg-surface text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink disabled:pointer-events-none disabled:opacity-40"
+                  aria-label="Répondre à tous"
+                >
+                  <ReplyAll className="size-4.5" />
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => onForward?.(mail)}

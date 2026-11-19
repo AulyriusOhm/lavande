@@ -170,7 +170,7 @@ afterEach(() => {
 });
 
 describe("Lecteur PC · fil complet", () => {
-  it("lit le corps du message antérieur rangé dans un autre dossier", async () => {
+  it("lit le corps d'un autre message du fil rangé dans un autre dossier", async () => {
     const calls = mockBackend();
     mount();
 
@@ -181,7 +181,7 @@ describe("Lecteur PC · fil complet", () => {
     });
     fireEvent.click(row);
 
-    await screen.findByText("1 message antérieur");
+    await screen.findByText("1 message suivant");
     expect(await screen.findByText("Corps envoyé")).toBeTruthy();
     expect(calls).toContain(`/api/accounts/${ACCOUNT}/threads/${THREAD}`);
     expect(calls).toContain(`/api/accounts/${ACCOUNT}/folders/${SENT}/messages/2?fetch_body=true`);
@@ -247,7 +247,7 @@ describe("Lecteur PC · marque répondu", () => {
       return found;
     });
     fireEvent.click(row);
-    await screen.findByText("1 message antérieur");
+    await screen.findByText("1 message suivant");
   };
 
   it("signale le mail auquel on a déjà répondu", async () => {
