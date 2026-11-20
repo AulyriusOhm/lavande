@@ -165,7 +165,16 @@ export async function llmModels(
   config: Pick<LlmConfig, "endpoint" | "apiKey" | "provider">,
 ): Promise<string[]> {
   if (demoReadOnly) throw new Error(READ_ONLY_NOTICE);
-  if (providerOf(config) === "copilot") return copilotModels();
+  if (providerOf(config) === "copilot") {
+    try {
+      const listed = await mailApi.copilotModels();
+      const ids = [...new Set(listed.map((model) => model.id.trim()))].filter((id) => id !== "").sort();
+      if (ids.length > 0) return ids;
+    } catch {
+      // repli : la liste statique garde la saisie libre utilisable hors ligne
+    }
+    return copilotModels();
+  }
   const base = config.endpoint.trim().replace(/\/+$/, "");
   if (base === "") throw new Error("Endpoint du modèle requis pour charger la liste");
   const response = await llmFetch(`${base}/models`, {

@@ -86,8 +86,28 @@ describe("llmChat · provider copilot", () => {
 });
 
 describe("llmModels · provider copilot", () => {
-  it("rend la liste statique sans appeler le réseau", async () => {
-    const fetchMock = stubFetch(() => response({}));
+  it("propose les modèles du démon, triés et dédupliqués", async () => {
+    const fetchMock = stubFetch((url) =>
+      url.endsWith("/ai/copilot/models")
+        ? response([
+            { id: "gpt-4.1", name: "GPT-4.1" },
+            { id: "gpt-4o", name: "GPT-4o" },
+            { id: "gpt-4o", name: "doublon" },
+          ])
+        : response({}),
+    );
+
+    await expect(llmModels(COPILOT)).resolves.toEqual(["gpt-4.1", "gpt-4o"]);
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(url).toBe("/api/ai/copilot/models");
+  });
+
+  it("replie sur la liste statique si le démon refuse", async () => {
+    stubFetch((url) =>
+      url.endsWith("/ai/copilot/models")
+        ? response({ error: "quota Copilot épuisé", kind: "copilot" }, 502)
+        : response({}),
+    );
 
     await expect(llmModels(COPILOT)).resolves.toEqual([
       "gpt-4o",
@@ -95,7 +115,6 @@ describe("llmModels · provider copilot", () => {
       "claude-sonnet-4",
       "o3-mini",
     ]);
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

@@ -10,8 +10,8 @@ use axum::{Json, Router};
 use serde_json::Value;
 
 use crate::copilot::{
-    self, ChatRequest, ConnectionResponse, LogoutResponse, StartRequest, StartResponse,
-    StatusQuery, StatusResponse,
+    self, ChatRequest, ConnectionResponse, CopilotModel, LogoutResponse, StartRequest,
+    StartResponse, StatusQuery, StatusResponse,
 };
 use crate::dto::ApiJson;
 use crate::error::ApiError;
@@ -22,6 +22,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/ai/copilot/start", post(start))
         .route("/api/ai/copilot/status", get(status))
         .route("/api/ai/copilot/session", get(session))
+        .route("/api/ai/copilot/models", get(models))
         .route("/api/ai/copilot/logout", post(logout))
         .route("/api/ai/chat", post(chat))
 }
@@ -43,6 +44,10 @@ async fn status(
 
 async fn session(State(state): State<Arc<AppState>>) -> Result<Json<ConnectionResponse>, ApiError> {
     copilot::connection(&state).await.map(Json)
+}
+
+async fn models(State(state): State<Arc<AppState>>) -> Result<Json<Vec<CopilotModel>>, ApiError> {
+    copilot::models(&state).await.map(Json)
 }
 
 async fn logout(State(state): State<Arc<AppState>>) -> Result<Json<LogoutResponse>, ApiError> {

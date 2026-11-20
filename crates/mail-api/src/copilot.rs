@@ -102,6 +102,12 @@ pub struct LogoutResponse {
     pub ok: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CopilotModel {
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(Deserialize)]
 pub struct ChatRequest {
     pub model: String,
@@ -293,6 +299,72 @@ pub async fn connection(state: &AppState) -> Result<ConnectionResponse, ApiError
 pub async fn logout(state: &AppState) -> Result<LogoutResponse, ApiError> {
     state.remove_copilot_tokens().await?;
     Ok(LogoutResponse { ok: true })
+}
+
+/// Modèles que l'abonnement du compte connecté peut réellement servir.
+pub async fn models(state: &AppState) -> Result<Vec<CopilotModel>, ApiError> {
+    let settings = state.copilot().clone();
+    let Some(tokens) = state.copilot_tokens().await? else {
+        return Err(ApiError::conflict(
+            "copilot",
+            "Connecte ton compte GitHub Copilot dans les réglages IA.",
+        ));
+    };
+    let copilot_token = fresh_token(state, &settings, &tokens).await?;
+    let response = http_client(settings.chat_timeout)?
+        .get(format!("{}/models", settings.copilot))
+        .header(header::ACCEPT, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {copilot_token}"))
+        .header("Copilot-Integration-Id", INTEGRATION_ID)
+        .header("Editor-Version", EDITOR_VERSION)
+        .header("Editor-Plugin-Version", EDITOR_PLUGIN_VERSION)
+        .header(header::USER_AGENT, COPILOT_USER_AGENT)
+        .send()
+        .await
+        .map_err(|error| {
+            if error.is_timeout() {
+                ApiError::new(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "copilot",
+                    format!(
+                        "GitHub Copilot n'a pas répondu en {} s : réessaie dans un instant.",
+                        settings.chat_timeout.as_secs().max(1)
+                    ),
+                )
+            } else {
+                ApiError::gateway("copilot", format!("GitHub Copilot injoignable : {error}"))
+            }
+        })?;
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        tracing::warn!(
+            status = status.as_u16(),
+            body = %text.chars().take(300).collect::<String>(),
+            "refus GitHub Copilot"
+        );
+        return Err(refusal(status, &text));
+    }
+    let payload: Value = serde_json::from_str(&text).map_err(|error| {
+        ApiError::gateway(
+            "copilot",
+            format!("liste des modèles Copilot illisible : {error}"),
+        )
+    })?;
+    let mut listed: Vec<CopilotModel> = payload
+        .get("data")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| pickable(entry))
+                .filter_map(model_of)
+                .collect()
+        })
+        .unwrap_or_default();
+    listed.sort_by(|left, right| left.id.cmp(&right.id));
+    listed.dedup_by(|left, right| left.id == right.id);
+    Ok(listed)
 }
 
 pub async fn chat(state: &AppState, request: ChatRequest) -> Result<Value, ApiError> {
@@ -640,6 +712,37 @@ fn report(state: &AppState, id: &str) -> Result<StatusResponse, ApiError> {
         .copilot_sessions()
         .with(id, |session| Some(session.report()))
         .ok_or_else(|| ApiError::not_found(UNKNOWN_SESSION))
+}
+
+fn pickable(entry: &Value) -> bool {
+    let chat = entry
+        .get("capabilities")
+        .and_then(|capabilities| capabilities.get("type"))
+        .and_then(Value::as_str)
+        == Some("chat");
+    let picker = entry.get("model_picker_enabled").and_then(Value::as_bool) == Some(true);
+    let allowed = entry
+        .get("policy")
+        .and_then(|policy| policy.get("state"))
+        .and_then(Value::as_str)
+        != Some("disabled");
+    chat && picker && allowed
+}
+
+fn model_of(entry: &Value) -> Option<CopilotModel> {
+    let id = entry.get("id").and_then(Value::as_str)?.trim();
+    if id.is_empty() {
+        return None;
+    }
+    let name = entry
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    Some(CopilotModel {
+        id: id.to_string(),
+        name: name.unwrap_or(id).to_string(),
+    })
 }
 
 fn refusal(status: reqwest::StatusCode, body: &str) -> ApiError {

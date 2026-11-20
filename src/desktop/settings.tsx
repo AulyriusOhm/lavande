@@ -1069,6 +1069,10 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     }
   };
 
+  useEffect(() => {
+    if (copilotProvider && copilot.connected) void loadModels();
+  }, [copilot.connected, copilotProvider]);
+
   const runProbe = async () => {
     setProbing(true);
     setProbe(null);
@@ -2143,7 +2147,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                           onChange={(event) => updateLlm({ model: event.target.value })}
                         />
                         <datalist id="copilot-models">
-                          {copilotModels().map((model) => (
+                          {(models.length > 0 ? models : copilotModels()).map((model) => (
                             <option key={model} value={model} />
                           ))}
                         </datalist>

@@ -306,6 +306,10 @@ export function SettingsScreen({
     }
   };
 
+  useEffect(() => {
+    if (copilotProvider && copilot.connected) void loadModels();
+  }, [copilot.connected, copilotProvider]);
+
   const runProbe = async () => {
     setProbing(true);
     setProbe(null);
@@ -1184,7 +1188,7 @@ export function SettingsScreen({
                       className="focus-ring mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
                     />
                     <datalist id="copilot-models">
-                      {copilotModels().map((model) => (
+                      {(models.length > 0 ? models : copilotModels()).map((model) => (
                         <option key={model} value={model} />
                       ))}
                     </datalist>

@@ -210,6 +210,8 @@ export type ApiCopilotStatus = {
 
 export type ApiCopilotSession = { connected: boolean; login: string | null };
 
+export type ApiCopilotModel = { id: string; name: string };
+
 export type AiChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
 export type AiChatInput = { model: string; messages: AiChatMessage[]; temperature?: number };
@@ -792,6 +794,9 @@ export const mailApi = {
 
   /** Jamais de jeton : seulement le drapeau et le login GitHub. */
   copilotSession: () => request<ApiCopilotSession>("/ai/copilot/session"),
+
+  /** Modèles que l'abonnement Copilot du compte connecté peut réellement servir. */
+  copilotModels: () => request<ApiCopilotModel[]>("/ai/copilot/models"),
 
   copilotLogout: () => request<{ ok: boolean }>("/ai/copilot/logout", { method: "POST" }),
 

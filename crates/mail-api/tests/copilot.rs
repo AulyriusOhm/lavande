@@ -641,6 +641,111 @@ async fn chat_without_a_connection_is_a_409() {
     );
 }
 
+fn catalog() -> String {
+    json!({
+        "data": [
+            {
+                "id": "gpt-4o",
+                "name": "GPT-4o",
+                "capabilities": { "type": "chat" },
+                "model_picker_enabled": true
+            },
+            {
+                "id": "hidden",
+                "name": "Hidden",
+                "capabilities": { "type": "chat" },
+                "model_picker_enabled": false
+            },
+            {
+                "id": "embed",
+                "name": "Embeddings",
+                "capabilities": { "type": "embeddings" },
+                "model_picker_enabled": true
+            },
+            {
+                "id": "claude-sonnet-4",
+                "capabilities": { "type": "chat" },
+                "model_picker_enabled": true
+            },
+            {
+                "id": "blocked",
+                "name": "Blocked",
+                "capabilities": { "type": "chat" },
+                "model_picker_enabled": true,
+                "policy": { "state": "disabled" }
+            }
+        ]
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn the_models_route_lists_chat_models_the_picker_can_use() {
+    let fake = serve(|request| match path(request) {
+        "/models" => (200, catalog()),
+        _ => (404, "{}".to_string()),
+    })
+    .await;
+    let (_directory, state) = state(settings(&fake)).await;
+    connected(&state, now() + 3600, Some("copilot-token")).await;
+
+    let (status, payload) = get(&state, "/api/ai/copilot/models").await;
+
+    assert_eq!(status, StatusCode::OK, "{payload}");
+    assert_eq!(
+        payload,
+        json!([
+            { "id": "claude-sonnet-4", "name": "claude-sonnet-4" },
+            { "id": "gpt-4o", "name": "GPT-4o" }
+        ])
+    );
+
+    let upstream = fake.find("GET /models");
+    assert!(
+        upstream.contains("authorization: Bearer copilot-token"),
+        "{upstream}"
+    );
+    assert!(
+        upstream.contains("user-agent: GitHubCopilotChat/0.26.7"),
+        "{upstream}"
+    );
+    assert_eq!(fake.count("GET /copilot_internal/v2/token"), 0);
+}
+
+#[tokio::test]
+async fn the_models_route_requires_a_connection() {
+    let fake = serve(|_| (404, "{}".to_string())).await;
+    let (_directory, state) = state(settings(&fake)).await;
+
+    let (status, payload) = get(&state, "/api/ai/copilot/models").await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{payload}");
+    assert_eq!(payload["kind"], "copilot");
+    assert_eq!(
+        payload["error"],
+        "Connecte ton compte GitHub Copilot dans les réglages IA."
+    );
+    assert_eq!(fake.count("GET /models"), 0);
+}
+
+#[tokio::test]
+async fn a_refused_models_list_surfaces_the_reason() {
+    let fake = serve(|request| match path(request) {
+        "/models" => (403, json!({ "message": "no access" }).to_string()),
+        _ => (404, "{}".to_string()),
+    })
+    .await;
+    let (_directory, state) = state(settings(&fake)).await;
+    connected(&state, now() + 3600, Some("copilot-token")).await;
+
+    let (status, payload) = get(&state, "/api/ai/copilot/models").await;
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{payload}");
+    assert_eq!(payload["kind"], "copilot");
+    let error = payload["error"].as_str().expect("message");
+    assert!(error.contains("no access"), "{error}");
+}
+
 #[tokio::test]
 async fn chat_proxies_to_copilot_with_its_headers() {
     let fake = serve(|request| match path(request) {
