@@ -15,6 +15,7 @@ import {
 } from "@/lib/draft";
 import { buildQuotedHtml, htmlToText, splitQuotedBody, textToHtml } from "@/lib/rich-text";
 import { notifyNewMail, setUnreadBadge } from "@/lib/notify";
+import { NOTICE_EVENT } from "@/lib/open-external";
 import type { NoticeData } from "@/components/ui/notice";
 import { ACCOUNTS, ALL_ACCOUNTS } from "@/lib/accounts";
 import type { Account } from "@/lib/accounts";
@@ -607,6 +608,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (mode === "api") void bootstrap();
   }, [bootstrap, mode]);
+
+  // Un lien confié au navigateur système peut échouer côté coquille : l'erreur
+  // remonte en notice au lieu de disparaître dans la console de la webview.
+  useEffect(() => {
+    const onNotice = (event: Event) => notify(String((event as CustomEvent).detail));
+    window.addEventListener(NOTICE_EVENT, onNotice);
+    return () => window.removeEventListener(NOTICE_EVENT, onNotice);
+  }, [notify]);
 
   // Interrupteur PGP effectif de chaque compte : poussé au démon (les corps
   // chiffrés restent fermés en base) et au lecteur (défense en profondeur).

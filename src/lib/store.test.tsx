@@ -5,6 +5,7 @@ import { PlanningProvider } from "@/lib/planning-store";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { PrefsProvider } from "@/lib/prefs";
 import { MAIL_SUGGESTIONS, TASKS } from "@/lib/tasks";
+import { NOTICE_EVENT } from "@/lib/open-external";
 import { promotedTaskId } from "@/lib/sync/merge";
 import { createMemoryStorage } from "@/lib/sync/storage";
 
@@ -81,6 +82,16 @@ describe("MailStoreProvider branché sur la planification", () => {
     expect(result.current.tasks.some((task) => task.id === taskId)).toBe(false);
     expect(result.current.suggestions.some((entry) => entry.id === suggestion.id)).toBe(true);
     expect(result.current.suggestions).toHaveLength(MAIL_SUGGESTIONS.length);
+  });
+
+  it("affiche en notice un message signalé sur window", () => {
+    const { result } = mount();
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(NOTICE_EVENT, { detail: "Lien non ouvert · boom" }));
+    });
+
+    expect(result.current.notices.at(-1)?.message).toBe("Lien non ouvert · boom");
   });
 
   it("masque une suggestion sans toucher aux tâches", () => {

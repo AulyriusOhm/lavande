@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement, type ReactNode } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
-import { useExternalLinks } from "@/lib/open-external";
+import { NOTICE_EVENT, useExternalLinks } from "@/lib/open-external";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
 
@@ -58,6 +58,24 @@ describe("useExternalLinks", () => {
       url: "https://exemple.fr/chemin?q=1#bas",
     });
     expect(window.open).not.toHaveBeenCalled();
+  });
+
+  it("signale en notice un échec d'ouverture dans la coquille", async () => {
+    (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    invokeMock.mockRejectedValueOnce("launch_failed: aucun navigateur");
+    const details: unknown[] = [];
+    const listener = (event: Event) => details.push((event as CustomEvent).detail);
+    window.addEventListener(NOTICE_EVENT, listener);
+    mount();
+
+    expect(click("web")).toBe(false);
+    await settle();
+
+    window.removeEventListener(NOTICE_EVENT, listener);
+    error.mockRestore();
+    expect(details).toHaveLength(1);
+    expect(String(details[0])).toContain("launch_failed: aucun navigateur");
   });
 
   it("retombe sur window.open hors coquille Tauri", () => {

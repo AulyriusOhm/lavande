@@ -12,11 +12,19 @@ export function isTauriShell(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+/** Événement de notice : `detail` est le message à afficher. */
+export const NOTICE_EVENT = "lavande:notice";
+
 export function openExternal(url: string): void {
   if (isTauriShell()) {
     void import("@tauri-apps/api/core")
       .then((core) => core.invoke("open_external", { url }))
-      .catch((error: unknown) => console.error("ouverture externe impossible", error));
+      .catch((error: unknown) => {
+        console.error("ouverture externe impossible", error);
+        window.dispatchEvent(
+          new CustomEvent(NOTICE_EVENT, { detail: `Lien non ouvert · ${String(error)}` }),
+        );
+      });
     return;
   }
   window.open(url, "_blank", "noopener,noreferrer");
