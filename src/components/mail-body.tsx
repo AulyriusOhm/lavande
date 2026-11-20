@@ -301,18 +301,23 @@ export function liftDarkText(contentDocument: Document) {
 /**
  * Corps du message : le HTML est **déjà assaini côté service** (liste blanche
  * stricte, styles filtrés, images de tracking retirées, liens `noopener`), on ne
- * fait donc que le rendre — dans une iframe `srcdoc` sans `allow-scripts`, donc
- * sans aucun script et sans fuite de styles vers l'app. La feuille injectée est
- * un simple **repli**, placée dans le `<head>` : le mail garde sa propre mise en
+ * fait donc que le rendre — dans une iframe `srcdoc` sandboxée, sans fuite de
+ * styles vers l'app. `allow-scripts` est requis : sans lui, WebKitGTK (coquille
+ * Linux) refuse d'exécuter dans le document du cadre le listener de clic posé
+ * par le parent, et les liens ne partent jamais (mesuré ; Chromium l'exécute).
+ * Le mail n'a de toute façon aucun script à lui : l'assainissement ammonia en
+ * amont les exclut tous, et la sandbox verrouille le reste (navigation du haut,
+ * formulaires, plugins).
+ * La feuille injectée est un simple **repli**, placée dans le `<head>` : le mail garde sa propre mise en
  * page (styles inline, blocs `<style>` réinjectés en tête du body, attributs de
  * table) et notre palette ne sert qu'au contenu non stylé — le rendu fidèle
  * prime, y compris en thème sombre (sauf sous 720px, où la feuille ramène
  * tables et images à la largeur de l'écran et où `fitMailWidth` neutralise dans
  * le document les largeurs absolues que le mail impose). Une fois le cadre
  * chargé, `liftDarkText` y remonte en thème sombre les textes restés sombres sur
- * le fond de l'app. Les liens sont interceptés côté parent — l'iframe n'exécute
- * aucun script — et remis au navigateur du système, la base `target="_blank"`
- * ne restant qu'un repli. Sans HTML, on retombe sur les paragraphes texte.
+ * le fond de l'app. Les liens sont interceptés côté parent (listener en capture
+ * sur le document du cadre) et remis au navigateur du système, la base
+ * `target="_blank"` ne restant qu'un repli. Sans HTML, on retombe sur les paragraphes texte.
  *
  * Les images distantes restent masquées par défaut : le bandeau ne fait que
  * demander au service de relire ce message-ci, jamais d'office, et le markup qui
@@ -502,7 +507,7 @@ export function MailBody({
       <iframe
         ref={frameRef}
         title="Contenu du message"
-        sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+        sandbox="allow-same-origin allow-scripts allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="no-referrer"
         srcDoc={frameDocument}
         onLoad={handleFrameLoad}

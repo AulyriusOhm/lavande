@@ -96,12 +96,16 @@ describe("isolation du HTML", () => {
     expect(container.firstElementChild?.className).toBe("mt-5");
   });
 
-  it("sandboxe l'iframe sans allow-scripts", () => {
+  it("sandboxe l'iframe : allow-scripts requis par WebKitGTK, reste verrouillé", () => {
     const { container } = renderBody();
 
     const sandbox = frame(container).getAttribute("sandbox") ?? "";
     expect(sandbox).toContain("allow-same-origin");
-    expect(sandbox).not.toContain("allow-scripts");
+    // Sans allow-scripts, WebKitGTK n'exécute pas le listener de clic posé par
+    // le parent dans le cadre : les liens ne partent jamais (mesuré).
+    expect(sandbox).toContain("allow-scripts");
+    expect(sandbox).not.toContain("allow-top-navigation");
+    expect(sandbox).not.toContain("allow-forms");
   });
 
   it("ouvre les liens dans un nouvel onglet via la base du document", () => {
