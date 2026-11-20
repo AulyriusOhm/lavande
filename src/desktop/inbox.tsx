@@ -122,11 +122,11 @@ const MEDIUM_QUERY = `(max-width: ${MEDIUM_MAX}px)`;
 
 /** Bornes des colonnes dossiers et liste, et largeur minimale gardée au lecteur. */
 const SPLITTER_WIDTH = 8;
-const RAIL_MIN = 200;
-const RAIL_MAX = 360;
-const LIST_MIN = 320;
-const LIST_MAX = 640;
-const READER_MIN = 320;
+const RAIL_MIN = 160;
+const RAIL_MAX = 480;
+const LIST_MIN = 260;
+const LIST_MAX = 1000;
+const READER_MIN = 240;
 
 type InboxTier = "wide" | "medium" | "narrow";
 

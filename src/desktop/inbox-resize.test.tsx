@@ -141,27 +141,51 @@ describe("Boîte PC · colonnes redimensionnables", () => {
     await openDesktop();
 
     drag(railSplitter(), 400, 2000);
-    expect(width(railSplitter())).toBe(360);
+    expect(width(railSplitter())).toBe(480);
 
     drag(railSplitter(), 400, -2000);
-    expect(width(railSplitter())).toBe(200);
+    expect(width(railSplitter())).toBe(160);
 
     drag(listSplitter(), 700, 3000);
-    expect(width(listSplitter())).toBe(640);
+    expect(width(listSplitter())).toBe(1000);
 
     drag(listSplitter(), 700, -3000);
-    expect(width(listSplitter())).toBe(320);
+    expect(width(listSplitter())).toBe(260);
   });
 
-  it("garde au moins 320 px au lecteur : la liste cède avant lui", async () => {
+  it("ramène le rail à son minimum de 160 px", async () => {
+    await openDesktop();
+    const handle = railSplitter();
+
+    expect(handle.getAttribute("aria-valuemin")).toBe("160");
+
+    drag(handle, 400, -2000);
+    expect(width(handle)).toBe(160);
+    expect(columns()).toBe("160px 8px 420px 8px minmax(0px, 1fr)");
+    expect(storedPanes()).toEqual({ rail: 160, list: 420 });
+  });
+
+  it("laisse la liste monter à 1000 px sur un écran ultralarge", async () => {
+    await openDesktop(3440);
+    const handle = listSplitter();
+
+    expect(handle.getAttribute("aria-valuemax")).toBe("1000");
+
+    drag(handle, 700, 3000);
+    expect(width(handle)).toBe(1000);
+    expect(columns()).toBe("248px 8px 1000px 8px minmax(0px, 1fr)");
+    expect(storedPanes()).toEqual({ rail: 248, list: 1000 });
+  });
+
+  it("garde au moins 240 px au lecteur : la liste cède avant lui", async () => {
     await openDesktop(1100);
     const handle = listSplitter();
 
-    expect(handle.getAttribute("aria-valuemax")).toBe("516");
+    expect(handle.getAttribute("aria-valuemax")).toBe("596");
 
     drag(handle, 700, 2000);
-    expect(width(handle)).toBe(516);
-    expect(columns()).toBe("248px 8px 516px 8px minmax(0px, 1fr)");
+    expect(width(handle)).toBe(596);
+    expect(columns()).toBe("248px 8px 596px 8px minmax(0px, 1fr)");
   });
 
   it("revient au défaut de la colonne au double-clic", async () => {
@@ -204,7 +228,7 @@ describe("Boîte PC · colonnes redimensionnables", () => {
     expect(width(handle)).toBe(248);
 
     for (let press = 0; press < 10; press += 1) fireEvent.keyDown(handle, { key: "ArrowLeft" });
-    expect(width(handle)).toBe(200);
+    expect(width(handle)).toBe(160);
   });
 
   it("relit les largeurs rangées au démarrage", async () => {
