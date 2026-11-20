@@ -6,13 +6,9 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="theme-color" content="#fbfaff" />
     <title>Lavande — Client mail</title>
-    <style>
-      html,
-      body {
-        margin: 0;
-        background: #fbfaff;
-      }
-    </style>
+    <!-- Aucun <style> inline ici : Tauri lui pose un nonce et l'ajoute au style-src de la CSP,
+         ce qui neutralise 'unsafe-inline' et bloque tout le CSS des mails dans l'iframe srcdoc.
+         Le reset html/body vit dans src/index.css. -->
   </head>
   <body>
     <div id="root"></div>
