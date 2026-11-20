@@ -4,7 +4,7 @@
 use lavande_mail::model::{Address, PgpState};
 use lavande_mail::pgp::{self, mime, PgpKey, PgpKeyring};
 use lavande_mail::smtp::OutgoingMessage;
-use lavande_mail::{parse_message, parse_message_with_keys};
+use lavande_mail::{parse_message, parse_message_with_keys, HTML_POLICY_MARKER};
 
 fn date(iso: &str) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::parse_from_rfc3339(iso)
@@ -197,7 +197,10 @@ fn an_encrypted_message_decrypts_with_the_recipients_secret_key() {
     let parsed = parse_message_with_keys(&sealed.raw, &keyring).expect("lecture");
     assert_eq!(parsed.pgp, PgpState::Encrypted);
     assert_eq!(parsed.body_text.as_deref(), Some("Bonjour Camille"));
-    assert_eq!(parsed.body_html.as_deref(), Some("<p>Bonjour</p>"));
+    assert_eq!(
+        parsed.body_html.as_deref(),
+        Some(format!("{HTML_POLICY_MARKER}<p>Bonjour</p>").as_str())
+    );
     let detail = parsed.pgp_detail.expect("détail");
     assert!(detail.decrypted);
     assert_eq!(detail.verified, None);

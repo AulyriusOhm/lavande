@@ -28,6 +28,11 @@ pub(crate) const MAX_INLINE_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 pub(crate) const INLINE_IMAGE_TYPES: [&str; 4] =
     ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
+/// Version marker of the presentation policy, prefixed to the **stored** HTML
+/// bodies: a body without it was sanitized by an earlier policy and is refreshed
+/// on the next read.
+pub const HTML_POLICY_MARKER: &str = "<!--lavande-html-v2-->";
+
 /// Prefix of a `data:` URL the daemon renders.
 const DATA_PREFIX: &str = "data:image/";
 
@@ -237,6 +242,7 @@ pub fn parse_message(raw: &[u8]) -> Result<ParsedMessage, MailError> {
     let body_html =
         html_source(&message).and_then(|html| sanitize_html(&inline_cid_images(&html, &message)));
     let body_text = text_body_of(&message, body_html.as_deref());
+    let body_html = body_html.map(|html| format!("{HTML_POLICY_MARKER}{html}"));
     let preview = body_text.as_deref().map(preview_of).unwrap_or_default();
 
     let references = header_texts(message.references())
@@ -2080,6 +2086,17 @@ mod tests {
     }
 
     #[test]
+    fn the_on_demand_body_never_carries_the_policy_marker() {
+        let html = sanitize_html_with_images(
+            "<p>Soldes</p><img src=\"https://pix.example/solde.png\" alt=\"visuel\">",
+        )
+        .expect("corps");
+        assert!(!html.contains(HTML_POLICY_MARKER), "{html}");
+        let html = sanitize_html("<p>Soldes</p>").expect("corps");
+        assert!(!html.contains(HTML_POLICY_MARKER), "{html}");
+    }
+
+    #[test]
     fn an_image_only_message_has_no_default_body_but_has_one_with_images() {
         assert_eq!(
             sanitize_html("<img src=\"https://pix.example/solde.png\">"),
@@ -2091,11 +2108,13 @@ mod tests {
     }
 
     #[test]
-    fn the_stored_body_and_the_on_demand_one_differ_by_the_images_only() {
+    fn the_stored_body_carries_the_policy_marker_and_no_remote_image() {
         let stored = parse_message(HTML_RAW.as_bytes()).expect("message");
         let stored = stored.body_html.unwrap_or_default();
-        assert!(stored.starts_with("<p>Soldes </p>"), "{stored}");
+        assert!(stored.starts_with(HTML_POLICY_MARKER), "{stored}");
+        assert!(stored.contains("<p>Soldes </p>"), "{stored}");
         assert!(!stored.contains("<img"), "{stored}");
+        assert_eq!(stored.matches(HTML_POLICY_MARKER).count(), 1, "{stored}");
 
         let html = html_with_images(HTML_RAW.as_bytes(), &PgpKeyring::default())
             .expect("lecture")

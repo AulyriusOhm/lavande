@@ -136,15 +136,11 @@ describe("feuille de repli", () => {
     expect(doc).not.toContain("ul,ol{");
   });
 
-  it("ne contraint la largeur qu'en dessous du point de rupture mobile", () => {
+  it("ne pose que des aides neutres en dessous du point de rupture mobile", () => {
     const doc = srcDoc(renderBody().container);
     const mobile = doc.indexOf("@media (max-width:720px)");
 
     expect(mobile).toBeGreaterThan(-1);
-    expect(doc.indexOf("table{width:100%!important}")).toBeGreaterThan(mobile);
-    expect(doc.indexOf("body *{max-width:100%!important;min-width:0!important}")).toBeGreaterThan(
-      mobile,
-    );
     expect(doc.indexOf("td,th{white-space:normal!important}")).toBeGreaterThan(mobile);
     expect(doc.indexOf("img{height:auto!important}")).toBeGreaterThan(mobile);
     expect(doc.indexOf("box-sizing:border-box!important")).toBeGreaterThan(mobile);
@@ -152,6 +148,13 @@ describe("feuille de repli", () => {
       doc.indexOf("html,body{width:100%!important;max-width:100%!important;min-width:0!important}"),
     ).toBeGreaterThan(mobile);
     expect(doc).not.toContain("overflow-x");
+  });
+
+  it("n'écrase la largeur ni des tables ni du contenu sous 720px", () => {
+    const doc = srcDoc(renderBody().container);
+
+    expect(doc).not.toContain("table{width:100%!important}");
+    expect(doc).not.toContain("body *{");
   });
 
 
@@ -201,9 +204,13 @@ describe("largeur du cadre", () => {
     cell.setAttribute("width", "600");
     cell.style.minWidth = "600px";
     cell.style.padding = "0 32px";
+    const image = document.createElement("img");
+    image.setAttribute("width", "520");
+    const smallImage = document.createElement("img");
+    smallImage.setAttribute("width", "120");
     const link = document.createElement("a");
     link.style.color = "#e1306c";
-    document.body.append(cell, link);
+    document.body.append(cell, image, smallImage, link);
 
     fitMailWidth(document, available);
 
@@ -216,10 +223,14 @@ describe("largeur du cadre", () => {
       supports: nested(3),
       small: rules[4].style,
       cell,
+      image,
+      smallImage,
       link,
       cleanup: () => {
         style.remove();
         cell.remove();
+        image.remove();
+        smallImage.remove();
         link.remove();
         document.documentElement.style.removeProperty("width");
         document.documentElement.style.removeProperty("min-width");
@@ -238,6 +249,7 @@ describe("largeur du cadre", () => {
       expect(page.media.getPropertyValue("width")).toBe("100%");
       expect(page.supports.getPropertyValue("width")).toBe("100%");
       expect(page.cell.getAttribute("width")).toBe("100%");
+      expect(page.image.getAttribute("width")).toBe("100%");
       expect(Number.parseFloat(page.cell.style.getPropertyValue("min-width"))).toBe(0);
       expect(document.documentElement.style.getPropertyValue("width")).toBe("100%");
       expect(Number.parseFloat(document.body.style.getPropertyValue("min-width"))).toBe(0);
@@ -253,6 +265,7 @@ describe("largeur du cadre", () => {
       expect(page.body.getPropertyValue("margin")).toBe("0px");
       expect(page.wrap.getPropertyValue("padding")).toBe("24px");
       expect(page.small.getPropertyValue("width")).toBe("320px");
+      expect(page.smallImage.getAttribute("width")).toBe("120");
       expect(page.link.style.getPropertyValue("color")).toBe("rgb(225, 48, 108)");
       expect(page.cell.style.getPropertyValue("padding")).toBe("0px 32px");
     } finally {
@@ -266,6 +279,7 @@ describe("largeur du cadre", () => {
       expect(page.body.getPropertyValue("width")).toBe("600px");
       expect(page.wrap.getPropertyValue("min-width")).toBe("600px");
       expect(page.cell.getAttribute("width")).toBe("600");
+      expect(page.image.getAttribute("width")).toBe("520");
       expect(document.documentElement.style.getPropertyValue("width")).toBe("");
     } finally {
       page.cleanup();

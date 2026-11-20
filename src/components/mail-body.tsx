@@ -74,11 +74,11 @@ function themeSnapshot(): Theme {
  *  que le mail ne style pas lui-même, sans dépendre du CSS de l'app (l'iframe a
  *  son propre document). Aucune règle de mise en page au-dessus de 720px : les
  *  bordures de cellules, les marges de paragraphes et la largeur des tables
- *  appartiennent au mail. En dessous, la largeur disponible prime sur la
- *  fidélité (une newsletter en table de 600px déborde sinon du téléphone) :
- *  `html` et `body` ramenés à 100%, largeurs et largeurs minimales rendues
- *  compressibles, tables ramenées à 100%, images plafonnées, cellules
- *  `nowrap` autorisées à replier. */
+ *  appartiennent au mail. En dessous, la feuille ne pose que des aides neutres
+ *  (`box-sizing`, `html` et `body` à 100%, cellules `nowrap` autorisées à
+ *  replier, images sans hauteur figée) : aucune règle `!important` n'écrase le
+ *  design de l'expéditeur. Les largeurs absolues qui débordent vraiment sont
+ *  neutralisées à la source par `fitMailWidth`. */
 export function mailStyles({ dark, accent }: Theme) {
   const palette = dark ? DARK : LIGHT;
   return `@font-face{font-family:"Plus Jakarta Sans";font-style:normal;font-weight:300 800;font-display:swap;src:url("${jakartaFont}") format("woff2")}
@@ -103,8 +103,6 @@ pre{white-space:pre-wrap;background:var(--surface-2);padding:.6em;border-radius:
 @media (max-width:720px){
 *,:before,:after{box-sizing:border-box!important}
 html,body{width:100%!important;max-width:100%!important;min-width:0!important}
-body *{max-width:100%!important;min-width:0!important}
-table{width:100%!important}
 td,th{white-space:normal!important}
 img{height:auto!important}
 }`;
@@ -124,11 +122,12 @@ export function mailDocument(body: string, theme: Theme) {
 
 /**
  * Sous 720px, neutralise **à la source** les contraintes de largeur que le mail
- * impose et que notre feuille de repli ne peut pas battre : `body{width:600px}`
- * ou `.wrap{min-width:600px}` réinjectés en tête du body, styles inline et
- * attributs `width` de table. Une largeur absolue plus large que le cadre passe
- * à `100%`, une largeur minimale à `0` ; couleurs, polices, marges et
- * remplissages ne sont jamais touchés, le mail garde son identité.
+ * impose et que notre feuille de repli ne cherche plus à battre :
+ * `body{width:600px}` ou `.wrap{min-width:600px}` réinjectés en tête du body,
+ * styles inline et attributs `width` de table, de cellule et d'image. Une
+ * largeur absolue plus large que le cadre passe à `100%`, une largeur minimale
+ * à `0` ; couleurs, polices, marges et remplissages ne sont jamais touchés, le
+ * mail garde son identité.
  */
 export function fitMailWidth(contentDocument: Document, available: number) {
   if (!(available > 0) || available >= MOBILE_WIDTH) return;
@@ -166,7 +165,7 @@ export function fitMailWidth(contentDocument: Document, available: number) {
     const attribute = element.getAttribute("width");
     if (!attribute) continue;
     const tag = element.tagName.toLowerCase();
-    if (tag !== "table" && tag !== "td" && tag !== "th") continue;
+    if (tag !== "table" && tag !== "td" && tag !== "th" && tag !== "img") continue;
     const size = absolutePx(/^\d+(\.\d+)?$/.test(attribute) ? `${attribute}px` : attribute);
     if (size !== null && size > available) element.setAttribute("width", "100%");
   }

@@ -1,6 +1,6 @@
 use lavande_mail::mime;
 use lavande_mail::model::PgpState;
-use lavande_mail::{parse_message, PgpKeyring};
+use lavande_mail::{parse_message, PgpKeyring, HTML_POLICY_MARKER};
 
 const SIMPLE: &[u8] = b"From: Marc Delaunay <marc@mail.fr>\r\n\
 To: Roman <roman@lavande.fr>\r\n\
@@ -170,7 +170,10 @@ fn falls_back_to_stripped_html() {
 fn prefers_text_plain_in_alternative() {
     let parsed = parse_message(ALTERNATIVE).expect("parse");
     assert_eq!(parsed.body_text.as_deref(), Some("Version texte."));
-    assert_eq!(parsed.body_html.as_deref(), Some("<p>Version HTML.</p>"));
+    assert_eq!(
+        parsed.body_html.as_deref(),
+        Some(format!("{HTML_POLICY_MARKER}<p>Version HTML.</p>").as_str())
+    );
     assert_eq!(parsed.preview, "Version texte.");
 }
 
@@ -317,7 +320,11 @@ fn html_is_sanitized_at_ingestion() {
     ] {
         assert!(!out.contains(forbidden), "{forbidden} in {out}");
     }
-    assert!(out.starts_with("<style>p{color:red}</style>"), "{out}");
+    assert!(out.starts_with(HTML_POLICY_MARKER), "{out}");
+    assert!(
+        out[HTML_POLICY_MARKER.len()..].starts_with("<style>p{color:red}</style>"),
+        "{out}"
+    );
     assert!(out.contains(r#"style="color:red""#), "{out}");
     assert!(out.contains("Bonjour <b>monde</b>"), "{out}");
     assert!(out.contains("href=\"https://example.com/x\""), "{out}");
@@ -372,7 +379,10 @@ fn an_autolink_only_body_survives() {
     let parsed = parse_message(&message_of("text/html", "<https://example.com/x>")).expect("parse");
     assert_eq!(parsed.body_text.as_deref(), Some("https://example.com/x"));
     assert_eq!(parsed.preview, "https://example.com/x");
-    assert_eq!(parsed.body_html.as_deref(), Some("https://example.com/x\n"));
+    assert_eq!(
+        parsed.body_html.as_deref(),
+        Some(format!("{HTML_POLICY_MARKER}https://example.com/x\n").as_str())
+    );
 }
 
 #[test]
@@ -433,7 +443,7 @@ fn an_inline_cid_image_reaches_the_body_as_a_data_url() {
     let on_demand = mime::html_with_images(RELATED, &PgpKeyring::default())
         .expect("lecture")
         .expect("corps html");
-    assert_eq!(on_demand, html);
+    assert_eq!(on_demand, html.trim_start_matches(HTML_POLICY_MARKER));
 }
 
 #[test]

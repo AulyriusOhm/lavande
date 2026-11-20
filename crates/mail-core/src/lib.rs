@@ -26,7 +26,8 @@ pub use gcal::{GcalClient, GoogleCalendar};
 pub use ics::{parse_events, ExternalEvent};
 pub use imap::SyncReport;
 pub use mime::{
-    parse_message, parse_message_with_keys, sanitize_html, sanitize_html_with_images, ParsedMessage,
+    parse_message, parse_message_with_keys, sanitize_html, sanitize_html_with_images,
+    ParsedMessage, HTML_POLICY_MARKER,
 };
 pub use model::{
     thread_key, Address, AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState, Thread,

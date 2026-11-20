@@ -9,6 +9,7 @@ use lavande_mail::model::{Address, PgpState};
 use lavande_mail::pgp::mime::seal;
 use lavande_mail::smtp::OutgoingMessage;
 use lavande_mail::tls::TlsOptions;
+use lavande_mail::HTML_POLICY_MARKER;
 use lavande_mail_api::secrets::SecretBackend;
 use lavande_mail_api::state::AppState;
 use tempfile::TempDir;
@@ -76,7 +77,10 @@ async fn an_enabled_account_decrypts_with_the_whole_keyring() {
     let parsed = mime::parse_message_with_keys(&raw, &keys).expect("lecture");
     assert_eq!(parsed.pgp, PgpState::Encrypted);
     assert_eq!(parsed.body_text.as_deref(), Some("Bonjour Camille"));
-    assert_eq!(parsed.body_html.as_deref(), Some("<p>Bonjour</p>"));
+    assert_eq!(
+        parsed.body_html.as_deref(),
+        Some(format!("{HTML_POLICY_MARKER}<p>Bonjour</p>").as_str())
+    );
     assert!(parsed.pgp_detail.expect("détail").decrypted);
     assert_eq!(
         mime::html_with_images(&raw, &keys)

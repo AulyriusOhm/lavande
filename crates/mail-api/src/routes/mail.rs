@@ -15,6 +15,7 @@ use lavande_mail::model::{Address, Flags, FolderRole, Message, Thread};
 use lavande_mail::pgp;
 use lavande_mail::smtp::{self, OutgoingMessage};
 use lavande_mail::sync as mail_sync;
+use lavande_mail::HTML_POLICY_MARKER;
 use serde::Deserialize;
 
 use crate::dto::{
@@ -213,14 +214,33 @@ async fn message(
         .get_message(&id, &folder_path, uid)?
         .ok_or_else(|| unknown(&id, &folder_path, uid))?;
     let body_missing = stored.body_text.is_none() && stored.body_html.is_none();
-    if !query.fetch_body || !body_missing {
+    // Un corps stocké sans marqueur a été assaini par une politique antérieure :
+    // il est relu au serveur, comme un corps évincé, pour être réécrit avec la
+    // politique courante.
+    let body_stale = stored
+        .body_html
+        .as_deref()
+        .is_some_and(|html| !html.starts_with(HTML_POLICY_MARKER));
+    if !query.fetch_body || !(body_missing || body_stale) {
         return Ok(Json(stored));
     }
 
     let keys = state.keyring_for(&id).await?;
-    let mut session = imap::connect_with(&config, state.tls()).await?;
-    imap::fetch_body(&mut session, state.store(), &id, &folder_path, uid, &keys).await?;
-    logout(session).await;
+    let refreshed = match imap::connect_with(&config, state.tls()).await {
+        Ok(mut session) => {
+            let fetched =
+                imap::fetch_body(&mut session, state.store(), &id, &folder_path, uid, &keys).await;
+            logout(session).await;
+            fetched
+        }
+        Err(error) => Err(error),
+    };
+    if let Err(error) = refreshed {
+        if body_missing {
+            return Err(error.into());
+        }
+        return Ok(Json(stored));
+    }
     let message = state
         .store()
         .get_message(&id, &folder_path, uid)?
