@@ -35,7 +35,10 @@ fn a_style_value_that_fetches_or_runs_is_dropped() {
     let html = body(
         r##"<p style="background:url(https://track.test/p.png);width:expression(alert(1));position:fixed;z-index:9;overflow:hidden;-moz-binding:url(https://track.test/b.xml);behavior:url(https://track.test/x.htc);color:javascript:alert(1);margin:10px">Texte</p>"##,
     );
-    assert_eq!(html, r#"<p style="margin:10px">Texte</p>"#);
+    assert_eq!(
+        html,
+        r#"<p style="position:fixed;z-index:9;overflow:hidden;margin:10px">Texte</p>"#
+    );
 }
 
 #[test]
@@ -73,9 +76,18 @@ fn a_broken_declaration_is_dropped_without_losing_the_others() {
 }
 
 #[test]
-fn only_the_safe_display_values_are_kept() {
+fn every_display_value_is_kept() {
     let html = body(r##"<p style="display:block">a</p><p style="display:grid">b</p>"##);
-    assert_eq!(html, r#"<p style="display:block">a</p><p>b</p>"#);
+    assert_eq!(
+        html,
+        r#"<p style="display:block">a</p><p style="display:grid">b</p>"#
+    );
+}
+
+#[test]
+fn an_image_keeps_its_legacy_align() {
+    let html = body(r#"<p><img src="https://example.org/i.png" align="middle" alt="i"></p>"#);
+    assert!(html.contains("align=\"middle\""), "{html}");
 }
 
 #[test]
@@ -126,7 +138,7 @@ fn a_style_block_goes_through_the_same_filter_as_an_inline_style() {
     );
     assert_eq!(
         html,
-        "<style>a{color:#333}</style><a target=\"_blank\" href=\"https://example.org\" \
+        "<style>a{position:fixed;color:#333}</style><a target=\"_blank\" href=\"https://example.org\" \
          rel=\"noopener noreferrer\">lien</a>"
     );
 }

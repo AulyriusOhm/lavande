@@ -453,9 +453,10 @@ fn to_utc(date: &mail_parser::DateTime) -> Option<DateTime<Utc>> {
     Utc.from_utc_datetime(&naive).checked_sub_signed(offset)
 }
 
-/// Tags kept by `sanitize_html`: structure and inline emphasis only, plus the
-/// presentational helpers a mail still relies on (`center`, `font`, `caption`).
-const HTML_TAGS: [&str; 31] = [
+/// Tags kept by `sanitize_html`: structure, inline emphasis and semantics, plus
+/// the presentational helpers a mail still relies on (`center`, `font`,
+/// `colgroup`).
+const HTML_TAGS: [&str; 61] = [
     "p",
     "br",
     "div",
@@ -487,6 +488,36 @@ const HTML_TAGS: [&str; 31] = [
     "center",
     "font",
     "caption",
+    "h5",
+    "h6",
+    "sup",
+    "sub",
+    "small",
+    "mark",
+    "del",
+    "ins",
+    "abbr",
+    "cite",
+    "q",
+    "bdi",
+    "bdo",
+    "wbr",
+    "nobr",
+    "dl",
+    "dt",
+    "dd",
+    "col",
+    "colgroup",
+    "tfoot",
+    "header",
+    "footer",
+    "section",
+    "article",
+    "aside",
+    "main",
+    "figure",
+    "figcaption",
+    "address",
 ];
 
 /// The HTML body of a raw message with its remote images kept, ready to render
@@ -565,9 +596,11 @@ fn inline_cid_images(html: &str, message: &mail_parser::Message<'_>) -> String {
 /// Strips everything a mail can use to break out of the message view and keeps
 /// what makes its design: only the tags of `HTML_TAGS` survive, with `href`
 /// (http/https/mailto only), `title`, `class`, `id` (a `<style>` block selects
-/// on it), the table geometry attributes (`width`, `height`, `align`, `valign`,
-/// `bgcolor`, `cellpadding`, `cellspacing`, `border`) and a `style` attribute /
-/// `<style>` blocks filtered by `sanitize_declarations`.
+/// on it), `align`, `bgcolor`, the table geometry attributes (`width`,
+/// `height`, `valign`, `cellpadding`, `cellspacing`, `border`) and a `style`
+/// attribute / `<style>` blocks filtered by `sanitize_declarations`. The `style`,
+/// `bgcolor` and `text` of the `<body>` tag come back as an `html,body` rule, the
+/// body element itself being dropped.
 /// `script`/`iframe`/`form`/`on*`/`srcset` and unknown tags lose their tag but
 /// keep their text, remote images (tracking pixels) are dropped, the `data:`
 /// images of `INLINE_IMAGE_TYPES` are kept (the content the sender pasted, not
@@ -588,7 +621,10 @@ pub fn sanitize_html_with_images(html: &str) -> Option<String> {
 
 fn sanitize(html: &str, images: bool) -> Option<String> {
     let html = unwrap_autolinks(html);
-    let (markup, styles) = extract_style_blocks(&html);
+    let (markup, mut styles) = extract_style_blocks(&html);
+    if let Some(presentation) = body_presentation(&html) {
+        styles.insert(0, presentation);
+    }
     let cleaned = html_sanitizer(images)
         .clean(&drop_refused_images(&markup, images))
         .to_string();
@@ -775,7 +811,9 @@ fn html_sanitizer(images: bool) -> ammonia::Builder<'static> {
     builder
         .tags(tags)
         .tag_attributes(attributes)
-        .generic_attributes(HashSet::from(["title", "style", "class", "id"]))
+        .generic_attributes(HashSet::from([
+            "title", "style", "class", "id", "align", "bgcolor",
+        ]))
         .url_schemes(HashSet::from(["http", "https", "mailto", "data"]))
         .link_rel(Some("noopener noreferrer"))
         .attribute_filter(move |element, attribute, value| {
@@ -787,9 +825,9 @@ fn html_sanitizer(images: bool) -> ammonia::Builder<'static> {
 /// Second line of defence, element by element: an image `src` is a `data:`
 /// image of `INLINE_IMAGE_TYPES` or, for a reader who asked for them, an
 /// absolute http(s) URL; a link never carries a `data:` URL; a `style`
-/// attribute is filtered down to `sanitize_declarations`; the geometry
-/// attributes are checked against their own grammar (a length, an enumeration,
-/// a colour) and everything else passes untouched.
+/// attribute is filtered down to `sanitize_declarations`; the geometry and
+/// presentation attributes are checked against their own grammar (a length, an
+/// enumeration, a colour) and everything else passes untouched.
 fn filter_attribute<'a>(
     element: &str,
     attribute: &str,
@@ -810,9 +848,23 @@ fn filter_attribute<'a>(
             is_length(value).then(|| value.into())
         }
         ("table", "align") => in_enumeration(value, &["left", "center", "right"]),
-        ("td" | "th" | "tr", "align") => {
-            in_enumeration(value, &["left", "center", "right", "justify"])
-        }
+        ("img", "align") => in_enumeration(
+            value,
+            &[
+                "left",
+                "right",
+                "center",
+                "justify",
+                "top",
+                "middle",
+                "bottom",
+                "absmiddle",
+                "absbottom",
+                "texttop",
+                "baseline",
+            ],
+        ),
+        (_, "align") => in_enumeration(value, &["left", "center", "right", "justify"]),
         ("td" | "th" | "tr", "valign") => {
             in_enumeration(value, &["top", "middle", "bottom", "baseline"])
         }
@@ -903,61 +955,6 @@ fn is_font_size(value: &str) -> bool {
     digits.len() == 1 && matches!(digits.as_bytes()[0], b'1'..=b'7')
 }
 
-/// Properties a mail keeps: the presentation of its own design, nothing that
-/// can redraw the message view (`position`, `z-index`, `overflow`,
-/// `-moz-binding`, `behavior`) or load a resource (every `url()` is refused).
-const STYLE_PROPERTIES: &[&str] = &[
-    "background",
-    "background-color",
-    "border",
-    "border-collapse",
-    "border-spacing",
-    "box-shadow",
-    "clear",
-    "color",
-    "direction",
-    "display",
-    "float",
-    "font-family",
-    "font-size",
-    "font-style",
-    "font-weight",
-    "height",
-    "letter-spacing",
-    "line-height",
-    "list-style",
-    "margin",
-    "max-height",
-    "max-width",
-    "min-height",
-    "min-width",
-    "opacity",
-    "overflow-wrap",
-    "padding",
-    "table-layout",
-    "text-align",
-    "text-decoration",
-    "text-indent",
-    "text-transform",
-    "vertical-align",
-    "white-space",
-    "width",
-    "word-break",
-    "word-spacing",
-];
-
-/// Longhands of the shorthands above: `padding-top`, `margin-left`,
-/// `border-bottom-left-radius`, `background-image:linear-gradient(…)`,
-/// `list-style-type`… `background-` never reintroduces a resource: every
-/// `url()` is refused by `write_token` whatever the property.
-const STYLE_PREFIXES: &[&str] = &[
-    "background-",
-    "border-",
-    "list-style-",
-    "margin-",
-    "padding-",
-];
-
 /// Words that never belong in a value: they either run code (`expression()`,
 /// `javascript:`), bind a behaviour to the element (`behavior`,
 /// `-moz-binding`) or fetch something.
@@ -968,18 +965,6 @@ const DENIED_VALUE_WORDS: &[&str] = &[
     "javascript",
     "url",
     "vbscript",
-];
-
-const DISPLAY_VALUES: &[&str] = &[
-    "block",
-    "flex",
-    "inline",
-    "inline-block",
-    "list-item",
-    "none",
-    "table",
-    "table-cell",
-    "table-row",
 ];
 
 /// CSS colour names a mail may put in a `bgcolor` or a `font color`. Named
@@ -1141,8 +1126,8 @@ const CSS_COLORS: &[&str] = &[
 /// parser: three levels cover the responsive templates.
 const MAX_STYLE_DEPTH: usize = 3;
 
-/// One CSS declaration list, filtered: a property of the allow-list, a value
-/// without a forbidden word, function or token.
+/// One CSS declaration list, filtered: a property that binds no behaviour, a
+/// value without a forbidden word, function or token.
 struct Declarations;
 
 impl<'i> DeclarationParser<'i> for Declarations {
@@ -1170,7 +1155,7 @@ impl<'i> DeclarationParser<'i> for Declarations {
                 Err(error) if error.kind == BasicParseErrorKind::EndOfInput => break,
                 Err(error) => return Err(error.into()),
             };
-            write_token(&token, input, &mut value)?;
+            write_token(&token, input, &mut value, false)?;
         }
         let value = value.trim();
         if value.is_empty() || !style_value_allowed(&name, value) {
@@ -1223,18 +1208,14 @@ fn declarations_of(input: &mut Parser) -> String {
         .join(";")
 }
 
+/// Every property passes except the two that bind a behaviour to the element:
+/// the layout of a mail is confined to the sandboxed iframe the client renders
+/// it in, and ammonia already refuses scripts and remote loads.
 fn style_property_allowed(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    STYLE_PROPERTIES.contains(&name.as_str())
-        || STYLE_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+    !name.eq_ignore_ascii_case("behavior") && !name.eq_ignore_ascii_case("-moz-binding")
 }
 
 fn style_value_allowed(property: &str, value: &str) -> bool {
-    if property.eq_ignore_ascii_case("display") {
-        return DISPLAY_VALUES
-            .iter()
-            .any(|allowed| allowed.eq_ignore_ascii_case(value));
-    }
     // A background has no use for a string, but `image-set("https://…" 1x)`
     // is a quoted resource the WebView still fetches: `url()` is not the only
     // way to name one.
@@ -1252,13 +1233,16 @@ fn is_denied_value_word(word: &str) -> bool {
 
 /// Re-serializes one token of a declaration value, refusing anything that
 /// executes, binds or fetches. Blocks are walked recursively, so a `url(`
-/// hidden in `image-set()` is refused too.
+/// hidden in `image-set()` is refused too. `refuse_strings` is set inside
+/// `image()`/`image-set()`, where a string is a resource the WebView fetches.
 fn write_token<'i>(
     token: &Token<'i>,
     input: &mut Parser<'i>,
     value: &mut String,
+    refuse_strings: bool,
 ) -> Result<(), ParseError<()>> {
     match token {
+        Token::QuotedString(_) if refuse_strings => Err(ParseError::unexpected_token()),
         Token::UnquotedUrl(_)
         | Token::BadUrl(_)
         | Token::BadString(_)
@@ -1274,24 +1258,27 @@ fn write_token<'i>(
             if is_denied_value_word(name) {
                 return Err(ParseError::unexpected_token());
             }
+            let names_a_resource =
+                name.eq_ignore_ascii_case("image") || name.eq_ignore_ascii_case("image-set");
             separate(value);
             value.push_str(name);
             value.push('(');
-            input.parse_nested_block(|nested| write_tokens(nested, value))?;
+            let refuse_strings = refuse_strings || names_a_resource;
+            input.parse_nested_block(|nested| write_tokens(nested, value, refuse_strings))?;
             value.push(')');
             Ok(())
         }
         Token::ParenthesisBlock => {
             separate(value);
             value.push('(');
-            input.parse_nested_block(|nested| write_tokens(nested, value))?;
+            input.parse_nested_block(|nested| write_tokens(nested, value, refuse_strings))?;
             value.push(')');
             Ok(())
         }
         Token::SquareBracketBlock => {
             separate(value);
             value.push('[');
-            input.parse_nested_block(|nested| write_tokens(nested, value))?;
+            input.parse_nested_block(|nested| write_tokens(nested, value, refuse_strings))?;
             value.push(']');
             Ok(())
         }
@@ -1306,14 +1293,18 @@ fn write_token<'i>(
     }
 }
 
-fn write_tokens(input: &mut Parser, value: &mut String) -> Result<(), ParseError<()>> {
+fn write_tokens(
+    input: &mut Parser,
+    value: &mut String,
+    refuse_strings: bool,
+) -> Result<(), ParseError<()>> {
     loop {
         let token = match input.next() {
             Ok(token) => token.clone(),
             Err(error) if error.kind == BasicParseErrorKind::EndOfInput => break Ok(()),
             Err(error) => return Err(error.into()),
         };
-        write_token(&token, input, value)?;
+        write_token(&token, input, value, refuse_strings)?;
     }
 }
 
@@ -1600,6 +1591,87 @@ fn extract_style_blocks(html: &str) -> (String, Vec<String>) {
     (markup, styles)
 }
 
+/// The `style`, `bgcolor` and `text` of the `<body>` tag, back as the rule
+/// `html,body{…}`: ammonia drops `html`, `head` and `body`, and the background
+/// and text colour of the mail must survive that.
+fn body_presentation(html: &str) -> Option<String> {
+    let lowered = html.to_ascii_lowercase();
+    let mut cursor = 0;
+    let tag = loop {
+        let opening = cursor + lowered[cursor..].find("<body")?;
+        let after_name = opening + "<body".len();
+        let boundary = lowered[after_name..].chars().next();
+        if !matches!(boundary, Some('>' | ' ' | '\t' | '\n' | '\r' | '/')) {
+            cursor = after_name;
+            continue;
+        }
+        let end = after_name + lowered[after_name..].find('>')?;
+        break &html[after_name..end];
+    };
+    let mut declarations = Vec::new();
+    if let Some(style) = attribute_value(tag, "style") {
+        let cleaned = sanitize_declarations(style);
+        if !cleaned.is_empty() {
+            declarations.push(cleaned);
+        }
+    }
+    if let Some(color) = attribute_value(tag, "bgcolor").filter(|value| is_html_color(value)) {
+        declarations.push(format!("background-color:{}", color.trim()));
+    }
+    if let Some(color) = attribute_value(tag, "text").filter(|value| is_html_color(value)) {
+        declarations.push(format!("color:{}", color.trim()));
+    }
+    (!declarations.is_empty()).then(|| format!("html,body{{{}}}", declarations.join(";")))
+}
+
+/// The value of `name` in the attribute list of an opening tag, quoted or not.
+fn attribute_value<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let bytes = tag.as_bytes();
+    let named = |byte: &u8| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':');
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        while cursor < bytes.len() && !named(&bytes[cursor]) {
+            cursor += 1;
+        }
+        let start = cursor;
+        while cursor < bytes.len() && named(&bytes[cursor]) {
+            cursor += 1;
+        }
+        let found = &tag[start..cursor];
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if bytes.get(cursor) != Some(&b'=') {
+            continue;
+        }
+        cursor += 1;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let value = match bytes.get(cursor) {
+            Some(quote @ (b'"' | b'\'')) => {
+                cursor += 1;
+                let end = cursor + tag[cursor..].find(*quote as char)?;
+                let value = &tag[cursor..end];
+                cursor = end + 1;
+                value
+            }
+            _ => {
+                let end = tag[cursor..]
+                    .find(char::is_whitespace)
+                    .map_or(tag.len(), |offset| cursor + offset);
+                let value = &tag[cursor..end];
+                cursor = end;
+                value
+            }
+        };
+        if found.eq_ignore_ascii_case(name) {
+            return Some(value);
+        }
+    }
+    None
+}
+
 fn with_style_blocks(styles: &[String], body: String) -> String {
     if styles.is_empty() {
         return body;
@@ -1844,8 +1916,97 @@ mod tests {
         );
         assert!(!html.contains("onerror"), "{html}");
         assert!(!html.contains("srcset"), "{html}");
-        assert!(!html.contains("style"), "{html}");
+        assert!(html.contains("position:fixed"), "{html}");
         assert!(!html.contains("script"), "{html}");
+    }
+
+    fn cleaned(html: &str) -> String {
+        sanitize_html_with_images(html).expect("corps")
+    }
+
+    #[test]
+    fn a_gradient_text_keeps_its_clip_and_its_transparent_fill() {
+        let html = cleaned(
+            r#"<p style="background:linear-gradient(90deg,#f00,#00f);-webkit-background-clip:text;-webkit-text-fill-color:transparent">Promo</p>"#,
+        );
+        assert!(
+            html.contains("background:linear-gradient(90deg, #f00, #00f)"),
+            "{html}"
+        );
+        assert!(html.contains("-webkit-background-clip:text"), "{html}");
+        assert!(
+            html.contains("-webkit-text-fill-color:transparent"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn usual_tags_survive() {
+        let html = cleaned(
+            "<table><colgroup><col><col></colgroup><tbody><tr><td>x</td></tr></tbody></table>\
+             <p>H<sub>2</sub>O et E=mc<sup>2</sup> <mark>surlign\u{e9}</mark></p>\
+             <header>en-t\u{ea}te</header>",
+        );
+        for tag in [
+            "<sup>",
+            "<sub>",
+            "<mark>",
+            "<colgroup>",
+            "<col>",
+            "<header>",
+        ] {
+            assert!(html.contains(tag), "{tag} absent de {html}");
+        }
+    }
+
+    #[test]
+    fn layout_properties_survive() {
+        let html = cleaned(
+            r#"<div style="position:sticky;overflow:hidden;gap:8px;text-decoration-thickness:2px">x</div>"#,
+        );
+        for declaration in [
+            "position:sticky",
+            "overflow:hidden",
+            "gap:8px",
+            "text-decoration-thickness:2px",
+        ] {
+            assert!(html.contains(declaration), "{declaration} absent de {html}");
+        }
+    }
+
+    #[test]
+    fn behaviour_and_quoted_resources_are_still_refused() {
+        let html = cleaned(
+            "<p style='behavior:url(x);-moz-binding:url(x);\
+             background:url(https://track.test/p.png);\
+             content:image-set(\"https://track.test\" 1x);color:#333'>x</p>",
+        );
+        assert_eq!(html, r#"<p style="color:#333">x</p>"#);
+    }
+
+    #[test]
+    fn the_body_background_and_its_style_come_back_as_a_rule() {
+        let html = cleaned(
+            "<html><body bgcolor=\"#f4f4f4\" style=\"margin:0\"><p>Bonjour</p></body></html>",
+        );
+        assert!(html.starts_with("<style>html,body{"), "{html}");
+        assert!(html.contains("margin:0"), "{html}");
+        assert!(html.contains("background-color:#f4f4f4"), "{html}");
+    }
+
+    #[test]
+    fn scripts_iframes_and_forms_are_still_removed() {
+        let html = cleaned(
+            "<p>Bonjour</p><script>alert(1)</script>\
+             <iframe src=\"https://track.test/cadre\"></iframe>\
+             <form action=\"https://track.test\"><input name=\"a\"><button>ok</button></form>\
+             <object data=\"https://track.test/x.swf\"></object><svg></svg>",
+        );
+        for refused in [
+            "<script", "<iframe", "<form", "<input", "<button", "<object", "<svg",
+        ] {
+            assert!(!html.contains(refused), "{refused} dans {html}");
+        }
     }
 
     #[test]
