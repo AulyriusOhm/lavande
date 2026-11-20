@@ -34,7 +34,7 @@ url = "2"
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 
-# Portal OpenURI : la voie canonique Wayland pour ouvrir un lien.
+# Scripting KWin : activer la fenêtre du navigateur après ouverture (Wayland).
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "4"
 
