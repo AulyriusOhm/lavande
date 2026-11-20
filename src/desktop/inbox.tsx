@@ -1995,7 +1995,10 @@ export function DesktopInbox({
                     <MailBodyLoading className="mt-6 max-w-[80ch] text-[14.5px] leading-[1.78]" />
                   ) : (
                     <MailBody
-                      className="mt-6 max-w-[80ch] text-[14.5px] leading-[1.78]"
+                      className={cn(
+                        "mt-6 text-[14.5px] leading-[1.78]",
+                        mail.html ? "w-full" : "max-w-[80ch]",
+                      )}
                       html={mail.html}
                       paragraphs={mail.body}
                       source={mail.source}

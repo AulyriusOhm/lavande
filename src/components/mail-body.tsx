@@ -44,6 +44,10 @@ const DEFAULT_ACCENT = "#8b7cf6";
 const HEX = /^#[0-9a-f]{3,8}$/i;
 const MAX_HEIGHT = 900;
 const MOBILE_WIDTH = 720;
+/** Agrandissement maximal du document mail sur un panneau large (ultrawide). */
+const MAX_ZOOM = 1.8;
+/** En dessous de ce facteur, le gain ne vaut pas la mise à l'échelle. */
+const ZOOM_DEADBAND = 1.05;
 
 const UNIT_PX: Record<string, number> = {
   px: 1,
@@ -174,6 +178,62 @@ export function fitMailWidth(contentDocument: Document, available: number) {
     element?.style.setProperty("width", "100%", "important");
     element?.style.setProperty("min-width", "0", "important");
   }
+}
+
+/**
+ * Facteur d'agrandissement du document mail pour la largeur disponible : jamais
+ * de réduction (plancher 1), plafond à 1,8 pour que le texte reste lisible quand
+ * un mail de 600px laisserait vide la moitié d'un écran ultrawide. Sous le
+ * deadband de 1,05 le gain est invisible : on garde le rendu natif.
+ */
+export function mailZoomScale(available: number, design: number): number {
+  if (!(available > 0) || !(design > 0)) return 1;
+  const scale = Math.min(available / design, MAX_ZOOM);
+  return scale < ZOOM_DEADBAND ? 1 : scale;
+}
+
+/**
+ * Sur un panneau plus large que le design du mail (ultrawide à 3440px, lettre
+ * d'info large de 600px), le document est mis à l'échelle pour occuper la
+ * largeur disponible au lieu de laisser des marges vides : proportions et design
+ * intacts, seule la taille de rendu change.
+ *
+ * La largeur naturelle du design est relevée à zoom 1 : tout `zoom` est retiré,
+ * les largeurs de `body` et de `html` passent à `max-content` le temps de lire
+ * `body.scrollWidth`, puis les largeurs d'origine sont restaurées telles quelles
+ * (une largeur inline du mail, `body{width:600px}`, survit à la mesure). Le
+ * facteur vient de `mailZoomScale` : plafond 1,8, deadband 1,05. La propriété
+ * CSS `zoom` met le **layout** à l'échelle (et non une transformation visuelle),
+ * donc la hauteur relue ensuite par `measure()` via
+ * `documentElement.scrollHeight` suit le facteur — d'où l'ordre `fitMailWidth`,
+ * `fitMailZoom`, `measure`. Un mail déjà fluide (`width:100%`) a un design proche
+ * de la largeur disponible : il n'est pas agrandi. Sous 720px rien n'est zoomé,
+ * le rendu reste gouverné par `fitMailWidth`. Les tables centrées (`margin:auto`)
+ * restent centrées dans l'espace zoomé.
+ */
+export function fitMailZoom(contentDocument: Document, available: number) {
+  const body = contentDocument.body;
+  if (!body) return;
+
+  body.style.removeProperty("zoom");
+  if (!(available > 0) || available < MOBILE_WIDTH) return;
+
+  const root = contentDocument.documentElement;
+  const saved = [body, root].map((element) => ({
+    style: element.style,
+    width: element.style.getPropertyValue("width"),
+    priority: element.style.getPropertyPriority("width"),
+  }));
+  body.style.setProperty("width", "max-content");
+  root.style.setProperty("width", "max-content");
+  const design = body.scrollWidth;
+  for (const entry of saved) {
+    if (entry.width) entry.style.setProperty("width", entry.width, entry.priority);
+    else entry.style.removeProperty("width");
+  }
+
+  const scale = mailZoomScale(available, design);
+  if (scale > 1) body.style.setProperty("zoom", String(scale));
 }
 
 type Rgb = { r: number; g: number; b: number; a: number };
@@ -312,9 +372,11 @@ export function liftDarkText(contentDocument: Document) {
  * table) et notre palette ne sert qu'au contenu non stylé — le rendu fidèle
  * prime, y compris en thème sombre (sauf sous 720px, où la feuille ramène
  * tables et images à la largeur de l'écran et où `fitMailWidth` neutralise dans
- * le document les largeurs absolues que le mail impose). Une fois le cadre
- * chargé, `liftDarkText` y remonte en thème sombre les textes restés sombres sur
- * le fond de l'app. Les liens sont interceptés côté parent (listener en capture
+ * le document les largeurs absolues que le mail impose). Sur un panneau plus
+ * large que le design du mail, `fitMailZoom` met le document à l'échelle (plafond
+ * 1,8, deadband 1,05) pour occuper la largeur disponible sans toucher à sa mise
+ * en page. Une fois le cadre chargé, `liftDarkText` y remonte en thème sombre les
+ * textes restés sombres sur le fond de l'app. Les liens sont interceptés côté parent (listener en capture
  * sur le document du cadre) et remis au navigateur du système, la base
  * `target="_blank"` ne restant qu'un repli. Sans HTML, on retombe sur les paragraphes texte.
  *
@@ -392,8 +454,16 @@ export function MailBody({
     fitMailWidth(contentDocument, element.clientWidth);
   }, []);
 
+  const fitZoom = useCallback(() => {
+    const element = frameRef.current;
+    const contentDocument = element?.contentDocument;
+    if (!element || !contentDocument) return;
+    fitMailZoom(contentDocument, element.clientWidth);
+  }, []);
+
   const syncHeight = useCallback(() => {
     fitWidth();
+    fitZoom();
     measure();
     observerRef.current?.disconnect();
     observerRef.current = null;
@@ -401,7 +471,7 @@ export function MailBody({
     if (!contentBody || typeof ResizeObserver === "undefined") return;
     observerRef.current = new ResizeObserver(() => measure());
     observerRef.current.observe(contentBody);
-  }, [measure]);
+  }, [fitZoom, measure]);
 
   const interceptLinks = useCallback(() => {
     const contentDocument = frameRef.current?.contentDocument;
@@ -461,11 +531,12 @@ export function MailBody({
         return;
       }
       fitWidth();
+      fitZoom();
       measure();
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [fitWidth, measure, body]);
+  }, [fitWidth, fitZoom, measure, body]);
 
   if (!body) {
     return (

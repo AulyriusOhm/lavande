@@ -15,7 +15,9 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("@/lib/open-external", () => ({ openExternal, isTauriShell: () => false }));
 
-const { MailBody, fitMailWidth, liftDarkText } = await import("@/components/mail-body");
+const { MailBody, fitMailWidth, fitMailZoom, liftDarkText, mailZoomScale } = await import(
+  "@/components/mail-body"
+);
 
 const SOURCE: MailSource = { accountId: "perso", folderPath: "INBOX", uid: 12 };
 const STORED = "<p>Soldes du mois</p>";
@@ -306,6 +308,93 @@ describe("largeur du cadre", () => {
     fireEvent.load(element);
 
     expect(contentDocument.documentElement.style.getPropertyValue("width")).toBe("");
+  });
+});
+
+describe("zoom adaptatif", () => {
+  it("plafonne l'agrandissement à 1,8", () => {
+    expect(mailZoomScale(2400, 600)).toBe(1.8);
+  });
+
+  it("suit la largeur disponible quand elle dépasse le design de peu", () => {
+    expect(mailZoomScale(700, 600)).toBeCloseTo(700 / 600);
+  });
+
+  it("ne réduit jamais un mail plus large que le panneau", () => {
+    expect(mailZoomScale(390, 600)).toBe(1);
+  });
+
+  it("ignore un gain sous le deadband de 1,05", () => {
+    expect(mailZoomScale(610, 600)).toBe(1);
+  });
+
+  it("retombe sur le rendu natif sans design ou sans largeur", () => {
+    expect(mailZoomScale(2400, 0)).toBe(1);
+    expect(mailZoomScale(0, 600)).toBe(1);
+  });
+
+  it("ne zoome pas un mail dont le design remplit déjà le panneau", () => {
+    expect(mailZoomScale(1200, 1200)).toBe(1);
+  });
+
+  it("laisse le zoom vide quand jsdom ne sait pas mesurer le design", () => {
+    const contentDocument = document.implementation.createHTMLDocument("message");
+    contentDocument.body.innerHTML = "<p>Soldes du mois</p>";
+
+    fitMailZoom(contentDocument, 2400);
+
+    expect(contentDocument.body.style.getPropertyValue("zoom")).toBe("");
+    expect(contentDocument.body.style.getPropertyValue("width")).toBe("");
+    expect(contentDocument.documentElement.style.getPropertyValue("width")).toBe("");
+  });
+
+  it("applique le facteur sur un design mesuré, largeur inline du mail intacte", () => {
+    const contentDocument = document.implementation.createHTMLDocument("message");
+    contentDocument.body.innerHTML = "<p>Soldes du mois</p>";
+    contentDocument.body.style.setProperty("width", "600px");
+    Object.defineProperty(contentDocument.body, "scrollWidth", {
+      configurable: true,
+      value: 600,
+    });
+
+    fitMailZoom(contentDocument, 2400);
+
+    expect(contentDocument.body.style.getPropertyValue("zoom")).toBe("1.8");
+    expect(contentDocument.body.style.getPropertyValue("width")).toBe("600px");
+    expect(contentDocument.documentElement.style.getPropertyValue("width")).toBe("");
+  });
+
+  it("retire le zoom quand le cadre repasse sous le point de rupture mobile", () => {
+    const contentDocument = document.implementation.createHTMLDocument("message");
+    contentDocument.body.style.setProperty("zoom", "1.8");
+
+    fitMailZoom(contentDocument, 412);
+
+    expect(contentDocument.body.style.getPropertyValue("zoom")).toBe("");
+  });
+
+  it("recalcule le zoom à l'onload d'un cadre élargi", () => {
+    const { container } = renderBody('<p style="width:600px">Soldes du mois</p>');
+    const element = frame(container);
+    const contentDocument = loadedDocument(container, '<p style="width:600px">Soldes du mois</p>');
+    contentDocument.body.style.setProperty("zoom", "1.8");
+    Object.defineProperty(contentDocument.body, "scrollWidth", {
+      configurable: true,
+      value: 600,
+    });
+    Object.defineProperty(element, "clientWidth", { configurable: true, value: 2400 });
+
+    fireEvent.load(element);
+
+    expect(contentDocument.body.style.getPropertyValue("zoom")).toBe("1.8");
+
+    Object.defineProperty(contentDocument.body, "scrollWidth", {
+      configurable: true,
+      value: 2400,
+    });
+    fireEvent.load(element);
+
+    expect(contentDocument.body.style.getPropertyValue("zoom")).toBe("");
   });
 });
 
