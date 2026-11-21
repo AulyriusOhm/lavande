@@ -60,7 +60,7 @@ export type DecisionConfig = {
 export type DecisionQuestion =
   | { type: "choice"; instructions: string; criteria: Record<string, string> }
   | { type: "noul"; instructions: string }
-  | { type: "score"; instructions: string; criteria: { levels: string[] } };
+  | { type: "score"; instructions: string; criteria: string[] };
 
 export type DecisionAnswer = {
   type: "choice" | "noul" | "score" | string;

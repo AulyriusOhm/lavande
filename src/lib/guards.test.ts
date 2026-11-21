@@ -118,6 +118,50 @@ describe("runPreSendGuard", () => {
     expect(res).toEqual({ warnings: [] });
   });
 
+  it("envoie criteria en tableau plat (format NeuralWatt) et lit les probabilités indexées", async () => {
+    let sentScoreCriteria: unknown = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const payload = JSON.parse(String(init.body)) as {
+          questions: { tone_risk?: { criteria?: unknown } };
+        };
+        sentScoreCriteria = payload.questions.tone_risk?.criteria;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            model: "mammoth-1",
+            answers: {
+              tone_risk: {
+                type: "score",
+                score: 1.65,
+                legend: { "0": "Neutre", "1": "Sec", "2": "Agressif" },
+                probabilities: { "0": 0.05, "1": 0.25, "2": 0.7 },
+                confidence: 0.25,
+              },
+            },
+            usage: { input_tokens: 75, output_tokens: 1 },
+          }),
+        };
+      }),
+    );
+
+    const res = await runPreSendGuard(READY_CONFIG, {
+      to: "camille@lavande.mail",
+      subject: "Relance",
+      body: "Tu n'as toujours rien fait, c'est inadmissible !",
+      attachmentCount: 1,
+      pgpEncrypted: true,
+    });
+
+    expect(sentScoreCriteria).toEqual(["Neutre", "Sec", "Agressif"]);
+    expect(res.warnings).toHaveLength(1);
+    expect(res.warnings[0].kind).toBe("tone_risk");
+    expect(res.warnings[0].label).toBe("Ton potentiellement agressif");
+    expect(res.warnings[0].confidence).toBeCloseTo(0.95);
+  });
+
   it("passe par mailApi.decisionDecide en mode démon et applique le timeout strict sans bloquer", async () => {
     vi.useFakeTimers();
     const spy = vi

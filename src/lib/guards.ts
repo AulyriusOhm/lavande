@@ -69,9 +69,9 @@ export type McpRiskEvaluation = {
   maxRisk: number;
 };
 
-export const PRE_SEND_TIMEOUT_MS = 1500;
-export const SUGGEST_FOLDER_TIMEOUT_MS = 2000;
-export const MCP_RISK_TIMEOUT_MS = 2000;
+export const PRE_SEND_TIMEOUT_MS = 2500;
+export const SUGGEST_FOLDER_TIMEOUT_MS = 3000;
+export const MCP_RISK_TIMEOUT_MS = 2500;
 
 const TONE_LEVELS = ["Neutre", "Sec", "Agressif"];
 
@@ -168,13 +168,18 @@ function toneRiskConfidence(answer: DecisionAnswer | undefined): {
 } {
   if (!answer) return { confidence: 0, aggressive: false };
   const probs = answer.probabilities;
-  if (probs && (typeof probs.Sec === "number" || typeof probs.Agressif === "number")) {
-    const sec = clamp01(probs.Sec ?? 0);
-    const aggressiveProb = clamp01(probs.Agressif ?? 0);
-    return {
-      confidence: clamp01(sec + aggressiveProb),
-      aggressive: aggressiveProb >= sec && aggressiveProb > 0,
-    };
+  if (probs) {
+    // Supporte les clés nommées ("Sec"/"Agressif") et les clés indexées NeuralWatt ("1"/"2").
+    const hasNamed = typeof probs.Sec === "number" || typeof probs.Agressif === "number";
+    const hasIndexed = typeof probs["1"] === "number" || typeof probs["2"] === "number";
+    if (hasNamed || hasIndexed) {
+      const sec = clamp01((hasNamed ? probs.Sec : probs["1"]) ?? 0);
+      const aggressiveProb = clamp01((hasNamed ? probs.Agressif : probs["2"]) ?? 0);
+      return {
+        confidence: clamp01(sec + aggressiveProb),
+        aggressive: aggressiveProb >= sec && aggressiveProb > 0,
+      };
+    }
   }
   if (typeof answer.score === "number" && Number.isFinite(answer.score)) {
     const normalized = clamp01(answer.score / (TONE_LEVELS.length - 1));
@@ -218,7 +223,7 @@ export async function runPreSendGuard(
     type: "score",
     instructions:
       "Évalue le ton du brouillon pour repérer une formulation involontairement sèche ou agressive.",
-    criteria: { levels: TONE_LEVELS },
+    criteria: TONE_LEVELS,
   };
   if (!input.pgpEncrypted) {
     questions.sensitive_unencrypted = {
@@ -354,7 +359,7 @@ export async function suggestFolderForMail(
     if (!matched) return null;
 
     const confidence = clamp01(
-      ans?.confidence ?? ans?.probabilities?.[choice] ?? ans?.probabilities?.[matched.path] ?? 0,
+      ans?.probabilities?.[choice] ?? ans?.probabilities?.[matched.path] ?? ans?.confidence ?? 0,
     );
     if (confidence < config.thresholds.folder) return null;
 

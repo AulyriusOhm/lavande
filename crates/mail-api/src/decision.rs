@@ -260,13 +260,8 @@ pub enum DecisionQuestion {
     },
     Score {
         instructions: String,
-        criteria: ScoreCriteria,
+        criteria: Vec<String>,
     },
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ScoreCriteria {
-    pub levels: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -770,14 +765,12 @@ pub fn build_triage_questions(
         DecisionQuestion::Score {
             instructions: "Évalue le niveau d'urgence de cet email pour le destinataire."
                 .to_string(),
-            criteria: ScoreCriteria {
-                levels: vec![
-                    "Faible".to_string(),
-                    "Normale".to_string(),
-                    "Haute".to_string(),
-                    "Critique".to_string(),
-                ],
-            },
+            criteria: vec![
+                "Faible".to_string(),
+                "Normale".to_string(),
+                "Haute".to_string(),
+                "Critique".to_string(),
+            ],
         },
     );
     questions.insert(
@@ -949,9 +942,10 @@ pub async fn triage_message_with_timeout(
     let category_probs = category_ans
         .map(|a| a.probabilities.clone())
         .unwrap_or_default();
-    let category_conf = category_ans
-        .and_then(|a| a.confidence)
-        .or_else(|| category_probs.get(&category).copied())
+    let category_conf = category_probs
+        .get(&category)
+        .copied()
+        .or_else(|| category_ans.and_then(|a| a.confidence))
         .unwrap_or(0.5);
 
     let urgency = output
@@ -980,8 +974,8 @@ pub async fn triage_message_with_timeout(
         .and_then(|a| a.choice.clone())
         .unwrap_or_else(|| "safe".to_string());
     let security_conf = security_ans
-        .and_then(|a| a.confidence)
-        .or_else(|| security_ans.and_then(|a| a.probabilities.get(&security).copied()))
+        .and_then(|a| a.probabilities.get(&security).copied())
+        .or_else(|| security_ans.and_then(|a| a.confidence))
         .unwrap_or(0.5);
 
     let cleanup_score = output
@@ -993,10 +987,10 @@ pub async fn triage_message_with_timeout(
     let (assignee, assignee_conf) = match output.answers.get("assignee") {
         Some(ans) => {
             let pick = ans.choice.clone().filter(|v| v != "aucun");
-            let conf = ans.confidence.or_else(|| {
-                pick.as_deref()
-                    .and_then(|p| ans.probabilities.get(p).copied())
-            });
+            let conf = pick
+                .as_deref()
+                .and_then(|p| ans.probabilities.get(p).copied())
+                .or(ans.confidence);
             (pick, conf)
         }
         None => (None, None),
