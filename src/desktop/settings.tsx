@@ -97,6 +97,23 @@ import {
   providerOf,
   type LlmProvider,
 } from "@/lib/llm";
+import {
+  DECISION_PROVIDERS,
+  THRESHOLD_PRESETS,
+  applyDecisionProvider,
+  decisionProbeDirect,
+  decisionProviderPreset,
+  decisionReady,
+  detectThresholdPreset,
+  type DecisionAuthHeader,
+  type DecisionConfig,
+  type DecisionProtocol,
+  type DecisionProvider,
+  type NotifFilterMode,
+  type ThresholdPresetId,
+} from "@/lib/decision";
+import { toApiDecisionConfig } from "@/lib/triage";
+import { CategoryManagerSheet, categoryColorStyle } from "@/components/category-manager-sheet";
 import { DEFAULT_COPILOT_CLIENT_ID, copilotModels, useCopilotSession } from "@/lib/copilot";
 import { openExternal } from "@/lib/open-external";
 import { formatTokens, lastDays, resetAiStats, topModels } from "@/lib/ai-stats";
@@ -883,6 +900,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     setTeamContext,
     llm,
     setLlm,
+    decision,
+    setDecision,
     aiReplyEnabled,
     setAiReplyEnabled,
     summary: summaryConfig,
@@ -896,7 +915,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     threadView,
     setThreadView,
   } = usePrefs();
-  const { notify, accounts, mode, readOnly, openConnect, askRemoveAccount, renameAccount } = useMailStore();
+  const { notify, accounts, mails, mode, readOnly, openConnect, askRemoveAccount, renameAccount, triageMails } =
+    useMailStore();
   const [active, setActive] = useState<SectionId>("comptes");
   const [hex, setHex] = useState(accent);
   const [openServer, setOpenServer] = useState<string | null>(null);
@@ -918,6 +938,10 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   const [savingRename, setSavingRename] = useState(false);
   const [probing, setProbing] = useState(false);
   const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(null);
+  const [decisionProbing, setDecisionProbing] = useState(false);
+  const [decisionProbeState, setDecisionProbeState] = useState<{ ok: boolean; text: string } | null>(null);
+  const [thresholdsOpen, setThresholdsOpen] = useState(false);
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
   const copilot = useCopilotSession(llm.copilotClientId);
   const copilotProvider = providerOf(llm) === "copilot";
   const [models, setModels] = useState<string[]>([]);
@@ -1085,6 +1109,99 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
       setProbing(false);
     }
   };
+
+  const pushDecisionDaemon = (next: DecisionConfig, apiKeyOverride?: string, clearApiKey = false) => {
+    if (mode !== "api") return;
+    void mailApi
+      .saveDecisionConfig(toApiDecisionConfig(next, { apiKey: apiKeyOverride, clearApiKey }))
+      .then((saved) => {
+        setDecision({
+          daemonHasKey: saved.has_api_key,
+          ...(saved.has_api_key && apiKeyOverride ? { apiKey: "" } : {}),
+        });
+      })
+      .catch(() => undefined);
+  };
+
+  useEffect(() => {
+    if (mode !== "api") return;
+    let alive = true;
+    void mailApi
+      .decisionConfig()
+      .then((remote) => {
+        if (!alive) return;
+        setDecision({ daemonHasKey: remote.has_api_key });
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [mode, setDecision]);
+
+  const updateDecision = (patch: Partial<DecisionConfig>) => {
+    setDecisionProbeState(null);
+    const next = { ...decision, ...patch };
+    setDecision(patch);
+    const keyChanged = typeof patch.apiKey === "string" && patch.apiKey.trim() !== "";
+    pushDecisionDaemon(next, keyChanged ? patch.apiKey : undefined);
+  };
+
+  const pickDecisionProvider = (provider: DecisionProvider) => {
+    setDecisionProbeState(null);
+    const next = applyDecisionProvider(decision, provider);
+    setDecision(next);
+    pushDecisionDaemon(next);
+  };
+
+  const applyThresholdPreset = (preset: ThresholdPresetId) => {
+    const next = { ...decision, thresholds: { ...THRESHOLD_PRESETS[preset].values } };
+    setDecision({ thresholds: next.thresholds });
+    pushDecisionDaemon(next);
+  };
+
+  const runDecisionProbe = async () => {
+    setDecisionProbing(true);
+    setDecisionProbeState(null);
+    try {
+      const reply =
+        mode === "api"
+          ? await mailApi.decisionProbe({
+              provider: decision.provider,
+              protocol: decision.protocol,
+              endpoint: decision.endpoint,
+              model: decision.model,
+              auth_header: decision.authHeader,
+              ...(decision.apiKey.trim() ? { api_key: decision.apiKey.trim() } : {}),
+            })
+          : await decisionProbeDirect(decision);
+      const latency = "latency_ms" in reply ? reply.latency_ms : reply.latencyMs;
+      const energy =
+        "energy" in reply && reply.energy
+          ? "energy_joules" in reply.energy
+            ? reply.energy.energy_joules
+            : reply.energy.energyJoules
+          : undefined;
+      const energySuffix = typeof energy === "number" && energy > 0 ? ` · ${energy.toFixed(1)} J` : "";
+      setDecisionProbeState({
+        ok: true,
+        text: `${reply.model} · ${latency} ms${energySuffix}`,
+      });
+    } catch (failure) {
+      setDecisionProbeState({
+        ok: false,
+        text: failure instanceof Error ? failure.message : "échec inconnu",
+      });
+    } finally {
+      setDecisionProbing(false);
+    }
+  };
+
+  const decisionPreset = decisionProviderPreset(decision.provider);
+  const activeThresholdPreset = detectThresholdPreset(decision.thresholds);
+  const decisionAvgLatency =
+    aiUsage.combined.decision.calls > 0
+      ? Math.round(aiUsage.combined.decision.totalLatencyMs / aiUsage.combined.decision.calls)
+      : 0;
 
   const goTo = (id: SectionId) => {
     setActive(id);
@@ -2050,7 +2167,387 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
               </Block>
 
               <Block id="ia" label="Intelligence artificielle" hint="suggestions & réécriture">
-                <Surface className="p-4">
+                <Surface className="space-y-3 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <SectionLabel>Modèle de décision · Système 1</SectionLabel>
+                    <Badge tone={decisionReady(decision) ? "green" : "neutral"}>
+                      {decisionReady(decision) ? "actif · rapide" : "inactif"}
+                    </Badge>
+                  </div>
+                  <p className="text-[12px] font-semibold leading-relaxed text-ink-soft">
+                    Triage ultra-rapide, catégories, détection TOTP, sécurité anti-phishing et filtrage avant
+                    LLM. Sans modèle de décision, les modes intelligents automatiques sont désactivés ; seules
+                    la réécriture, la correction et l'analyse manuelle LLM restent actives.
+                  </p>
+                  <div className="overflow-hidden rounded-2xl border border-line">
+                    <ToggleRow
+                      icon={<Sparkles className="size-4" />}
+                      label="Activer le modèle de décision"
+                      hint={
+                        decisionReady(decision)
+                          ? `${decision.model} · triage et filtres actifs`
+                          : "Configure un endpoint (ex. NeuralWatt mammoth-1)"
+                      }
+                      checked={decision.enabled}
+                      onChange={(value) => updateDecision({ enabled: value })}
+                    />
+                  </div>
+                  <div
+                    role="group"
+                    aria-label="Fournisseur du modèle de décision"
+                    className="flex flex-wrap gap-1.5"
+                  >
+                    {DECISION_PROVIDERS.map((entry) => (
+                      <button
+                        key={entry.id}
+                        type="button"
+                        aria-pressed={decision.provider === entry.id}
+                        onClick={() => pickDecisionProvider(entry.id)}
+                        className={cn(
+                          "focus-ring h-8 rounded-full border px-3 text-[12px] font-bold transition-colors",
+                          decision.provider === entry.id
+                            ? "border-accent bg-accent-soft text-accent-ink"
+                            : "border-line bg-surface text-ink-soft hover:bg-surface-2",
+                        )}
+                      >
+                        {entry.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="grid gap-2.5">
+                    <label className="grid gap-1">
+                      <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                        Endpoint décision
+                      </span>
+                      <TextInput
+                        aria-label="Endpoint du modèle de décision"
+                        placeholder="https://api.neuralwatt.com/v1/systemone"
+                        value={decision.endpoint}
+                        onChange={(event) => updateDecision({ endpoint: event.target.value })}
+                      />
+                    </label>
+                    <label className="grid gap-1">
+                      <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                        Modèle décision
+                      </span>
+                      <TextInput
+                        aria-label="Nom du modèle de décision"
+                        list="decision-models"
+                        placeholder="mammoth-1"
+                        value={decision.model}
+                        onChange={(event) => updateDecision({ model: event.target.value })}
+                      />
+                      <datalist id="decision-models">
+                        {decisionPreset.models.map((model) => (
+                          <option key={model} value={model} />
+                        ))}
+                      </datalist>
+                    </label>
+                    {decision.provider === "custom" ? (
+                      <div className="grid gap-2.5 md:grid-cols-2">
+                        <div>
+                          <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                            Protocole
+                          </span>
+                          <div className="mt-1.5 flex gap-1.5">
+                            {(["systemone", "jev"] as DecisionProtocol[]).map((proto) => (
+                              <button
+                                key={proto}
+                                type="button"
+                                aria-pressed={decision.protocol === proto}
+                                onClick={() => updateDecision({ protocol: proto })}
+                                className={cn(
+                                  "focus-ring h-9 flex-1 rounded-xl border px-2 text-[11.5px] font-bold",
+                                  decision.protocol === proto
+                                    ? "border-accent bg-accent-soft text-accent-ink"
+                                    : "border-line bg-surface text-ink-soft",
+                                )}
+                              >
+                                {proto === "systemone" ? "SystemOne" : "Jev"}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                            En-tête Auth
+                          </span>
+                          <div className="mt-1.5 flex gap-1.5">
+                            {(
+                              [
+                                { id: "bearer", label: "Bearer" },
+                                { id: "api_key", label: "Api-Key" },
+                                { id: "none", label: "Aucune" },
+                              ] as { id: DecisionAuthHeader; label: string }[]
+                            ).map((opt) => (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                aria-pressed={decision.authHeader === opt.id}
+                                onClick={() => updateDecision({ authHeader: opt.id })}
+                                className={cn(
+                                  "focus-ring h-9 flex-1 rounded-xl border px-2 text-[11.5px] font-bold",
+                                  decision.authHeader === opt.id
+                                    ? "border-accent bg-accent-soft text-accent-ink"
+                                    : "border-line bg-surface text-ink-soft",
+                                )}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                    {decision.authHeader !== "none" ? (
+                      <label className="grid gap-1">
+                        <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                          {decision.daemonHasKey
+                            ? "Clé API décision (enregistrée au trousseau)"
+                            : "Clé API décision"}
+                        </span>
+                        <TextInput
+                          aria-label="Clé API du modèle de décision"
+                          type="password"
+                          placeholder={decision.daemonHasKey ? "•••••••• (remplacer la clé)" : "nw-…"}
+                          value={decision.apiKey}
+                          onChange={(event) => updateDecision({ apiKey: event.target.value })}
+                        />
+                      </label>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <DButton
+                      variant="primary"
+                      size="sm"
+                      disabled={!decisionReady({ ...decision, enabled: true }) || decisionProbing}
+                      onClick={() => void runDecisionProbe()}
+                    >
+                      {decisionProbing ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <PlugZap className="size-3.5" />
+                      )}
+                      {decisionProbing ? "Test en cours…" : "Tester le modèle de décision"}
+                    </DButton>
+                    {decisionProbeState ? (
+                      <Badge tone={decisionProbeState.ok ? "green" : "rose"}>
+                        {decisionProbeState.ok ? "connexion établie" : "échec"}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  {decisionProbeState ? (
+                    <p
+                      className={cn(
+                        "rounded-xl px-2.5 py-2 text-[12.5px] leading-relaxed font-semibold break-words",
+                        decisionProbeState.ok
+                          ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                          : "bg-rose-500/10 text-rose-600 dark:text-rose-300",
+                      )}
+                    >
+                      {decisionProbeState.ok
+                        ? `Modèle de décision · ${decisionProbeState.text}`
+                        : `Échec décision · ${decisionProbeState.text}`}
+                    </p>
+                  ) : null}
+                  <div className="space-y-2 border-t border-line/70 pt-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                        Seuils de confiance
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setThresholdsOpen((open) => !open)}
+                        className="focus-ring rounded-full border border-line px-2.5 py-1 text-[11px] font-bold text-ink-soft hover:bg-surface-2"
+                      >
+                        {thresholdsOpen ? "Masquer le détail" : "Ajuster"}
+                      </button>
+                    </div>
+                    <div
+                      role="group"
+                      aria-label="Profil de seuils de décision"
+                      className="flex flex-wrap gap-1.5"
+                    >
+                      {(["prudent", "balanced", "strict"] as ThresholdPresetId[]).map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          aria-pressed={activeThresholdPreset === preset}
+                          onClick={() => applyThresholdPreset(preset)}
+                          className={cn(
+                            "focus-ring h-8 rounded-full border px-3 text-[12px] font-bold transition-colors",
+                            activeThresholdPreset === preset
+                              ? "border-accent bg-accent-soft text-accent-ink"
+                              : "border-line bg-surface text-ink-soft hover:bg-surface-2",
+                          )}
+                        >
+                          {THRESHOLD_PRESETS[preset].label}
+                        </button>
+                      ))}
+                      {activeThresholdPreset === "custom" ? (
+                        <span className="inline-flex h-8 items-center rounded-full border border-accent/40 bg-accent-soft/50 px-3 text-[11.5px] font-bold text-accent-ink">
+                          Personnalisé
+                        </span>
+                      ) : null}
+                    </div>
+                    {thresholdsOpen ? (
+                      <div className="grid gap-2.5 rounded-2xl bg-surface-2/60 p-3 md:grid-cols-2">
+                        {(
+                          [
+                            { key: "llmEscalate", label: "Escalade vers le LLM", min: 0.2, max: 0.9 },
+                            { key: "category", label: "Catégories & badges", min: 0.3, max: 0.95 },
+                            { key: "security", label: "Bouclier sécurité", min: 0.5, max: 0.98 },
+                            { key: "folder", label: "Suggestion de dossier", min: 0.5, max: 0.98 },
+                          ] as const
+                        ).map((slider) => (
+                          <label key={slider.key} className="block space-y-1">
+                            <div className="flex items-center justify-between text-[11.5px] font-semibold text-ink-soft">
+                              <span>{slider.label}</span>
+                              <span className="font-mono text-ink">
+                                {`${Math.round(decision.thresholds[slider.key] * 100)} %`}
+                              </span>
+                            </div>
+                            <input
+                              aria-label={slider.label}
+                              type="range"
+                              min={slider.min}
+                              max={slider.max}
+                              step={0.05}
+                              value={decision.thresholds[slider.key]}
+                              onChange={(event) =>
+                                updateDecision({
+                                  thresholds: {
+                                    ...decision.thresholds,
+                                    [slider.key]: Number(event.target.value),
+                                  },
+                                })
+                              }
+                              className="w-full accent-[var(--accent)]"
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="space-y-1.5 border-t border-line/70 pt-3">
+                    <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                      Vue par défaut de la boîte
+                    </span>
+                    <div role="group" aria-label="Vue par défaut de la boîte" className="flex flex-wrap gap-1.5">
+                      {[
+                        { id: "all", label: "Tous" },
+                        { id: "priority", label: "Prioritaire" },
+                        { id: "needs_reply", label: "À répondre" },
+                        ...decision.customCategories.map((cat) => ({
+                          id: `custom:${cat.id}`,
+                          label: cat.name,
+                        })),
+                      ].map((view) => (
+                        <button
+                          key={view.id}
+                          type="button"
+                          aria-pressed={decision.defaultInboxFilter === view.id}
+                          onClick={() => updateDecision({ defaultInboxFilter: view.id })}
+                          className={cn(
+                            "focus-ring h-8 rounded-full border px-3 text-[12px] font-bold transition-colors",
+                            decision.defaultInboxFilter === view.id
+                              ? "border-accent bg-accent-soft text-accent-ink"
+                              : "border-line bg-surface text-ink-soft hover:bg-surface-2",
+                          )}
+                        >
+                          {view.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 border-t border-line/70 pt-3">
+                    <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                      Filtrage des notifications
+                    </span>
+                    <div role="group" aria-label="Filtrage des notifications" className="flex flex-wrap gap-1.5">
+                      {(
+                        [
+                          { id: "all", label: "Toutes" },
+                          { id: "smart", label: "Intelligentes" },
+                          { id: "urgent_only", label: "Urgentes & TOTP" },
+                        ] as { id: NotifFilterMode; label: string }[]
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          aria-pressed={decision.notifMode === opt.id}
+                          onClick={() => updateDecision({ notifMode: opt.id })}
+                          className={cn(
+                            "focus-ring h-8 rounded-full border px-3 text-[12px] font-bold transition-colors",
+                            decision.notifMode === opt.id
+                              ? "border-accent bg-accent-soft text-accent-ink"
+                              : "border-line bg-surface text-ink-soft hover:bg-surface-2",
+                          )}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="divide-y divide-line/70 overflow-hidden rounded-2xl border border-line">
+                    <ToggleRow
+                      icon={<KeyRound className="size-4" />}
+                      label="Popup TOTP instantané"
+                      hint="Affiche les codes de vérification dès réception pour les copier en un clic"
+                      checked={decision.totpPopup}
+                      onChange={(value) => updateDecision({ totpPopup: value })}
+                    />
+                    <ToggleRow
+                      icon={<Lock className="size-4" />}
+                      label="Garde-fou avant envoi (Pre-send Guard)"
+                      hint="Vérifie pièce jointe oubliée, question sans réponse et secrets en clair"
+                      checked={decision.preSendGuard}
+                      onChange={(value) => updateDecision({ preSendGuard: value })}
+                    />
+                  </div>
+                  <div className="space-y-2 border-t border-line/70 pt-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                        Catégories personnalisées
+                      </span>
+                      <span className="text-[11px] font-semibold text-ink-muted">
+                        {decision.customCategories.length} / 8
+                      </span>
+                    </div>
+                    {decision.customCategories.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {decision.customCategories.map((cat) => {
+                          const style = categoryColorStyle(cat.color);
+                          return (
+                            <span
+                              key={cat.id}
+                              className={cn(
+                                "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold",
+                                style.pill,
+                              )}
+                            >
+                              <span className={cn("size-2 rounded-full", style.dot)} />
+                              {cat.name}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-[11.5px] font-medium text-ink-muted">
+                        Aucune catégorie personnalisée · ajoute Factures, Colis, Banque…
+                      </p>
+                    )}
+                    <DButton
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setCategoriesOpen(true)}
+                    >
+                      Gérer les catégories personnalisées
+                    </DButton>
+                  </div>
+                </Surface>
+
+                <Surface className="mt-3 p-4">
                   <p className="text-[12px] font-semibold leading-relaxed text-ink-soft">
                     {copilotProvider
                       ? "GitHub Copilot répond par le démon, qui garde les jetons : connecte ton compte GitHub, puis choisis un modèle."
@@ -2280,7 +2777,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                   </div>
                   <dl className="mt-3 grid grid-cols-3 gap-2 text-center">
                     <div className="rounded-xl bg-surface-2 px-2 py-2">
-                      <dt className="text-[10px] font-bold tracking-[0.1em] text-ink-muted uppercase">Appels</dt>
+                      <dt className="text-[10px] font-bold tracking-[0.1em] text-ink-muted uppercase">Appels LLM</dt>
                       <dd className="text-[15px] font-extrabold text-ink">
                         {formatTokens(aiUsage.combined.total.calls)}
                       </dd>
@@ -2295,6 +2792,30 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                       <dt className="text-[10px] font-bold tracking-[0.1em] text-ink-muted uppercase">Sortie</dt>
                       <dd className="text-[15px] font-extrabold text-ink">
                         {formatTokens(aiUsage.combined.total.completion)}
+                      </dd>
+                    </div>
+                  </dl>
+                  <dl className="mt-2 grid grid-cols-3 gap-2 text-center">
+                    <div className="rounded-xl bg-accent-soft/45 px-2 py-2">
+                      <dt className="text-[10px] font-bold tracking-[0.1em] text-accent-ink uppercase">Décisions</dt>
+                      <dd className="text-[15px] font-extrabold text-ink">
+                        {formatTokens(aiUsage.combined.decision.calls)}
+                      </dd>
+                    </div>
+                    <div className="rounded-xl bg-accent-soft/45 px-2 py-2">
+                      <dt className="text-[10px] font-bold tracking-[0.1em] text-accent-ink uppercase">LLM évités</dt>
+                      <dd className="text-[15px] font-extrabold text-ink">
+                        {formatTokens(aiUsage.combined.decision.llmSaved)}
+                      </dd>
+                    </div>
+                    <div className="rounded-xl bg-accent-soft/45 px-2 py-2">
+                      <dt className="text-[10px] font-bold tracking-[0.1em] text-accent-ink uppercase">
+                        {aiUsage.combined.decision.energyJoules > 0 ? "Énergie" : "Latence"}
+                      </dt>
+                      <dd className="text-[15px] font-extrabold text-ink">
+                        {aiUsage.combined.decision.energyJoules > 0
+                          ? `${aiUsage.combined.decision.energyJoules.toFixed(0)} J`
+                          : `${decisionAvgLatency} ms`}
                       </dd>
                     </div>
                   </dl>
@@ -2796,6 +3317,11 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
         </div>
       </div>
 
+      <CategoryManagerSheet
+        open={categoriesOpen}
+        onClose={() => setCategoriesOpen(false)}
+        onRetriage={() => triageMails(mails, true)}
+      />
     </div>
   );
 }

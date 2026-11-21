@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { ComposeDraft, DraftAttachment } from "@/lib/draft";
 import { MAX_ATTACHMENT_BYTES, attachmentsSize, formatBytes, readAttachment } from "@/lib/draft";
 import {
+  AlertTriangle,
   Check,
   ChevronDown,
   Image,
@@ -19,6 +20,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMailStore } from "@/lib/store";
+import { decisionReady } from "@/lib/decision";
+import { runPreSendGuard, type PreSendWarning } from "@/lib/guards";
 import {
   aiComposeReply,
   composeReply,
@@ -106,6 +109,8 @@ export function ComposeScreen({
   const [showCci, setShowCci] = useState(Boolean(draft.cci.trim()));
   const [recipientsOpen, setRecipientsOpen] = useState(false);
   const [confirmSend, setConfirmSend] = useState(false);
+  const [guardWarnings, setGuardWarnings] = useState<PreSendWarning[]>([]);
+  const [checkingGuard, setCheckingGuard] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [draftSaveError, setDraftSaveError] = useState<string | null>(null);
@@ -199,14 +204,60 @@ export function ComposeScreen({
   const send = () => {
     if (sending || sent) return;
     setConfirmSend(false);
+    setGuardWarnings([]);
     onSend?.(draft);
     if (!onSend) onClose();
   };
 
+  const parentBodyForGuard = () => {
+    if (draft.threadId && mails?.length) {
+      const threadMessages = mails.filter((entry) => entry.threadId === draft.threadId);
+      const latest = threadMessages.at(-1);
+      if (latest) {
+        const text = latest.body.join("\n").trim() || latest.preview.trim();
+        if (text) return text;
+      }
+    }
+    if (draft.quoted?.trim()) {
+      const text = htmlToText(draft.quoted).trim();
+      if (text) return text;
+    }
+    return undefined;
+  };
+
+  const runGuardAndSend = async () => {
+    setCheckingGuard(true);
+    try {
+      const result = await runPreSendGuard(
+        prefs.decision,
+        {
+          to: [draft.to, draft.cc, draft.cci].filter(Boolean).join(", "),
+          subject: draft.subject,
+          body: htmlToText(draft.body),
+          attachmentCount: draft.attachments?.length ?? 0,
+          pgpEncrypted: draft.pgpEncrypt,
+          parentBody: parentBodyForGuard(),
+        },
+        { useDaemon: mode === "api", timeoutMs: 1500 },
+      );
+      if (result.warnings.length > 0) {
+        setGuardWarnings(result.warnings);
+        return;
+      }
+    } finally {
+      setCheckingGuard(false);
+    }
+    send();
+  };
+
   const requestSend = () => {
-    if (!validRecipients || sent || sending) return;
+    if (!validRecipients || sent || sending || checkingGuard) return;
     if (!draft.subject.trim() || !draft.body.trim()) {
       setConfirmSend(true);
+      return;
+    }
+    if (decisionReady(prefs.decision) && prefs.decision?.preSendGuard) {
+      void runGuardAndSend();
       return;
     }
     send();
@@ -634,22 +685,65 @@ export function ComposeScreen({
           </div>
         )}
 
+        {guardWarnings.length > 0 && (
+          <div
+            role="alertdialog"
+            aria-label="Alertes avant envoi"
+            className="mb-2 rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5"
+          >
+            <div className="flex items-start gap-2">
+              <AlertTriangle
+                className="mt-0.5 size-4 shrink-0 text-amber-700 dark:text-amber-300"
+                strokeWidth={2.4}
+              />
+              <div className="min-w-0 flex-1 space-y-1">
+                <p className="text-[12px] font-bold text-ink">Vérification avant envoi</p>
+                <ul className="space-y-1">
+                  {guardWarnings.map((warning) => (
+                    <li key={warning.kind} className="text-[11.5px] leading-snug text-ink-soft">
+                      <span className="font-bold text-ink">{warning.label}</span>
+                      {warning.detail ? ` · ${warning.detail}` : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <div className="mt-2.5 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setGuardWarnings([])}
+                className="inline-flex min-h-11 items-center rounded-full px-3 text-[12px] font-bold text-ink-soft"
+              >
+                Corriger
+              </button>
+              <button
+                type="button"
+                onClick={send}
+                disabled={sending}
+                className="inline-flex min-h-11 items-center rounded-full bg-accent px-3 text-[12px] font-bold text-accent-contrast disabled:pointer-events-none disabled:opacity-50"
+              >
+                Envoyer quand même
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center gap-2">
           <ShimmerButton
             className="flex-1"
-            disabled={!validRecipients || sent || sending}
+            disabled={!validRecipients || sent || sending || checkingGuard}
             aria-label={validRecipients ? "Envoyer le message" : "Envoyer, destinataire valide requis"}
             onMouseDown={(event) => event.preventDefault()}
             onClick={requestSend}
           >
             {sent ? (
               <Check className="size-4" />
-            ) : sending ? (
+            ) : sending || checkingGuard ? (
               <Loader2 className="size-4 animate-spin" />
             ) : (
               <Send className="size-4" />
             )}
-            {sent ? "Envoyé" : sending ? "Envoi…" : "Envoyer"}
+            {sent ? "Envoyé" : sending ? "Envoi…" : checkingGuard ? "Vérification…" : "Envoyer"}
           </ShimmerButton>
           {isReply && (
             <button

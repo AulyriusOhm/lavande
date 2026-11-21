@@ -1,17 +1,23 @@
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
-import type { ApiAccount, ApiFolder, ApiMessage, ApiThread } from "@/lib/api";
+import type { ApiAccount, ApiFolder, ApiMailDecision, ApiMessage, ApiThread } from "@/lib/api";
+import { decisionDb } from "@/lib/decision-db";
 import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
-import { DEFAULT_SUMMARY } from "@/lib/summary";
 import { formatDueDate, isoToday } from "@/lib/tasks";
 import { LOCAL_SCHEMA_VERSION, docKey, type Doc } from "@/lib/sync/merge";
 import { createDevice, createMemoryStorage, emptyState, type SyncStorage } from "@/lib/sync/storage";
 
 const ALPHA = "alpha";
 const LLM = { endpoint: "https://llm.test/v1", apiKey: "sk-test", model: "modele" };
+const DECISION_CFG = {
+  enabled: true,
+  endpoint: "https://decision.test/v1/systemone",
+  model: "mammoth-1",
+  apiKey: "nw-test",
+};
 const H = 3_600_000;
 
 const apiAccount = (accountId = ALPHA): ApiAccount => ({
@@ -48,7 +54,7 @@ const apiThread = (
     uid,
     uidvalidity: 1,
     thread_id: `t-${accountId}-${uid}`,
-    message_id: `<${uid}@test.fr>`,
+    message_id: `<${accountId}-${uid}@test.fr>`,
     in_reply_to: null,
     references: [],
     from: { name: from, email: `${from.toLowerCase()}@test.fr` },
@@ -90,10 +96,42 @@ const TASKS_JSON = {
   taches: [{ titre: "Envoyer le compte rendu", echeance: DUE_ISO, de: "Camille", mailId: MAIL_ID }],
 };
 
+const apiDecision = (
+  accountId: string,
+  uid: number,
+  overrides: Partial<ApiMailDecision> = {},
+): ApiMailDecision => ({
+  account_id: accountId,
+  folder_path: "INBOX",
+  uid,
+  message_id: `<${accountId}-${uid}@test.fr>`,
+  content_hash: `h-${accountId}-${uid}`,
+  schema_version: 1,
+  model: "mammoth-1",
+  category: "important",
+  category_conf: 0.92,
+  category_probs: { important: 0.92 },
+  urgency: 1.5,
+  needs_reply: 0.5,
+  has_task: 0.9,
+  has_event: 0.1,
+  security: "safe",
+  security_conf: 0.99,
+  cleanup_score: 0.05,
+  decided_at: Math.floor(Date.now() / 1000),
+  source: "local",
+  ...overrides,
+});
+
 const reply = (body: unknown) =>
   ({ ok: true, status: 200, statusText: "", json: async () => body }) as unknown as Response;
 
-function mockBackend(threads: ApiThread[], tasksJson: unknown = TASKS_JSON, failChat = false) {
+function mockBackend(
+  threads: ApiThread[],
+  tasksJson: unknown = TASKS_JSON,
+  failChat = false,
+  decisionsByUid: Record<number, Partial<ApiMailDecision>> = {},
+) {
   const llmCalls: { system: string; user: string }[] = [];
   const accountIds = threads.length > 0 ? [...new Set(threads.map((thread) => thread.account_id))] : [ALPHA];
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -110,6 +148,18 @@ function mockBackend(threads: ApiThread[], tasksJson: unknown = TASKS_JSON, fail
       });
       if (failChat) throw new Error("réseau");
       return reply({ choices: [{ message: { content: JSON.stringify(tasksJson) } }] });
+    }
+    if (path.endsWith("/api/ai/decisions/triage")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        targets?: { account_id: string; uid: number }[];
+      };
+      return reply({
+        results: (body.targets ?? []).map((t) => ({
+          decision: apiDecision(t.account_id, t.uid, decisionsByUid[t.uid]),
+          cached: false,
+        })),
+        errors: [],
+      });
     }
     if (path.endsWith("/api/accounts")) return reply(accountIds.map((accountId) => apiAccount(accountId)));
     const folders = path.match(/\/api\/accounts\/([^/]+)\/folders$/);
@@ -132,8 +182,20 @@ function mount(storage?: SyncStorage) {
   return renderHook(() => useMailStore(), { wrapper });
 }
 
-const seedPrefs = (aiTasks: Record<string, unknown>, summary: Record<string, unknown> = { enabled: false }) =>
-  window.localStorage.setItem("lavande.prefs", JSON.stringify({ llm: LLM, summary, aiTasks }));
+const seedPrefs = (
+  aiTasks: Record<string, unknown>,
+  summary: Record<string, unknown> = { enabled: false },
+  withDecision = true,
+) =>
+  window.localStorage.setItem(
+    "lavande.prefs",
+    JSON.stringify({
+      llm: LLM,
+      summary,
+      aiTasks,
+      ...(withDecision ? { decision: DECISION_CFG } : {}),
+    }),
+  );
 
 const suggestionDoc = (id: string, proposal: string, timestamp?: number, account = "perso"): Doc => ({
   id,
@@ -157,8 +219,9 @@ const suggestionDoc = (id: string, proposal: string, timestamp?: number, account
   updatedAt: new Date(0).toISOString(),
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   window.localStorage.clear();
+  await decisionDb().clearDecisions();
   vi.stubGlobal("EventSource", undefined);
 });
 
@@ -168,11 +231,37 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("suggestions de tâches IA · fenêtre des 48 h", () => {
-  it("propose les tâches du modèle pour les mails de la fenêtre, horodatées", async () => {
+describe("suggestions de tâches IA · fenêtre des 48 h et modèle de décision", () => {
+  it("n'émet aucun appel LLM automatique sans modèle de décision ni décisions en cache", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: true, windowHours: 48 }, { enabled: false }, false);
+    const llmCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)]);
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.mails.length).toBeGreaterThan(0), { timeout: 3000 });
+    await new Promise((resolve) => window.setTimeout(resolve, 40));
+
+    expect(llmCalls).toHaveLength(0);
+    expect(result.current.suggestions).toHaveLength(0);
+  });
+
+  it("filtre promo, spam et auth_totp avant le LLM et propose les tâches qualifiées", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs({ enabled: true, windowHours: 48 });
-    const llmCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)]);
+    const llmCalls = mockBackend(
+      [
+        apiThread(1, "Camille", "Maquettes v3", RECEIVED),
+        apiThread(2, "Boutique X", "Promo flash -50%", RECEIVED),
+        apiThread(3, "GitHub", "Code 482917", RECEIVED),
+      ],
+      TASKS_JSON,
+      false,
+      {
+        1: { category: "important", has_task: 0.9 },
+        2: { category: "promo", has_task: 0.95 },
+        3: { category: "auth_totp", has_task: 0.95, totp_code: "482917" },
+      },
+    );
     const { result } = mount();
 
     await waitFor(
@@ -191,7 +280,9 @@ describe("suggestions de tâches IA · fenêtre des 48 h", () => {
     expect(result.current.tasks.some((task) => task.title === "Envoyer le compte rendu")).toBe(false);
     expect(llmCalls).toHaveLength(1);
     expect(llmCalls[0].system).toContain("NON FIABLE");
-    expect(llmCalls[0].user).toContain("<<<MAILS>>>");
+    expect(llmCalls[0].user).toContain("Maquettes v3");
+    expect(llmCalls[0].user).not.toContain("Promo flash");
+    expect(llmCalls[0].user).not.toContain("482917");
   });
 
   it("n'invente ni date ni mention quand le modèle ne donne pas d'échéance", async () => {

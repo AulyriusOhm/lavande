@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_imap::extensions::idle::IdleResponse;
+use futures::stream::{self, StreamExt};
 use lavande_mail::config::{AccountConfig, FolderMapping};
 use lavande_mail::imap::{self, ImapSession};
 use lavande_mail::model::FolderRole;
@@ -12,6 +13,7 @@ use lavande_mail::store::Store;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
+use crate::decision::{self, DecisionConfig};
 use crate::dto::FolderReport;
 use crate::state::AppState;
 use crate::widget::WidgetMail;
@@ -22,6 +24,12 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(30);
 /// Combien de mails un événement porte au plus : le front en fait une
 /// notification chacun, au-delà d'une poignée de mails c'est du bruit.
 const NOTICE_CAP: usize = 5;
+
+/// Plafond et bornes du triage automatique à l'arrivée IMAP IDLE.
+const IDLE_TRIAGE_CAP: usize = 10;
+const IDLE_TRIAGE_CONCURRENCY: usize = 3;
+const IDLE_TRIAGE_TIMEOUT: Duration = Duration::from_secs(8);
+const IDLE_TRIAGE_BATCH_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Event {
@@ -44,26 +52,132 @@ pub fn new_mail_notices(
     uids: &[u32],
     cap: usize,
 ) -> Vec<WidgetMail> {
+    new_mail_notices_with_config(store, account, label, folder, uids, cap, None)
+}
+
+/// Variante enrichie avec la configuration du modèle de décision pour calculer
+/// `should_notify` et embarquer catégorie, urgence et code TOTP dans le SSE.
+pub fn new_mail_notices_with_config(
+    store: &Store,
+    account: &str,
+    label: &str,
+    folder: &str,
+    uids: &[u32],
+    cap: usize,
+    decision_config: Option<&DecisionConfig>,
+) -> Vec<WidgetMail> {
+    let default_config = DecisionConfig::default();
+    let cfg = decision_config.unwrap_or(&default_config);
     let mut notices: Vec<WidgetMail> = uids
         .iter()
         .filter_map(|uid| store.get_message(account, folder, *uid).ok().flatten())
-        .map(|message| WidgetMail {
-            id: format!("{account}:{folder}:{}", message.uid),
-            account: account.to_string(),
-            label: label.to_string(),
-            subject: message.subject.clone(),
-            from: match message.from.name.as_deref().map(str::trim) {
-                Some(name) if !name.is_empty() => name.to_string(),
-                _ => message.from.email.clone(),
-            },
-            date: message.date.map(|date| date.timestamp()),
-            unread: message.flags.unread,
-            message_id: message.message_id.clone(),
+        .map(|message| {
+            let decision = store
+                .get_decision(account, folder, message.uid)
+                .ok()
+                .flatten();
+            WidgetMail {
+                id: format!("{account}:{folder}:{}", message.uid),
+                account: account.to_string(),
+                label: label.to_string(),
+                subject: message.subject.clone(),
+                from: match message.from.name.as_deref().map(str::trim) {
+                    Some(name) if !name.is_empty() => name.to_string(),
+                    _ => message.from.email.clone(),
+                },
+                date: message.date.map(|date| date.timestamp()),
+                unread: message.flags.unread,
+                message_id: message.message_id.clone(),
+                category: decision.as_ref().map(|d| d.category.clone()),
+                urgency: decision.as_ref().map(|d| d.urgency),
+                totp_code: decision.as_ref().and_then(|d| d.totp_code.clone()),
+                totp_service: decision.as_ref().and_then(|d| d.totp_service.clone()),
+                should_notify: decision.as_ref().map(|d| decision::should_notify(cfg, d)),
+            }
         })
         .collect();
     notices.sort_by_key(|mail| std::cmp::Reverse(mail.date));
     notices.truncate(cap);
     notices
+}
+
+/// Trie en concurrence bornée (max 3 en parallèle, timeout strict) les derniers
+/// messages reçus dans `INBOX` lorsque le modèle de décision est prêt. Une
+/// erreur ou un timeout est silencieux : la synchro et le SSE ne bloquent jamais.
+pub async fn triage_inbox_uids(
+    state: &Arc<AppState>,
+    account_id: &str,
+    folder_path: &str,
+    uids: &[u32],
+) {
+    if !folder_path.eq_ignore_ascii_case("INBOX") || uids.is_empty() {
+        return;
+    }
+    let Ok(config) = state.decision_config() else {
+        return;
+    };
+    let has_key = state.decision_api_key().await.ok().flatten().is_some();
+    if !config.is_ready(has_key) {
+        return;
+    }
+
+    let messages: Vec<_> = uids
+        .iter()
+        .rev()
+        .take(IDLE_TRIAGE_CAP)
+        .filter_map(|uid| {
+            state
+                .store()
+                .get_message(account_id, folder_path, *uid)
+                .ok()
+                .flatten()
+        })
+        .collect();
+    if messages.is_empty() {
+        return;
+    }
+
+    let batch = stream::iter(messages).for_each_concurrent(IDLE_TRIAGE_CONCURRENCY, |msg| {
+        let state = Arc::clone(state);
+        async move {
+            match tokio::time::timeout(
+                IDLE_TRIAGE_TIMEOUT,
+                decision::triage_message_with_timeout(
+                    &state,
+                    &msg,
+                    &[],
+                    false,
+                    IDLE_TRIAGE_TIMEOUT,
+                ),
+            )
+            .await
+            {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => {
+                    tracing::debug!(
+                        account = %msg.account_id,
+                        uid = msg.uid,
+                        error = %error.message(),
+                        "triage IDLE ignoré"
+                    );
+                }
+                Err(_) => {
+                    tracing::debug!(
+                        account = %msg.account_id,
+                        uid = msg.uid,
+                        "triage IDLE expiré (timeout)"
+                    );
+                }
+            }
+        }
+    });
+
+    if tokio::time::timeout(IDLE_TRIAGE_BATCH_TIMEOUT, batch)
+        .await
+        .is_err()
+    {
+        tracing::debug!(account = %account_id, "lot de triage IDLE expiré");
+    }
 }
 
 pub struct Events {
@@ -180,13 +294,16 @@ async fn sync_and_publish(
                 removed = report.removed,
                 "nouveau courrier détecté"
             );
-            let new_mails = new_mail_notices(
+            triage_inbox_uids(state, &config.id, folder_path, &report.preview_uids).await;
+            let decision_config = state.decision_config().ok();
+            let new_mails = new_mail_notices_with_config(
                 state.store(),
                 &config.id,
                 &config.label,
                 folder_path,
                 &report.preview_uids,
                 NOTICE_CAP,
+                decision_config.as_ref(),
             );
             state.events().publish(Event {
                 kind: "folder-updated",
@@ -338,5 +455,130 @@ mod tests {
     fn empty_uids_give_no_notice() {
         let store = store();
         assert!(new_mail_notices(&store, "perso", "Perso", "INBOX", &[], 5).is_empty());
+    }
+
+    #[test]
+    fn notices_are_enriched_with_decisions_and_smart_should_notify() {
+        use crate::decision::NotifFilterMode;
+        use lavande_mail::store::MailDecision;
+        use std::collections::HashMap;
+
+        let store = store();
+        store
+            .upsert_message(&message(1, "Promo Flash", Some("Shop"), 1_731_000_060))
+            .expect("promo");
+        store
+            .upsert_message(&message(2, "Code GitHub", Some("GitHub"), 1_731_000_120))
+            .expect("totp");
+
+        let promo_dec = MailDecision {
+            account_id: "perso".into(),
+            folder_path: "INBOX".into(),
+            uid: 1,
+            message_id: Some("<m1@x>".into()),
+            content_hash: "h1".into(),
+            schema_version: 1,
+            model: "mammoth-1".into(),
+            category: "promo".into(),
+            category_conf: 0.96,
+            category_probs: HashMap::new(),
+            urgency: 0.2,
+            needs_reply: 0.01,
+            has_task: 0.0,
+            has_event: 0.0,
+            security: "safe".into(),
+            security_conf: 0.99,
+            cleanup_score: 0.95,
+            assignee: None,
+            assignee_conf: None,
+            totp_code: None,
+            totp_service: None,
+            suggested_folder: None,
+            suggested_folder_conf: None,
+            decided_at: 1_731_000_065,
+            source: "local".into(),
+        };
+        let mut totp_dec = promo_dec.clone();
+        totp_dec.uid = 2;
+        totp_dec.message_id = Some("<m2@x>".into());
+        totp_dec.category = "auth_totp".into();
+        totp_dec.urgency = 2.1;
+        totp_dec.totp_code = Some("482917".into());
+        totp_dec.totp_service = Some("GitHub".into());
+
+        store.upsert_decision(&promo_dec).expect("upsert promo");
+        store.upsert_decision(&totp_dec).expect("upsert totp");
+
+        let cfg = DecisionConfig {
+            notif_mode: NotifFilterMode::Smart,
+            ..Default::default()
+        };
+
+        let notices =
+            new_mail_notices_with_config(&store, "perso", "Perso", "INBOX", &[1, 2], 5, Some(&cfg));
+        assert_eq!(notices.len(), 2);
+        assert_eq!(notices[0].category.as_deref(), Some("auth_totp"));
+        assert_eq!(notices[0].totp_code.as_deref(), Some("482917"));
+        assert_eq!(notices[0].totp_service.as_deref(), Some("GitHub"));
+        assert_eq!(notices[0].should_notify, Some(true));
+        assert_eq!(notices[1].category.as_deref(), Some("promo"));
+        assert_eq!(notices[1].should_notify, Some(false));
+    }
+
+    #[tokio::test]
+    async fn triage_inbox_uids_silently_survives_unreachable_model() {
+        use crate::discovery::DiscoveryEndpoints;
+        use crate::secrets::SecretBackend;
+        use lavande_mail::tls::TlsOptions;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = Arc::new(
+            AppState::open_with(
+                dir.path(),
+                TlsOptions::default(),
+                DiscoveryEndpoints::default(),
+                SecretBackend::File,
+            )
+            .await
+            .expect("open"),
+        );
+        state
+            .store()
+            .upsert_account("perso", "Perso", "roman@lavande.fr")
+            .expect("account");
+        state
+            .store()
+            .upsert_folder(&Folder {
+                account_id: "perso".into(),
+                path: "INBOX".into(),
+                name: "INBOX".into(),
+                role: FolderRole::Inbox,
+                uidvalidity: 1,
+                uidnext: 2,
+                last_sync_at: None,
+                modseq: None,
+                delimiter: Some("/".into()),
+            })
+            .expect("folder");
+        state
+            .store()
+            .upsert_message(&message(1, "Test", Some("Marc"), 1_731_000_000))
+            .expect("msg");
+        state
+            .save_decision_config(&DecisionConfig {
+                enabled: true,
+                endpoint: "http://127.0.0.1:9/v1/systemone".into(),
+                model: "mammoth-1".into(),
+                auth_header: crate::decision::DecisionAuthHeader::None,
+                ..Default::default()
+            })
+            .expect("save cfg");
+
+        triage_inbox_uids(&state, "perso", "INBOX", &[1]).await;
+        assert!(state
+            .store()
+            .get_decision("perso", "INBOX", 1)
+            .expect("query")
+            .is_none());
     }
 }

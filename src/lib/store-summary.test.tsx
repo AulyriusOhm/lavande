@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { ApiAccount, ApiFolder, ApiMessage, ApiThread } from "@/lib/api";
+import type { ApiAccount, ApiFolder, ApiMailDecision, ApiMessage, ApiThread } from "@/lib/api";
+import { decisionDb } from "@/lib/decision-db";
 import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
@@ -11,6 +12,12 @@ import { createMemoryStorage } from "@/lib/sync/storage";
 
 const ALPHA = "alpha";
 const LLM = { endpoint: "https://llm.test/v1", apiKey: "sk-test", model: "modele" };
+const DECISION_CFG = {
+  enabled: true,
+  endpoint: "https://decision.test/v1/systemone",
+  model: "mammoth-1",
+  apiKey: "nw-test",
+};
 
 const apiAccount = (): ApiAccount => ({
   id: ALPHA,
@@ -28,7 +35,7 @@ const apiFolder = (): ApiFolder => ({
   name: "Boîte de réception",
   role: "inbox",
   uidvalidity: 1,
-  uidnext: 4,
+  uidnext: 5,
   last_sync_at: null,
 });
 
@@ -79,6 +86,32 @@ const THREADS = [
   apiThread(3, "OVH", "Facture F2026-1187"),
 ];
 
+const apiDecision = (
+  uid: number,
+  overrides: Partial<ApiMailDecision> = {},
+): ApiMailDecision => ({
+  account_id: ALPHA,
+  folder_path: "INBOX",
+  uid,
+  message_id: `<${uid}@test.fr>`,
+  content_hash: `h-${uid}`,
+  schema_version: 1,
+  model: "mammoth-1",
+  category: "important",
+  category_conf: 0.92,
+  category_probs: { important: 0.92 },
+  urgency: 1.5,
+  needs_reply: 0.2,
+  has_task: 0.2,
+  has_event: 0.1,
+  security: "safe",
+  security_conf: 0.99,
+  cleanup_score: 0.05,
+  decided_at: Math.floor(Date.now() / 1000),
+  source: "local",
+  ...overrides,
+});
+
 const reply = (body: unknown) =>
   ({ ok: true, status: 200, statusText: "", json: async () => body }) as unknown as Response;
 
@@ -95,19 +128,41 @@ const SUMMARY_JSON = {
   ],
 };
 
-function mockBackend() {
-  const llmCalls: string[] = [];
-  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+function mockBackend(
+  threads: ApiThread[] = THREADS,
+  decisionsByUid: Record<number, Partial<ApiMailDecision>> = {
+    1: { category: "important", needs_reply: 0.9, has_task: 0.85, urgency: 2.2 },
+    2: { category: "info", urgency: 0.8 },
+    3: { category: "info", urgency: 0.6 },
+  },
+) {
+  const llmCalls: { url: string; user: string }[] = [];
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const { pathname } = new URL(url, "http://localhost");
     const path = decodeURIComponent(pathname);
     if (path.endsWith("/chat/completions")) {
-      llmCalls.push(url);
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        messages?: { role?: string; content?: string }[];
+      };
+      llmCalls.push({ url, user: body.messages?.[1]?.content ?? "" });
       return reply({ choices: [{ message: { content: JSON.stringify(SUMMARY_JSON) } }] });
+    }
+    if (path.endsWith("/api/ai/decisions/triage")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        targets?: { uid: number }[];
+      };
+      return reply({
+        results: (body.targets ?? []).map((t) => ({
+          decision: apiDecision(t.uid, decisionsByUid[t.uid]),
+          cached: false,
+        })),
+        errors: [],
+      });
     }
     if (path.endsWith("/api/accounts")) return reply([apiAccount()]);
     if (path.endsWith(`/api/accounts/${ALPHA}/folders`)) return reply([apiFolder()]);
-    if (path.endsWith(`/api/accounts/${ALPHA}/folders/INBOX/threads`)) return reply(THREADS);
+    if (path.endsWith(`/api/accounts/${ALPHA}/folders/INBOX/threads`)) return reply(threads);
     if (path.includes("/messages/counts") || path.endsWith("/counts")) return reply([]);
     return reply([]);
   });
@@ -125,11 +180,18 @@ function mount() {
   return renderHook(() => useMailStore(), { wrapper });
 }
 
-const seedPrefs = (summary: Record<string, unknown>) =>
-  window.localStorage.setItem("lavande.prefs", JSON.stringify({ llm: LLM, summary }));
+const seedPrefs = (
+  summary: Record<string, unknown>,
+  decision: Record<string, unknown> = DECISION_CFG,
+) =>
+  window.localStorage.setItem(
+    "lavande.prefs",
+    JSON.stringify({ llm: LLM, summary, ...(decision ? { decision } : {}) }),
+  );
 
-beforeEach(() => {
+beforeEach(async () => {
   window.localStorage.clear();
+  await decisionDb().clearDecisions();
   vi.stubGlobal("EventSource", undefined);
 });
 
@@ -139,7 +201,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("résumé périodique · repli local", () => {
+describe("résumé périodique · repli local et règle d'or #3", () => {
   it("produit un résumé de démonstration sans appel réseau", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "demo");
     seedPrefs({ ...DEFAULT_SUMMARY, llmConsent: true });
@@ -159,6 +221,22 @@ describe("résumé périodique · repli local", () => {
     expect(result.current.tasks).toHaveLength(TASKS.length);
   });
 
+  it("n'émet aucun appel LLM automatique sans modèle de décision ni décisions en cache", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({ llm: LLM, summary: { ...DEFAULT_SUMMARY, llmConsent: true } }),
+    );
+    const llmCalls = mockBackend();
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.mails).toHaveLength(THREADS.length), { timeout: 3000 });
+    await waitFor(() => expect(result.current.summary?.source).toBe("fallback"), { timeout: 3000 });
+    await new Promise((resolve) => window.setTimeout(resolve, 30));
+
+    expect(llmCalls).toHaveLength(0);
+  });
+
   it("ne crée aucun résumé quand la préférence est désactivée", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "demo");
     seedPrefs({ ...DEFAULT_SUMMARY, enabled: false });
@@ -169,19 +247,34 @@ describe("résumé périodique · repli local", () => {
   });
 });
 
-describe("résumé périodique · tâches proposées", () => {
-  it("garde les tâches du modèle en suggestions, sans créer de tâche", async () => {
+describe("résumé périodique · pipeline hybride et tâches proposées", () => {
+  it("filtre les pubs, spams et codes TOTP avant le LLM et garde les tâches en suggestions", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs({ ...DEFAULT_SUMMARY, llmConsent: true });
-    mockBackend();
+    const threads = [
+      ...THREADS,
+      apiThread(4, "Boutique X", "Soldes -70% maintenant"),
+      apiThread(5, "GitHub", "Code de vérification 482917"),
+    ];
+    const llmCalls = mockBackend(threads, {
+      1: { category: "important", needs_reply: 0.9, has_task: 0.85, urgency: 2.2 },
+      2: { category: "info", urgency: 0.8 },
+      3: { category: "info", urgency: 0.6 },
+      4: { category: "promo", urgency: 0.1 },
+      5: { category: "auth_totp", totp_code: "482917", urgency: 1.8 },
+    });
     const { result } = mount();
 
     await waitFor(() => expect(result.current.summary?.source).toBe("llm"), { timeout: 3000 });
 
+    expect(llmCalls.length).toBeGreaterThan(0);
+    expect(llmCalls.every((c) => !c.user.includes("Soldes -70%"))).toBe(true);
+    expect(llmCalls.every((c) => !c.user.includes("482917"))).toBe(true);
+
     expect(result.current.summary?.headline).toBe(SUMMARY_JSON.accroche);
     expect(result.current.summary?.groups.actions[0].mailId).toBe(`${ALPHA}:INBOX:1`);
     expect(result.current.summary?.groups.infos[0].mailId).toBe(`${ALPHA}:INBOX:2`);
-    expect(result.current.summary?.mailCount).toBe(THREADS.length);
+    expect(result.current.summary?.mailCount).toBe(threads.length);
     expect(result.current.tasks).toHaveLength(0);
     expect(result.current.tasks.some((task) => task.title === "Répondre à Camille")).toBe(false);
 

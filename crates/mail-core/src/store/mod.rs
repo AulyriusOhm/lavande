@@ -1922,8 +1922,7 @@ const DECISION_COLUMNS: &str = "account_id, folder_path, uid, message_id, conten
 
 fn decision_from_row(row: &Row<'_>) -> Result<MailDecision, rusqlite::Error> {
     let probs_raw: String = row.get(9)?;
-    let category_probs: HashMap<String, f64> =
-        serde_json::from_str(&probs_raw).unwrap_or_default();
+    let category_probs: HashMap<String, f64> = serde_json::from_str(&probs_raw).unwrap_or_default();
     Ok(MailDecision {
         account_id: row.get(0)?,
         folder_path: row.get(1)?,
@@ -2033,9 +2032,13 @@ impl Store {
             "SELECT {DECISION_COLUMNS} FROM mail_decisions \
              WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3"
         );
-        conn.query_row(&sql, params![account_id, folder_path, uid], decision_from_row)
-            .optional()
-            .map_err(MailError::from)
+        conn.query_row(
+            &sql,
+            params![account_id, folder_path, uid],
+            decision_from_row,
+        )
+        .optional()
+        .map_err(MailError::from)
     }
 
     pub fn get_decision_by_message_id(
@@ -2481,8 +2484,17 @@ mod tests {
             .expect("present");
         assert_eq!(updated.suggested_folder.as_deref(), Some("Auth"));
 
-        assert_eq!(store.list_decisions(Some("perso"), None, 50).expect("list").len(), 1);
+        assert_eq!(
+            store
+                .list_decisions(Some("perso"), None, 50)
+                .expect("list")
+                .len(),
+            1
+        );
         assert_eq!(store.clear_decisions(Some("perso")).expect("clear"), 1);
-        assert!(store.get_decision("perso", "INBOX", 42).expect("empty").is_none());
+        assert!(store
+            .get_decision("perso", "INBOX", 42)
+            .expect("empty")
+            .is_none());
     }
 }

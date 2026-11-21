@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { ApiAccount, ApiFolder, ApiMessage, ApiThread } from "@/lib/api";
+import type { ApiAccount, ApiFolder, ApiMailDecision, ApiMessage, ApiThread } from "@/lib/api";
+import { decisionDb } from "@/lib/decision-db";
 import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
@@ -13,6 +14,12 @@ const ALPHA = "alpha";
 const BETA = "beta";
 const ALL = "all";
 const LLM = { endpoint: "https://llm.test/v1", apiKey: "sk-test", model: "modele" };
+const DECISION_CFG = {
+  enabled: true,
+  endpoint: "https://decision.test/v1/systemone",
+  model: "mammoth-1",
+  apiKey: "nw-test",
+};
 const H = 3_600_000;
 const RECEIVED = new Date(Date.now() - H).toISOString();
 const ATTACHMENT_BYTES = 317_440;
@@ -97,6 +104,33 @@ const SUMMARY_JSON = {
   taches: [{ titre: "Répondre à Camille", echeance: "2026-11-20", de: "Camille", mailId: `${ALPHA}:INBOX:1` }],
 };
 
+const apiDecision = (
+  accountId: string,
+  uid: number,
+  overrides: Partial<ApiMailDecision> = {},
+): ApiMailDecision => ({
+  account_id: accountId,
+  folder_path: "INBOX",
+  uid,
+  message_id: `<${uid}@test.fr>`,
+  content_hash: `h-${accountId}-${uid}`,
+  schema_version: 1,
+  model: "mammoth-1",
+  category: uid === 1 ? "important" : "info",
+  category_conf: 0.92,
+  category_probs: { [uid === 1 ? "important" : "info"]: 0.92 },
+  urgency: uid === 1 ? 2.2 : 0.8,
+  needs_reply: uid === 1 ? 0.9 : 0.2,
+  has_task: uid === 1 ? 0.85 : 0.2,
+  has_event: 0.1,
+  security: "safe",
+  security_conf: 0.99,
+  cleanup_score: 0.05,
+  decided_at: Math.floor(Date.now() / 1000),
+  source: "local",
+  ...overrides,
+});
+
 function mockBackend() {
   const prompts: { system: string; user: string }[] = [];
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -106,6 +140,18 @@ function mockBackend() {
       const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: { content?: string }[] };
       prompts.push({ system: body.messages?.[0]?.content ?? "", user: body.messages?.[1]?.content ?? "" });
       return reply({ choices: [{ message: { content: JSON.stringify(SUMMARY_JSON) } }] });
+    }
+    if (path.endsWith("/api/ai/decisions/triage")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        targets?: { account_id: string; uid: number }[];
+      };
+      return reply({
+        results: (body.targets ?? []).map((target) => ({
+          decision: apiDecision(target.account_id, target.uid),
+          cached: false,
+        })),
+        errors: [],
+      });
     }
     if (path.endsWith("/api/accounts")) return reply([apiAccount(ALPHA), apiAccount(BETA)]);
     if (/\/api\/accounts\/[^/]+\/folders$/.test(path)) {
@@ -137,6 +183,7 @@ const seedPrefs = () =>
     "lavande.prefs",
     JSON.stringify({
       llm: LLM,
+      decision: DECISION_CFG,
       summary: { ...DEFAULT_SUMMARY, llmConsent: true },
       aiTasks: { enabled: false },
     }),
@@ -147,8 +194,9 @@ const cachedResult = () => {
   return raw ? (JSON.parse(raw) as Record<string, { result: { headline: string } }>) : {};
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   window.localStorage.clear();
+  await decisionDb().clearDecisions();
   vi.stubGlobal("EventSource", undefined);
 });
 
@@ -241,6 +289,7 @@ describe("résumé IA · cache du passage", () => {
       "lavande.prefs",
       JSON.stringify({
         llm: LLM,
+        decision: DECISION_CFG,
         summary: { ...DEFAULT_SUMMARY, llmConsent: true },
         aiTasks: { enabled: false },
         teamContext: {

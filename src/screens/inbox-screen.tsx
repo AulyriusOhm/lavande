@@ -5,8 +5,12 @@ import type { FolderId, Mail } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
 import type { SummaryRef } from "@/lib/summary";
 import { dueToneFor, formatDueDate } from "@/lib/tasks";
-import { threadsInFolder } from "@/lib/threads";
+import { threadsInFolder, type Thread } from "@/lib/threads";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
+import { decisionReady, type CustomCategory, type MailDecision } from "@/lib/decision";
+import { countCleanupByFilter } from "@/lib/cleanup";
+import { indexDecisions, triageDecisionFor } from "@/lib/triage";
+import { usePrefs } from "@/lib/prefs";
 import { useMailStore } from "@/lib/store";
 import type { MailNavigation } from "@/lib/app-shortcuts";
 import { accentContrast } from "@/lib/theme";
@@ -20,9 +24,66 @@ import { ThreadRow } from "@/components/thread-row";
 import { EmptyTrashButton } from "@/components/empty-trash";
 import { HiddenFoldersRail } from "@/components/folder-row";
 import { useFolderTree } from "@/components/folder-tree";
+import { CategoryManagerSheet, categoryColorStyle } from "@/components/category-manager-sheet";
 import { moveFolderPath } from "@/lib/folder-tree";
 
-type Filter = "all" | "unread" | "starred" | "encrypted";
+type Filter =
+  | "all"
+  | "unread"
+  | "starred"
+  | "encrypted"
+  | "priority"
+  | "needs_reply"
+  | "auth_totp"
+  | "notification"
+  | "promo"
+  | `custom:${string}`;
+
+function matchesCustomCategory(category: string, customId: string): boolean {
+  return category === `custom:${customId}` || category === customId;
+}
+
+function isExcludedFromPriority(
+  decision: MailDecision | undefined,
+  customCategories: readonly CustomCategory[],
+): boolean {
+  if (!decision) return false;
+  if (
+    decision.category === "promo" ||
+    decision.category === "spam" ||
+    decision.category === "auth_totp" ||
+    decision.category === "notification"
+  ) {
+    return true;
+  }
+  const custom = customCategories.find((cat) => matchesCustomCategory(decision.category, cat.id));
+  return Boolean(custom?.excludeFromPriority);
+}
+
+function resolveDefaultFilter(
+  configured: string,
+  smartActive: boolean,
+  customCategories: readonly CustomCategory[],
+): Filter {
+  if (!configured || configured === "all") return "all";
+  if (!smartActive) return "all";
+  if (
+    configured === "priority" ||
+    configured === "needs_reply" ||
+    configured === "auth_totp" ||
+    configured === "notification" ||
+    configured === "promo"
+  ) {
+    return configured;
+  }
+  if (configured.startsWith("custom:")) {
+    const id = configured.slice("custom:".length);
+    if (customCategories.some((cat) => cat.id === id)) {
+      return `custom:${id}`;
+    }
+  }
+  return "all";
+}
 
 const INTRO_HOLD_MS = 2000;
 
@@ -73,6 +134,7 @@ export function InboxScreen({
   onRestore,
   onForward,
   onOpenMenu,
+  onOpenCleanup,
 }: {
   mails: Mail[];
   account: string;
@@ -90,26 +152,9 @@ export function InboxScreen({
   onNotSpam?: (mail: Mail) => void;
   onRestore?: (mail: Mail) => void;
   onOpenMenu?: (mail: Mail) => void;
+  onOpenCleanup?: () => void;
 }) {
-  const [filter, setFilter] = useState<Filter>("all");
-  const [compact, setCompact] = useState(false);
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [sizes, setSizes] = useState({ hero: 0, card: 0, bar: 0 });
-  const [cursor, setCursor] = useState<number | null>(null);
-  const [proposed, setProposed] = useState<Record<string, "added" | "existing">>({});
-  const rowsRef = useRef<HTMLDivElement>(null);
-  const wasOpen = useRef(false);
-
-  const focusRow = useCallback((id: string | null) => {
-    if (!id || !rowsRef.current) return;
-    const row = Array.from(rowsRef.current.querySelectorAll<HTMLElement>("[data-mail-row]")).find(
-      (element) => element.dataset.mailRow === id,
-    );
-    if (!row) return;
-    row.focus({ preventScroll: true });
-    row.scrollIntoView?.({ block: "nearest" });
-  }, []);
-
+  const { decision: decisionPrefs } = usePrefs();
   const {
     mode,
     syncing,
@@ -128,11 +173,77 @@ export function InboxScreen({
     proposeSummaryAction,
     openMail,
     closeMessage,
+    decisions,
+    triageMails,
   } = useMailStore();
 
+  const smartActive = decisionReady(decisionPrefs) || Object.keys(decisions).length > 0;
+  const reception = folder === "inbox" || folder === "unified";
+
+  const [filter, setFilter] = useState<Filter>(() =>
+    reception
+      ? resolveDefaultFilter(
+          decisionPrefs.defaultInboxFilter,
+          smartActive,
+          decisionPrefs.customCategories,
+        )
+      : "all",
+  );
+  const userPickedFilter = useRef(false);
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
+  const [compact, setCompact] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [sizes, setSizes] = useState({ hero: 0, card: 0, bar: 0 });
+  const [cursor, setCursor] = useState<number | null>(null);
+  const [proposed, setProposed] = useState<Record<string, "added" | "existing">>({});
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const wasOpen = useRef(false);
+
+  const focusRow = useCallback((id: string | null) => {
+    if (!id || !rowsRef.current) return;
+    const row = Array.from(rowsRef.current.querySelectorAll<HTMLElement>("[data-mail-row]")).find(
+      (element) => element.dataset.mailRow === id,
+    );
+    if (!row) return;
+    row.focus({ preventScroll: true });
+    row.scrollIntoView?.({ block: "nearest" });
+  }, []);
+
   useEffect(() => {
-    setFilter("all");
+    userPickedFilter.current = false;
+    setFilter(
+      reception
+        ? resolveDefaultFilter(
+            decisionPrefs.defaultInboxFilter,
+            smartActive,
+            decisionPrefs.customCategories,
+          )
+        : "all",
+    );
   }, [folder, folderPath, account]);
+
+  useEffect(() => {
+    if (userPickedFilter.current) return;
+    setFilter(
+      reception
+        ? resolveDefaultFilter(
+            decisionPrefs.defaultInboxFilter,
+            smartActive,
+            decisionPrefs.customCategories,
+          )
+        : "all",
+    );
+  }, [
+    reception,
+    smartActive,
+    decisionPrefs.defaultInboxFilter,
+    decisionPrefs.customCategories,
+  ]);
+
+  const selectFilter = useCallback((next: Filter) => {
+    userPickedFilter.current = true;
+    setFilter(next);
+  }, []);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const heroRef = useRef<HTMLDivElement>(null);
@@ -191,10 +302,91 @@ export function InboxScreen({
     folderOptions.find(
       (entry) => entry.id === folder && (entry.id !== "other" || entry.path === folderPath),
     )?.label ?? folderLabel(folder);
-  const reception = folder === "inbox" || folder === "unified";
   const unreadCount = threads.filter((thread) => thread.unread > 0).length;
   const starredCount = threads.filter((thread) => thread.starred).length;
   const encryptedCount = threads.filter((thread) => thread.encrypted > 0).length;
+
+  const decisionIndex = useMemo(() => indexDecisions(decisions), [decisions]);
+  const decisionForThread = useCallback(
+    (thread: Thread): MailDecision | undefined => {
+      const primary = triageDecisionFor(
+        thread.primary,
+        decisionIndex.byKey,
+        decisionIndex.byMessageId,
+      );
+      if (primary) return primary;
+      for (const msg of thread.messages) {
+        const hit = triageDecisionFor(msg, decisionIndex.byKey, decisionIndex.byMessageId);
+        if (hit) return hit;
+      }
+      return undefined;
+    },
+    [decisionIndex],
+  );
+
+  const smartCounts = useMemo(() => {
+    if (!smartActive) {
+      return {
+        priority: 0,
+        needsReply: 0,
+        authTotp: 0,
+        notification: 0,
+        promo: 0,
+        custom: {} as Record<string, number>,
+      };
+    }
+    const custom: Record<string, number> = {};
+    for (const cat of decisionPrefs.customCategories) custom[cat.id] = 0;
+    let priority = 0;
+    let needsReply = 0;
+    let authTotp = 0;
+    let notification = 0;
+    let promo = 0;
+
+    for (const thread of threads) {
+      const dec = decisionForThread(thread);
+      if (!isExcludedFromPriority(dec, decisionPrefs.customCategories)) priority += 1;
+      if (dec) {
+        if (dec.needsReply >= decisionPrefs.thresholds.category && !thread.primary.answered) {
+          needsReply += 1;
+        }
+        if (dec.category === "auth_totp") authTotp += 1;
+        else if (dec.category === "notification") notification += 1;
+        else if (dec.category === "promo" || dec.category === "spam") promo += 1;
+        else {
+          for (const cat of decisionPrefs.customCategories) {
+            if (matchesCustomCategory(dec.category, cat.id)) {
+              custom[cat.id] = (custom[cat.id] ?? 0) + 1;
+            }
+          }
+        }
+      }
+    }
+
+    return { priority, needsReply, authTotp, notification, promo, custom };
+  }, [
+    smartActive,
+    threads,
+    decisionForThread,
+    decisionPrefs.customCategories,
+    decisionPrefs.thresholds.category,
+  ]);
+
+  const cleanupCount = useMemo(
+    () =>
+      smartActive
+        ? countCleanupByFilter(
+            mails,
+            decisions,
+            [],
+            [],
+            decisionPrefs.thresholds,
+            Date.now(),
+            decisionPrefs.customCategories,
+          ).all
+        : 0,
+    [smartActive, mails, decisions, decisionPrefs.thresholds, decisionPrefs.customCategories],
+  );
   const summaryById = useMemo(() => new Map(summaryMails.map((mail) => [mail.id, mail])), [summaryMails]);
   const summaryRows = (refs: SummaryRef[]) =>
     refs.flatMap((ref) => {
@@ -231,6 +423,22 @@ export function InboxScreen({
     if (filter === "unread") return thread.unread > 0;
     if (filter === "starred") return thread.starred;
     if (filter === "encrypted") return thread.encrypted > 0;
+    if (filter === "all") return true;
+    const dec = decisionForThread(thread);
+    if (filter === "priority") {
+      return !isExcludedFromPriority(dec, decisionPrefs.customCategories);
+    }
+    if (!dec) return false;
+    if (filter === "needs_reply") {
+      return dec.needsReply >= decisionPrefs.thresholds.category && !thread.primary.answered;
+    }
+    if (filter === "auth_totp") return dec.category === "auth_totp";
+    if (filter === "notification") return dec.category === "notification";
+    if (filter === "promo") return dec.category === "promo" || dec.category === "spam";
+    if (filter.startsWith("custom:")) {
+      const id = filter.slice("custom:".length);
+      return matchesCustomCategory(dec.category, id);
+    }
     return true;
   });
 
@@ -649,10 +857,10 @@ export function InboxScreen({
         )}
 
         <div className="mt-5 flex gap-2 overflow-x-auto px-5 pb-1 no-scrollbar">
-          <Chip active={filter === "all"} onClick={() => setFilter("all")}>
+          <Chip active={filter === "all"} onClick={() => selectFilter("all")}>
             Tous
           </Chip>
-          <Chip active={filter === "unread"} onClick={() => setFilter("unread")}>
+          <Chip active={filter === "unread"} onClick={() => selectFilter("unread")}>
             Non lus
             <span
               aria-hidden
@@ -667,7 +875,7 @@ export function InboxScreen({
               {unreadCount} conversation{unreadCount > 1 ? "s" : ""} non lue{unreadCount > 1 ? "s" : ""}
             </span>
           </Chip>
-          <Chip active={filter === "starred"} onClick={() => setFilter("starred")}>
+          <Chip active={filter === "starred"} onClick={() => selectFilter("starred")}>
             Étoilés
             <span
               aria-hidden
@@ -682,7 +890,7 @@ export function InboxScreen({
               {starredCount} conversation{starredCount > 1 ? "s" : ""} étoilée{starredCount > 1 ? "s" : ""}
             </span>
           </Chip>
-          <Chip active={filter === "encrypted"} onClick={() => setFilter("encrypted")}>
+          <Chip active={filter === "encrypted"} onClick={() => selectFilter("encrypted")}>
             Chiffrés
             <span
               aria-hidden
@@ -697,6 +905,79 @@ export function InboxScreen({
               {encryptedCount} conversation{encryptedCount > 1 ? "s" : ""} chiffrée{encryptedCount > 1 ? "s" : ""}
             </span>
           </Chip>
+          {smartActive ? (
+            <>
+              {(
+                [
+                  { id: "priority", label: "Prioritaire", count: smartCounts.priority },
+                  { id: "needs_reply", label: "À répondre", count: smartCounts.needsReply },
+                  { id: "auth_totp", label: "Codes & Auth", count: smartCounts.authTotp },
+                  { id: "notification", label: "Notifications", count: smartCounts.notification },
+                  { id: "promo", label: "Pub & Promos", count: smartCounts.promo },
+                ] as { id: Filter; label: string; count: number }[]
+              ).map((item) => (
+                <Chip
+                  key={item.id}
+                  active={filter === item.id}
+                  onClick={() => selectFilter(item.id)}
+                >
+                  <span>{item.label}</span>
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "rounded-full px-1.5 text-[10px] font-bold",
+                      filter === item.id ? "bg-ink/10 text-accent-contrast" : "bg-accent-soft text-accent-ink",
+                    )}
+                  >
+                    {item.count}
+                  </span>
+                </Chip>
+              ))}
+              {decisionPrefs.customCategories.map((cat) => {
+                const catFilter: Filter = `custom:${cat.id}`;
+                const activeChip = filter === catFilter;
+                const style = categoryColorStyle(cat.color);
+                const count = smartCounts.custom[cat.id] ?? 0;
+                return (
+                  <Chip
+                    key={cat.id}
+                    active={activeChip}
+                    onClick={() => selectFilter(catFilter)}
+                  >
+                    <span className={cn("size-2 rounded-full", activeChip ? "bg-accent-contrast" : style.dot)} />
+                    <span>{cat.name}</span>
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "rounded-full px-1.5 text-[10px] font-bold",
+                        activeChip ? "bg-ink/10 text-accent-contrast" : "bg-accent-soft text-accent-ink",
+                      )}
+                    >
+                      {count}
+                    </span>
+                  </Chip>
+                );
+              })}
+              <Chip onClick={() => setCategoriesOpen(true)}>
+                <Plus className="size-3.5" />
+                <span>Catégorie</span>
+              </Chip>
+              {onOpenCleanup ? (
+                <Chip onClick={onOpenCleanup}>
+                  <Sparkles className="size-3.5" />
+                  <span>Nettoyage</span>
+                  {cleanupCount > 0 ? (
+                    <span
+                      aria-hidden
+                      className="rounded-full bg-accent-soft px-1.5 text-[10px] font-bold text-accent-ink"
+                    >
+                      {cleanupCount}
+                    </span>
+                  ) : null}
+                </Chip>
+              ) : null}
+            </>
+          ) : null}
         </div>
 
         <div ref={rowsRef} className="mt-3 space-y-1 px-1">
@@ -715,6 +996,9 @@ export function InboxScreen({
                 thread={thread}
                 delay={Math.min(0.4, 0.16 + index * 0.05)}
                 showAccount={account === ALL_ACCOUNTS}
+                decision={decisionForThread(thread)}
+                decisionThresholds={decisionPrefs.thresholds}
+                customCategories={decisionPrefs.customCategories}
                 onOpen={() => onOpen(thread.primary)}
                 onToggleStar={() => onToggleStar(thread.primary.id)}
                 onDelete={() => onMailAction("delete", thread.primary)}
@@ -746,7 +1030,7 @@ export function InboxScreen({
               {filter !== "all" && (
                 <button
                   type="button"
-                  onClick={() => setFilter("all")}
+                  onClick={() => selectFilter("all")}
                   className="mt-3 inline-flex min-h-11 items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-2 text-[12px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
                 >
                   <RotateCcw className="size-3.5" />
@@ -816,6 +1100,12 @@ export function InboxScreen({
           </IconButton>
         </div>
       </motion.div>
+
+      <CategoryManagerSheet
+        open={categoriesOpen}
+        onClose={() => setCategoriesOpen(false)}
+        onRetriage={() => triageMails(mails, true)}
+      />
     </div>
   );
 }

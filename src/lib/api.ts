@@ -244,6 +244,13 @@ export type LiveMail = {
   date: number | null;
   unread: boolean;
   message_id?: string | null;
+  decision_category?: string;
+  decision_urgency?: number;
+  category?: string;
+  urgency?: number;
+  should_notify?: boolean;
+  totp_code?: string;
+  totp_service?: string;
 };
 
 export type LiveEvent = {

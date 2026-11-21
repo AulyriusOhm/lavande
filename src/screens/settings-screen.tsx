@@ -53,8 +53,11 @@ import {
   type DecisionConfig,
   type DecisionProtocol,
   type DecisionProvider,
+  type NotifFilterMode,
   type ThresholdPresetId,
 } from "@/lib/decision";
+import { toApiDecisionConfig } from "@/lib/triage";
+import { CategoryManagerSheet, categoryColorStyle } from "@/components/category-manager-sheet";
 import { mailApi } from "@/lib/api";
 import { DEFAULT_COPILOT_CLIENT_ID, copilotModels, useCopilotSession } from "@/lib/copilot";
 import { openExternal } from "@/lib/open-external";
@@ -173,6 +176,7 @@ export function SettingsScreen({
     unhideFolder,
     deleteFolder,
     account: currentAccount,
+    triageMails,
   } = useMailStore();
   const {
     swipeLeft,
@@ -212,6 +216,7 @@ export function SettingsScreen({
   const [decisionProbing, setDecisionProbing] = useState(false);
   const [decisionProbeState, setDecisionProbeState] = useState<{ ok: boolean; text: string } | null>(null);
   const [thresholdsOpen, setThresholdsOpen] = useState(false);
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
@@ -345,35 +350,9 @@ export function SettingsScreen({
   const pushDecisionDaemon = (next: DecisionConfig, apiKeyOverride?: string, clearApiKey = false) => {
     if (mode !== "api") return;
     void mailApi
-      .saveDecisionConfig({
-        enabled: next.enabled,
-        provider: next.provider,
-        protocol: next.protocol,
-        endpoint: next.endpoint,
-        model: next.model,
-        auth_header: next.authHeader,
-        thresholds: {
-          llm_escalate: next.thresholds.llmEscalate,
-          category: next.thresholds.category,
-          security: next.thresholds.security,
-          folder: next.thresholds.folder,
-        },
-        custom_categories: next.customCategories.map((cat) => ({
-          id: cat.id,
-          name: cat.name,
-          description: cat.description,
-          color: cat.color,
-          exclude_from_priority: cat.excludeFromPriority,
-          allow_notifications: cat.allowNotifications,
-          cleanup_eligible: cat.cleanupEligible,
-        })),
-        default_inbox_filter: next.defaultInboxFilter,
-        notif_mode: next.notifMode,
-        pre_send_guard: next.preSendGuard,
-        totp_popup: next.totpPopup,
-        ...(apiKeyOverride ? { api_key: apiKeyOverride } : {}),
-        ...(clearApiKey ? { clear_api_key: true } : {}),
-      })
+      .saveDecisionConfig(
+        toApiDecisionConfig(next, { apiKey: apiKeyOverride, clearApiKey }),
+      )
       .then((saved) => {
         setDecision({
           daemonHasKey: saved.has_api_key,
@@ -1485,6 +1464,10 @@ export function SettingsScreen({
                     { id: "all", label: "Tous" },
                     { id: "priority", label: "Prioritaire" },
                     { id: "needs_reply", label: "À répondre" },
+                    ...decision.customCategories.map((cat) => ({
+                      id: `custom:${cat.id}`,
+                      label: cat.name,
+                    })),
                   ].map((view) => (
                     <button
                       key={view.id}
@@ -1502,6 +1485,88 @@ export function SettingsScreen({
                     </button>
                   ))}
                 </div>
+              </div>
+              <div className="space-y-1.5 border-t border-line/70 pt-3">
+                <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                  Filtrage des notifications
+                </span>
+                <div role="group" aria-label="Filtrage des notifications" className="flex flex-wrap gap-1.5">
+                  {(
+                    [
+                      { id: "all", label: "Toutes" },
+                      { id: "smart", label: "Intelligentes" },
+                      { id: "urgent_only", label: "Urgentes & TOTP" },
+                    ] as { id: NotifFilterMode; label: string }[]
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      aria-pressed={decision.notifMode === opt.id}
+                      onClick={() => updateDecision({ notifMode: opt.id })}
+                      className={cn(
+                        "focus-ring min-h-9 rounded-full border px-3 text-[12px] font-bold transition-colors",
+                        decision.notifMode === opt.id
+                          ? "border-accent bg-accent-soft text-accent-ink"
+                          : "border-line bg-surface text-ink-soft",
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="divide-y divide-line/70 overflow-hidden rounded-2xl border border-line">
+                <ToggleRow
+                  icon={<KeyRound className="size-4" />}
+                  label="Popup TOTP instantané"
+                  hint="Affiche les codes de vérification dès réception pour les copier en un clic"
+                  checked={decision.totpPopup}
+                  onChange={(value) => updateDecision({ totpPopup: value })}
+                />
+                <ToggleRow
+                  icon={<Lock className="size-4" />}
+                  label="Garde-fou avant envoi (Pre-send Guard)"
+                  hint="Vérifie pièce jointe oubliée, question sans réponse et secrets en clair"
+                  checked={decision.preSendGuard}
+                  onChange={(value) => updateDecision({ preSendGuard: value })}
+                />
+              </div>
+              <div className="space-y-2 border-t border-line/70 pt-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                    Catégories personnalisées
+                  </span>
+                  <span className="text-[11px] font-semibold text-ink-muted">
+                    {decision.customCategories.length} / 8
+                  </span>
+                </div>
+                {decision.customCategories.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {decision.customCategories.map((cat) => {
+                      const style = categoryColorStyle(cat.color);
+                      return (
+                        <span
+                          key={cat.id}
+                          className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold", style.pill)}
+                        >
+                          <span className={cn("size-2 rounded-full", style.dot)} />
+                          {cat.name}
+                        </span>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-[11.5px] font-medium text-ink-muted">
+                    Aucune catégorie personnalisée · ajoute Factures, Colis, Banque…
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setCategoriesOpen(true)}
+                  className="focus-ring min-h-10 w-full rounded-full border border-line bg-surface px-4 text-[12px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+                >
+                  Gérer les catégories personnalisées
+                </button>
               </div>
             </Card>
           </BlurFade>
@@ -2082,6 +2147,12 @@ export function SettingsScreen({
           </BlurFade>
         </>
       ) : null}
+
+      <CategoryManagerSheet
+        open={categoriesOpen}
+        onClose={() => setCategoriesOpen(false)}
+        onRetriage={() => triageMails(mails, true)}
+      />
     </div>
   );
 }

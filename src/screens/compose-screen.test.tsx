@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import type { ComposeDraft } from "@/lib/draft";
 import { baseDraft } from "@/lib/draft";
+import { DEFAULT_DECISION, type DecisionConfig } from "@/lib/decision";
 import { buildQuotedHtml, textToHtml } from "@/lib/rich-text";
 import { sendInputOf } from "@/lib/mail-backend";
 
@@ -23,9 +24,17 @@ vi.mock("@/lib/store", () => ({
 }));
 
 const signatureMock = vi.hoisted(() => ({ html: null as string | null }));
-const prefsMock = vi.hoisted(() => ({ threadView: "tidy" as "tidy" | "inline" }));
+const prefsMock = vi.hoisted(() => ({
+  threadView: "tidy" as "tidy" | "inline",
+  decision: undefined as DecisionConfig | undefined,
+}));
 vi.mock("@/lib/prefs", () => ({
-  usePrefs: () => ({ signatures: [], llm: { endpoint: "", apiKey: "", model: "" }, threadView: prefsMock.threadView }),
+  usePrefs: () => ({
+    signatures: [],
+    llm: { endpoint: "", apiKey: "", model: "" },
+    threadView: prefsMock.threadView,
+    ...(prefsMock.decision ? { decision: prefsMock.decision } : {}),
+  }),
   activeSignature: () => signatureMock.html,
 }));
 
@@ -84,8 +93,14 @@ function pick(input: HTMLElement, file: File) {
 beforeEach(() => {
   signatureMock.html = null;
   prefsMock.threadView = "tidy";
+  prefsMock.decision = undefined;
   storeMock.mode = "demo";
   storeMock.save = async () => true;
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("pièces jointes de la composition", () => {
@@ -517,5 +532,86 @@ describe("récapitulatif des destinataires", () => {
 
     fireEvent.change(screen.getByLabelText("Cc"), { target: { value: "" } });
     await waitFor(() => expect(screen.queryByTestId("compose-recipients")).toBeNull());
+  });
+});
+
+describe("garde-fou avant envoi (Pre-send Guard)", () => {
+  const GUARD_CONFIG: DecisionConfig = {
+    ...DEFAULT_DECISION,
+    enabled: true,
+    apiKey: "test-key",
+    preSendGuard: true,
+  };
+
+  it("affiche les alertes détectées avec « Corriger » et « Envoyer quand même »", async () => {
+    prefsMock.decision = GUARD_CONFIG;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          model: "mammoth-1",
+          answers: {
+            missing_attachment: { type: "noul", noul: 0.91 },
+            tone_risk: { type: "score", score: 0.2 },
+            sensitive_unencrypted: { type: "noul", noul: 0.89 },
+          },
+          usage: { input_tokens: 90, output_tokens: 0 },
+        }),
+      })),
+    );
+
+    const onSend = vi.fn();
+    render(
+      <Harness
+        to="camille@lavande.mail"
+        subject="Facture ci-jointe"
+        body="<p>Voici le fichier ci-joint et mon mot de passe.</p>"
+        onSend={onSend}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("Envoyer le message"));
+
+    const dialog = await screen.findByRole("alertdialog", { name: "Alertes avant envoi" });
+    expect(dialog.textContent).toContain("Pièce jointe possiblement oubliée");
+    expect(dialog.textContent).toContain("Données sensibles sans chiffrement PGP");
+    expect(onSend).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Corriger" }));
+    expect(screen.queryByRole("alertdialog", { name: "Alertes avant envoi" })).toBeNull();
+    expect(onSend).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByLabelText("Envoyer le message"));
+    const dialogAgain = await screen.findByRole("alertdialog", { name: "Alertes avant envoi" });
+    fireEvent.click(within(dialogAgain).getByRole("button", { name: "Envoyer quand même" }));
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("envoie immédiatement sans friction si aucune alerte ou si le modèle échoue", async () => {
+    prefsMock.decision = GUARD_CONFIG;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("timeout réseau");
+      }),
+    );
+
+    const onSend = vi.fn();
+    render(
+      <Harness
+        to="camille@lavande.mail"
+        subject="Bonjour"
+        body="<p>Tout va bien.</p>"
+        onSend={onSend}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("Envoyer le message"));
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alertdialog", { name: "Alertes avant envoi" })).toBeNull();
   });
 });

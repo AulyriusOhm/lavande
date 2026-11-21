@@ -394,7 +394,10 @@ fn build_http_client(tls: &TlsOptions, timeout: Duration) -> Result<Client, ApiE
         .map_err(|error| ApiError::internal("decision", format!("client HTTP : {error}")))
 }
 
-fn auth_header_value(kind: DecisionAuthHeader, api_key: Option<&str>) -> Result<Option<String>, ApiError> {
+fn auth_header_value(
+    kind: DecisionAuthHeader,
+    api_key: Option<&str>,
+) -> Result<Option<String>, ApiError> {
     match kind {
         DecisionAuthHeader::None => Ok(None),
         DecisionAuthHeader::Bearer => {
@@ -455,8 +458,9 @@ pub async fn decide_with_config(
 
     let response = req
         .body(
-            serde_json::to_vec(&body)
-                .map_err(|error| ApiError::internal("decision", format!("sérialisation : {error}")))?,
+            serde_json::to_vec(&body).map_err(|error| {
+                ApiError::internal("decision", format!("sérialisation : {error}"))
+            })?,
         )
         .send()
         .await
@@ -481,7 +485,10 @@ pub async fn decide_with_config(
             if detail.is_empty() {
                 format!("Le modèle de décision a répondu {}", status.as_u16())
             } else {
-                format!("Le modèle de décision a répondu {} · {detail}", status.as_u16())
+                format!(
+                    "Le modèle de décision a répondu {} · {detail}",
+                    status.as_u16()
+                )
             },
         ));
     }
@@ -657,7 +664,9 @@ pub async fn probe(state: &AppState, req: ProbeRequest) -> Result<ProbeResponse,
         state.tls(),
         &config,
         api_key,
-        Value::String("Checkout has been failing for every customer for the last hour.".to_string()),
+        Value::String(
+            "Checkout has been failing for every customer for the last hour.".to_string(),
+        ),
         questions,
         PROBE_TIMEOUT,
     )
@@ -723,11 +732,13 @@ pub fn build_triage_questions(
     );
     criteria.insert(
         "auth_totp".to_string(),
-        "Code de vérification, OTP, TOTP, 2FA, lien magique de connexion ou confirmation de compte".to_string(),
+        "Code de vérification, OTP, TOTP, 2FA, lien magique de connexion ou confirmation de compte"
+            .to_string(),
     );
     criteria.insert(
         "notification".to_string(),
-        "Notification automatique de service, suivi de commande, reçu ou alerte système".to_string(),
+        "Notification automatique de service, suivi de commande, reçu ou alerte système"
+            .to_string(),
     );
     criteria.insert(
         "promo".to_string(),
@@ -739,7 +750,10 @@ pub fn build_triage_questions(
     );
     for cat in &config.custom_categories {
         let key = format!("custom:{}", cat.id.trim());
-        criteria.insert(key, format!("{} — {}", cat.name.trim(), cat.description.trim()));
+        criteria.insert(
+            key,
+            format!("{} — {}", cat.name.trim(), cat.description.trim()),
+        );
     }
 
     let mut questions = BTreeMap::new();
@@ -878,6 +892,17 @@ pub async fn triage_message(
     team_members: &[String],
     force: bool,
 ) -> Result<TriageOutcome, ApiError> {
+    triage_message_with_timeout(state, message, team_members, force, DEFAULT_TIMEOUT).await
+}
+
+/// Variante de `triage_message` avec délai d'attente explicite (ex. veille IMAP IDLE).
+pub async fn triage_message_with_timeout(
+    state: &AppState,
+    message: &Message,
+    team_members: &[String],
+    force: bool,
+    timeout: Duration,
+) -> Result<TriageOutcome, ApiError> {
     let config = state.decision_config()?;
     let api_key = state.decision_api_key().await?;
     if !config.is_ready(api_key.is_some()) {
@@ -913,7 +938,7 @@ pub async fn triage_message(
         api_key.as_deref(),
         mail_state_payload(message),
         questions,
-        DEFAULT_TIMEOUT,
+        timeout,
     )
     .await?;
 
@@ -956,10 +981,7 @@ pub async fn triage_message(
         .unwrap_or_else(|| "safe".to_string());
     let security_conf = security_ans
         .and_then(|a| a.confidence)
-        .or_else(|| {
-            security_ans
-                .and_then(|a| a.probabilities.get(&security).copied())
-        })
+        .or_else(|| security_ans.and_then(|a| a.probabilities.get(&security).copied()))
         .unwrap_or(0.5);
 
     let cleanup_score = output
@@ -971,9 +993,10 @@ pub async fn triage_message(
     let (assignee, assignee_conf) = match output.answers.get("assignee") {
         Some(ans) => {
             let pick = ans.choice.clone().filter(|v| v != "aucun");
-            let conf = ans
-                .confidence
-                .or_else(|| pick.as_deref().and_then(|p| ans.probabilities.get(p).copied()));
+            let conf = ans.confidence.or_else(|| {
+                pick.as_deref()
+                    .and_then(|p| ans.probabilities.get(p).copied())
+            });
             (pick, conf)
         }
         None => (None, None),
@@ -1051,7 +1074,10 @@ pub fn should_notify(config: &DecisionConfig, decision: &MailDecision) -> bool {
             if decision.totp_code.is_some() || decision.category == "auth_totp" {
                 return true;
             }
-            if matches!(decision.category.as_str(), "promo" | "spam" | "notification") {
+            if matches!(
+                decision.category.as_str(),
+                "promo" | "spam" | "notification"
+            ) {
                 return decision.urgency >= 2.2;
             }
             if let Some(custom_id) = decision.category.strip_prefix("custom:") {

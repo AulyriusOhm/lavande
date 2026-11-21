@@ -42,7 +42,10 @@ async fn start_mock_neuralwatt() -> MockServer {
                         .and_then(|v| v.to_str().ok())
                         .unwrap_or("");
                     if auth != "Bearer nw-secret-key" {
-                        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" })));
+                        return (
+                            StatusCode::UNAUTHORIZED,
+                            Json(json!({ "error": "unauthorized" })),
+                        );
                     }
                     counter.fetch_add(1, Ordering::SeqCst);
                     let questions = body
@@ -183,7 +186,14 @@ async fn config_probe_triage_cache_and_sync_import() {
     let (_dir, state, router, token) = setup_daemon().await;
 
     // 1. Config initiale : désactivée, aucune clé exposée.
-    let (status, initial) = send_json(&router, &token, Method::GET, "/api/ai/decision/config", None).await;
+    let (status, initial) = send_json(
+        &router,
+        &token,
+        Method::GET,
+        "/api/ai/decision/config",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(initial["ready"], false);
     assert_eq!(initial["has_api_key"], false);

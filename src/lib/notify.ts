@@ -11,7 +11,7 @@ import { isTauriShell } from "@/lib/open-external";
 
 const BASE_TITLE = "Lavande";
 
-type NotifyKind = "mail" | "calendar";
+type NotifyKind = "mail" | "calendar" | "totp";
 
 const CHANNELS: Record<NotifyKind, { id: string; name: string; description: string }> = {
   mail: {
@@ -23,6 +23,11 @@ const CHANNELS: Record<NotifyKind, { id: string; name: string; description: stri
     id: "calendrier",
     name: "Rappels d'agenda",
     description: "Un rendez-vous du calendrier commence bientôt",
+  },
+  totp: {
+    id: "totp",
+    name: "Codes de vérification",
+    description: "Un code de vérification ou 2FA vient d'arriver",
   },
 };
 
@@ -82,6 +87,11 @@ export async function notifyNewMail(sender: string, subject: string): Promise<vo
 
 export function notifyCalendarEvent(title: string, startsAt: string): void {
   void notify("calendar", title || "Rendez-vous", startsAt);
+}
+
+export async function notifyTotpCode(service: string, code: string): Promise<void> {
+  const target = service.trim() || "de vérification";
+  await notify("totp", `Code ${target} : ${code}`, "Code de vérification détecté");
 }
 
 export function setUnreadBadge(count: number): void {

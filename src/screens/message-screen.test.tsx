@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PrefsProvider } from "@/lib/prefs";
+import type { MailDecision } from "@/lib/decision";
 import type { Mail } from "@/lib/mail";
 import type { Thread } from "@/lib/threads";
 
@@ -555,5 +556,184 @@ describe("actions par message du fil", () => {
     expect(screen.queryByLabelText("Transférer le message de Marc Delaunay")).toBeNull();
     expect(screen.queryByLabelText("Ouvrir le message de Marc Delaunay")).toBeNull();
     expect(screen.queryByLabelText("Répondre à tous")).toBeNull();
+  });
+});
+
+describe("bouclier sécurité et rangement par dossier", () => {
+  const BASE_DECISION: MailDecision = {
+    accountId: "perso",
+    folderPath: "INBOX",
+    uid: 12,
+    contentHash: "h12",
+    schemaVersion: 1,
+    model: "mammoth-1",
+    category: "important",
+    categoryConf: 0.9,
+    categoryProbs: { important: 0.9 },
+    urgency: 1,
+    needsReply: 0.2,
+    hasTask: 0.1,
+    hasEvent: 0.0,
+    security: "safe",
+    securityConf: 0.95,
+    cleanupScore: 0.05,
+    decidedAt: Date.now(),
+    source: "local",
+  };
+
+  it("affiche un bandeau anti-phishing quand security=phishing dépasse le seuil", () => {
+    render(
+      <PrefsProvider>
+        <MessageScreen
+          thread={THREAD}
+          decision={{ ...BASE_DECISION, security: "phishing", securityConf: 0.92 }}
+          onClose={() => {}}
+          onToggleStar={() => {}}
+          onReply={() => {}}
+        />
+      </PrefsProvider>,
+    );
+
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("Alerte hameçonnage (phishing)");
+    expect(alert.textContent).toContain("liens");
+    expect(alert.textContent).toContain("pièces jointes");
+  });
+
+  it("n'affiche pas le bandeau anti-phishing sous le seuil", () => {
+    render(
+      <PrefsProvider>
+        <MessageScreen
+          thread={THREAD}
+          decision={{ ...BASE_DECISION, security: "phishing", securityConf: 0.45 }}
+          onClose={() => {}}
+          onToggleStar={() => {}}
+          onReply={() => {}}
+        />
+      </PrefsProvider>,
+    );
+
+    expect(screen.queryByText("Alerte hameçonnage (phishing)")).toBeNull();
+  });
+
+  it("affiche l'isolation IA et demande confirmation avant Analyse sur prompt_injection", () => {
+    const onAnalyse = vi.fn();
+    render(
+      <PrefsProvider>
+        <MessageScreen
+          thread={THREAD}
+          decision={{ ...BASE_DECISION, security: "prompt_injection", securityConf: 0.91 }}
+          onClose={() => {}}
+          onToggleStar={() => {}}
+          onReply={() => {}}
+          onAnalyse={onAnalyse}
+        />
+      </PrefsProvider>,
+    );
+
+    expect(screen.getByText("Mail isolé des automatismes IA")).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("Analyse"));
+    expect(onAnalyse).not.toHaveBeenCalled();
+
+    const dialog = screen.getByRole("alertdialog", {
+      name: "Confirmer l'analyse malgré l'injection de prompt",
+    });
+    expect(dialog.textContent).toContain(
+      "Ce mail semble contenir une tentative d'injection de prompt. Analyser quand même ?",
+    );
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Annuler" }));
+    expect(onAnalyse).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByLabelText("Analyse"));
+    fireEvent.click(
+      within(
+        screen.getByRole("alertdialog", {
+          name: "Confirmer l'analyse malgré l'injection de prompt",
+        }),
+      ).getByRole("button", { name: "Analyser quand même" }),
+    );
+    expect(onAnalyse).toHaveBeenCalledWith(MAIL);
+  });
+
+  it("propose la puce « Ranger dans <Dossier> » depuis decision et déplace en 1 clic", () => {
+    const onMoveToFolder = vi.fn();
+    render(
+      <PrefsProvider>
+        <MessageScreen
+          thread={THREAD}
+          decision={{
+            ...BASE_DECISION,
+            suggestedFolder: "Compta/Factures",
+            suggestedFolderConf: 0.92,
+          }}
+          customFolders={[{ path: "Compta/Factures", label: "Factures" }]}
+          onMoveToFolder={onMoveToFolder}
+          onClose={() => {}}
+          onToggleStar={() => {}}
+          onReply={() => {}}
+        />
+      </PrefsProvider>,
+    );
+
+    const chip = screen.getByRole("button", { name: "Ranger dans Factures" });
+    expect(onMoveToFolder).not.toHaveBeenCalled();
+    fireEvent.click(chip);
+    expect(onMoveToFolder).toHaveBeenCalledWith(MAIL, "Compta/Factures");
+  });
+
+  it("résout une suggestion via onSuggestFolder quand absente de decision", async () => {
+    const onMoveToFolder = vi.fn();
+    const onSuggestFolder = vi.fn(async () => ({
+      folderPath: "Banque",
+      folderLabel: "Banque",
+      confidence: 0.9,
+    }));
+    render(
+      <PrefsProvider>
+        <MessageScreen
+          thread={THREAD}
+          customFolders={[{ path: "Banque", label: "Banque" }]}
+          onSuggestFolder={onSuggestFolder}
+          onMoveToFolder={onMoveToFolder}
+          onClose={() => {}}
+          onToggleStar={() => {}}
+          onReply={() => {}}
+        />
+      </PrefsProvider>,
+    );
+
+    const chip = await screen.findByRole("button", { name: "Ranger dans Banque" });
+    fireEvent.click(chip);
+    expect(onMoveToFolder).toHaveBeenCalledWith(MAIL, "Banque");
+  });
+
+  it("ne propose pas de ranger dans le dossier où le mail se trouve déjà", () => {
+    const alreadyInFactures: Mail = {
+      ...MAIL,
+      folder: "other",
+      folderName: "Factures",
+      source: { accountId: "perso", folderPath: "Compta/Factures", uid: 12 },
+    };
+    render(
+      <PrefsProvider>
+        <MessageScreen
+          thread={{ ...THREAD, messages: [alreadyInFactures], primary: alreadyInFactures }}
+          decision={{
+            ...BASE_DECISION,
+            suggestedFolder: "Compta/Factures",
+            suggestedFolderConf: 0.95,
+          }}
+          customFolders={[{ path: "Compta/Factures", label: "Factures" }]}
+          onMoveToFolder={vi.fn()}
+          onClose={() => {}}
+          onToggleStar={() => {}}
+          onReply={() => {}}
+        />
+      </PrefsProvider>,
+    );
+
+    expect(screen.queryByRole("button", { name: /Ranger dans/ })).toBeNull();
   });
 });

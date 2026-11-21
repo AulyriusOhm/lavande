@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
+import { DEFAULT_DECISION, type DecisionConfig } from "@/lib/decision";
 import {
   MCP_LOG_KEY,
   MCP_LOG_LIMIT,
@@ -13,6 +14,7 @@ import {
   readMcpLog,
   recordMcpAction,
   requestMcpAction,
+  requiresMcpApprovalWithGuard,
   resetMcpRights,
   resolveMcpApproval,
   setMcpRights,
@@ -249,5 +251,120 @@ describe("journal MCP", () => {
 
     expect(result.current).toHaveLength(1);
     expect(result.current[0]).toMatchObject({ tool: "pgp.verify", agent: "pgp-signer" });
+  });
+});
+
+describe("garde-fou MCP intelligent (Système 1)", () => {
+  const DECISION_CFG: DecisionConfig = {
+    ...DEFAULT_DECISION,
+    enabled: true,
+    apiKey: "test-key",
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("force l'approbation humaine avec les raisons même si le type est dans alwaysAllow", async () => {
+    setMcpRights({ enabled: {}, alwaysAllow: { envoi: true }, confirmSend: false });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          model: "mammoth-1",
+          answers: {
+            external_recipient: { type: "noul", noul: 0.92 },
+            sensitive_data: { type: "noul", noul: 0.1 },
+            destructive_action: { type: "noul", noul: 0.05 },
+            suspicious_instruction: { type: "noul", noul: 0.85 },
+          },
+          usage: { input_tokens: 60, output_tokens: 0 },
+        }),
+      })),
+    );
+
+    const check = await requiresMcpApprovalWithGuard(
+      { server: "mail", tool: "mail.send", detail: "Transfert vers externe@evil.example" },
+      DECISION_CFG,
+    );
+    expect(check.requiresApproval).toBe(true);
+    expect(check.forceConfirm).toBe(true);
+    expect(check.reasons).toEqual([
+      "Destinataire externe ou inconnu",
+      "Instruction suspecte ou inhabituelle",
+    ]);
+
+    const pending = requestMcpAction({
+      server: "mail",
+      tool: "mail.send",
+      detail: "Transfert vers externe@evil.example",
+      decisionConfig: DECISION_CFG,
+    });
+    await vi.waitFor(() => expect(getMcpApprovals()).toHaveLength(1));
+    expect(getMcpApprovals()[0].guardReasons).toEqual([
+      "Destinataire externe ou inconnu",
+      "Instruction suspecte ou inhabituelle",
+    ]);
+    resolveMcpApproval(getMcpApprovals()[0].id, false);
+    await expect(pending).resolves.toBe(false);
+  });
+
+  it("laisse passer sans approbation quand alwaysAllow est actif et aucun risque n'est détecté", async () => {
+    setMcpRights({ enabled: {}, alwaysAllow: { envoi: true }, confirmSend: false });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          model: "mammoth-1",
+          answers: {
+            external_recipient: { type: "noul", noul: 0.1 },
+            sensitive_data: { type: "noul", noul: 0.05 },
+            destructive_action: { type: "noul", noul: 0.0 },
+            suspicious_instruction: { type: "noul", noul: 0.02 },
+          },
+          usage: { input_tokens: 40, output_tokens: 0 },
+        }),
+      })),
+    );
+
+    const check = await requiresMcpApprovalWithGuard(
+      { server: "mail", tool: "mail.send", detail: "Réponse interne équipe" },
+      DECISION_CFG,
+    );
+    expect(check).toEqual({
+      requiresApproval: false,
+      type: "envoi",
+      forceConfirm: false,
+      reasons: [],
+      maxRisk: 0.1,
+    });
+  });
+
+  it("retombe sur la politique mcpConfirmSend/mcpAlwaysAllow si le modèle de décision est indisponible", async () => {
+    setMcpRights({ enabled: {}, alwaysAllow: { envoi: true }, confirmSend: true });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("timeout");
+      }),
+    );
+
+    const allowed = await requiresMcpApprovalWithGuard(
+      { server: "mail", tool: "mail.send", detail: "Devis" },
+      DECISION_CFG,
+    );
+    expect(allowed.requiresApproval).toBe(false);
+
+    setMcpRights({ enabled: {}, alwaysAllow: {}, confirmSend: true });
+    const confirmRequired = await requiresMcpApprovalWithGuard(
+      { server: "mail", tool: "mail.send", detail: "Devis" },
+      DECISION_CFG,
+    );
+    expect(confirmRequired.requiresApproval).toBe(true);
   });
 });

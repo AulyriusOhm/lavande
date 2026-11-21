@@ -381,3 +381,36 @@ describe("analyse · contexte fiable", () => {
     expect(calls[0].user).not.toContain("Point lointain");
   });
 });
+
+describe("analyse · bouclier sécurité & analyse manuelle universelle", () => {
+  it("reste active sur une pub et ajoute promptInjectionWarning si injection détectée", async () => {
+    stubFetch([EXTRACTION]);
+
+    const result = await analyseMail(LLM, MAIL, [], {
+      decision: {
+        accountId: "perso",
+        folderPath: "INBOX",
+        uid: 1,
+        contentHash: "h",
+        schemaVersion: 1,
+        model: "mammoth-1",
+        category: "promo",
+        categoryConf: 0.95,
+        categoryProbs: {},
+        urgency: 0.2,
+        needsReply: 0,
+        hasTask: 0,
+        hasEvent: 0,
+        security: "prompt_injection",
+        securityConf: 0.92,
+        cleanupScore: 0.9,
+        decidedAt: 1_731_000_000,
+        source: "local",
+      },
+    });
+
+    expect(result.source).toBe("llm");
+    expect(result.promptInjectionWarning).toBe(true);
+    expect(result.tasks).toHaveLength(1);
+  });
+});

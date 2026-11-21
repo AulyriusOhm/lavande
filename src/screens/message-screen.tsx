@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
+  AlertTriangle,
   ArrowLeft,
   Archive,
   ChevronDown,
@@ -8,12 +9,14 @@ import {
   CornerUpLeft,
   CornerUpRight,
   Download,
+  FolderInput,
   Loader2,
   Lock,
   Paperclip,
   PenLine,
   ReplyAll,
   RotateCcw,
+  ShieldAlert,
   ShieldCheck,
   ShieldOff,
   Sparkles,
@@ -21,6 +24,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { downloadAttachment } from "@/lib/attachments";
+import { isPhishing, isPromptInjection, type MailDecision } from "@/lib/decision";
 import type { Mail, MailAttachment } from "@/lib/mail";
 import { canReplyAll, folderLabel } from "@/lib/mail";
 import { messagePgpStatus } from "@/lib/pgp";
@@ -55,6 +59,10 @@ export function MessageScreen({
   selfEmail,
   bodyFetching = null,
   readOnly = false,
+  decision = null,
+  customFolders,
+  onMoveToFolder,
+  onSuggestFolder,
 }: {
   thread: Thread;
   onClose: () => void;
@@ -83,6 +91,16 @@ export function MessageScreen({
   bodyFetching?: string | null;
   /** Démo vitrine : le lecteur affiche, il ne modifie rien. */
   readOnly?: boolean;
+  /** Décision Système 1 associée au mail ouvert (sécurité & suggestion de dossier). */
+  decision?: MailDecision | null;
+  /** Dossiers personnalisés disponibles pour le rangement assisté. */
+  customFolders?: { path: string; label: string }[];
+  /** Déplace le mail vers le dossier choisi par l'utilisateur. */
+  onMoveToFolder?: (mail: Mail, folderPath: string) => void;
+  /** Résout une suggestion de dossier à la demande si absente de `decision`. */
+  onSuggestFolder?: (
+    mail: Mail,
+  ) => Promise<{ folderPath: string; folderLabel: string; confidence: number } | null>;
 }) {
   const prefs = usePrefs();
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -91,8 +109,80 @@ export function MessageScreen({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [download, setDownload] = useState<{ mailId: string; file: string } | null>(null);
   const [hint, setHint] = useState<{ mailId: string; text: string } | null>(null);
+  const [confirmAnalyseInjection, setConfirmAnalyseInjection] = useState(false);
+  const [asyncFolderSuggestion, setAsyncFolderSuggestion] = useState<{
+    mailId: string;
+    folderPath: string;
+    folderLabel: string;
+    confidence: number;
+  } | null>(null);
 
   const mail = thread.primary;
+  const securityThresholds = prefs.decision.thresholds;
+  const phishingAlert = Boolean(decision && isPhishing(decision, securityThresholds));
+  const promptInjectionAlert = Boolean(decision && isPromptInjection(decision, securityThresholds));
+  const folderThreshold = securityThresholds.folder;
+
+  const isAlreadyInFolder = (path: string, label?: string) => {
+    const currentPath = mail.source?.folderPath;
+    if (currentPath && currentPath === path) return true;
+    if (mail.folderName && (mail.folderName === path || (label && mail.folderName === label))) {
+      return true;
+    }
+    return false;
+  };
+
+  const decisionFolderSuggestion = (() => {
+    if (!decision?.suggestedFolder) return null;
+    if ((decision.suggestedFolderConf ?? 0) < folderThreshold) return null;
+    const match = customFolders?.find(
+      (folder) => folder.path === decision.suggestedFolder || folder.label === decision.suggestedFolder,
+    );
+    const folderPath = match?.path ?? decision.suggestedFolder;
+    const labelText =
+      match?.label ??
+      (decision.suggestedFolder.split(/[/.]/).filter(Boolean).pop() || decision.suggestedFolder);
+    if (isAlreadyInFolder(folderPath, labelText)) return null;
+    return {
+      folderPath,
+      folderLabel: labelText,
+      confidence: decision.suggestedFolderConf ?? 0,
+    };
+  })();
+
+  useEffect(() => {
+    setConfirmAnalyseInjection(false);
+  }, [mail.id]);
+
+  useEffect(() => {
+    if (readOnly || decisionFolderSuggestion || !onSuggestFolder) return;
+    if (customFolders !== undefined && customFolders.length === 0) return;
+    let cancelled = false;
+    void onSuggestFolder(mail).then((result) => {
+      if (cancelled || !result) return;
+      if (result.confidence < folderThreshold) return;
+      if (isAlreadyInFolder(result.folderPath, result.folderLabel)) return;
+      setAsyncFolderSuggestion({ mailId: mail.id, ...result });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mail, readOnly, decisionFolderSuggestion, onSuggestFolder, customFolders, folderThreshold]);
+
+  const activeFolderSuggestion =
+    !readOnly
+      ? (decisionFolderSuggestion ??
+        (asyncFolderSuggestion?.mailId === mail.id ? asyncFolderSuggestion : null))
+      : null;
+
+  const handleAnalyseClick = () => {
+    if (!onAnalyse) return;
+    if (promptInjectionAlert) {
+      setConfirmAnalyseInjection(true);
+      return;
+    }
+    onAnalyse(mail);
+  };
   const bodyLoading = bodyFetching === mail.id;
   /* Le fil est chronologique : ce qui précède le message ouvert est antérieur,
      ce qui le suit est postérieur. */
@@ -383,6 +473,16 @@ export function MessageScreen({
                 {thread.attachments > 1 ? "s" : ""}
               </span>
             ) : null}
+            {activeFolderSuggestion ? (
+              <button
+                type="button"
+                onClick={() => onMoveToFolder?.(mail, activeFolderSuggestion.folderPath)}
+                className="inline-flex items-center gap-1 rounded-full border border-accent-ring/60 bg-accent-soft px-2.5 py-1 text-[10.5px] font-bold text-accent-ink transition-transform active:scale-95"
+              >
+                <FolderInput className="size-3" />
+                Ranger dans {activeFolderSuggestion.folderLabel}
+              </button>
+            ) : null}
           </div>
 
           <h1 className="mt-3 text-[22px] leading-[1.25] font-extrabold tracking-[-0.02em] text-ink">
@@ -595,6 +695,44 @@ export function MessageScreen({
           </BlurFade>
         ) : null}
 
+        {phishingAlert && (
+          <BlurFade delay={0.1}>
+            <div
+              role="alert"
+              className="mt-3 flex items-start gap-2.5 rounded-2xl border border-red-500/40 bg-red-500/10 px-3.5 py-3 text-red-700 dark:text-red-300"
+            >
+              <ShieldAlert className="mt-0.5 size-4.5 shrink-0" strokeWidth={2.4} />
+              <div className="min-w-0 flex-1">
+                <p className="text-[12.5px] leading-snug font-bold">
+                  Alerte hameçonnage (phishing)
+                </p>
+                <p className="mt-1 text-[11.5px] leading-snug font-medium">
+                  Ce message présente des signes d'hameçonnage. Ne clique pas sur les liens et n'ouvre pas les pièces jointes.
+                </p>
+              </div>
+            </div>
+          </BlurFade>
+        )}
+
+        {promptInjectionAlert && (
+          <BlurFade delay={0.1}>
+            <div
+              role="status"
+              className="mt-3 flex items-start gap-2.5 rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3.5 py-2.5 text-amber-800 dark:text-amber-300"
+            >
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" strokeWidth={2.4} />
+              <div className="min-w-0 flex-1">
+                <p className="text-[12px] leading-snug font-bold">
+                  Mail isolé des automatismes IA
+                </p>
+                <p className="mt-0.5 text-[11px] leading-snug font-medium">
+                  Tentative d'injection de prompt détectée · exclu des résumés et extractions automatiques.
+                </p>
+              </div>
+            </div>
+          </BlurFade>
+        )}
+
         <BlurFade delay={0.12}>
           {bodyLoading ? (
             <MailBodyLoading className="mt-5" />
@@ -613,6 +751,34 @@ export function MessageScreen({
       </div>
 
       <div className="relative border-t border-line/80 px-5 py-3 glass safe-bottom sm:pb-5">
+        {confirmAnalyseInjection && (
+          <div
+            role="alertdialog"
+            aria-label="Confirmer l'analyse malgré l'injection de prompt"
+            className="mb-2 flex flex-wrap items-center gap-2 rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2"
+          >
+            <p className="min-w-0 flex-1 text-[11.5px] font-semibold text-ink">
+              Ce mail semble contenir une tentative d'injection de prompt. Analyser quand même ?
+            </p>
+            <button
+              type="button"
+              onClick={() => setConfirmAnalyseInjection(false)}
+              className="inline-flex min-h-11 items-center rounded-full px-3 text-[12px] font-bold text-ink-soft"
+            >
+              Annuler
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setConfirmAnalyseInjection(false);
+                onAnalyse?.(mail);
+              }}
+              className="inline-flex min-h-11 items-center rounded-full bg-amber-600 px-3 text-[12px] font-bold text-white"
+            >
+              Analyser quand même
+            </button>
+          </div>
+        )}
         {readOnly ? (
           <p className="flex items-center justify-center gap-1.5 text-[11.5px] font-semibold text-ink-muted">
             <Lock className="size-3.5" strokeWidth={2.4} />
@@ -658,7 +824,7 @@ export function MessageScreen({
               </button>
               <button
                 type="button"
-                onClick={() => onAnalyse?.(mail)}
+                onClick={handleAnalyseClick}
                 disabled={!onAnalyse}
                 className="grid size-11 place-items-center rounded-full border border-line bg-surface text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink disabled:pointer-events-none disabled:opacity-40"
                 aria-label="Analyse"

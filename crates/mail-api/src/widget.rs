@@ -25,7 +25,7 @@ pub struct WidgetAccount {
     pub unread: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WidgetMail {
     pub id: String,
     pub account: String,
@@ -38,9 +38,19 @@ pub struct WidgetMail {
     /// un nouveau message arrive dans un fil existant, donc Kotlin ne peut pas
     /// dédupliquer sur lui.
     pub message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub urgency: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totp_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totp_service: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub should_notify: Option<bool>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WidgetSummary {
     pub accounts: Vec<WidgetAccount>,
     pub mails: Vec<WidgetMail>,
@@ -106,6 +116,10 @@ pub fn summarize(
             }
         };
         for thread in threads {
+            let decision = store
+                .get_decision(id, &thread.primary.folder_path, thread.primary.uid)
+                .ok()
+                .flatten();
             summary.mails.push(WidgetMail {
                 id: thread.id.clone(),
                 account: id.clone(),
@@ -118,6 +132,11 @@ pub fn summarize(
                 date: thread.primary.date.map(|date| date.timestamp()),
                 unread: thread.unread > 0,
                 message_id: thread.primary.message_id.clone(),
+                category: decision.as_ref().map(|d| d.category.clone()),
+                urgency: decision.as_ref().map(|d| d.urgency),
+                totp_code: decision.as_ref().and_then(|d| d.totp_code.clone()),
+                totp_service: decision.as_ref().and_then(|d| d.totp_service.clone()),
+                should_notify: None,
             });
         }
         summary.accounts.push(WidgetAccount {

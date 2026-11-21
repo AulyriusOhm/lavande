@@ -85,8 +85,7 @@ pub fn extract_totp(
     body: &str,
 ) -> Option<TotpMatch> {
     let service = infer_service(from_name, from_email);
-    let code = find_code_in_text(subject, true)
-        .or_else(|| find_code_in_text(body, false))?;
+    let code = find_code_in_text(subject, true).or_else(|| find_code_in_text(body, false))?;
     Some(TotpMatch { code, service })
 }
 
@@ -207,7 +206,15 @@ fn find_code_in_text(text: &str, is_subject: bool) -> Option<String> {
         let (end, normalized, grouped) = read_candidate_span(bounded, start);
         i = end;
 
-        if let Some(score) = score_candidate(bounded, &lower, start, end, &normalized, grouped, is_subject) {
+        if let Some(score) = score_candidate(
+            bounded,
+            &lower,
+            start,
+            end,
+            &normalized,
+            grouped,
+            is_subject,
+        ) {
             let candidate = Candidate {
                 code: normalized,
                 score,
@@ -217,7 +224,8 @@ fn find_code_in_text(text: &str, is_subject: bool) -> Option<String> {
                 None => true,
                 Some(current) => {
                     candidate.score > current.score
-                        || (candidate.score == current.score && candidate.position < current.position)
+                        || (candidate.score == current.score
+                            && candidate.position < current.position)
                 }
             };
             if replace {
@@ -261,17 +269,20 @@ fn read_candidate_span(text: &str, start: usize) -> (usize, String, bool) {
             second_end += 1;
         }
         let second = &text[end + 1..second_end];
-        let both_digits = first.bytes().all(|b| b.is_ascii_digit())
-            && second.bytes().all(|b| b.is_ascii_digit());
+        let both_digits =
+            first.bytes().all(|b| b.is_ascii_digit()) && second.bytes().all(|b| b.is_ascii_digit());
         let valid_grouped_digits = both_digits
-            && ((first.len() == 3 && second.len() == 3)
-                || (first.len() == 4 && second.len() == 4));
+            && ((first.len() == 3 && second.len() == 3) || (first.len() == 4 && second.len() == 4));
         let valid_grouped_alnum = sep == b'-'
             && first.len() >= 3
             && second.len() >= 3
             && (first.len() + second.len()) <= 8
-            && first.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
-            && second.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+            && first
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+            && second
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
             && (first.bytes().any(|b| b.is_ascii_digit())
                 || second.bytes().any(|b| b.is_ascii_digit()));
 
@@ -301,7 +312,11 @@ fn score_candidate(
     is_subject: bool,
 ) -> Option<i32> {
     let bytes = text.as_bytes();
-    let prev = if start > 0 { Some(bytes[start - 1]) } else { None };
+    let prev = if start > 0 {
+        Some(bytes[start - 1])
+    } else {
+        None
+    };
     let next = bytes.get(end).copied();
 
     // Exclut les couleurs hex (#123456), chemins (/123456), emails, décimaux (1234.56), téléphones.
@@ -351,7 +366,9 @@ fn score_candidate(
         if !(4..=8).contains(&raw_len) {
             return None;
         }
-    } else if !(grouped || (has_digit && has_upper && all_upper_or_digit && (5..=8).contains(&raw_len))) {
+    } else if !(grouped
+        || (has_digit && has_upper && all_upper_or_digit && (5..=8).contains(&raw_len)))
+    {
         return None;
     }
 
@@ -362,8 +379,8 @@ fn score_candidate(
     let around_ctx = &lower[ctx_start..ctx_end];
 
     let has_keyword_before = CONTEXT_KEYWORDS.iter().any(|kw| before_ctx.contains(kw));
-    let has_keyword_around = has_keyword_before
-        || CONTEXT_KEYWORDS.iter().any(|kw| around_ctx.contains(kw));
+    let has_keyword_around =
+        has_keyword_before || CONTEXT_KEYWORDS.iter().any(|kw| around_ctx.contains(kw));
 
     // Rejette les années (1990..=2099) sauf si explicitement précédées d'un mot-clé OTP.
     if all_digits && raw_len == 4 {
@@ -375,7 +392,9 @@ fn score_candidate(
     }
 
     // Sans aucun mot-clé autour, un code alphanumérique ou 4 chiffres est trop risqué.
-    if !has_keyword_around && !(all_digits && raw_len == 6 && (is_subject || isolated_on_line(text, start, end))) {
+    if !has_keyword_around
+        && !(all_digits && raw_len == 6 && (is_subject || isolated_on_line(text, start, end)))
+    {
         return None;
     }
 

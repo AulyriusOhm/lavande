@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ComposeDraft, DraftAttachment } from "@/lib/draft";
 import {
   MAX_ATTACHMENT_BYTES,
@@ -14,7 +22,7 @@ import {
   retargetDraft,
 } from "@/lib/draft";
 import { buildQuotedHtml, htmlToText, splitQuotedBody, textToHtml } from "@/lib/rich-text";
-import { notifyNewMail, setUnreadBadge } from "@/lib/notify";
+import { notifyNewMail, notifyTotpCode, setUnreadBadge } from "@/lib/notify";
 import { NOTICE_EVENT } from "@/lib/open-external";
 import type { NoticeData } from "@/components/ui/notice";
 import { ACCOUNTS, ALL_ACCOUNTS } from "@/lib/accounts";
@@ -54,7 +62,19 @@ import {
   usePrefs,
 } from "@/lib/prefs";
 import { suggestionsInWindow, usePlanning } from "@/lib/planning-store";
-import { teamContextOf, teamPromptBlock } from "@/lib/team";
+import { allTeamMembers, teamContextOf, teamPromptBlock } from "@/lib/team";
+import { decisionMailDocId, syncedDecisionDocs } from "@/lib/ai-sync";
+import { decisionDomain, decisionReady, type MailDecision } from "@/lib/decision";
+import { decisionDb, decisionMailKey } from "@/lib/decision-db";
+import {
+  filterMailsForLlm,
+  fromApiDecision,
+  indexDecisions,
+  stableDecisionKey,
+  toApiDecision,
+  triageDecisionFor,
+  triageRecentMails,
+} from "@/lib/triage";
 import { mailApi, errorText } from "@/lib/api";
 import type { LiveEvent } from "@/lib/api";
 import type { NewAccount } from "@/lib/api";
@@ -87,6 +107,13 @@ import {
 import type { ComposeBus, ComposeState } from "@/lib/compose-bus";
 
 export type BackendPhase = "loading" | "ready" | "offline" | "empty";
+
+export type TotpAlert = {
+  code: string;
+  service: string;
+  mailId: string;
+  receivedAt: number;
+};
 
 /** Analyse à la demande du mail ouvert : un seul mail à la fois, cache par mail. */
 export type MailAnalyse = {
@@ -393,6 +420,7 @@ export type MailStoreValue = {
   mailAction: (kind: "delete" | "archive" | "read", mail: Mail) => void;
   bulkMailAction: (kind: BulkKind, mails: Mail[]) => void;
   moveToInbox: (mail: Mail) => void;
+  moveToFolder: (mail: Mail, folderPath: string) => void;
   restoreMail: (mail: Mail) => void;
   emptyTrash: () => void;
   addSuggestion: (suggestion: MailSuggestion) => void;
@@ -442,6 +470,15 @@ export type MailStoreValue = {
   /** Ordre d'affichage local des dossiers du compte courant (chemins IMAP). */
   folderOrder: string[];
   setFolderOrder: (paths: string[]) => void;
+  /** Décisions Système 1 indexées par clé mail (`accountId:folderPath:uid`). */
+  decisions: Record<string, MailDecision>;
+  /** Indique si le modèle de décision est prêt (config locale ou trousseau démon). */
+  isDecisionReady: boolean;
+  /** Alerte TOTP instantanée émise à la réception SSE. */
+  totpAlert: TotpAlert | null;
+  dismissTotpAlert: () => void;
+  /** File de triage bornée (au plus 40 mails récents non en cache, ou `limit` jusqu'à 50). */
+  triageMails: (mails: Mail[], force?: boolean, limit?: number) => Promise<void>;
 };
 
 /** Une page de recherche par compte : le démon plafonne à 200. */
@@ -528,6 +565,17 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const summaryRun = useRef<string | null>(null);
   const summaryRunning = useRef(false);
+  const [decisions, setDecisions] = useState<Record<string, MailDecision>>({});
+  const decisionsRef = useRef(decisions);
+  decisionsRef.current = decisions;
+  const [daemonDecisionReady, setDaemonDecisionReady] = useState(false);
+  const [totpAlert, setTotpAlert] = useState<TotpAlert | null>(null);
+  const dismissTotpAlert = useCallback(() => setTotpAlert(null), []);
+  const decisionIndex = useMemo(() => indexDecisions(decisions), [decisions]);
+  const decisionPrefsRef = useRef(prefs.decision);
+  decisionPrefsRef.current = prefs.decision;
+  const autoTriagedKeys = useRef(new Set<string>());
+  const importedSyncKeys = useRef(new Set<string>());
   const [analyse, setAnalyse] = useState<MailAnalyse | null>(null);
   const analyseRun = useRef<string | null>(null);
   const analyseRunning = useRef(false);
@@ -651,6 +699,156 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const liveMails = useRef(mails);
   liveMails.current = mails;
 
+  const mergeDecisions = useCallback((items: MailDecision[]) => {
+    if (items.length === 0) return;
+    setDecisions((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const item of items) {
+        const key = decisionMailKey(item.accountId, item.folderPath, item.uid);
+        const existing = next[key];
+        if (!existing || item.decidedAt >= existing.decidedAt) {
+          if (existing !== item) {
+            next[key] = item;
+            changed = true;
+          }
+        }
+      }
+      return changed ? next : current;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (isComposeWindow()) return;
+    let cancelled = false;
+    void decisionDb()
+      .listDecisions()
+      .then((cached) => {
+        if (!cancelled && cached.length > 0) mergeDecisions(cached);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [mergeDecisions]);
+
+  useEffect(() => {
+    if (mode !== "api" || phase !== "ready" || isComposeWindow()) return;
+    let cancelled = false;
+    void mailApi
+      .decisionConfig()
+      .then((cfg) => {
+        if (!cancelled && cfg && typeof cfg.ready === "boolean") {
+          setDaemonDecisionReady(cfg.ready);
+        }
+      })
+      .catch(() => {});
+    void mailApi
+      .listDecisions({ limit: 500 })
+      .then((items) => {
+        if (cancelled || !Array.isArray(items) || items.length === 0) return;
+        const converted = items.map(fromApiDecision);
+        void decisionDb().putDecisions(converted).catch(() => {});
+        mergeDecisions(converted);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [mergeDecisions, mode, phase]);
+
+  const [syncRev, setSyncRev] = useState(0);
+  useEffect(
+    () => planning.engine.subscribe(() => setSyncRev((value) => value + 1)),
+    [planning.engine],
+  );
+  const syncDocs = useMemo(
+    () => planning.engine.getState().docs,
+    [planning.engine, syncRev],
+  );
+
+  useEffect(() => {
+    if (isComposeWindow()) return;
+    const synced = syncedDecisionDocs(syncDocs);
+    if (synced.length === 0) return;
+    const unseen = synced.filter((item) => {
+      const token = `${stableDecisionKey(item)}:${item.decidedAt}`;
+      return !importedSyncKeys.current.has(token);
+    });
+    if (unseen.length === 0) return;
+    for (const item of unseen) {
+      importedSyncKeys.current.add(`${stableDecisionKey(item)}:${item.decidedAt}`);
+    }
+    void decisionDb().putDecisions(unseen).catch(() => {});
+    mergeDecisions(unseen);
+    if (mode === "api") {
+      void mailApi.importDecisions(unseen.map(toApiDecision)).catch(() => {});
+    }
+  }, [mergeDecisions, mode, syncDocs]);
+
+  const publishDecisionSync = useCallback(
+    (dec: MailDecision) => {
+      if (!prefs.sync.enabled || demoReadOnly || !planning.engine.canEmit()) return;
+      const id = decisionMailDocId(stableDecisionKey(dec));
+      if (planning.engine.readOnly("ai", id)) return;
+      planning.engine.emitLocal("ai", id, {
+        accountId: dec.accountId,
+        folderPath: dec.folderPath,
+        uid: dec.uid,
+        ...(dec.messageId ? { messageId: dec.messageId } : {}),
+        contentHash: dec.contentHash,
+        schemaVersion: dec.schemaVersion,
+        model: dec.model,
+        category: dec.category,
+        categoryConf: dec.categoryConf,
+        categoryProbs: dec.categoryProbs,
+        urgency: dec.urgency,
+        needsReply: dec.needsReply,
+        hasTask: dec.hasTask,
+        hasEvent: dec.hasEvent,
+        security: dec.security,
+        securityConf: dec.securityConf,
+        cleanupScore: dec.cleanupScore,
+        ...(dec.assignee ? { assignee: dec.assignee } : {}),
+        ...(typeof dec.assigneeConf === "number" ? { assigneeConf: dec.assigneeConf } : {}),
+        ...(dec.totpCode ? { totpCode: dec.totpCode } : {}),
+        ...(dec.totpService ? { totpService: dec.totpService } : {}),
+        ...(dec.suggestedFolder ? { suggestedFolder: dec.suggestedFolder } : {}),
+        ...(typeof dec.suggestedFolderConf === "number"
+          ? { suggestedFolderConf: dec.suggestedFolderConf }
+          : {}),
+        decidedAt: dec.decidedAt,
+      });
+    },
+    [planning.engine, prefs.sync.enabled],
+  );
+
+  const isDecisionReady = decisionReady(prefs.decision) || daemonDecisionReady;
+  const hasDecisionLayer = isDecisionReady || Object.keys(decisions).length > 0;
+
+  const triageMails = useCallback(
+    async (targetMails: Mail[], force = false, limit?: number) => {
+      if (mode !== "api" || !isDecisionReady || targetMails.length === 0) return;
+      const teamMembers = allTeamMembers(prefs).map((member) => member.name);
+      try {
+        const triaged = await triageRecentMails({
+          mails: targetMails,
+          existingDecisions: decisionsRef.current,
+          teamMembers,
+          force,
+          limit,
+          db: decisionDb(),
+          domain: decisionDomain(prefs.decision),
+          publishSynced: publishDecisionSync,
+        });
+        if (triaged.length > 0) mergeDecisions(triaged);
+      } catch {
+        // Un échec réseau du modèle de décision ne bloque jamais la boîte mail.
+      }
+    },
+    [isDecisionReady, mergeDecisions, mode, prefs, publishDecisionSync],
+  );
+
   useEffect(() => {
     if (mode !== "api" || !mailSyncOn || typeof EventSource === "undefined" || isComposeWindow()) return;
     let source: EventSource | null = null;
@@ -663,12 +861,33 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           const payload = JSON.parse((event as MessageEvent<string>).data) as LiveEvent;
           const inserted = payload.report?.inserted ?? 0;
           const notices = payload.new_mails ?? [];
+          if (notices.length > 0 && decisionPrefsRef.current.totpPopup) {
+            const totpNotice = notices.find(
+              (entry) => typeof entry.totp_code === "string" && entry.totp_code.trim() !== "",
+            );
+            if (totpNotice?.totp_code) {
+              setTotpAlert({
+                code: totpNotice.totp_code,
+                service: totpNotice.totp_service || totpNotice.from || "Vérification",
+                mailId: totpNotice.id,
+                receivedAt: Date.now(),
+              });
+            }
+          }
           if (
             payload.folder_path.toUpperCase() === "INBOX" &&
             notifyMailAccounts.current.some((entry) => entry.id === payload.account_id) &&
             notificationsForAccount(notifyPrefs.current, payload.account_id)
           ) {
             for (const notice of notices) {
+              if (notice.should_notify === false) continue;
+              if (notice.totp_code && notice.totp_code.trim() !== "") {
+                void notifyTotpCode?.(
+                  notice.totp_service || notice.from || "Vérification",
+                  notice.totp_code.trim(),
+                );
+                continue;
+              }
               void notifyNewMail(notice.from, notice.subject);
             }
             // Repli : un démon antérieur à la notification par mail ne pousse
@@ -685,6 +904,17 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
               );
             }
           }
+          if (inserted > 0 || notices.length > 0) {
+            void mailApi
+              .listDecisions({ accountId: payload.account_id, limit: 200 })
+              .then((items) => {
+                if (!Array.isArray(items) || items.length === 0) return;
+                const converted = items.map(fromApiDecision);
+                void decisionDb().putDecisions(converted).catch(() => {});
+                mergeDecisions(converted);
+              })
+              .catch(() => {});
+          }
           if (account === ALL_ACCOUNTS || !account || payload.account_id === account) {
             setRevision((value) => value + 1);
           }
@@ -697,7 +927,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       closed = true;
       source?.close();
     };
-  }, [account, mailSyncOn, mode]);
+  }, [account, mailSyncOn, mergeDecisions, mode]);
 
   const retryBackend = useCallback(() => {
     if (mode === "api") void bootstrap();
@@ -1354,6 +1584,52 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       });
     },
     [mode, moveTo, notify, readOnlyBlocked],
+  );
+
+  const moveToFolder = useCallback(
+    (mail: Mail, targetPath: string) => {
+      if (readOnlyBlocked()) return;
+      const targetLabel =
+        folderRecords.find(
+          (record) => record.accountId === (mail.source?.accountId ?? mail.account) && record.path === targetPath,
+        )?.name ??
+        (targetPath.split(/[/.]/).filter(Boolean).pop() || targetPath);
+      if (mode !== "api") {
+        setMails((current) =>
+          current.map((entry) =>
+            entry.id === mail.id
+              ? { ...entry, folder: "other", folderName: targetLabel, previousFolder: entry.folder }
+              : entry,
+          ),
+        );
+        notify(`Message rangé dans ${targetLabel}`);
+        return;
+      }
+      if (!mail.source) return;
+      if (targetPath === mail.source.folderPath) {
+        notify(`Le message est déjà dans « ${targetLabel} ».`);
+        return;
+      }
+      const source = mail.source;
+      setMails((current) => current.filter((entry) => entry.id !== mail.id));
+      setOpenMail((current) => (current && current.id === mail.id ? null : current));
+      adjustCounts(source.accountId, source.folderPath, -1, mail.unread ? -1 : 0);
+      mailApi
+        .move(source.accountId, { from_path: source.folderPath, uid: source.uid, to_path: targetPath })
+        .then(() => {
+          adjustCounts(source.accountId, targetPath, 1, mail.unread ? 1 : 0);
+          notify(`Message rangé dans ${targetLabel}`);
+          setRevision((value) => value + 1);
+        })
+        .catch((error: unknown) => {
+          setMails((current) =>
+            current.some((entry) => entry.id === mail.id) ? current : [...current, mail],
+          );
+          adjustCounts(source.accountId, source.folderPath, 1, mail.unread ? 1 : 0);
+          notify(errorText(error));
+        });
+    },
+    [adjustCounts, folderRecords, mode, notify, readOnlyBlocked],
   );
 
   const restoreMail = useCallback(
@@ -2506,6 +2782,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
                 subject: mail.subject,
                 snippet: mail.preview,
                 timestamp: mail.timestamp,
+                ...(mail.messageId ? { messageId: mail.messageId } : {}),
+                ...(mail.source ? { source: mail.source } : {}),
               },
             ]
           : [],
@@ -2607,11 +2885,18 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       const scoped =
         scope === ALL_ACCOUNTS ? inboxMails : inboxMails.filter((mail) => mail.account === scope);
       const inputs = summaryInputs(scoped);
-      const signature = summarySignature(inputs);
+      const decisionCount = Object.keys(decisions).length;
+      const baseSig = summarySignature(inputs);
+      const signature = hasDecisionLayer ? `${baseSig}:d${decisionCount}` : `${baseSig}:no-dec`;
       const runKey = `${scope}:${period.id}:${signature}`;
       if (!force && summaryRun.current === runKey) return;
-      if (!force) {
-        const cached = readSummaryCache(summaryStorage(), scope, period.id, signature);
+      if (!force && (hasDecisionLayer || mode === "demo")) {
+        const cached = readSummaryCache(
+          summaryStorage(),
+          scope,
+          period.id,
+          mode === "demo" ? baseSig : signature,
+        );
         if (cached) {
           summaryRun.current = runKey;
           setSummary(cached);
@@ -2628,10 +2913,17 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           now,
           undefined,
           teamContextFor(scope),
+          {
+            hybrid: true,
+            decisionReady: mode === "demo" ? false : hasDecisionLayer,
+            decisions: decisionIndex,
+            thresholds: prefs.decision.thresholds,
+            customCategories: prefs.decision.customCategories,
+          },
         );
         setSummary(result);
         if (result.mailCount > 0) summaryRun.current = runKey;
-        if (result.source === "llm") {
+        if (result.source === "llm" && hasDecisionLayer) {
           writeSummaryCache(summaryStorage(), scope, result.period.id, signature, result);
         }
         proposeTasks(
@@ -2651,11 +2943,16 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     },
     [
       account,
+      decisionIndex,
+      decisions,
       excludedAccounts,
+      hasDecisionLayer,
       inboxIndex,
       inboxMails,
       mode,
       notify,
+      prefs.decision.customCategories,
+      prefs.decision.thresholds,
       prefs.llm,
       prefs.summary,
       proposeTasks,
@@ -2667,8 +2964,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   /**
    * Propose des tâches extraites des mails de la fenêtre configurée. Le LLM n'est
    * sollicité qu'une fois par contenu de fenêtre (signature window+mails, gardée
-   * en mémoire puis sur le poste) et jamais en démo : pas de réseau, pas de
-   * boucle, aucune création automatique.
+   * en mémoire puis sur le poste) et uniquement sur les mails qualifiés par le
+   * modèle de décision (`hasTask >= llmEscalate`, hors bruit et prompt injection).
    */
   const refreshTaskSuggestions = useCallback(async () => {
     const config = prefs.aiTasks;
@@ -2676,12 +2973,18 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       taskRun.current = null;
       return;
     }
-    if (mode !== "api" || !llmReady(prefs.llm) || taskRunning.current) return;
+    if (mode !== "api" || !hasDecisionLayer || !llmReady(prefs.llm) || taskRunning.current) return;
     const recent = recentMails(summaryInputs(aiMails), config.windowHours);
     if (recent.length === 0) return;
-    const signature = `${config.windowHours}:${recent.map((mail) => mail.id).join(",")}`;
+    const { kept } = filterMailsForLlm(
+      recent,
+      decisionIndex,
+      prefs.decision.thresholds,
+      "tasks",
+    );
+    const signature = `${config.windowHours}:${recent.map((mail) => mail.id).join(",")}:d${Object.keys(decisions).length}:k${kept.map((mail) => mail.id).join(",")}`;
     if (taskRun.current === signature) return;
-    if (aiRunDone("tasks", signature)) {
+    if (kept.length > 0 && aiRunDone("tasks", signature)) {
       taskRun.current = signature;
       return;
     }
@@ -2694,10 +2997,16 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         new Date(),
         undefined,
         teamContextFor(),
+        {
+          hybrid: true,
+          decisionReady: hasDecisionLayer,
+          decisions: decisionIndex,
+          thresholds: prefs.decision.thresholds,
+        },
       );
       if (proposed === null) return;
       taskRun.current = signature;
-      markAiRun("tasks", signature);
+      if (kept.length > 0) markAiRun("tasks", signature);
       if (proposed.length === 0) return;
       proposeTasks(proposed, inboxIndex, "Suggestion IA");
     } finally {
@@ -2705,9 +3014,13 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [
     aiMails,
+    decisionIndex,
+    decisions,
+    hasDecisionLayer,
     inboxIndex,
     mode,
     prefs.aiTasks,
+    prefs.decision.thresholds,
     prefs.llm,
     prefs.planningEnabled,
     proposeTasks,
@@ -2775,12 +3088,18 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       eventRun.current = null;
       return;
     }
-    if (mode !== "api" || !llmReady(prefs.llm) || eventRunning.current) return;
+    if (mode !== "api" || !hasDecisionLayer || !llmReady(prefs.llm) || eventRunning.current) return;
     const recent = recentMails(summaryInputs(aiMails), config.windowHours);
     if (recent.length === 0) return;
-    const signature = `${config.windowHours}:${recent.map((mail) => mail.id).join(",")}`;
+    const { kept } = filterMailsForLlm(
+      recent,
+      decisionIndex,
+      prefs.decision.thresholds,
+      "events",
+    );
+    const signature = `${config.windowHours}:${recent.map((mail) => mail.id).join(",")}:d${Object.keys(decisions).length}:k${kept.map((mail) => mail.id).join(",")}`;
     if (eventRun.current === signature) return;
-    if (aiRunDone("events", signature)) {
+    if (kept.length > 0 && aiRunDone("events", signature)) {
       eventRun.current = signature;
       return;
     }
@@ -2793,10 +3112,16 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         new Date(),
         undefined,
         teamContextFor(),
+        {
+          hybrid: true,
+          decisionReady: hasDecisionLayer,
+          decisions: decisionIndex,
+          thresholds: prefs.decision.thresholds,
+        },
       );
       if (proposed === null) return;
       eventRun.current = signature;
-      markAiRun("events", signature);
+      if (kept.length > 0) markAiRun("events", signature);
       if (proposed.length === 0) return;
       proposeEvents(proposed, inboxIndex, "Rendez-vous IA");
     } finally {
@@ -2804,10 +3129,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [
     aiMails,
+    decisionIndex,
+    decisions,
+    hasDecisionLayer,
     inboxIndex,
     mode,
     prefs.aiTasks,
     prefs.calendarEnabled,
+    prefs.decision.thresholds,
     prefs.llm,
     proposeEvents,
     summaryInputs,
@@ -2828,6 +3157,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       setAnalyse({ mailId, status: "loading", result: null, error: null });
       const storage = summaryStorage();
       const llm = mode === "demo" ? EMPTY_LLM : prefs.llm;
+      const decision = triageDecisionFor(mail, decisionIndex.byKey, decisionIndex.byMessageId);
       try {
         let body = mail.body.join("\n");
         const source = mail.source;
@@ -2847,7 +3177,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
             conversation: threadConversation(undefined, mails, mail.threadId),
           },
           events,
-          { team: teamContextFor(mail.account), style, force, storage },
+          {
+            team: teamContextFor(mail.account),
+            style,
+            force,
+            storage,
+            decision,
+            thresholds: prefs.decision.thresholds,
+          },
         );
         if (analyseRun.current !== mailId) return;
         if (result.source === "local" && llmReady(llm)) {
@@ -2867,7 +3204,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         analyseRunning.current = false;
       }
     },
-    [events, folderRecords, mails, mode, prefs.llm, teamContextFor],
+    [decisionIndex, events, folderRecords, mails, mode, prefs.decision.thresholds, prefs.llm, teamContextFor],
   );
 
   /** Une tâche analysée suit le circuit de suggestions : validation humaine obligatoire. */
@@ -2894,6 +3231,28 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   }, [refreshEventSuggestions]);
 
   useEffect(() => {
+    if (mode !== "api" || phase !== "ready" || !isDecisionReady || isComposeWindow()) return;
+    const pending = inboxMails
+      .filter((mail) => {
+        if (!mail.source) return false;
+        const key = decisionMailKey(mail.source.accountId, mail.source.folderPath, mail.source.uid);
+        if (autoTriagedKeys.current.has(key)) return false;
+        return !triageDecisionFor(mail, decisionIndex.byKey, decisionIndex.byMessageId);
+      })
+      .sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0))
+      .slice(0, 40);
+    if (pending.length === 0) return;
+    for (const mail of pending) {
+      if (mail.source) {
+        autoTriagedKeys.current.add(
+          decisionMailKey(mail.source.accountId, mail.source.folderPath, mail.source.uid),
+        );
+      }
+    }
+    void triageMails(pending);
+  }, [decisionIndex, inboxMails, isDecisionReady, mode, phase, triageMails]);
+
+  useEffect(() => {
     if (phase !== "ready" || isComposeWindow()) return;
     summaryRun.current = null;
     void refreshSummaryRef.current();
@@ -2904,7 +3263,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (phase !== "ready" || isComposeWindow()) return;
     void refreshSummaryRef.current();
-  }, [inboxMails.length, phase]);
+  }, [decisions, hasDecisionLayer, inboxMails.length, phase]);
 
   useEffect(() => {
     taskRun.current = null;
@@ -2917,7 +3276,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (phase !== "ready" || isComposeWindow()) return;
     void refreshTaskSuggestionsRef.current();
-  }, [inboxMails.length, phase]);
+  }, [decisions, hasDecisionLayer, inboxMails.length, phase]);
 
   useEffect(() => {
     eventRun.current = null;
@@ -2930,7 +3289,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (phase !== "ready" || isComposeWindow()) return;
     void refreshEventSuggestionsRef.current();
-  }, [inboxMails.length, phase]);
+  }, [decisions, hasDecisionLayer, inboxMails.length, phase]);
 
   const openMailId = openMail?.id ?? null;
   const openMailThreadId = openMail?.threadId ?? null;
@@ -3031,6 +3390,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       mailAction,
       bulkMailAction,
       moveToInbox,
+      moveToFolder,
       restoreMail,
       emptyTrash,
       addSuggestion,
@@ -3073,6 +3433,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       unhideFolder,
       folderOrder,
       setFolderOrder,
+      decisions,
+      isDecisionReady,
+      totpAlert,
+      dismissTotpAlert,
+      triageMails,
     }),
     [
       mails,
@@ -3130,6 +3495,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       mailAction,
       bulkMailAction,
       moveToInbox,
+      moveToFolder,
       restoreMail,
       emptyTrash,
       addSuggestion,
@@ -3171,6 +3537,11 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       unhideFolder,
       folderOrder,
       setFolderOrder,
+      decisions,
+      isDecisionReady,
+      totpAlert,
+      dismissTotpAlert,
+      triageMails,
       bootstrap,
     ],
   );

@@ -1,5 +1,21 @@
 import { ALL_ACCOUNTS } from "@/lib/accounts";
+import { recordLlmSaved } from "@/lib/ai-stats";
+import {
+  DEFAULT_DECISION_THRESHOLDS,
+  type CustomCategory,
+  type DecisionThresholds,
+} from "@/lib/decision";
 import { llmChat, llmReady, type LlmConfig } from "@/lib/llm";
+import type { MailSource } from "@/lib/mail";
+import {
+  asDecisionIndex,
+  filterMailsForLlm,
+  hasAnyDecision,
+  summaryGroupsFromDecisions,
+  triageDecisionFor,
+  type DecisionIndex,
+  type DecisionLookup,
+} from "@/lib/triage";
 
 /**
  * Moteur de résumé périodique. Le LLM y est traité comme un composant ISOLÉ,
@@ -69,6 +85,16 @@ export type SummaryMailInput = {
   subject: string;
   snippet: string;
   timestamp: number;
+  messageId?: string;
+  source?: MailSource;
+};
+
+export type SummaryHybridOptions = {
+  hybrid?: boolean;
+  decisionReady?: boolean;
+  decisions?: DecisionLookup;
+  thresholds?: DecisionThresholds;
+  customCategories?: readonly CustomCategory[];
 };
 
 export type SummaryTask = {
@@ -267,6 +293,22 @@ export function recentMails(
     .slice(0, MAX_MAILS);
 }
 
+function enrichTaskAssignees(
+  tasks: SummaryTask[],
+  mails: readonly SummaryMailInput[],
+  index: DecisionIndex,
+): SummaryTask[] {
+  const byId = new Map(mails.map((mail) => [mail.id, mail]));
+  return tasks.map((task) => {
+    if (task.assignee || !task.mailId) return task;
+    const mail = byId.get(task.mailId);
+    const dec = mail ? triageDecisionFor(mail, index.byKey, index.byMessageId) : undefined;
+    const assignee = dec?.assignee?.trim();
+    if (!assignee || assignee === "moi" || assignee === "aucun") return task;
+    return { ...task, assignee };
+  });
+}
+
 /**
  * Extraits de tâches : même isolation que le résumé (contenu mail non fiable,
  * sortie JSON validée), et un mailId hors fenêtre est supprimé pour qu'une
@@ -279,16 +321,33 @@ export async function suggestTasks(
   now = new Date(),
   signal?: AbortSignal,
   context = "",
+  options?: SummaryHybridOptions,
 ): Promise<SummaryTask[] | null> {
   const recent = recentMails(mails, config.windowHours, now.getTime());
-  if (!llmReady(llm) || recent.length === 0) return [];
+  if (recent.length === 0) return [];
+
+  let target = recent;
+  let decisionIndex: DecisionIndex | null = null;
+  if (options?.hybrid) {
+    const hasDec = hasAnyDecision(options.decisions);
+    if (!options.decisionReady && !hasDec) return [];
+    const thresholds = options.thresholds ?? DEFAULT_DECISION_THRESHOLDS;
+    decisionIndex = asDecisionIndex(options.decisions ?? new Map());
+    const { kept, skippedCount } = filterMailsForLlm(recent, decisionIndex, thresholds, "tasks");
+    if (llmReady(llm) && skippedCount > 0) recordLlmSaved(skippedCount);
+    if (kept.length === 0) return [];
+    target = kept;
+  }
+
+  if (!llmReady(llm)) return [];
   try {
-    const { system, user } = buildTaskPrompt(recent, context);
+    const { system, user } = buildTaskPrompt(target, context);
     const raw = await llmChat(llm, system, user, signal);
-    const known = new Set(recent.map((mail) => mail.id));
-    return parseSummaryOutput(raw, recent).tasks.map((task) =>
+    const known = new Set(target.map((mail) => mail.id));
+    const parsed = parseSummaryOutput(raw, target).tasks.map((task) =>
       task.mailId && !known.has(task.mailId) ? { ...task, mailId: undefined } : task,
     );
+    return decisionIndex ? enrichTaskAssignees(parsed, target, decisionIndex) : parsed;
   } catch {
     return null;
   }
@@ -306,13 +365,28 @@ export async function suggestEvents(
   now = new Date(),
   signal?: AbortSignal,
   context = "",
+  options?: SummaryHybridOptions,
 ): Promise<SummaryEvent[] | null> {
   const recent = recentMails(mails, config.windowHours, now.getTime());
-  if (!llmReady(llm) || recent.length === 0) return [];
+  if (recent.length === 0) return [];
+
+  let target = recent;
+  if (options?.hybrid) {
+    const hasDec = hasAnyDecision(options.decisions);
+    if (!options.decisionReady && !hasDec) return [];
+    const thresholds = options.thresholds ?? DEFAULT_DECISION_THRESHOLDS;
+    const decisionIndex = asDecisionIndex(options.decisions ?? new Map());
+    const { kept, skippedCount } = filterMailsForLlm(recent, decisionIndex, thresholds, "events");
+    if (llmReady(llm) && skippedCount > 0) recordLlmSaved(skippedCount);
+    if (kept.length === 0) return [];
+    target = kept;
+  }
+
+  if (!llmReady(llm)) return [];
   try {
-    const { system, user } = buildEventPrompt(recent, context);
+    const { system, user } = buildEventPrompt(target, context);
     const raw = await llmChat(llm, system, user, signal);
-    const known = new Set(recent.map((mail) => mail.id));
+    const known = new Set(target.map((mail) => mail.id));
     return parseEventOutput(raw).map((event) =>
       event.mailId && !known.has(event.mailId) ? { ...event, mailId: undefined } : event,
     );
@@ -649,6 +723,53 @@ export function fallbackSummary(mails: SummaryMailInput[], period: SummaryPeriod
   };
 }
 
+function decisionHeadline(mails: SummaryMailInput[], groups: SummaryGroups): string {
+  if (mails.length === 0) return "Aucun nouveau mail sur la période.";
+  const parts: string[] = [];
+  if (groups.actions.length > 0) {
+    parts.push(`${groups.actions.length} à traiter`);
+  }
+  if (groups.infos.length > 0) {
+    parts.push(`${groups.infos.length} info${groups.infos.length > 1 ? "s" : ""}`);
+  }
+  if (groups.notifications.length > 0) {
+    parts.push(
+      `${groups.notifications.length} notification${groups.notifications.length > 1 ? "s" : ""}`,
+    );
+  }
+  if (parts.length === 0) return `${mails.length} mail${mails.length > 1 ? "s" : ""} sur la période.`;
+  return `${mails.length} mail${mails.length > 1 ? "s" : ""} : ${parts.join(", ")}.`;
+}
+
+function mergeRefs(primary: SummaryRef[], secondary: SummaryRef[], max: number): SummaryRef[] {
+  const seen = new Set<string>();
+  const out: SummaryRef[] = [];
+  for (const ref of [...primary, ...secondary]) {
+    if (out.length >= max) break;
+    if (!ref.mailId || seen.has(ref.mailId)) continue;
+    seen.add(ref.mailId);
+    out.push(ref);
+  }
+  return out;
+}
+
+function decisionSummary(
+  mails: SummaryMailInput[],
+  period: SummaryPeriod,
+  groups: SummaryGroups,
+): SummaryResult {
+  return {
+    period,
+    headline: decisionHeadline(mails, groups),
+    groups,
+    tasks: [],
+    mailCount: mails.length,
+    generatedAt: Date.now(),
+    source: "fallback",
+    mailIds: mails.map((mail) => mail.id),
+  };
+}
+
 export async function generateSummary(
   config: SummaryConfig,
   llm: LlmConfig,
@@ -656,6 +777,7 @@ export async function generateSummary(
   now = new Date(),
   signal?: AbortSignal,
   context = "",
+  options?: SummaryHybridOptions,
 ): Promise<SummaryResult> {
   const period = currentPeriod(config, now);
   const since = periodSince(config, now).getTime();
@@ -664,25 +786,78 @@ export async function generateSummary(
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, MAX_MAILS);
 
-  if (!config.enabled || !config.llmConsent || !llmReady(llm) || recent.length === 0) {
+  if (!options?.hybrid) {
+    if (!config.enabled || !config.llmConsent || !llmReady(llm) || recent.length === 0) {
+      return fallbackSummary(recent, period);
+    }
+    try {
+      const { system, user } = buildPrompt(recent, context);
+      const raw = await llmChat(llm, system, user, signal);
+      const { headline, groups, tasks } = parseSummaryOutput(raw, recent);
+      if (!headline) return fallbackSummary(recent, period);
+      return {
+        period,
+        headline,
+        groups,
+        tasks,
+        mailCount: recent.length,
+        generatedAt: Date.now(),
+        source: "llm",
+        mailIds: recent.map((mail) => mail.id),
+      };
+    } catch {
+      return fallbackSummary(recent, period);
+    }
+  }
+
+  if (!config.enabled || recent.length === 0) {
     return fallbackSummary(recent, period);
   }
+  const hasDec = hasAnyDecision(options.decisions);
+  if (!options.decisionReady && !hasDec) {
+    return fallbackSummary(recent, period);
+  }
+
+  const thresholds = options.thresholds ?? DEFAULT_DECISION_THRESHOLDS;
+  const decisionIndex = asDecisionIndex(options.decisions ?? new Map());
+  const decisionGroups = summaryGroupsFromDecisions(recent, decisionIndex, thresholds, {
+    customCategories: options.customCategories,
+  });
+  const { kept, skippedCount } = filterMailsForLlm(recent, decisionIndex, thresholds, "summary", {
+    customCategories: options.customCategories,
+  });
+  if (config.llmConsent && llmReady(llm) && skippedCount > 0) {
+    recordLlmSaved(skippedCount);
+  }
+
+  if (!config.llmConsent || !llmReady(llm) || kept.length === 0) {
+    return decisionSummary(recent, period, decisionGroups);
+  }
+
   try {
-    const { system, user } = buildPrompt(recent, context);
+    const { system, user } = buildPrompt(kept, context);
     const raw = await llmChat(llm, system, user, signal);
-    const { headline, groups, tasks } = parseSummaryOutput(raw, recent);
-    if (!headline) return fallbackSummary(recent, period);
+    const parsed = parseSummaryOutput(raw, kept);
+    if (!parsed.headline) return decisionSummary(recent, period, decisionGroups);
+    const keptIds = new Set(kept.map((mail) => mail.id));
+    const llmActions = parsed.groups.actions.filter((ref) => keptIds.has(ref.mailId));
+    const llmInfos = parsed.groups.infos.filter((ref) => keptIds.has(ref.mailId));
+    const groups: SummaryGroups = {
+      actions: mergeRefs(llmActions, decisionGroups.actions, MAX_ACTIONS),
+      infos: mergeRefs(llmInfos, decisionGroups.infos, MAX_INFOS),
+      notifications: decisionGroups.notifications,
+    };
     return {
       period,
-      headline,
+      headline: parsed.headline,
       groups,
-      tasks,
+      tasks: enrichTaskAssignees(parsed.tasks, kept, decisionIndex),
       mailCount: recent.length,
       generatedAt: Date.now(),
       source: "llm",
       mailIds: recent.map((mail) => mail.id),
     };
   } catch {
-    return fallbackSummary(recent, period);
+    return decisionSummary(recent, period, decisionGroups);
   }
 }

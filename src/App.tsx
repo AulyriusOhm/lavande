@@ -2,13 +2,15 @@ import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { BatteryFull, PenLine, Signal, Wifi } from "lucide-react";
 import { ThemeProvider, useTheme } from "@/lib/theme";
-import { PrefsProvider, usePrefs } from "@/lib/prefs";
+import { PrefsProvider, isFolderHidden, usePrefs } from "@/lib/prefs";
 import type { MailSuggestion, Task } from "@/lib/tasks";
 import { sortTasks, taskFromSuggestion } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import { insertAt } from "@/lib/draft";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
+import { suggestFolderForMail } from "@/lib/guards";
+import { indexDecisions, triageDecisionFor } from "@/lib/triage";
 import { Dock, TABS, type TabId } from "@/components/dock";
 import { AccountSwitchSheet, InboxScreen as InboxView, MailboxSheet } from "@/screens/inbox-screen";
 import { MailContextMenu } from "@/components/mail-context-menu";
@@ -23,7 +25,9 @@ import { NewEventSheet, type NewEventDraft } from "@/screens/new-event-sheet";
 import { SettingsScreen as SettingsView } from "@/screens/settings-screen";
 import { MessageScreen } from "@/screens/message-screen";
 import { ComposeScreen } from "@/screens/compose-screen";
+import { CleanupScreen } from "@/screens/cleanup-screen";
 import { PgpScreen } from "@/screens/pgp-screen";
+import { TotpPopup } from "@/components/totp-popup";
 import { DotPattern, MeshGlow } from "@/components/ui/backdrops";
 import { Notice } from "@/components/ui/notice";
 import type { CalendarEvent } from "@/lib/calendar";
@@ -58,6 +62,24 @@ const DesktopShell = lazy(() =>
 
 const OVERLAY_STATE = { lavandeOverlay: true };
 
+function TotpHost() {
+  const { totpAlert, dismissTotpAlert, mails, openMessage, mailAction } = useMailStore();
+  return (
+    <TotpPopup
+      alert={totpAlert}
+      onDismiss={dismissTotpAlert}
+      onOpenMail={(mailId) => {
+        const target = mails.find((entry) => entry.id === mailId);
+        openMessage(target ?? mailId);
+      }}
+      onMarkRead={(mailId) => {
+        const target = mails.find((entry) => entry.id === mailId);
+        if (target?.unread) mailAction("read", target);
+      }}
+    />
+  );
+}
+
 export default function App() {
   const layout = shellLayout();
 
@@ -78,6 +100,7 @@ export default function App() {
                   <Stage />
                 )}
               </Suspense>
+              <TotpHost />
               <UpdatePopup />
             </MailStoreProvider>
           </PlanningProvider>
@@ -164,7 +187,9 @@ function PhoneApp({ native }: { native?: boolean }) {
     dismissNotice,
     toggleStar,
     mailAction,
+    bulkMailAction,
     moveToInbox,
+    moveToFolder,
     restoreMail,
     addSuggestion,
     dismissSuggestion,
@@ -185,6 +210,11 @@ function PhoneApp({ native }: { native?: boolean }) {
     acceptAnalyseTask,
     acceptAnalyseEvent,
     openReplyWithBody,
+    folderOptions,
+    folderRecords,
+    decisions,
+    isDecisionReady,
+    triageMails,
     mode,
     readOnly,
     phase,
@@ -216,6 +246,72 @@ function PhoneApp({ native }: { native?: boolean }) {
   const [eventDraft, setEventDraft] = useState<NewEventDraft | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [movingTask, setMovingTask] = useState<Task | null>(null);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [cleanupScanning, setCleanupScanning] = useState(false);
+
+  const decisionIndex = useMemo(() => indexDecisions(decisions), [decisions]);
+  const openMailDecision = useMemo(
+    () =>
+      openMail
+        ? (triageDecisionFor(openMail, decisionIndex.byKey, decisionIndex.byMessageId) ?? null)
+        : null,
+    [openMail, decisionIndex],
+  );
+
+  const openMailCustomFolders = useMemo(() => {
+    if (!openMail) return [];
+    const accId = openMail.source?.accountId ?? openMail.account;
+    const fromRecords = folderRecords
+      .filter(
+        (record) =>
+          record.accountId === accId &&
+          record.role === "other" &&
+          !isFolderHidden(prefs.hiddenFolders, accId, record.path),
+      )
+      .map((record) => ({ path: record.path, label: record.name }));
+    if (fromRecords.length > 0) return fromRecords;
+    return folderOptions
+      .filter((option) => option.id === "other")
+      .map((option) => ({ path: option.path, label: option.label }));
+  }, [folderOptions, folderRecords, openMail, prefs.hiddenFolders]);
+
+  const handleScanMoreCleanup = useCallback(async () => {
+    if (cleanupScanning) return;
+    const untriaged = mails
+      .filter(
+        (mail) =>
+          mail.source &&
+          !triageDecisionFor(mail, decisionIndex.byKey, decisionIndex.byMessageId),
+      )
+      .slice(0, 50);
+    if (untriaged.length === 0) return;
+    setCleanupScanning(true);
+    try {
+      await triageMails(untriaged, false, 50);
+    } finally {
+      setCleanupScanning(false);
+    }
+  }, [cleanupScanning, decisionIndex, mails, triageMails]);
+
+  const handleSuggestFolder = useCallback(
+    (mail: Mail) => {
+      const config =
+        isDecisionReady && !prefs.decision.daemonHasKey
+          ? { ...prefs.decision, enabled: true, daemonHasKey: true }
+          : prefs.decision;
+      return suggestFolderForMail(
+        config,
+        {
+          from: `${mail.name} <${mail.email}>`,
+          subject: mail.subject,
+          excerpt: mail.preview || mail.body.join(" "),
+          folders: openMailCustomFolders,
+        },
+        { useDaemon: mode === "api" },
+      );
+    },
+    [isDecisionReady, mode, openMailCustomFolders, prefs.decision],
+  );
 
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -247,6 +343,7 @@ function PhoneApp({ native }: { native?: boolean }) {
     [Boolean(contextMail), () => setContextMail(null)],
     [Boolean(movingTask), () => setMovingTask(null)],
     [Boolean(openMail), () => closeMessage()],
+    [cleanupOpen, () => setCleanupOpen(false)],
     [Boolean(detail), () => setDetail(null)],
     [pgpOpen, () => setPgpOpen(false)],
     [mcpOpen, () => setMcpOpen(false)],
@@ -507,6 +604,7 @@ function PhoneApp({ native }: { native?: boolean }) {
                   onNotSpam={moveToInbox}
                   onRestore={restoreMail}
                   onOpenMenu={setContextMail}
+                  onOpenCleanup={() => setCleanupOpen(true)}
                 />
               )}
               {id === "calendar" && (
@@ -620,6 +718,10 @@ function PhoneApp({ native }: { native?: boolean }) {
                   closeMessage();
                   openPgp();
                 }}
+                decision={openMailDecision}
+                customFolders={openMailCustomFolders}
+                onMoveToFolder={moveToFolder}
+                onSuggestFolder={handleSuggestFolder}
               />
               {analyse && analyse.mailId === openMail.id ? (
                 <AnalysePanel
@@ -633,6 +735,36 @@ function PhoneApp({ native }: { native?: boolean }) {
                   onRetry={() => void runAnalyse(openMail, true)}
                 />
               ) : null}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {cleanupOpen && (
+            <motion.div
+              key="cleanup"
+              className="absolute inset-0 z-[35] bg-canvas"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ type: "spring", stiffness: 340, damping: 34 }}
+            >
+              <CleanupScreen
+                mails={mails}
+                decisions={decisions}
+                thresholds={prefs.decision.thresholds}
+                customCategories={prefs.decision.customCategories}
+                onTrash={(targets) => bulkMailAction("delete", targets)}
+                onArchive={(targets) => bulkMailAction("archive", targets)}
+                onRestore={(targets) => bulkMailAction("restore", targets)}
+                onOpenMail={(mail) => {
+                  setCleanupOpen(false);
+                  openMessage(mail);
+                }}
+                onScanMore={handleScanMoreCleanup}
+                scanning={cleanupScanning}
+                onClose={() => setCleanupOpen(false)}
+              />
             </motion.div>
           )}
         </AnimatePresence>

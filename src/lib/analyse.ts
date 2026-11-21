@@ -1,5 +1,11 @@
 import { isoDay, overlappingEvents, type CalendarEvent } from "@/lib/calendar";
 import { minutesOf } from "@/lib/calendar-views";
+import {
+  DEFAULT_DECISION_THRESHOLDS,
+  isPromptInjection,
+  type DecisionThresholds,
+  type MailDecision,
+} from "@/lib/decision";
 import { llmChat, llmReady, type LlmConfig } from "@/lib/llm";
 import { fingerprint, parseEventOutput, parseJsonObject, sanitizeText, type SummaryEvent, type SummaryTask } from "@/lib/summary";
 
@@ -24,6 +30,7 @@ export type AnalyseResult = {
   conflicts: AnalyseConflict[];
   slots: FreeSlot[];
   reply?: string;
+  promptInjectionWarning?: boolean;
   generatedAt: number;
   source: "llm" | "local";
 };
@@ -236,8 +243,17 @@ async function draftReply(
   return sanitizeText(raw, MAX_REPLY);
 }
 
-function localResult(mailId: string): AnalyseResult {
-  return { mailId, tasks: [], events: [], conflicts: [], slots: [], generatedAt: Date.now(), source: "local" };
+function localResult(mailId: string, promptInjectionWarning = false): AnalyseResult {
+  return {
+    mailId,
+    tasks: [],
+    events: [],
+    conflicts: [],
+    slots: [],
+    ...(promptInjectionWarning ? { promptInjectionWarning: true } : {}),
+    generatedAt: Date.now(),
+    source: "local",
+  };
 }
 
 export function analyseCacheKey(
@@ -302,6 +318,7 @@ function storedResult(value: unknown): AnalyseResult | null {
     conflicts: raw.conflicts as AnalyseConflict[],
     slots: raw.slots as FreeSlot[],
     ...(typeof raw.reply === "string" ? { reply: raw.reply } : {}),
+    ...(raw.promptInjectionWarning === true ? { promptInjectionWarning: true } : {}),
     generatedAt: raw.generatedAt,
     source: raw.source === "llm" ? "llm" : "local",
   };
@@ -353,24 +370,41 @@ export async function analyseMail(
   llm: LlmConfig,
   input: { mailId: string; from: string; subject: string; body: string; conversation: string },
   events: CalendarEvent[],
-  opts: { team?: string; style?: string; force?: boolean; signal?: AbortSignal; storage?: Storage | null } = {},
+  opts: {
+    team?: string;
+    style?: string;
+    force?: boolean;
+    signal?: AbortSignal;
+    storage?: Storage | null;
+    decision?: MailDecision | null;
+    thresholds?: DecisionThresholds;
+  } = {},
 ): Promise<AnalyseResult> {
+  const promptInjectionWarning = opts.decision
+    ? isPromptInjection(opts.decision, opts.thresholds ?? DEFAULT_DECISION_THRESHOLDS)
+    : false;
   const agenda = agendaLines(events);
   const key = analyseCacheKey(input.mailId, input.body, input.conversation, agenda, opts.team, opts.style);
   if (!opts.force) {
     const cached = readAnalyseCache(opts.storage, key);
-    if (cached) return cached;
+    if (cached) {
+      return promptInjectionWarning ? { ...cached, promptInjectionWarning: true } : cached;
+    }
   }
-  if (!llmReady(llm)) return localResult(input.mailId);
+  if (!llmReady(llm)) return localResult(input.mailId, promptInjectionWarning);
 
   let tasks: AnalyseTask[];
   let proposed: SummaryEvent[];
   try {
     const raw = await llmChat(llm, extractionSystem(opts.team, opts.style), extractionUser(input, agenda), opts.signal);
     tasks = parseAnalyseTasks(raw, input.mailId);
+    const decisionAssignee = opts.decision?.assignee?.trim();
+    if (decisionAssignee && decisionAssignee !== "moi" && decisionAssignee !== "aucun") {
+      tasks = tasks.map((task) => (task.assignee ? task : { ...task, assignee: decisionAssignee }));
+    }
     proposed = parseAnalyseEvents(raw, input.mailId);
   } catch {
-    return localResult(input.mailId);
+    return localResult(input.mailId, promptInjectionWarning);
   }
 
   const conflicts = computeConflicts(proposed, events);
@@ -390,6 +424,7 @@ export async function analyseMail(
     conflicts,
     slots,
     ...(reply ? { reply } : {}),
+    ...(promptInjectionWarning ? { promptInjectionWarning: true } : {}),
     generatedAt: Date.now(),
     source: "llm",
   };

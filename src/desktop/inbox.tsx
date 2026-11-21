@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Archive,
   Check,
   ChevronDown,
@@ -8,6 +9,7 @@ import {
   CornerUpLeft,
   CornerUpRight,
   Download,
+  FolderInput,
   FolderOpen,
   Forward,
   Inbox,
@@ -24,6 +26,7 @@ import {
   ReplyAll,
   RotateCcw,
   Search,
+  ShieldAlert,
   ShieldCheck,
   ShieldOff,
   Sparkles,
@@ -41,10 +44,22 @@ import type { Thread } from "@/lib/threads";
 import { threadsInFolder } from "@/lib/threads";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
 import type { FolderOption } from "@/lib/mail-backend";
+import {
+  DEFAULT_DECISION_THRESHOLDS,
+  decisionReady,
+  isPhishing,
+  isPromptInjection,
+  type CustomCategory,
+  type DecisionThresholds,
+  type MailDecision,
+} from "@/lib/decision";
+import { countCleanupByFilter } from "@/lib/cleanup";
+import { indexDecisions, triageDecisionFor } from "@/lib/triage";
+import { suggestFolderForMail } from "@/lib/guards";
 import { PGP_STATE, formatKeyDate, keyLabel, keyState, shortFingerprint, type PgpKey } from "@/lib/pgp";
 import { listKeys } from "@/lib/pgp-api";
 import { useMailStore, type BulkKind } from "@/lib/store";
-import { DEFAULT_INBOX_PANES, resolvePgp, usePrefs } from "@/lib/prefs";
+import { DEFAULT_INBOX_PANES, isFolderHidden, resolvePgp, usePrefs } from "@/lib/prefs";
 import type { MailNavigation } from "@/lib/app-shortcuts";
 import { useEscapeLayer } from "@/desktop/escape";
 import { PaneSplitter } from "@/desktop/pane-splitter";
@@ -60,6 +75,8 @@ import { MailBody, MailBodyLoading } from "@/components/mail-body";
 import { MailRecipients } from "@/components/mail-recipients";
 import { MailContextMenu } from "@/components/mail-context-menu";
 import { AnalysePanel } from "@/components/analyse-panel";
+import { CategoryManagerSheet, categoryColorStyle } from "@/components/category-manager-sheet";
+import { CleanupScreen } from "@/screens/cleanup-screen";
 import { FolderContextMenu } from "@/desktop/folder-context-menu";
 import { EmptyTrashButton } from "@/components/empty-trash";
 import { HiddenFoldersRail } from "@/components/folder-row";
@@ -76,7 +93,64 @@ import {
   SectionLabel,
 } from "@/desktop/ui";
 
-type Filter = "all" | "unread" | "starred" | "encrypted" | "attachments";
+type Filter =
+  | "all"
+  | "unread"
+  | "starred"
+  | "encrypted"
+  | "attachments"
+  | "priority"
+  | "needs_reply"
+  | "auth_totp"
+  | "notification"
+  | "promo"
+  | `custom:${string}`;
+
+function matchesCustomCategory(category: string, customId: string): boolean {
+  return category === `custom:${customId}` || category === customId;
+}
+
+function isExcludedFromPriority(
+  decision: MailDecision | undefined,
+  customCategories: readonly CustomCategory[],
+): boolean {
+  if (!decision) return false;
+  if (
+    decision.category === "promo" ||
+    decision.category === "spam" ||
+    decision.category === "auth_totp" ||
+    decision.category === "notification"
+  ) {
+    return true;
+  }
+  const custom = customCategories.find((cat) => matchesCustomCategory(decision.category, cat.id));
+  return Boolean(custom?.excludeFromPriority);
+}
+
+function resolveDefaultFilter(
+  configured: string,
+  smartActive: boolean,
+  customCategories: readonly CustomCategory[],
+): Filter {
+  if (!configured || configured === "all") return "all";
+  if (!smartActive) return "all";
+  if (
+    configured === "priority" ||
+    configured === "needs_reply" ||
+    configured === "auth_totp" ||
+    configured === "notification" ||
+    configured === "promo"
+  ) {
+    return configured;
+  }
+  if (configured.startsWith("custom:")) {
+    const id = configured.slice("custom:".length);
+    if (customCategories.some((cat) => cat.id === id)) {
+      return `custom:${id}`;
+    }
+  }
+  return "all";
+}
 
 const SUMMARY_DUE_TONE: Record<ReturnType<typeof dueToneFor>, "rose" | "amber" | "green"> = {
   late: "rose",
@@ -99,21 +173,13 @@ function summaryClock(mail: Mail): string {
   return typeof mail.timestamp === "number" ? clockOf(mail.timestamp) : mail.time;
 }
 
-const FILTERS: { id: Filter; label: string }[] = [
+const FILTERS: { id: "all" | "unread" | "starred" | "encrypted" | "attachments"; label: string }[] = [
   { id: "all", label: "Tous" },
   { id: "unread", label: "Non lus" },
   { id: "starred", label: "Étoilés" },
   { id: "encrypted", label: "Chiffrés" },
   { id: "attachments", label: "Fichiers" },
 ];
-
-const FILTER_MATCH: Record<Filter, (thread: Thread) => boolean> = {
-  all: () => true,
-  unread: (thread) => thread.unread > 0,
-  starred: (thread) => thread.starred,
-  encrypted: (thread) => thread.encrypted > 0,
-  attachments: (thread) => thread.attachments > 0,
-};
 
 const NARROW_MAX = 859;
 const MEDIUM_MAX = 1099;
@@ -540,6 +606,9 @@ function ThreadRow({
   selected,
   checked,
   delay,
+  decision = null,
+  decisionThresholds = DEFAULT_DECISION_THRESHOLDS,
+  customCategories = [],
   onOpen,
   onStar,
   onRead,
@@ -553,6 +622,9 @@ function ThreadRow({
   selected: boolean;
   checked: boolean;
   delay: number;
+  decision?: MailDecision | null;
+  decisionThresholds?: DecisionThresholds;
+  customCategories?: readonly CustomCategory[];
   onOpen: (event: React.MouseEvent | null) => void;
   onStar: () => void;
   onRead: () => void;
@@ -573,6 +645,37 @@ function ThreadRow({
         }`
       : sender;
   const unread = thread.unread > 0;
+
+  const decisionBadges: { label: string; className: string }[] = [];
+  if (decision) {
+    if (isPhishing(decision, decisionThresholds)) {
+      decisionBadges.push({
+        label: "Suspect",
+        className: "bg-rose-500/12 text-rose-700 dark:text-rose-300",
+      });
+    }
+    if (decision.urgency >= 2.0) {
+      decisionBadges.push({
+        label: "Urgent",
+        className: "bg-amber-500/14 text-amber-700 dark:text-amber-300",
+      });
+    }
+    if (decision.needsReply >= decisionThresholds.category && !mail.answered) {
+      decisionBadges.push({
+        label: "À répondre",
+        className: "bg-accent-soft text-accent-ink",
+      });
+    }
+    const customCat = customCategories.find(
+      (cat) => matchesCustomCategory(decision.category, cat.id),
+    );
+    if (customCat) {
+      decisionBadges.push({
+        label: customCat.name,
+        className: categoryColorStyle(customCat.color).pill,
+      });
+    }
+  }
 
   const quick: QuickAction[] = [
     {
@@ -673,8 +776,8 @@ function ThreadRow({
 
             <p className="mt-1 line-clamp-3 text-[12.5px] leading-[1.5] text-ink-muted">{thread.preview}</p>
 
-            {thread.count > 1 || thread.attachments > 0 ? (
-              <div className="mt-1.5 flex items-center gap-1">
+            {thread.count > 1 || thread.attachments > 0 || decisionBadges.length > 0 ? (
+              <div className="mt-1.5 flex flex-wrap items-center gap-1">
                 {thread.count > 1 ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] font-bold text-ink-soft">
                     {thread.count} messages
@@ -686,6 +789,17 @@ function ThreadRow({
                     {thread.attachments}
                   </span>
                 ) : null}
+                {decisionBadges.map((badge) => (
+                  <span
+                    key={badge.label}
+                    className={cn(
+                      "inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[10px] font-bold",
+                      badge.className,
+                    )}
+                  >
+                    {badge.label}
+                  </span>
+                ))}
               </div>
             ) : null}
           </div>
@@ -727,6 +841,7 @@ export function DesktopInbox({
     syncing,
     syncFolder,
     folderOptions,
+    folderRecords,
     folderPath,
     accountById,
     folder,
@@ -741,6 +856,7 @@ export function DesktopInbox({
     mailAction,
     bulkMailAction,
     moveToInbox,
+    moveToFolder,
     restoreMail,
     emptyTrash,
     openMessage,
@@ -766,10 +882,35 @@ export function DesktopInbox({
     hiddenFolderOptions,
     folderOrder,
     setFolderOrder,
+    decisions,
+    isDecisionReady,
+    triageMails,
   } = useMailStore();
   const { dark, setDark } = useTheme();
   const prefs = usePrefs();
-  const [filter, setFilter] = useState<Filter>("all");
+  const { decision: decisionPrefs } = prefs;
+  const smartActive = decisionReady(decisionPrefs) || Object.keys(decisions).length > 0;
+  const reception = folder === "inbox" || folder === "unified";
+  const [filter, setFilter] = useState<Filter>(() =>
+    reception
+      ? resolveDefaultFilter(
+          decisionPrefs.defaultInboxFilter,
+          smartActive,
+          decisionPrefs.customCategories,
+        )
+      : "all",
+  );
+  const userPickedFilter = useRef(false);
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [cleanupScanning, setCleanupScanning] = useState(false);
+  const [confirmAnalyseInjection, setConfirmAnalyseInjection] = useState(false);
+  const [asyncFolderSuggestion, setAsyncFolderSuggestion] = useState<{
+    mailId: string;
+    folderPath: string;
+    folderLabel: string;
+    confidence: number;
+  } | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(true);
   const [collapsedPrevious, setCollapsedPrevious] = useState<string[]>([]);
   const [pgpKeys, setPgpKeys] = useState<PgpKey[] | null>(null);
@@ -887,8 +1028,129 @@ export function DesktopInbox({
     folderOptions.find(
       (entry) => entry.id === folder && (entry.id !== "other" || entry.path === folderPath),
     )?.label ?? folderLabel(folder);
-  const reception = folder === "inbox" || folder === "unified";
-  const visible = threads.filter(FILTER_MATCH[filter]);
+  const decisionIndex = useMemo(() => indexDecisions(decisions), [decisions]);
+  const decisionForThread = useCallback(
+    (thread: Thread): MailDecision | undefined => {
+      const primary = triageDecisionFor(
+        thread.primary,
+        decisionIndex.byKey,
+        decisionIndex.byMessageId,
+      );
+      if (primary) return primary;
+      for (const msg of thread.messages) {
+        const hit = triageDecisionFor(msg, decisionIndex.byKey, decisionIndex.byMessageId);
+        if (hit) return hit;
+      }
+      return undefined;
+    },
+    [decisionIndex],
+  );
+
+  const smartCounts = useMemo(() => {
+    if (!smartActive) {
+      return {
+        priority: 0,
+        needsReply: 0,
+        authTotp: 0,
+        notification: 0,
+        promo: 0,
+        custom: {} as Record<string, number>,
+      };
+    }
+    const custom: Record<string, number> = {};
+    for (const cat of decisionPrefs.customCategories) custom[cat.id] = 0;
+    let priority = 0;
+    let needsReply = 0;
+    let authTotp = 0;
+    let notification = 0;
+    let promo = 0;
+
+    for (const thread of threads) {
+      const dec = decisionForThread(thread);
+      if (!isExcludedFromPriority(dec, decisionPrefs.customCategories)) priority += 1;
+      if (dec) {
+        if (dec.needsReply >= decisionPrefs.thresholds.category && !thread.primary.answered) {
+          needsReply += 1;
+        }
+        if (dec.category === "auth_totp") authTotp += 1;
+        else if (dec.category === "notification") notification += 1;
+        else if (dec.category === "promo" || dec.category === "spam") promo += 1;
+        else {
+          for (const cat of decisionPrefs.customCategories) {
+            if (matchesCustomCategory(dec.category, cat.id)) {
+              custom[cat.id] = (custom[cat.id] ?? 0) + 1;
+            }
+          }
+        }
+      }
+    }
+
+    return { priority, needsReply, authTotp, notification, promo, custom };
+  }, [
+    smartActive,
+    threads,
+    decisionForThread,
+    decisionPrefs.customCategories,
+    decisionPrefs.thresholds.category,
+  ]);
+
+  const cleanupCount = useMemo(
+    () =>
+      smartActive
+        ? countCleanupByFilter(
+            mails,
+            decisions,
+            [],
+            [],
+            decisionPrefs.thresholds,
+            Date.now(),
+            decisionPrefs.customCategories,
+          ).all
+        : 0,
+    [smartActive, mails, decisions, decisionPrefs.thresholds, decisionPrefs.customCategories],
+  );
+
+  const handleScanMoreCleanup = useCallback(async () => {
+    if (cleanupScanning) return;
+    const untriaged = mails
+      .filter(
+        (entry) =>
+          entry.source &&
+          !triageDecisionFor(entry, decisionIndex.byKey, decisionIndex.byMessageId),
+      )
+      .slice(0, 50);
+    if (untriaged.length === 0) return;
+    setCleanupScanning(true);
+    try {
+      await triageMails(untriaged, false, 50);
+    } finally {
+      setCleanupScanning(false);
+    }
+  }, [cleanupScanning, decisionIndex, mails, triageMails]);
+
+  const visible = threads.filter((thread) => {
+    if (filter === "unread") return thread.unread > 0;
+    if (filter === "starred") return thread.starred;
+    if (filter === "encrypted") return thread.encrypted > 0;
+    if (filter === "attachments") return thread.attachments > 0;
+    if (filter === "all") return true;
+    const dec = decisionForThread(thread);
+    if (filter === "priority") {
+      return !isExcludedFromPriority(dec, decisionPrefs.customCategories);
+    }
+    if (!dec) return false;
+    if (filter === "needs_reply") {
+      return dec.needsReply >= decisionPrefs.thresholds.category && !thread.primary.answered;
+    }
+    if (filter === "auth_totp") return dec.category === "auth_totp";
+    if (filter === "notification") return dec.category === "notification";
+    if (filter === "promo") return dec.category === "promo" || dec.category === "spam";
+    if (filter.startsWith("custom:")) {
+      const id = filter.slice("custom:".length);
+      return matchesCustomCategory(dec.category, id);
+    }
+    return true;
+  });
   const selectedMails = visible.filter((thread) => selectedIds.has(thread.id)).map((thread) => thread.primary);
   const selection = useRef({ ids: selectedIds, mails: selectedMails });
   selection.current = { ids: selectedIds, mails: selectedMails };
@@ -925,9 +1187,41 @@ export function DesktopInbox({
   const attachmentThreads = threads.filter((thread) => thread.attachments > 0).length;
   const encryptedThreads = threads.filter((thread) => thread.encrypted > 0).length;
 
+  const selectFilter = useCallback((next: Filter) => {
+    userPickedFilter.current = true;
+    setFilter(next);
+  }, []);
+
   useEffect(() => {
-    setFilter("all");
+    userPickedFilter.current = false;
+    setFilter(
+      reception
+        ? resolveDefaultFilter(
+            decisionPrefs.defaultInboxFilter,
+            smartActive,
+            decisionPrefs.customCategories,
+          )
+        : "all",
+    );
   }, [folder, folderPath, account]);
+
+  useEffect(() => {
+    if (userPickedFilter.current) return;
+    setFilter(
+      reception
+        ? resolveDefaultFilter(
+            decisionPrefs.defaultInboxFilter,
+            smartActive,
+            decisionPrefs.customCategories,
+          )
+        : "all",
+    );
+  }, [
+    reception,
+    smartActive,
+    decisionPrefs.defaultInboxFilter,
+    decisionPrefs.customCategories,
+  ]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -957,6 +1251,131 @@ export function DesktopInbox({
     mail && mail.pgp === "encrypted" && !mail.bodyFetched && !resolvePgp(prefs, mail.account).enabled,
   );
 
+  const openMailDecision = useMemo(
+    () =>
+      mail
+        ? (triageDecisionFor(mail, decisionIndex.byKey, decisionIndex.byMessageId) ?? null)
+        : null,
+    [mail, decisionIndex],
+  );
+  const securityThresholds = decisionPrefs.thresholds;
+  const phishingAlert = Boolean(openMailDecision && isPhishing(openMailDecision, securityThresholds));
+  const promptInjectionAlert = Boolean(
+    openMailDecision && isPromptInjection(openMailDecision, securityThresholds),
+  );
+  const folderThreshold = securityThresholds.folder;
+
+  const openMailCustomFolders = useMemo(() => {
+    if (!mail) return [];
+    const accId = mail.source?.accountId ?? mail.account;
+    const fromRecords = folderRecords
+      .filter(
+        (record) =>
+          record.accountId === accId &&
+          record.role === "other" &&
+          !isFolderHidden(prefs.hiddenFolders, accId, record.path),
+      )
+      .map((record) => ({ path: record.path, label: record.name }));
+    if (fromRecords.length > 0) return fromRecords;
+    return folderOptions
+      .filter((option) => option.id === "other")
+      .map((option) => ({ path: option.path, label: option.label }));
+  }, [folderOptions, folderRecords, mail, prefs.hiddenFolders]);
+
+  const isAlreadyInFolder = useCallback(
+    (targetPath: string, targetLabel?: string) => {
+      if (!mail) return false;
+      const currentPath = mail.source?.folderPath;
+      if (currentPath && currentPath === targetPath) return true;
+      if (
+        mail.folderName &&
+        (mail.folderName === targetPath || (targetLabel && mail.folderName === targetLabel))
+      ) {
+        return true;
+      }
+      return false;
+    },
+    [mail],
+  );
+
+  const decisionFolderSuggestion = (() => {
+    if (!mail || !openMailDecision?.suggestedFolder) return null;
+    if ((openMailDecision.suggestedFolderConf ?? 0) < folderThreshold) return null;
+    const match = openMailCustomFolders.find(
+      (entry) =>
+        entry.path === openMailDecision.suggestedFolder ||
+        entry.label === openMailDecision.suggestedFolder,
+    );
+    const targetPath = match?.path ?? openMailDecision.suggestedFolder;
+    const targetLabel =
+      match?.label ??
+      (openMailDecision.suggestedFolder.split(/[/.]/).filter(Boolean).pop() ||
+        openMailDecision.suggestedFolder);
+    if (isAlreadyInFolder(targetPath, targetLabel)) return null;
+    return {
+      folderPath: targetPath,
+      folderLabel: targetLabel,
+      confidence: openMailDecision.suggestedFolderConf ?? 0,
+    };
+  })();
+
+  useEffect(() => {
+    setConfirmAnalyseInjection(false);
+  }, [mail?.id]);
+
+  useEffect(() => {
+    if (!mail || readOnly || decisionFolderSuggestion || openMailCustomFolders.length === 0) return;
+    const config =
+      isDecisionReady && !decisionPrefs.daemonHasKey
+        ? { ...decisionPrefs, enabled: true, daemonHasKey: true }
+        : decisionPrefs;
+    if (!decisionReady(config)) return;
+    let cancelled = false;
+    void suggestFolderForMail(
+      config,
+      {
+        from: `${mail.name} <${mail.email}>`,
+        subject: mail.subject,
+        excerpt: mail.preview || mail.body.join(" "),
+        folders: openMailCustomFolders,
+      },
+      { useDaemon: mode === "api" },
+    ).then((result) => {
+      if (cancelled || !result) return;
+      if (result.confidence < folderThreshold) return;
+      if (isAlreadyInFolder(result.folderPath, result.folderLabel)) return;
+      setAsyncFolderSuggestion({ mailId: mail.id, ...result });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    mail,
+    readOnly,
+    decisionFolderSuggestion,
+    openMailCustomFolders,
+    isDecisionReady,
+    decisionPrefs,
+    mode,
+    folderThreshold,
+    isAlreadyInFolder,
+  ]);
+
+  const activeFolderSuggestion =
+    mail && !readOnly
+      ? (decisionFolderSuggestion ??
+        (asyncFolderSuggestion?.mailId === mail.id ? asyncFolderSuggestion : null))
+      : null;
+
+  const handleAnalyseClick = () => {
+    if (!mail) return;
+    if (promptInjectionAlert) {
+      setConfirmAnalyseInjection(true);
+      return;
+    }
+    void runAnalyse(mail);
+  };
+
   const currentIndex = useMemo(() => {
     if (mail) {
       const index = visible.findIndex((thread) => thread.messages.some((message) => message.id === mail.id));
@@ -974,6 +1393,7 @@ export function DesktopInbox({
     selectionAnchor.current = null;
   }, [filter, folder, folderPath, account]);
 
+  useEscapeLayer(cleanupOpen, () => setCleanupOpen(false));
   useEscapeLayer(Boolean(mail), () => {
     setCursor(currentIndex);
     pendingFocus.current = "list";
@@ -1643,10 +2063,81 @@ export function DesktopInbox({
 
             <div className="mt-2.5 flex flex-wrap gap-1.5 pb-1">
               {FILTERS.map((entry) => (
-                <DChip key={entry.id} active={filter === entry.id} onClick={() => setFilter(entry.id)}>
+                <DChip key={entry.id} active={filter === entry.id} onClick={() => selectFilter(entry.id)}>
                   {entry.label}
                 </DChip>
               ))}
+              {smartActive ? (
+                <>
+                  {(
+                    [
+                      { id: "priority", label: "Prioritaire", count: smartCounts.priority },
+                      { id: "needs_reply", label: "À répondre", count: smartCounts.needsReply },
+                      { id: "auth_totp", label: "Codes & Auth", count: smartCounts.authTotp },
+                      { id: "notification", label: "Notifications", count: smartCounts.notification },
+                      { id: "promo", label: "Pub & Promos", count: smartCounts.promo },
+                    ] as { id: Filter; label: string; count: number }[]
+                  ).map((item) => (
+                    <DChip
+                      key={item.id}
+                      active={filter === item.id}
+                      onClick={() => selectFilter(item.id)}
+                    >
+                      <span>{item.label}</span>
+                      <span
+                        aria-hidden
+                        className={cn(
+                          "rounded-full px-1.5 text-[10px] font-bold tabular-nums",
+                          filter === item.id ? "bg-ink/10 text-accent-contrast" : "bg-accent-soft text-accent-ink",
+                        )}
+                      >
+                        {item.count}
+                      </span>
+                    </DChip>
+                  ))}
+                  {decisionPrefs.customCategories.map((cat) => {
+                    const catFilter: Filter = `custom:${cat.id}`;
+                    const activeChip = filter === catFilter;
+                    const style = categoryColorStyle(cat.color);
+                    const count = smartCounts.custom[cat.id] ?? 0;
+                    return (
+                      <DChip
+                        key={cat.id}
+                        active={activeChip}
+                        onClick={() => selectFilter(catFilter)}
+                      >
+                        <span className={cn("size-2 rounded-full", activeChip ? "bg-accent-contrast" : style.dot)} />
+                        <span>{cat.name}</span>
+                        <span
+                          aria-hidden
+                          className={cn(
+                            "rounded-full px-1.5 text-[10px] font-bold tabular-nums",
+                            activeChip ? "bg-ink/10 text-accent-contrast" : "bg-accent-soft text-accent-ink",
+                          )}
+                        >
+                          {count}
+                        </span>
+                      </DChip>
+                    );
+                  })}
+                  <DChip onClick={() => setCategoriesOpen(true)}>
+                    <Plus className="size-3.5" />
+                    <span>Catégorie</span>
+                  </DChip>
+                  <DChip onClick={() => setCleanupOpen(true)}>
+                    <Sparkles className="size-3.5" />
+                    <span>Nettoyage</span>
+                    {cleanupCount > 0 ? (
+                      <span
+                        aria-hidden
+                        className="rounded-full bg-accent-soft px-1.5 text-[10px] font-bold text-accent-ink tabular-nums"
+                      >
+                        {cleanupCount}
+                      </span>
+                    ) : null}
+                  </DChip>
+                </>
+              ) : null}
             </div>
           </div>
 
@@ -1678,6 +2169,9 @@ export function DesktopInbox({
                 selected={selectedThreadId === thread.id}
                 checked={selectedIds.has(thread.id)}
                 delay={Math.min(0.4, 0.06 + index * 0.04)}
+                decision={decisionForThread(thread)}
+                decisionThresholds={decisionPrefs.thresholds}
+                customCategories={decisionPrefs.customCategories}
                 onOpen={(event) => selectThread(thread, index, event)}
                 onStar={() => toggleStar(thread.primary.id)}
                 onRead={() => mailAction("read", thread.primary)}
@@ -1704,7 +2198,7 @@ export function DesktopInbox({
                 />
                 {filter !== "all" ? (
                   <div className="mt-3 flex justify-center">
-                    <DButton size="sm" variant="ghost" onClick={() => setFilter("all")}>
+                    <DButton size="sm" variant="ghost" onClick={() => selectFilter("all")}>
                       <RotateCcw className="size-3.5" />
                       Réinitialiser le filtre
                     </DButton>
@@ -1794,7 +2288,7 @@ export function DesktopInbox({
                     <h1 className="line-clamp-2 text-[24px] leading-[1.22] font-extrabold tracking-[-0.035em] text-ink">
                       {mail.subject}
                     </h1>
-                    <div className="mt-1 flex min-w-0 items-center gap-2">
+                    <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
                       <p className="truncate text-[12.5px] font-semibold text-ink-muted">
                         {folderLabel(mail.folder)}
                         {openThread && openThread.count > 1 ? ` · ${openThread.count} messages` : ""}
@@ -1804,6 +2298,16 @@ export function DesktopInbox({
                           <CornerUpLeft className="size-3" />
                           Répondu
                         </span>
+                      ) : null}
+                      {activeFolderSuggestion ? (
+                        <button
+                          type="button"
+                          onClick={() => moveToFolder(mail, activeFolderSuggestion.folderPath)}
+                          className="focus-ring inline-flex shrink-0 items-center gap-1 rounded-full border border-accent-ring/60 bg-accent-soft px-2.5 py-0.5 text-[11px] font-bold text-accent-ink transition-colors hover:border-accent-ring"
+                        >
+                          <FolderInput className="size-3" />
+                          Ranger dans {activeFolderSuggestion.folderLabel}
+                        </button>
                       ) : null}
                     </div>
                   </div>
@@ -1852,7 +2356,7 @@ export function DesktopInbox({
                       <DButton
                         variant="ghost"
                         size="sm"
-                        onClick={() => void runAnalyse(mail)}
+                        onClick={handleAnalyseClick}
                       >
                         <Sparkles className="size-3.5" />
                         Analyse
@@ -1860,6 +2364,31 @@ export function DesktopInbox({
                     </>
                   )}
                 </div>
+
+                {confirmAnalyseInjection ? (
+                  <div
+                    role="alertdialog"
+                    aria-label="Confirmer l'analyse malgré l'injection de prompt"
+                    className="flex flex-wrap items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-5 py-2.5"
+                  >
+                    <p className="min-w-0 flex-1 text-[12px] font-semibold text-ink">
+                      Ce mail semble contenir une tentative d'injection de prompt. Analyser quand même ?
+                    </p>
+                    <DButton size="sm" variant="ghost" onClick={() => setConfirmAnalyseInjection(false)}>
+                      Annuler
+                    </DButton>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setConfirmAnalyseInjection(false);
+                        void runAnalyse(mail);
+                      }}
+                      className="focus-ring inline-flex h-8 items-center rounded-lg bg-amber-600 px-3 text-[12px] font-bold text-white transition-colors hover:bg-amber-700"
+                    >
+                      Analyser quand même
+                    </button>
+                  </div>
+                ) : null}
 
                 {analyse && analyse.mailId === mail.id ? (
                   <AnalysePanel
@@ -1991,6 +2520,40 @@ export function DesktopInbox({
                     </div>
                   ) : null}
 
+                  {phishingAlert ? (
+                    <div
+                      role="alert"
+                      className="mt-4 flex items-start gap-2.5 rounded-[18px] border border-red-500/40 bg-red-500/10 px-4 py-3 text-red-700 dark:text-red-300"
+                    >
+                      <ShieldAlert className="mt-0.5 size-4.5 shrink-0" strokeWidth={2.4} />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[12.5px] leading-snug font-bold">
+                          Alerte hameçonnage (phishing)
+                        </p>
+                        <p className="mt-1 text-[11.5px] leading-snug font-medium">
+                          Ce message présente des signes d'hameçonnage. Ne clique pas sur les liens et n'ouvre pas les pièces jointes.
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {promptInjectionAlert ? (
+                    <div
+                      role="status"
+                      className="mt-3 flex items-start gap-2.5 rounded-[18px] border border-amber-500/40 bg-amber-500/10 px-4 py-2.5 text-amber-800 dark:text-amber-300"
+                    >
+                      <AlertTriangle className="mt-0.5 size-4 shrink-0" strokeWidth={2.4} />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[12px] leading-snug font-bold">
+                          Mail isolé des automatismes IA
+                        </p>
+                        <p className="mt-0.5 text-[11px] leading-snug font-medium">
+                          Tentative d'injection de prompt détectée · exclu des résumés et extractions automatiques.
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+
                   {bodyLoading ? (
                     <MailBodyLoading className="mt-6 max-w-[80ch] text-[14.5px] leading-[1.78]" />
                   ) : (
@@ -2053,6 +2616,40 @@ export function DesktopInbox({
           ancre={{ x: folderMenu.x, y: folderMenu.y }}
           onClose={() => setFolderMenu(null)}
         />
+      ) : null}
+
+      <CategoryManagerSheet
+        open={categoriesOpen}
+        onClose={() => setCategoriesOpen(false)}
+        onRetriage={() => triageMails(mails, true)}
+      />
+
+      {cleanupOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Nettoyage de boîte"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30 p-4 backdrop-blur-[2px]"
+        >
+          <div className="h-[min(86vh,760px)] w-full max-w-3xl overflow-hidden rounded-[28px] border border-line bg-canvas shadow-2xl">
+            <CleanupScreen
+              mails={mails}
+              decisions={decisions}
+              thresholds={decisionPrefs.thresholds}
+              customCategories={decisionPrefs.customCategories}
+              onTrash={(targets) => bulkMailAction("delete", targets)}
+              onArchive={(targets) => bulkMailAction("archive", targets)}
+              onRestore={(targets) => bulkMailAction("restore", targets)}
+              onOpenMail={(target) => {
+                setCleanupOpen(false);
+                openMessage(target);
+              }}
+              onScanMore={handleScanMoreCleanup}
+              scanning={cleanupScanning}
+              onClose={() => setCleanupOpen(false)}
+            />
+          </div>
+        </div>
       ) : null}
     </>
   );

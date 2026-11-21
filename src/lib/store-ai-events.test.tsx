@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
-import type { ApiAccount, ApiFolder, ApiMessage, ApiThread } from "@/lib/api";
+import type { ApiAccount, ApiFolder, ApiMailDecision, ApiMessage, ApiThread } from "@/lib/api";
+import { decisionDb } from "@/lib/decision-db";
 import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
@@ -12,6 +13,12 @@ import { createDevice, createMemoryStorage, emptyState, type SyncStorage } from 
 const ALPHA = "alpha";
 const BETA = "beta";
 const LLM = { endpoint: "https://llm.test/v1", apiKey: "sk-test", model: "modele" };
+const DECISION_CFG = {
+  enabled: true,
+  endpoint: "https://decision.test/v1/systemone",
+  model: "mammoth-1",
+  apiKey: "nw-test",
+};
 const H = 3_600_000;
 const DAY = isoDate(new Date(Date.now() + 5 * 24 * H));
 const MAIL_ID = `${ALPHA}:INBOX:1`;
@@ -51,7 +58,7 @@ const apiThread = (
     uid,
     uidvalidity: 1,
     thread_id: `t-${accountId}-${uid}`,
-    message_id: `<${uid}@test.fr>`,
+    message_id: `<${accountId}-${uid}@test.fr>`,
     in_reply_to: null,
     references: [],
     from: { name: from, email: `${from.toLowerCase()}@test.fr` },
@@ -96,10 +103,41 @@ const event = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const apiDecision = (
+  accountId: string,
+  uid: number,
+  overrides: Partial<ApiMailDecision> = {},
+): ApiMailDecision => ({
+  account_id: accountId,
+  folder_path: "INBOX",
+  uid,
+  message_id: `<${accountId}-${uid}@test.fr>`,
+  content_hash: `h-${accountId}-${uid}`,
+  schema_version: 1,
+  model: "mammoth-1",
+  category: "important",
+  category_conf: 0.92,
+  category_probs: { important: 0.92 },
+  urgency: 1.5,
+  needs_reply: 0.5,
+  has_task: 0.2,
+  has_event: 0.9,
+  security: "safe",
+  security_conf: 0.99,
+  cleanup_score: 0.05,
+  decided_at: Math.floor(Date.now() / 1000),
+  source: "local",
+  ...overrides,
+});
+
 const reply = (body: unknown) =>
   ({ ok: true, status: 200, statusText: "", json: async () => body }) as unknown as Response;
 
-function mockBackend(threads: ApiThread[], evenements: unknown[]) {
+function mockBackend(
+  threads: ApiThread[],
+  evenements: unknown[],
+  decisionsByUid: Record<number, Partial<ApiMailDecision>> = {},
+) {
   const llmCalls: { system: string; user: string }[] = [];
   const accountIds = threads.length > 0 ? [...new Set(threads.map((thread) => thread.account_id))] : [ALPHA];
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -114,6 +152,18 @@ function mockBackend(threads: ApiThread[], evenements: unknown[]) {
         user: body.messages?.[1]?.content ?? "",
       });
       return reply({ choices: [{ message: { content: JSON.stringify({ evenements }) } }] });
+    }
+    if (path.endsWith("/api/ai/decisions/triage")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        targets?: { account_id: string; uid: number }[];
+      };
+      return reply({
+        results: (body.targets ?? []).map((t) => ({
+          decision: apiDecision(t.account_id, t.uid, decisionsByUid[t.uid]),
+          cached: false,
+        })),
+        errors: [],
+      });
     }
     if (path.endsWith("/api/accounts")) return reply(accountIds.map((accountId) => apiAccount(accountId)));
     const folders = path.match(/\/api\/accounts\/([^/]+)\/folders$/);
@@ -136,10 +186,15 @@ function mount(storage?: SyncStorage) {
   return renderHook(() => useMailStore(), { wrapper });
 }
 
-const seedPrefs = (aiTasks: Record<string, unknown>) =>
+const seedPrefs = (aiTasks: Record<string, unknown>, withDecision = true) =>
   window.localStorage.setItem(
     "lavande.prefs",
-    JSON.stringify({ llm: LLM, summary: { enabled: false }, aiTasks }),
+    JSON.stringify({
+      llm: LLM,
+      summary: { enabled: false },
+      aiTasks,
+      ...(withDecision ? { decision: DECISION_CFG } : {}),
+    }),
   );
 
 const eventCalls = (calls: { system: string; user: string }[]) =>
@@ -176,8 +231,9 @@ const eventDoc = (id: string, account = "perso"): Doc => ({
   updatedAt: new Date(0).toISOString(),
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   window.localStorage.clear();
+  await decisionDb().clearDecisions();
   vi.stubGlobal("EventSource", undefined);
 });
 
@@ -187,11 +243,36 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("suggestions de rendez-vous IA · génération", () => {
-  it("propose les rendez-vous du modèle pour les mails de la fenêtre", async () => {
+describe("suggestions de rendez-vous IA · génération et modèle de décision", () => {
+  it("n'émet aucun appel LLM automatique sans modèle de décision ni décisions en cache", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: true, events: true, windowHours: 48 }, false);
+    const llmCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)], [event()]);
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.mails.length).toBeGreaterThan(0), { timeout: 3000 });
+    await new Promise((resolve) => window.setTimeout(resolve, 40));
+
+    expect(eventCalls(llmCalls)).toHaveLength(0);
+    expect(result.current.suggestions).toHaveLength(0);
+  });
+
+  it("filtre promo, spam et auth_totp avant le LLM et propose les rendez-vous qualifiés", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs({ enabled: true, events: true, windowHours: 48 });
-    const llmCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)], [event()]);
+    const llmCalls = mockBackend(
+      [
+        apiThread(1, "Camille", "Maquettes v3", RECEIVED),
+        apiThread(2, "Boutique X", "Webinaire promo", RECEIVED),
+        apiThread(3, "GitHub", "Code 482917", RECEIVED),
+      ],
+      [event()],
+      {
+        1: { category: "important", has_event: 0.9 },
+        2: { category: "promo", has_event: 0.95 },
+        3: { category: "auth_totp", has_event: 0.95, totp_code: "482917" },
+      },
+    );
     const { result } = mount();
 
     await waitFor(
@@ -219,6 +300,8 @@ describe("suggestions de rendez-vous IA · génération", () => {
     expect(calls[0].system).toContain("NON FIABLE");
     expect(calls[0].user).toContain("<<<MAILS>>>");
     expect(calls[0].user).toContain("Maquettes v3");
+    expect(calls[0].user).not.toContain("Webinaire promo");
+    expect(calls[0].user).not.toContain("482917");
   });
 
   it("ne propose aucun rendez-vous pour un mail déjà traité, sans l'écarter du modèle", async () => {
@@ -253,6 +336,7 @@ describe("suggestions de rendez-vous IA · génération", () => {
       "lavande.prefs",
       JSON.stringify({
         llm: LLM,
+        decision: DECISION_CFG,
         summary: { enabled: false },
         calendarEnabled: false,
         aiTasks: { enabled: true, events: true, windowHours: 48 },

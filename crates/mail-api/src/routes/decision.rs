@@ -26,10 +26,7 @@ const DECIDE_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
-        .route(
-            "/api/ai/decision/config",
-            get(get_config).put(put_config),
-        )
+        .route("/api/ai/decision/config", get(get_config).put(put_config))
         .route("/api/ai/decision/probe", post(probe))
         .route("/api/ai/decision/decide", post(decide))
         .route(
@@ -155,9 +152,7 @@ async fn clear_decisions(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ClearQuery>,
 ) -> Result<Json<ClearResponse>, ApiError> {
-    let removed = state
-        .store()
-        .clear_decisions(query.account_id.as_deref())?;
+    let removed = state.store().clear_decisions(query.account_id.as_deref())?;
     Ok(Json(ClearResponse { removed }))
 }
 
@@ -190,11 +185,10 @@ async fn triage_batch(
     let mut results = Vec::new();
     let mut errors = Vec::new();
     for target in payload.targets.into_iter().take(MAX_BATCH_TRIAGE) {
-        let Some(message) = state.store().get_message(
-            &target.account_id,
-            &target.folder_path,
-            target.uid,
-        )?
+        let Some(message) =
+            state
+                .store()
+                .get_message(&target.account_id, &target.folder_path, target.uid)?
         else {
             errors.push(format!(
                 "{}:{}:{} introuvable",

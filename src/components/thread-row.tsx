@@ -9,6 +9,14 @@ import { BlurFade } from "@/components/ui/blur-fade";
 import { PgpBadge } from "@/components/ui/pgp-badge";
 import { SwipeAction, type SwipeActionDef } from "@/components/ui/swipe-action";
 import { usePrefs, type SwipeActionId } from "@/lib/prefs";
+import {
+  DEFAULT_DECISION_THRESHOLDS,
+  isPhishing,
+  type CustomCategory,
+  type DecisionThresholds,
+  type MailDecision,
+} from "@/lib/decision";
+import { categoryColorStyle } from "@/components/category-manager-sheet";
 import { accountLabelInk, accountTint, useTheme } from "@/lib/theme";
 
 const ACCOUNT_CHIP_TIERS = [
@@ -41,6 +49,9 @@ export function ThreadRow({
   delay = 0,
   showPreview = true,
   showAccount = false,
+  decision = null,
+  decisionThresholds = DEFAULT_DECISION_THRESHOLDS,
+  customCategories = [],
 }: {
   thread: Thread;
   onOpen: () => void;
@@ -55,6 +66,9 @@ export function ThreadRow({
   delay?: number;
   showPreview?: boolean;
   showAccount?: boolean;
+  decision?: MailDecision | null;
+  decisionThresholds?: DecisionThresholds;
+  customCategories?: readonly CustomCategory[];
 }) {
   const mail = thread.primary;
   const { accountById } = useMailStore();
@@ -78,6 +92,37 @@ export function ThreadRow({
         : "";
   const { swipeLeft, swipeRight } = usePrefs();
   const { dark } = useTheme();
+
+  const decisionBadges: { label: string; className: string }[] = [];
+  if (decision) {
+    if (isPhishing(decision, decisionThresholds)) {
+      decisionBadges.push({
+        label: "Suspect",
+        className: "bg-rose-500/12 text-rose-700 dark:text-rose-300",
+      });
+    }
+    if (decision.urgency >= 2.0) {
+      decisionBadges.push({
+        label: "Urgent",
+        className: "bg-amber-500/14 text-amber-700 dark:text-amber-300",
+      });
+    }
+    if (decision.needsReply >= decisionThresholds.category && !mail.answered) {
+      decisionBadges.push({
+        label: "À répondre",
+        className: "bg-accent-soft text-accent-ink",
+      });
+    }
+    const customCat = customCategories.find(
+      (cat) => decision.category === `custom:${cat.id}` || decision.category === cat.id,
+    );
+    if (customCat) {
+      decisionBadges.push({
+        label: customCat.name,
+        className: categoryColorStyle(customCat.color).pill,
+      });
+    }
+  }
 
   const press = useRef<{ timer: number; x: number; y: number } | null>(null);
   const held = useRef(false);
@@ -300,13 +345,24 @@ export function ThreadRow({
             <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-[1.45] text-ink-muted">{thread.preview}</p>
           )}
 
-          {(pillLabel || mail.pgp !== "none") && (
-            <div className="mt-1.5 flex items-center gap-2">
+          {(pillLabel || decisionBadges.length > 0 || mail.pgp !== "none") && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               {pillLabel ? (
                 <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-[10.5px] font-semibold text-accent-ink">
                   <span className="truncate">{pillLabel}</span>
                 </span>
               ) : null}
+              {decisionBadges.map((badge) => (
+                <span
+                  key={badge.label}
+                  className={cn(
+                    "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10.5px] font-bold",
+                    badge.className,
+                  )}
+                >
+                  {badge.label}
+                </span>
+              ))}
               <PgpBadge state={mail.pgp} detail={mail.pgp_detail} compact className="ml-auto" />
             </div>
           )}

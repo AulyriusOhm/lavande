@@ -1,4 +1,7 @@
 import { useSyncExternalStore } from "react";
+import type { DecisionConfig } from "@/lib/decision";
+import { decisionReady } from "@/lib/decision";
+import { evaluateMcpRisk, type GuardOptions } from "@/lib/guards";
 
 export type McpTool = {
   name: string;
@@ -290,6 +293,7 @@ export type McpApprovalRequest = {
   type: McpActionType;
   detail: string;
   agent: string;
+  guardReasons?: string[];
 };
 
 let approvals: McpApprovalRequest[] = [];
@@ -340,13 +344,58 @@ export type McpActionRequest = {
   tool: string;
   detail: string;
   agent?: string;
+  decisionConfig?: DecisionConfig | null;
+  useDaemon?: boolean;
 };
+
+export type McpGuardApprovalResult = {
+  requiresApproval: boolean;
+  type: McpActionType | null;
+  forceConfirm: boolean;
+  reasons: string[];
+  maxRisk: number;
+};
+
+/**
+ * Complète `mcpConfirmSend` / `mcpAlwaysAllow` avec le garde-fou Système 1 :
+ * même si la catégorie est dans `alwaysAllow`, un risque détecté force
+ * l'approbation humaine avec les raisons explicites.
+ */
+export async function requiresMcpApprovalWithGuard(
+  action: { server?: string; tool: string; detail: string; agent?: string },
+  decisionConfig: DecisionConfig | null | undefined,
+  opts?: GuardOptions & { rights?: Pick<McpRights, "alwaysAllow" | "confirmSend"> },
+): Promise<McpGuardApprovalResult> {
+  const type = mcpActionType(action.tool);
+  const policy = opts?.rights ?? rights;
+  const policyAllows = type === null ? true : mcpTypeAllowed(type, policy);
+  const risk = await evaluateMcpRisk(
+    decisionConfig,
+    {
+      server: action.server ?? "",
+      tool: action.tool,
+      type: type ?? "lecture",
+      detail: action.detail,
+      agent: action.agent,
+    },
+    opts,
+  );
+  return {
+    requiresApproval: !policyAllows || risk.forceConfirm,
+    type,
+    forceConfirm: risk.forceConfirm,
+    reasons: risk.reasons,
+    maxRisk: risk.maxRisk,
+  };
+}
 
 export async function requestMcpAction({
   server,
   tool,
   detail,
   agent,
+  decisionConfig,
+  useDaemon,
 }: McpActionRequest): Promise<boolean> {
   const target = MCP_SERVERS.find((entry) => entry.id === server || entry.name === server) ?? null;
   const serverName = target?.name ?? server;
@@ -361,30 +410,49 @@ export async function requestMcpAction({
   if (!exposed) return refuse("outil non exposé");
   const isOn = rights.enabled[target.id] ?? target.status === "connected";
   if (!isOn) return refuse("serveur désactivé");
-  if (exposed.scope === "lecture") {
+
+  const type = mcpActionType(tool);
+  const risk =
+    decisionConfig && decisionReady(decisionConfig)
+      ? await evaluateMcpRisk(
+          decisionConfig,
+          { server: target.id, tool, type: type ?? "lecture", detail, agent: agentName },
+          { useDaemon },
+        )
+      : { forceConfirm: false, reasons: [] as string[], maxRisk: 0 };
+
+  if (exposed.scope === "lecture" && !risk.forceConfirm) {
     recordMcpAction({ tool, server: serverName, agent: agentName, status: "succès", detail });
     return true;
   }
 
-  const type = mcpActionType(tool) ?? "modification";
-  if (mcpTypeAllowed(type, rights)) {
+  const effectiveType: McpActionType = type ?? "modification";
+  if (type !== null && mcpTypeAllowed(effectiveType, rights) && !risk.forceConfirm) {
     recordMcpAction({
       tool,
       server: serverName,
       agent: agentName,
       status: "succès",
-      detail: `${detail} · ${type} autorisé d'avance`,
+      detail: `${detail} · ${effectiveType} autorisé d'avance`,
     });
     return true;
   }
 
-  const approved = await askApproval({ server: target.id, serverName, tool, type, detail, agent: agentName });
+  const approved = await askApproval({
+    server: target.id,
+    serverName,
+    tool,
+    type: effectiveType,
+    detail,
+    agent: agentName,
+    ...(risk.reasons.length > 0 ? { guardReasons: risk.reasons } : {}),
+  });
   recordMcpAction({
     tool,
     server: serverName,
     agent: agentName,
     status: approved ? "succès" : "refusé",
-    detail: `${detail} · ${type} ${approved ? "approuvé" : "refusé"}`,
+    detail: `${detail} · ${effectiveType} ${approved ? "approuvé" : "refusé"}`,
   });
   return approved;
 }
