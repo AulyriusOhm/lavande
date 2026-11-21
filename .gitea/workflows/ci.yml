@@ -57,6 +57,77 @@ jobs:
 
       - run: npm audit --omit=dev --audit-level=high
 
+  android:
+    name: Android — Kotlin + cargo check arm64 (vérification, sans signature)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: rustup stable + cible Android
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" target add aarch64-linux-android
+
+      - name: SDK Android + NDK
+        run: |
+          if ! command -v unzip >/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq unzip
+          fi
+          SDK="$HOME/android-sdk"
+          SDKM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          mkdir -p "$SDK/cmdline-tools"
+          curl -sSLo /tmp/cmdline.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q /tmp/cmdline.zip -d "$SDK/cmdline-tools"
+          mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
+          printf 'y\n%.0s' {1..20} | "$SDKM" --licenses >/dev/null
+          "$SDKM" --install "platform-tools" "platforms;android-37.0" "build-tools;36.0.0" "ndk;28.2.13676358"
+          {
+            echo "ANDROID_HOME=$SDK"
+            echo "ANDROID_SDK_ROOT=$SDK"
+            echo "NDK_HOME=$SDK/ndk/28.2.13676358"
+          } >> "$GITHUB_ENV"
+          rm -f /tmp/cmdline.zip
+          NDK="$SDK/ndk/28.2.13676358"
+          rm -rf "$NDK/sources" "$NDK/simpleperf" "$NDK/shader-tools" "$NDK/prebuilt" "$NDK/meta"
+          rm -rf "$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/riscv64-linux-android"
+          df -h /
+
+      - name: npm ci (cache nettoyé pour le disque runner)
+        run: |
+          npm ci
+          npm cache clean --force
+
+      - name: Sources crates Tauri dans le registre (tauri.settings.gradle à chemins absolus)
+        run: |
+          cargo fetch --manifest-path src-tauri/Cargo.toml
+          rm -rf "$HOME/.cargo/registry/cache"
+
+      - name: Générer le projet Gradle + patch
+        run: |
+          npx tauri android init --ci --skip-targets-install
+          node scripts/patch-android.mjs
+
+      - name: Build Android debug (codegen tauri.settings.gradle + Rust aarch64 + Kotlin, APK non signé)
+        run: |
+          df -h /
+          source scripts/android-env.sh
+          CLANG="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$CLANG/aarch64-linux-android24-clang"
+          export AR_aarch64_linux_android="$CLANG/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CLANG/aarch64-linux-android24-clang"
+          export CARGO_BUILD_JOBS=2
+          npx tauri android build --ci --debug --apk -t aarch64
+
   vitrine:
     name: Site vitrine — build, audit
     runs-on: ubuntu-latest

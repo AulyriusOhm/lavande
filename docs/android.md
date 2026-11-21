@@ -27,12 +27,16 @@ source scripts/android-env.sh
 java -version && echo "$NDK_HOME"     # contrôle rapide
 ```
 
-| Variable | Valeur |
+| Variable | Valeur par défaut |
 | --- | --- |
 | `JAVA_HOME` | `~/.local/share/jdk-21` |
 | `ANDROID_HOME` / `ANDROID_SDK_ROOT` | `~/Android/Sdk` |
 | `NDK_HOME` | `~/Android/Sdk/ndk/28.2.13676358` |
 | `PATH` | JDK, `platform-tools` (donc `adb`), plus `~/.local/share/hostgcc/bin` si la machine n'a pas de `cc` |
+
+Les trois chemins sont des **replis** : `JAVA_HOME`, `ANDROID_HOME` et `NDK_HOME` déjà exportés sont
+conservés, et le script ne pose plus que le `PATH` et le `cc` hôte. C'est ainsi que le job CI `android`
+réutilise ce script avec ses propres outils (voir [`CI.md`](./CI.md)).
 
 Le script est à **sourcer**, pas à exécuter : les variables doivent rester dans le shell appelant.
 
@@ -96,6 +100,12 @@ mesurés dans `src-tauri/target/*` allaient de 112 à 127 Mo **avant** `strip`.
 
 `[profile.dev] strip = "debuginfo"` dans `src-tauri/Cargo.toml` fait passer le `.so` de 127 Mo à
 21,7 Mo : c'est ce qui rend l'APK installable sans attendre des centaines de Mo.
+
+Côté release, `scripts/build-android-release.sh` passe le même `-t aarch64` : l'APK livré est donc
+**déjà mono-ABI arm64** (le flavor `universal` ne contient que `lib/arm64-v8a/`), 28 Mo signés.
+`--split-per-abi` ne découperait que des ABI déjà absentes : aucun gain de taille. Décision Roman
+(21/11) : statu quo — ni `--split-per-abi`, ni build multi-ABI ; un support 32 bits (téléphones
+anciens, émulateur `x86_64`) serait un chantier séparé, à ouvrir seulement si le besoin apparaît.
 
 ## Où se trouve l'APK
 
@@ -183,9 +193,12 @@ est **idempotent** et rejoué après `init` puis avant chaque build (les deux co
 
 | Fichier écrit | Contenu | Pourquoi |
 | --- | --- | --- |
-| `app/src/main/java/mail/lavande/app/MainActivity.kt` | `enableEdgeToEdge()`, listener `WindowInsetsCompat` sur `android.R.id.content`, recherche récursive de la WebView, injection de `--safe-bottom` et `--ime-bottom` en px CSS | `env(safe-area-inset-*)` vaut **0** dans la WebView Android |
+| `app/src/main/java/mail/lavande/app/MainActivity.kt` | `enableEdgeToEdge()`, `layoutInDisplayCutoutMode = LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES`, apparence des barres et fond de WebView relus dans les `SharedPreferences` avant le premier paint, listener `WindowInsetsCompat` sur `android.R.id.content`, injection de `--native-top`, `--safe-bottom` et `--ime-bottom` en px CSS | `env(safe-area-inset-*)` vaut **0** dans la WebView Android ; le haut n'est plus une constante ; sans `SHORT_EDGES` l'encoche reste peinte par le fond natif au lieu du canvas web |
+| `java/mail/lavande/app/LavandeUiBars.kt` | `object` : préférence `lavande_ui`/`bars_dark` (défaut clair), `appearance(activity, dark)` via `WindowInsetsControllerCompat` (`isAppearanceLightStatusBars`/`…NavigationBars`), `canvas()` = `#FBFAFF` / `#0E0C13`, `paint()` qui peint le fond de la WebView, `findWebView()` partagé avec `MainActivity` | un seul propriétaire de l'apparence des barres et du fond sous la WebView |
+| `java/mail/lavande/app/LavandeUiBarsPlugin.kt` | plugin Tauri `lavandeuibars` : `setBarsAppearance` (`{dark}`) | le thème de l'app pilote les icônes système, plus le mode nuit du téléphone |
 | `res/values/colors.xml` | `lavande_canvas` `#fbfaff`, `ic_launcher_background` `#8b7cf6` | fond de fenêtre et fond de l'icône adaptative |
-| `res/values/themes.xml` et `res/values-night/themes.xml` | `android:windowBackground` = `@color/lavande_canvas` | évite le flash blanc au lancement (thème `Theme.Material3.DayNight.NoActionBar`) |
+| `res/values-night/colors.xml` | `lavande_canvas` `#0e0c13` | le canvas reste sombre avec le mode nuit système : pas de flash blanc en thème sombre |
+| `res/values/themes.xml` et `res/values-night/themes.xml` | `android:windowBackground` = `@color/lavande_canvas` | le ton peint derrière l'encoche et au tout premier paint est le même que le canvas web : un seul ton (thème `Theme.Material3.DayNight.NoActionBar`) |
 | `res/mipmap-anydpi-v26/ic_launcher.xml` et `ic_launcher_round.xml` | icône adaptative : fond couleur + `@mipmap/ic_launcher_foreground` (dégradé plein cadre) | icône ronde / adaptative = carré dégradé violet |
 | `AndroidManifest.xml` | retire `android:usesCleartextTraffic`, pose `android:networkSecurityConfig`, `android:allowBackup="false"`, `android:fullBackupContent="false"`, `android:dataExtractionRules`, `REQUEST_INSTALL_PACKAGES`, `RECEIVE_BOOT_COMPLETED`, le receiver `.InstallResultReceiver`, le receiver `.LavandeWidgetProvider` (exporté, `APPWIDGET_UPDATE` + méta-données du widget) et le receiver `.BootReceiver` (`BOOT_COMPLETED`) | cleartext borné, sauvegarde fermée (voir ci-dessous), installation d'APK (mises à jour), widget et synchro de fond |
 | `java/mail/lavande/app/LavandeUpdaterPlugin.kt` | plugin Tauri `lavandeupdater` : `downloadApk`, `canInstall`, `openInstallSettings`, `installApk` | téléchargement de l'APK et session `PackageInstaller` |
@@ -230,11 +243,15 @@ Le cleartext de la config réseau ne s'applique qu'à la pile réseau Java/WebVi
 (`crates/mail-api`) sort par des sockets Rust : IMAP/SMTP en clair, souvent le seul mode proposé par un
 serveur mail local, ne sont pas bridés par ce fichier.
 
-Détails du pont d'insets : il ne s'occupe que du **bas** (barre de navigation + clavier). Le haut n'est pas
-mesuré : `.native-shell` réserve une marge fixe de 44 px (`--native-top`), parce qu'une hauteur de barre de statut ou
-d'encoche change selon la marque et le modèle — une valeur mesurée serait juste ici et fausse ailleurs.
-Le listener garde la dernière valeur, réinjecte après `onResume` et sur `addOnGlobalLayoutListener`, et
-**n'injecte rien** si la signature `bottom|ime` n'a pas changé.
+Détails du pont d'insets : il pousse le **haut** (`--native-top`), le **bas** (barre de navigation) et le clavier
+(`--safe-bottom`, `--ime-bottom`). Le haut est l'union `systemBars() or displayCutout()` du système, convertie en px
+CSS par la densité de l'écran : elle couvre la barre de statut **et** l'encoche, sans valeur devinée. `--native-top: 44px` ne reste
+qu'un repli (`:root`), pour le navigateur en mode `?app` où aucun pont n'existe. Le listener garde la dernière
+valeur, réinjecte après `onResume` et sur `addOnGlobalLayoutListener`, et **n'injecte rien** si la signature
+`top|bottom|ime` n'a pas changé — le haut en fait partie, sinon un changement de barre seule passerait inaperçu.
+Les tout premiers insets arrivent avant le chargement de la page et partent dans le document vide : `setBarsAppearance`
+(appelé par l'effet du thème, une fois la page vivante) et `onResume` réinitialisent la signature pour réinjecter
+les valeurs dans le document chargé.
 
 ## Synchronisation en arrière-plan et widget
 
@@ -278,8 +295,9 @@ quand même.
 | Élément | Rôle |
 | --- | --- |
 | `isNativeShell()` (`src/lib/native.ts`) | vrai si l'URL contient `?app`, ou si `__TAURI_INTERNALS__` existe et que l'UA contient `Android` |
-| `NativeShell` (`src/App.tsx`) | `PhoneApp` en plein écran, classe `.native-shell`, sans le `Stage` (cadre téléphone + barre de statut factice) |
-| `src/index.css` | marge haute fixe `--native-top: 44px`, tokens `--safe-bottom` et `--ime-bottom` (défaut `0px`) pour le bas, consommés par `.native-shell` (`bottom: max(--safe-bottom, --ime-bottom)` pour le clavier) |
+| `NativeShell` (`src/App.tsx`) | `PhoneApp` en plein écran dans une feuille `.native-sheet` opaque `--canvas`, elle-même dans `.native-shell` (haut uni canvas), sans le `Stage` (cadre téléphone + barre de statut factice) |
+| `src/index.css` | tokens `--native-top` (repli `44px`, écrasé par le pont) et `--safe-bottom`/`--ime-bottom` (défaut `0px`) ; `.native-shell` fond `--canvas` sur toute la hauteur (`padding-top: var(--native-top)`, `padding-bottom: max(--safe-bottom, --ime-bottom)`), donc barre d'état, encoche et contenu partagent **une seule couleur** ; `.native-sheet` opaque `--canvas`, coins hauts 18 px révélés par un liseré `border-line` + une ombre douce `--sheet-shadow` (arrondi discret, sans bande) |
+| `applySystemBars()` (`src/lib/system-bars.ts`) | appelle `plugin:lavandeuibars\|set_bars_appearance` (`{dark}`) depuis l'effet du thème, en coquille native seulement |
 | Polices | deux `@font-face` locaux (Plus Jakarta Sans, `src/assets/fonts/`, licence OFL) ; `index.html` ne charge plus Google Fonts |
 | Icône | `app-icon.svg` (carré dégradé violet, sans monogramme) + `app-icon-adaptive.svg` (même dégradé, plein cadre, calques de l'icône adaptative) → `./node_modules/.bin/tauri icon icon-manifest.json` → `src-tauri/icons/`, `src-tauri/gen/android/app/src/main/res/mipmap-*`, `bundle.icon` renseigné dans `src-tauri/tauri.conf.json` |
 
@@ -302,7 +320,12 @@ Le rendu de l'APK est **identique à la maquette** : aucun effet n'est coupé (l
 | Glissement entre onglets | reste **déclaratif** (état React → `transform`) : une version en écriture directe (`strip.style.transform`) avait été tentée, puis abandonnée — une fermeture périmée réappliquait l'ancien index après un tap sur le dock, d'où un double clic nécessaire. Le coût par événement est faible parce que les 4 écrans sont mémoïsés. |
 | Écrans mémoïsés | `memo` + gestionnaires `useCallback` + `Set` des mails mémoïsé : un tap ou un toast ne réconcilie plus les 4 écrans, seulement celui qui change |
 | Coquille PC en différé | `import()` de `desktop-shell` : 86 kB de JS absents du bundle mobile |
-| Fond peint avant le JS | `background: #fbfaff` inline dans `index.html` et `setBackgroundColor()` sur la WebView : plus de flash blanc au lancement |
+| Fond peint avant le JS | aucun `background` inline dans `index.html` (les styles inline y sont interdits par la CSP à nonce) ; `windowBackground` = `@color/lavande_canvas`, avec `values-night` sombre, et `setBackgroundColor()` sur la WebView avec le canvas du thème mémorisé |
+
+**Piège corrigé (#81)** : `setBackgroundColor(0xFFFBFAFF)` figé en dur était la **source** d'un flash blanc en thème
+sombre — la WebView repeignait son fond en clair avant que le CSS n'arrive. La couleur vient maintenant du thème
+mémorisé (`lavande_ui`/`bars_dark`), lue au `onCreate` et mise à jour par le pont. `Color.TRANSPARENT` a été écarté :
+la fenêtre laisse alors voir le gris/noir du premier paint du système.
 
 **Piège écarté** : `content-visibility: hidden` sur les écrans hors champ masquait l'écran sortant pendant
 l'animation de changement d'onglet (page blanche intermittente). Retiré — la fluidité ne venait pas de là.
@@ -315,11 +338,29 @@ le dock est visible, c'est le premier suspect.
 
 
 
-- **Barre de statut** : elle n'est pas mesurée. Une marge fixe de 44 px est réservée en haut (`.native-shell`,
-  token `--native-top`)
-  parce que la hauteur de la barre et de l'encoche change selon la marque et le modèle : mieux vaut une
-  valeur constante qu'une valeur juste sur un seul appareil. Sur un modèle à grosse encoche, le titre peut
-  se rapprocher des icônes. Le fond reste transparent, donc le lavande de l'app passe dessous.
+- **Barre de statut** : elle est mesurée (`systemBars() or displayCutout()`, convertie en px CSS) et poussée dans
+  `--native-top` par le pont d'insets ; les 44 px de `src/index.css` ne servent plus qu'au navigateur (`?app`).
+  **Décision (21/11)** : le thème de l'app — et lui seul — décide de l'apparence des icônes système
+  (`WindowInsetsControllerCompat`, `isAppearanceLightStatusBars`/`…NavigationBars`) ; ni
+  `AppCompatDelegate.setDefaultNightMode` ni `values-night` global pour les couleurs web, les widgets gardent leur
+  propre mode nuit. **Visuel retenu après retour réel sur téléphone à encoche (21/11) : « haut uni canvas + arrondi discret »** —
+  la barre d'état et l'encoche sont peintes par **le canvas de l'app**, une seule couleur de haut en bas :
+  `.native-shell` a `background-color: var(--canvas)` et se contente de réserver la hauteur mesurée
+  (`padding-top: var(--native-top)`), `.native-sheet` est une feuille opaque `--canvas` à **coins hauts 18 px**
+  révélés par un liseré `border-top: 1px solid var(--line)` + une ombre douce `--sheet-shadow` (clair
+  `rgba(27,21,35,.07)`, sombre `rgba(0,0,0,.45)`) : l'arrondi se lit comme une arête subtile, **sans bande colorée**. Le cutout reste en `SHORT_EDGES` : le contenu web peint dans l'encoche au lieu de laisser le
+  `windowBackground` la repeindre, et `windowBackground` vaut `@color/lavande_canvas` (clair `#fbfaff`, sombre
+  `#0e0c13`, `values-night`) pour que l'encoche et le tout premier paint soient déjà du bon ton. Le header `glass`
+  des écrans reste `absolute top-0` **dans** la feuille : il commence sous la zone système, c'est voulu.
+  Abandonnés après retour réel (trois itérations, un ton distinct à chaque fois) : le dégradé vertical
+  `--statusband-top` → mélange 45 % vers le canvas (trois tons visibles : encoche claire, bande dégradée, canvas),
+  puis la **bande plate tonale** `--statusband` (`#eceaf3` / `#1a1724`, couleur `lavande_band` natif) avec feuille à
+  coins hauts 18 px — même à deux tons, la bande restait distincte du canvas (`#eceaf3` ≠ `#fbfaff`) et se voyait.
+  Plus de token `--statusband`, plus de couleur `lavande_band`, plus de `.native-shell::before` ni de bande ;
+  l'arrondi 18 px est conservé, révélé par le liseré + l'ombre `--sheet-shadow` (décision Roman 21/11 : ravoir
+  l'arrondi tout en gardant une couleur unie).
+  `setStatusBarColor` ne peint plus rien depuis l'edge-to-edge imposé (targetSdk 37) : on règle les icônes, jamais
+  la couleur native de la barre.
 - **Bas mesuré, non validé sur appareil physique** : le pont renvoie la barre de navigation et le clavier,
   mais rien n'a été mesuré sur un téléphone réel ; en mode `?app` ces marges valent 0 par construction.
 - **Pas de gestes natifs, haptique par la WebView** : seuls les gestes WebView existants (swipe d'onglets,
@@ -336,7 +377,14 @@ le dock est visible, c'est le premier suspect.
   elles sont enregistrées dans le dossier de téléchargements, chemin affiché et bouton « Ouvrir le dossier ».
 - **Démon mail embarqué** : API locale `127.0.0.1:8790`, données dans le stockage privé de l'app ;
   planification synchronisée (voir ci-dessous) ; thème, accent et préférences de gestes en `localStorage`.
-- Pas de `--split-per-abi`, pas de CI Android : l'APK arm64 est signé par `scripts/build-android-release.sh`.
+- **Split-per-abi : statu quo** (décision Roman 21/11). L'APK release est déjà mono-ABI arm64 —
+  `scripts/build-android-release.sh` construit avec `-t aarch64`, donc le flavor `universal` ne contient
+  que `arm64-v8a` (28 Mo) — et `--split-per-abi` n'apporterait aucun gain de taille, il ne découperait
+  que des ABI déjà absentes. Un build multi-ABI (32 bits, émulateur `x86_64`) resterait un chantier
+  séparé, à ouvrir si le besoin apparaît.
+- **CI Android = vérification de compilation seulement** (job `android`, voir [`CI.md`](./CI.md)) : Kotlin
+  de l'app + `cargo check` arm64, sans clé, sans APK, sans émulateur. La release continue d'être signée
+  à la main par `scripts/build-android-release.sh`, hors CI (voir [`SIGNING.md`](./SIGNING.md)).
 
 ## Synchronisation de la planification (APK)
 

@@ -59,6 +59,18 @@ export function monthLabel(month: number) {
   return capitalizeFirst(MONTH_FMT.format(new Date(2020, month, 1)));
 }
 
+const LONG_FMT = new Intl.DateTimeFormat("fr-FR", {
+  weekday: "long",
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+});
+
+/** « Jeudi 20 novembre 2026 » : jour complet, espaces insécables normalisées. */
+export function longDate(iso: string) {
+  return capitalizeFirst(LONG_FMT.format(new Date(`${iso}T12:00:00`)).replace(/[\u202f\u00a0]/g, " "));
+}
+
 export const EVENTS: CalendarEvent[] = import.meta.env.VITE_DISTRIBUTION === "1" ? [] : [
   {
     id: "e1",

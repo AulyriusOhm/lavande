@@ -20,6 +20,7 @@
     "lavandeupdater:default",
     "lavandebgsync:default",
     "lavandeattachments:default",
+    "lavandeuibars:default",
     "process:default"
   ]
 }

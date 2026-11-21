@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { shellLayout } from "@/lib/native";
 import { isTauriShell } from "@/lib/open-external";
+import { applySystemBars } from "@/lib/system-bars";
 
 export const ACCENT_PRESETS = [
   { name: "Lavande", value: "#8b7cf6" },
@@ -155,6 +156,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     document
       .querySelector('meta[name="theme-color"]')
       ?.setAttribute("content", dark ? THEME_COLOR.dark : THEME_COLOR.light);
+    void applySystemBars(dark).catch(() => undefined);
   }, [accent, dark, mode]);
 
   const setAccent = useCallback((value: string) => setAccentState(value), []);

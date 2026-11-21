@@ -11,11 +11,16 @@
 # sans sudo : le clang 19 du NDK, avec les objets et bibliothèques libgcc
 # extraits dans ~/.local/share/hostgcc. Nécessaire pour les build scripts C
 # des crates (proc-macro2, libc…) qui compilent pour l'hôte.
+#
+# Les trois chemins sont paramétrables : `JAVA_HOME`, `ANDROID_HOME` et
+# `NDK_HOME` déjà définis sont honorés, sinon repli sur ceux de cette machine.
+# Le job CI `android` installe ses outils ailleurs, exporte les siens, puis
+# source ce script pour le `PATH` et le `cc` hôte : un seul chemin de code.
 
-export JAVA_HOME="$HOME/.local/share/jdk-21"
-export ANDROID_HOME="$HOME/Android/Sdk"
+export JAVA_HOME="${JAVA_HOME:-$HOME/.local/share/jdk-21}"
+export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
-export NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
+export NDK_HOME="${NDK_HOME:-$ANDROID_HOME/ndk/28.2.13676358}"
 
 HOST_CC_DIR="$HOME/.local/share/hostgcc/bin"
 HOST_CC_ROOT="$HOME/.local/share/hostgcc/root"

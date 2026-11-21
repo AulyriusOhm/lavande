@@ -24,6 +24,12 @@ fn main() {
                 tauri_build::InlinedPlugin::new()
                     .commands(&["open_attachment"])
                     .default_permission(tauri_build::DefaultPermissionRule::AllowAllCommands),
+            )
+            .plugin(
+                "lavandeuibars",
+                tauri_build::InlinedPlugin::new()
+                    .commands(&["set_bars_appearance"])
+                    .default_permission(tauri_build::DefaultPermissionRule::AllowAllCommands),
             ),
     )
     .expect("failed to run tauri-build");
