@@ -8,5 +8,14 @@ export default defineConfig({
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
-  build: { outDir: "dist", assetsInlineLimit: 0 },
+  build: {
+    outDir: "dist",
+    assetsInlineLimit: 0,
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        confidentialite: fileURLToPath(new URL("./confidentialite/index.html", import.meta.url)),
+      },
+    },
+  },
 });

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="fr" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Politique de confidentialité — Lavande</title>
+    <meta
+      name="description"
+      content="Politique de confidentialité de Lavande : application local-first, données stockées sur votre appareil, OAuth Google, IA optionnelle, aucun traceur sur le site."
+    />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0e0c13" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="fr_FR" />
+    <meta property="og:title" content="Politique de confidentialité — Lavande" />
+    <meta
+      property="og:description"
+      content="Vos données restent sur votre appareil. Détail des traitements, de l’OAuth Google et de l’IA optionnelle dans Lavande."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preload" href="/fonts/plus-jakarta-sans-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/plus-jakarta-sans-latin-ext.woff2" as="font" type="font/woff2" crossorigin />
+    <script>
+      (function () {
+        var SITE_KEY = "lavande.site.theme";
+        var DEMO_KEY = "lavande.theme";
+        var root = document.documentElement;
+        var theme = "dark";
+        try {
+          var stored = localStorage.getItem(SITE_KEY);
+          if (stored === "light" || stored === "dark") theme = stored;
+        } catch (error) {}
+        root.setAttribute("data-theme", theme);
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute("content", theme === "light" ? "#fbfaff" : "#0e0c13");
+        try {
+          var demo = {};
+          var raw = localStorage.getItem(DEMO_KEY);
+          if (raw) demo = JSON.parse(raw) || {};
+          demo.mode = theme;
+          localStorage.setItem(DEMO_KEY, JSON.stringify(demo));
+        } catch (error) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/privacy-main.tsx"></script>
+  </body>
+</html>

@@ -40,6 +40,12 @@ export function Footer() {
               </a>
             ))}
             <a
+              href="/confidentialite"
+              className="text-sm font-semibold text-ink-soft no-underline transition-colors hover:text-ink"
+            >
+              Confidentialité
+            </a>
+            <a
               href="/updates/latest.json"
               className="text-sm font-semibold text-ink-soft no-underline transition-colors hover:text-ink"
             >
