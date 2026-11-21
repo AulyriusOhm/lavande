@@ -37,7 +37,6 @@
   --safe-bottom: 0px;
   --ime-bottom: 0px;
   --native-top: 44px;
-  --statusband: #eceaf3;
 
   --accent: #8b7cf6;
   --accent-contrast: #1b1523;
@@ -65,7 +64,6 @@
   --ink-muted: #8c8699;
   --line: #2a2438;
   --shadow-color: 265 60% 4%;
-  --statusband: #1a1724;
 
   --accent-soft: color-mix(in oklab, var(--accent) 24%, #16131f);
   --accent-ring: color-mix(in oklab, var(--accent) 45%, #16131f);
@@ -152,18 +150,7 @@
   background-color: var(--canvas);
 }
 
-/* Bande limitée au haut : le bas (barre nav / clavier) reste canvas. */
-.native-shell::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: var(--native-top);
-  background: var(--statusband);
-}
-
-/* Coins hauts seulement : arrondir le bas re-floute le dock (docs/android.md). */
 .native-sheet {
-  border-radius: 18px 18px 0 0;
   background: var(--canvas);
 }
 

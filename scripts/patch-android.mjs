@@ -22,7 +22,7 @@ const REQUIRED_IMPORTS = [
 const CLASS_BODY = `class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
-    // Sans SHORT_EDGES, l'encoche reste peinte par le fond natif (blanc) au lieu de la bande web.
+    // Sans SHORT_EDGES, l'encoche reste peinte par le fond natif au lieu du canvas web.
     val attrs = window.attributes
     attrs.layoutInDisplayCutoutMode =
       android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
@@ -66,8 +66,8 @@ import androidx.core.view.WindowInsetsControllerCompat
  * Apparence des barres système, possédée par le thème de l'app : le mode nuit du
  * téléphone ne la décide plus (elle contrôlait les icônes sans rapport avec le
  * fond Lavande, d'où du blanc sur blanc). targetSdk 37 impose l'edge-to-edge, où
- * setStatusBarColor ne peint plus rien : on ne règle que les icônes, la bande
- * colorée est dessinée par le contenu web.
+ * setStatusBarColor ne peint plus rien : on ne règle que les icônes, le haut
+ * (barre d'état et encoche) est peint par le canvas du contenu web.
  */
 object LavandeUiBars {
   private const val PREFS = "lavande_ui"
@@ -185,7 +185,6 @@ class LavandeUiBarsPlugin(private val activity: Activity) : Plugin(activity) {
 const CANVAS_NIGHT_COLORS = `<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="lavande_canvas">#0e0c13</color>
-    <color name="lavande_band">#1a1724</color>
 </resources>
 `;
 
@@ -213,16 +212,17 @@ function upsertColor(source, name, value) {
   return `${head}${separator}    ${entry}\n${source.slice(closing)}`;
 }
 
+// Retire la couleur de bande des projets déjà patchés (haut uni canvas : une seule couleur).
 function patchColors(source) {
+  const withoutBand = source.replace(/[ \t]*<color name="lavande_band">[^<]*<\/color>\r?\n?/, "");
   return [
     ["lavande_canvas", "#fbfaff"],
-    ["lavande_band", "#eceaf3"],
     ["ic_launcher_background", "#8b7cf6"],
-  ].reduce((acc, [name, value]) => upsertColor(acc, name, value), source);
+  ].reduce((acc, [name, value]) => upsertColor(acc, name, value), withoutBand);
 }
 
 function patchThemes(source) {
-  const item = '<item name="android:windowBackground">@color/lavande_band</item>';
+  const item = '<item name="android:windowBackground">@color/lavande_canvas</item>';
   const existing = /<item name="android:windowBackground">[^<]*<\/item>/;
   if (existing.test(source)) return source.replace(existing, item);
   const pattern = /([ \t]*)<\/style>/;
@@ -1832,7 +1832,7 @@ if (existsSync(strayLauncherBg)) {
 await writeStatic(
   path.join(appDir, "res", "values-night", "colors.xml"),
   CANVAS_NIGHT_COLORS,
-  "res/values-night/colors.xml (canvas et bande sombres, windowBackground avant le premier paint)",
+  "res/values-night/colors.xml (canvas sombre, windowBackground avant le premier paint)",
 );
 await writeStatic(
   path.join(resXmlDir, "network_security_config.xml"),

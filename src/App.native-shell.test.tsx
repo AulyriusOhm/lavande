@@ -43,7 +43,7 @@ function renderNative() {
 }
 
 describe("coquille native", () => {
-  it("pose le contenu dans une feuille arrondie sous la bande de statut", () => {
+  it("pose le contenu dans une feuille opaque sous le haut uni", () => {
     const shell = renderNative();
 
     expect(shell).not.toBeNull();
@@ -53,14 +53,15 @@ describe("coquille native", () => {
     expect(sheet!.className).toContain("overflow-hidden");
   });
 
-  it("déclare la bande plate et les coins hauts dans les deux thèmes", () => {
+  it("peint le haut en canvas uni, sans bande ni coins", () => {
     const css = readFileSync(path.join(process.cwd(), "src/index.css"), "utf8");
 
-    expect(css.split("--statusband:").length - 1).toBe(2);
+    expect(css).not.toContain("--statusband");
     expect(css).toMatch(/\.native-shell \{[^}]*background-color: var\(--canvas\)/);
-    expect(css).toMatch(/\.native-shell::before \{[^}]*height: var\(--native-top\)[^}]*background: var\(--statusband\)/);
+    expect(css).not.toContain(".native-shell::before");
+    expect(css).not.toMatch(/\.native-sheet \{[^}]*border-radius/);
     expect(css).not.toContain("linear-gradient");
     expect(css).not.toContain("background-size");
-    expect(css).toMatch(/\.native-sheet \{[^}]*border-radius: 18px 18px 0 0/);
+    expect(css).toMatch(/\.native-sheet \{[^}]*background: var\(--canvas\)/);
   });
 });
