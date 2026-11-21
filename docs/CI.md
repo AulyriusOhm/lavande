@@ -21,6 +21,23 @@ les jobs (`getCacheEntry … connect ETIMEDOUT`, ~4 min de timeout par tentative
 run). À réactiver quand l'infra sera corrigée : `actions/cache@v4` sur `~/.cargo/registry`,
 `~/.cargo/git`, `target` (clé sur `hashFiles('**/Cargo.lock')`) et `cache: npm` pour `setup-node`.
 
+## Build Windows — GitHub Actions (miroir)
+
+Le dépôt est poussé en miroir vers `github.com/AulyriusOhm/lavande` (miroir de push Gitea,
+`sync_on_commit`). Le workflow [`.github/workflows/windows.yml`](../.github/workflows/windows.yml)
+y compile nativement sur `windows-latest` (toolchain MSVC préinstallée) : `cargo test --workspace`
+puis l'installeur NSIS **non signé** (`Lavande_<version>_x64-setup.exe`, artifact
+`lavande-windows-x64`, rétention 14 jours). Aucune clé sur le runner : la release locale récupère
+l'exe, le signe et publie l'entrée `windows-x86_64` du manifeste (politique `SIGNING.md`).
+
+- `npm run build:distribution` porte un préfixe d'environnement POSIX que `cmd.exe` refuse : le job
+  construit le front à part (`VITE_DISTRIBUTION=1` en `env:`) et neutralise `beforeBuildCommand`
+  via `--config '{"build":{"beforeBuildCommand":"cmd /C exit 0"}}'` (étape en `shell: bash`).
+- La push protection GitHub est désactivée sur le miroir : GH013 bloquait le push de toutes les
+  refs à cause d'un secret détecté dans une branche historique (`feat/android-ui`).
+- Le runtime Windows n'est pas encore validé (répertoires de données XDG à adapter) : le job
+  garantit la compilation et l'installeur, pas le comportement sur un vrai Windows.
+
 ## Reproduire les checks en local
 
 ```bash
