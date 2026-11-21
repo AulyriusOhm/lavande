@@ -436,13 +436,19 @@ Comportements à connaître :
 - `move_message` : `UID MOVE` si la capacité `MOVE` est annoncée, sinon `UID COPY` +
   `+FLAGS (\Deleted)` + `UID EXPUNGE` (le flux d'`EXPUNGE` est consommé jusqu'au bout). Ce repli
   exige `UIDPLUS` : sans lui, l'appel est refusé **avant** la copie (voir les limites). Côté base, la
-  ligne source est **supprimée** (`store.delete_message`) et le dossier destination est **réconcilié**
-  (`reconcile(…, None)`) : la ligne locale de la destination est réinsérée avec l'UID réellement
-  attribué par le serveur (GreenMail réattribue l'UID au `MOVE`, vérifié en réseau), corps compris.
-  Aucun UID n'est supposé conservé, aucune ligne n'est déplacée à la main.
+  ligne source tombe **avant la commande** (`imap::drop_locally` : tombstone puis
+  `store.delete_messages`), sinon la liste relue par le front pendant la connexion et le `MOVE` sert
+  encore le message que l'utilisateur vient de supprimer. Une commande que le serveur refuse
+  **restaure** la ligne (`store.forget_tombstones` puis réconciliation best-effort de la source,
+  l'erreur d'origine remontant telle quelle ; une session morte laisse la restauration à la synchro
+  suivante). Le dossier destination est ensuite **réconcilié** (`reconcile(…, None)`) : la ligne
+  locale de la destination est réinsérée avec l'UID réellement attribué par le serveur (GreenMail
+  réattribue l'UID au `MOVE`, vérifié en réseau), corps compris. Aucun UID n'est supposé conservé,
+  aucune ligne n'est déplacée à la main.
 - `delete_message` : `UIDPLUS` est vérifié **avant** de poser `\Deleted` ; sans lui, `MailError::Imap`
-  (502 côté API) et rien n'est modifié, ni côté serveur ni en base. Avec lui : `STORE +FLAGS
-  (\Deleted)` puis `UID EXPUNGE <uid>`, puis suppression de la ligne locale.
+  (502 côté API) et rien n'est modifié, ni côté serveur ni en base. Avec lui : la ligne locale tombe
+  **avant la marque** (`drop_locally`), puis `STORE +FLAGS (\Deleted)` et `UID EXPUNGE <uid>` ; un
+  expunge refusé restaure la ligne au lieu de la perdre.
 - `empty_folder` : `UID STORE 1:*` + expunge du dossier, et `removed` est le nombre de réponses
   `EXPUNGE` réellement reçues du serveur — la seule mesure de ce que le dossier a perdu. Le
   nettoyage local est `store.clear_folder` (lignes et pièces jointes du dossier, ligne du dossier
@@ -1060,7 +1066,11 @@ fournisseur, sinon il répond `AADSTS50011`.
 ### Événements (`/api/events`)
 
 La veille **IMAP IDLE** tourne dans le démon (une par compte, sur INBOX) : à chaque notification du
-serveur elle lance une réconciliation du dossier et publie un événement SSE.
+serveur elle lance une réconciliation du dossier, et ne publie un événement SSE que si cette
+réconciliation a réellement changé quelque chose (`inserted`, `removed` ou `flags_updated` non nuls,
+`UIDVALIDITY` changée). Un événement sans changement ferait relire au front la liste entière — donc
+réapparaître un message dont la suppression est encore en vol, la veille se réveillant aussi sur le
+`\Deleted`/`EXPUNGE` de cette suppression.
 
 ```text
 event: mail
@@ -1237,6 +1247,7 @@ généré par le script dans `$LAVANDE_MAIL_TEST_DIR` (défaut `~/.cache/lavande
 | `empty_folder_counts_a_never_synced_folder` | message copié par une session brute dans un dossier **jamais synchronisé** (aucune ligne locale), puis `empty_folder` : `removed >= 1` (un compte basé sur le store rendrait `0`) et le dossier est vide côté serveur |
 | `unchanged_folder_reports_nothing` | deux synchros d'affilée sans changement : `inserted`, `flags_updated` et `removed` à 0 et `uidvalidity_changed == false` (la réconciliation est idempotente) |
 | `move_keeps_store_in_step_with_server` | `create_folder` deux fois (idempotent), `move_message` INBOX → Archive (capacité `MOVE`) : la ligne INBOX disparaît, la ligne Archive réapparaît **avec l'UID réattribué par le serveur** et son corps, `fetch_body` fonctionne dessus, et une session neuve confirme que tous les UID locaux d'Archive existent côté serveur |
+| `move_to_a_missing_folder_restores_the_source_row` | `move_message` vers un dossier absent (`Aucun/Dossier`) : le serveur refuse, et la ligne source est **revenue** en base (`get_message` → `Some`) sans tombstone — la restauration qui suit un échec après `drop_locally` |
 | `reply_joins_the_thread` | une réponse (`In-Reply-To` + `References` = `Message-ID` du parent) rejoint le thread du parent : `thread_id` identique, un seul thread de `count == 2` |
 | `xoauth2_authenticates_with_refresh_token` | échange refresh token contre un endpoint HTTP local (mock), puis `AUTHENTICATE XOAUTH2` (SASL-IR) sur GreenMail |
 | `a_word_only_in_the_body_is_found_by_the_server_search` (mail-api) | mot unique **uniquement dans le corps**, au-delà des 1 024 premiers octets : après un sync INBOX (en-têtes seuls, `body_text`/`body_html` à `null`), `GET /api/accounts/{id}/search?q=<mot>` le trouve par le repli `UID SEARCH TEXT` (GreenMail honore `TEXT` et `CHARSET UTF-8`, insensible à la casse) et le message revient **sans corps** |

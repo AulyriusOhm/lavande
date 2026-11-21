@@ -1438,6 +1438,19 @@ fn a_fresh_tombstone_survives_a_prune() {
 }
 
 #[test]
+fn forgetting_a_tombstone_is_per_uid_and_tolerates_unknown_ones() {
+    let store = open();
+    store.tombstone_uid("perso", "INBOX", 4);
+    store.tombstone_uid("perso", "INBOX", 5);
+
+    store.forget_tombstones("perso", "INBOX", &[4]);
+    store.forget_tombstones("perso", "INBOX", &[99]);
+
+    assert!(!store.is_tombstoned("perso", "INBOX", 4));
+    assert!(store.is_tombstoned("perso", "INBOX", 5));
+}
+
+#[test]
 fn search_folds_accents_and_case() {
     let store = open();
     let mut zebra = message(1, "t1", "Marc", "Zèbre rayé", 10);

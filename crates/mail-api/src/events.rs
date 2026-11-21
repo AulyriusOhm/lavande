@@ -7,7 +7,7 @@ use std::time::Duration;
 use async_imap::extensions::idle::IdleResponse;
 use futures::stream::{self, StreamExt};
 use lavande_mail::config::{AccountConfig, FolderMapping};
-use lavande_mail::imap::{self, ImapSession};
+use lavande_mail::imap::{self, ImapSession, SyncReport};
 use lavande_mail::model::FolderRole;
 use lavande_mail::store::Store;
 use serde::Serialize;
@@ -279,6 +279,14 @@ async fn sync_and_publish(
     let mapping = FolderMapping::default();
     match imap::sync_folder(session, state.store(), &config.id, folder_path, &mapping).await {
         Ok(report) => {
+            if !report_changed(&report) {
+                tracing::debug!(
+                    account = %config.id,
+                    folder = folder_path,
+                    "veille réveillée sans changement"
+                );
+                return;
+            }
             imap::fetch_previews(
                 config,
                 state.tls(),
@@ -317,6 +325,17 @@ async fn sync_and_publish(
             tracing::warn!(account = %config.id, error = %error, "synchro IDLE impossible")
         }
     }
+}
+
+/// Whether the reconciliation moved anything. The watcher wakes on every
+/// unsolicited response — including the `\Deleted` and `EXPUNGE` of a delete the
+/// front is already showing optimistically — and an event published for a no-op
+/// resync is a full list refetch that serves the row back before it is dropped.
+fn report_changed(report: &SyncReport) -> bool {
+    report.inserted > 0
+        || report.removed > 0
+        || report.flags_updated > 0
+        || report.uidvalidity_changed
 }
 
 /// Rôles à surveiller quand un compte arrive : l'INBOX d'abord, c'est ce que
@@ -383,6 +402,40 @@ mod tests {
             body_text: None,
             body_html: None,
             attachments: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_resync_that_changed_nothing_publishes_nothing() {
+        assert!(!report_changed(&SyncReport::default()));
+        assert!(!report_changed(&SyncReport {
+            uidnext: 1208,
+            ..SyncReport::default()
+        }));
+    }
+
+    #[test]
+    fn a_resync_that_changed_anything_publishes() {
+        let reports = [
+            SyncReport {
+                inserted: 1,
+                ..SyncReport::default()
+            },
+            SyncReport {
+                removed: 1,
+                ..SyncReport::default()
+            },
+            SyncReport {
+                flags_updated: 1,
+                ..SyncReport::default()
+            },
+            SyncReport {
+                uidvalidity_changed: true,
+                ..SyncReport::default()
+            },
+        ];
+        for report in reports {
+            assert!(report_changed(&report), "{report:?}");
         }
     }
 

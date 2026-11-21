@@ -372,13 +372,18 @@ async fn set_flags(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// The rows go before the IMAP session is even opened: an optimistic list is
+/// read while `connect_with` + `SELECT` + `MOVE` are in flight, and a row still
+/// there brings the message the user just deleted back on screen.
 async fn move_message(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
     ApiJson(request): ApiJson<MoveRequest>,
 ) -> Result<StatusCode, ApiError> {
     let config = state.account(&id).await?;
-    let mut session = imap::connect_with(&config, state.tls()).await?;
+    imap::drop_locally(state.store(), &id, &request.from_path, &[request.uid])?;
+    let mut session =
+        session_after_drop(&state, &id, &config, &request.from_path, &[request.uid]).await?;
     imap::move_message(
         &mut session,
         state.store(),
@@ -398,7 +403,9 @@ async fn delete_message(
     ApiJson(request): ApiJson<DeleteRequest>,
 ) -> Result<StatusCode, ApiError> {
     let config = state.account(&id).await?;
-    let mut session = imap::connect_with(&config, state.tls()).await?;
+    imap::drop_locally(state.store(), &id, &request.folder_path, &[request.uid])?;
+    let mut session =
+        session_after_drop(&state, &id, &config, &request.folder_path, &[request.uid]).await?;
     imap::delete_message(
         &mut session,
         state.store(),
@@ -457,7 +464,9 @@ async fn move_bulk(
 ) -> Result<StatusCode, ApiError> {
     require_uids(&request.uids, MAX_BULK_UIDS)?;
     let config = state.account(&id).await?;
-    let mut session = imap::connect_with(&config, state.tls()).await?;
+    imap::drop_locally(state.store(), &id, &request.from_path, &request.uids)?;
+    let mut session =
+        session_after_drop(&state, &id, &config, &request.from_path, &request.uids).await?;
     imap::move_messages(
         &mut session,
         state.store(),
@@ -478,7 +487,9 @@ async fn delete_bulk(
 ) -> Result<StatusCode, ApiError> {
     require_uids(&request.uids, MAX_BULK_UIDS)?;
     let config = state.account(&id).await?;
-    let mut session = imap::connect_with(&config, state.tls()).await?;
+    imap::drop_locally(state.store(), &id, &request.folder_path, &request.uids)?;
+    let mut session =
+        session_after_drop(&state, &id, &config, &request.folder_path, &request.uids).await?;
     imap::delete_messages_many(
         &mut session,
         state.store(),
@@ -662,6 +673,25 @@ async fn submit(
 async fn logout(mut session: ImapSession) {
     if let Err(error) = session.logout().await {
         tracing::debug!(error = %error, "fermeture de la session imap");
+    }
+}
+
+/// Opens the session of a handler that has already dropped its rows: a server
+/// that cannot be reached must not cost the user the message it never lost, so
+/// the tombstones go and the next sync puts the rows back.
+async fn session_after_drop(
+    state: &Arc<AppState>,
+    id: &str,
+    config: &AccountConfig,
+    folder_path: &str,
+    uids: &[u32],
+) -> Result<ImapSession, ApiError> {
+    match imap::connect_with(config, state.tls()).await {
+        Ok(session) => Ok(session),
+        Err(error) => {
+            state.store().forget_tombstones(id, folder_path, uids);
+            Err(error.into())
+        }
     }
 }
 

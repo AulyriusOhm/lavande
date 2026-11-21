@@ -1126,10 +1126,11 @@ pub async fn move_message(
 /// `UID MOVE` when the server has the capability, `UID COPY` + `\Deleted` +
 /// `UID EXPUNGE` otherwise; the fallback needs `UIDPLUS` and is refused before
 /// the copy when the server does not announce it. One command per step carries
-/// every uid. The source uids are tombstoned as soon as the server accepted the
-/// move — before the rows are dropped — so a sync that wakes up on the move
-/// cannot re-import them, then the source rows are dropped and the destination
-/// reconciled so it carries the uids the server actually gave the messages.
+/// every uid. The source rows are dropped **before** the command (see
+/// `drop_locally`), so the list the front reads while the connection and the
+/// move are in flight no longer holds the message; a command the server refuses
+/// puts the rows back, and the destination is reconciled so it carries the uids
+/// the server actually gave the messages.
 pub async fn move_messages(
     session: &mut ImapSession,
     store: &Store,
@@ -1141,30 +1142,87 @@ pub async fn move_messages(
     if uids.is_empty() {
         return Ok(());
     }
+    match move_on_server(session, store, account_id, from_path, uids, to_path).await {
+        Ok(()) => {
+            reconcile(session, store, account_id, to_path, None).await?;
+            Ok(())
+        }
+        Err(error) => {
+            undo_drop(store, session, account_id, from_path, uids).await;
+            Err(error)
+        }
+    }
+}
+
+/// Drops `uids` from `folder_path` before the server command: a sync that wakes
+/// up in the middle of the round trip would otherwise serve the message back to
+/// the front, which shows a list it read while the row still existed. The
+/// tombstones keep the import paths away for `TOMBSTONE_TTL`, long enough for an
+/// asynchronous server to converge. Idempotent: calling it again refreshes the
+/// tombstones and deletes no row.
+pub fn drop_locally(
+    store: &Store,
+    account_id: &str,
+    folder_path: &str,
+    uids: &[u32],
+) -> Result<(), MailError> {
+    for uid in uids {
+        store.tombstone_uid(account_id, folder_path, *uid);
+    }
+    if let Err(error) = store.delete_messages(account_id, folder_path, uids) {
+        store.forget_tombstones(account_id, folder_path, uids);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Puts back the rows `drop_locally` removed when the server command did not go
+/// through: the tombstones go first, since an import skips a tombstoned uid,
+/// then a best-effort reconcile re-reads the source. A dead session leaves the
+/// rows to the next sync — this path never masks the error the caller reports.
+async fn undo_drop(
+    store: &Store,
+    session: &mut ImapSession,
+    account_id: &str,
+    folder_path: &str,
+    uids: &[u32],
+) {
+    store.forget_tombstones(account_id, folder_path, uids);
+    let _ = reconcile(session, store, account_id, folder_path, None).await;
+}
+
+/// The wire half of a move, `drop_locally` included: the rows go once the
+/// server has answered for `MOVE`/`UIDPLUS`, so a refusal leaves them where they
+/// were.
+async fn move_on_server(
+    session: &mut ImapSession,
+    store: &Store,
+    account_id: &str,
+    from_path: &str,
+    uids: &[u32],
+    to_path: &str,
+) -> Result<(), MailError> {
     let selector = uid_selector(uids);
     session.select(from_path).await.map_err(imap_error)?;
     let capabilities = session.capabilities().await.map_err(imap_error)?;
-    if capabilities.has_str("MOVE") {
+    let movable = capabilities.has_str("MOVE");
+    if !movable && !capabilities.has_str("UIDPLUS") {
+        return Err(uidplus_required());
+    }
+    drop_locally(store, account_id, from_path, uids)?;
+    if movable {
         session
-            .uid_mv(selector.clone(), to_path)
+            .uid_mv(selector, to_path)
             .await
             .map_err(imap_error)?;
-    } else {
-        if !capabilities.has_str("UIDPLUS") {
-            return Err(uidplus_required());
-        }
-        session
-            .uid_copy(selector.clone(), to_path)
-            .await
-            .map_err(imap_error)?;
-        store_flags_selector(session, &selector, "+FLAGS", &["\\Deleted"]).await?;
-        expunge(session, &selector, ExpungeMode::Strict).await?;
+        return Ok(());
     }
-    for uid in uids {
-        store.tombstone_uid(account_id, from_path, *uid);
-    }
-    store.delete_messages(account_id, from_path, uids)?;
-    reconcile(session, store, account_id, to_path, None).await?;
+    session
+        .uid_copy(selector.clone(), to_path)
+        .await
+        .map_err(imap_error)?;
+    store_flags_selector(session, &selector, "+FLAGS", &["\\Deleted"]).await?;
+    expunge(session, &selector, ExpungeMode::Strict).await?;
     Ok(())
 }
 
@@ -1240,7 +1298,10 @@ pub async fn delete_message(
 /// Drops the messages from the server and from the store, one `UID STORE` and
 /// one `UID EXPUNGE` for the whole selection. The store rows are dropped even
 /// when they were already gone: the server is the source of truth and a missing
-/// row must not turn a successful expunge into an error.
+/// row must not turn a successful expunge into an error. They are dropped
+/// **before** the `\Deleted` mark (see `drop_locally`), so a list read while the
+/// expunge is in flight no longer holds the message; a refused expunge puts them
+/// back.
 ///
 /// `UIDPLUS` is required and checked before `\Deleted` is set: without it the
 /// only expunge available is folder-wide and would destroy every message
@@ -1255,17 +1316,32 @@ pub async fn delete_messages_many(
     if uids.is_empty() {
         return Ok(());
     }
+    match delete_on_server(session, store, account_id, folder_path, uids).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            undo_drop(store, session, account_id, folder_path, uids).await;
+            Err(error)
+        }
+    }
+}
+
+/// The wire half of a permanent delete, `drop_locally` included: the rows go
+/// once `UIDPLUS` has answered, so a refusal leaves them where they were.
+async fn delete_on_server(
+    session: &mut ImapSession,
+    store: &Store,
+    account_id: &str,
+    folder_path: &str,
+    uids: &[u32],
+) -> Result<(), MailError> {
     let selector = uid_selector(uids);
     session.select(folder_path).await.map_err(imap_error)?;
     if !supports_uidplus(session).await? {
         return Err(uidplus_required());
     }
+    drop_locally(store, account_id, folder_path, uids)?;
     store_flags_selector(session, &selector, "+FLAGS", &["\\Deleted"]).await?;
     expunge(session, &selector, ExpungeMode::Strict).await?;
-    for uid in uids {
-        store.tombstone_uid(account_id, folder_path, *uid);
-    }
-    store.delete_messages(account_id, folder_path, uids)?;
     Ok(())
 }
 

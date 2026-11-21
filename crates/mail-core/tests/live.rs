@@ -1143,6 +1143,37 @@ async fn move_tombstones_the_source_uid() {
     );
 }
 
+/// Un déplacement que le serveur refuse ne doit pas coûter le message : la ligne
+/// tombe avant la commande, et l'échec la remet en place en oubliant son
+/// tombstone, sinon la resynchro suivante ne pourrait plus la réimporter.
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn move_to_a_missing_folder_restores_the_source_row() {
+    let cfg = account();
+    let store = store(&cfg);
+    let subject = unique("[live-move-restore] dossier absent");
+    send(&cfg, &subject, "corps restaure", None).await;
+    sync(&cfg, &store, INBOX).await;
+    let uid = find(&store, INBOX, &subject).uid;
+
+    let mut session = connect(&cfg).await;
+    let refused =
+        imap::move_message(&mut session, &store, ACCOUNT, INBOX, uid, "Aucun/Dossier").await;
+    assert!(
+        refused.is_err(),
+        "the move to a folder the server does not have went through"
+    );
+
+    assert!(
+        checked("inbox lookup", store.get_message(ACCOUNT, INBOX, uid)).is_some(),
+        "uid {uid} did not come back to the local INBOX"
+    );
+    assert!(
+        !store.is_tombstoned(ACCOUNT, INBOX, uid),
+        "the refused move left uid {uid} tombstoned"
+    );
+}
+
 #[tokio::test]
 #[ignore = "requires scripts/mail-test-server.sh start"]
 async fn reply_joins_the_thread() {

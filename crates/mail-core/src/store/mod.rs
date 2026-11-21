@@ -663,6 +663,18 @@ impl Store {
         }
     }
 
+    /// Forgets the tombstones of `uids`, so a later import can store them
+    /// again: the row of a local drop that had to be undone goes back through
+    /// the sync, which skips a tombstoned uid. An unknown uid is a no-op.
+    pub fn forget_tombstones(&self, account_id: &str, folder_path: &str, uids: &[u32]) {
+        let Some(mut tombstones) = self.live_tombstones(Instant::now()) else {
+            return;
+        };
+        for uid in uids {
+            tombstones.remove(&uid_key(account_id, folder_path, *uid));
+        }
+    }
+
     /// Whether `uid` was dropped from `folder_path` less than `TOMBSTONE_TTL`
     /// ago.
     pub fn is_tombstoned(&self, account_id: &str, folder_path: &str, uid: u32) -> bool {
