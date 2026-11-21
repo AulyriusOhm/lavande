@@ -1,6 +1,7 @@
 //! Offline HTTP tests: the router is driven directly, no socket, no network.
 
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
@@ -1108,9 +1109,12 @@ fn text_message() -> lavande_mail::model::Message {
 #[tokio::test]
 async fn the_token_file_is_private_and_stable() {
     let (directory, state) = state().await;
-    let path = directory.path().join("daemon-token");
-    let mode = fs::metadata(&path).expect("fichier").permissions().mode();
-    assert_eq!(mode & 0o777, 0o600);
+    #[cfg(unix)]
+    {
+        let path = directory.path().join("daemon-token");
+        let mode = fs::metadata(&path).expect("fichier").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
     assert!(!state.token().is_empty());
 
     let reopened = state_in(directory.path()).await;
@@ -1149,11 +1153,14 @@ async fn add_account_keeps_secrets_out_of_the_file() {
     let text = fs::read_to_string(directory.path().join("accounts.json")).expect("fichier");
     assert!(!text.contains("secret-en-clair"), "{text}");
     assert!(directory.path().join("secrets.enc").exists());
-    let mode = fs::metadata(directory.path().join("secrets.key"))
-        .expect("clé")
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o600);
+    #[cfg(unix)]
+    {
+        let mode = fs::metadata(directory.path().join("secrets.key"))
+            .expect("clé")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
 
     let stored = state.secrets().get("perso").await.expect("secret");
     assert_eq!(
@@ -1201,8 +1208,11 @@ async fn calendar_sources_keep_their_credentials_in_the_secret_store() {
     assert!(!text.contains("roman"), "{text}");
     assert!(!text.contains("password"), "{text}");
     assert!(text.contains("https://caldav.exemple.tld/dav/"), "{text}");
-    let mode = fs::metadata(&path).expect("fichier").permissions().mode();
-    assert_eq!(mode & 0o777, 0o600);
+    #[cfg(unix)]
+    {
+        let mode = fs::metadata(&path).expect("fichier").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
 
     assert_eq!(
         state
@@ -1342,11 +1352,14 @@ async fn a_generated_key_never_leaks_its_private_half() {
     let private = directory.path().join("pgp-keys.json");
     let text = fs::read_to_string(&private).expect("trousseau");
     assert!(!text.contains("PRIVATE KEY"), "{text}");
-    let mode = fs::metadata(&private)
-        .expect("fichier")
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o600);
+    #[cfg(unix)]
+    {
+        let mode = fs::metadata(&private)
+            .expect("fichier")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
     assert!(
         state
             .secrets()

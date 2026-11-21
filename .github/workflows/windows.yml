@@ -1,0 +1,75 @@
+name: Windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows — installeur NSIS (non signé)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: rustup stable (toolchain MSVC préinstallé sur le runner)
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup show
+
+      - name: Cache cargo (registre + répertoires de compilation)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            src-tauri/target
+          key: windows-cargo-${{ hashFiles('Cargo.lock', 'src-tauri/Cargo.lock') }}
+          restore-keys: windows-cargo-
+
+      - name: npm ci
+        run: npm ci
+
+      - name: cargo test --workspace (compilation et tests natifs Windows)
+        run: cargo test --workspace
+
+      - name: Front — typecheck + build distribution
+        env:
+          VITE_DISTRIBUTION: "1"
+        run: |
+          npx tsc --noEmit
+          npx vite build
+
+      # `npm run build:distribution` porte un préfixe d'environnement POSIX
+      # (`VITE_DISTRIBUTION=1 vite build`) que cmd.exe refuse : le front est
+      # construit à l'étape précédente, le hook beforeBuildCommand est neutralisé,
+      # et bash garantit que le JSON passé à --config arrive intact.
+      - name: Installeur NSIS (non signé)
+        shell: bash
+        env:
+          CI: "true"
+        run: npx tauri build --bundles nsis --config '{"build":{"beforeBuildCommand":"cmd /C exit 0"}}'
+
+      - name: Publier l'installeur
+        uses: actions/upload-artifact@v4
+        with:
+          name: lavande-windows-x64
+          path: src-tauri/target/release/bundle/nsis/Lavande_*-setup.exe
+          if-no-files-found: error
+          retention-days: 14

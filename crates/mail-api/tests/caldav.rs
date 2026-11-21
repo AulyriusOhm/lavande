@@ -2,6 +2,7 @@
 //! événements, servies par un faux serveur WebDAV en boucle locale.
 
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
@@ -327,8 +328,11 @@ async fn a_stored_source_keeps_its_credentials_out_of_every_file_and_answer() {
     assert!(text.contains("Travail"), "{text}");
     assert!(!text.contains("secret"), "{text}");
     assert!(!text.contains("roman"), "{text}");
-    let mode = fs::metadata(&path).expect("fichier").permissions().mode();
-    assert_eq!(mode & 0o777, 0o600);
+    #[cfg(unix)]
+    {
+        let mode = fs::metadata(&path).expect("fichier").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
 
     assert_eq!(
         state.secrets().get("caldav:travail").await.expect("secret"),

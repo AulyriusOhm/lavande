@@ -16,6 +16,7 @@
 
 use std::env;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -332,12 +333,16 @@ async fn account_is_added_and_synced() {
     );
 
     let accounts_path = daemon.directory.path().join("accounts.json");
-    let mode = fs::metadata(&accounts_path)
-        .expect("accounts.json")
-        .permissions()
-        .mode()
-        & 0o777;
-    assert_eq!(mode, 0o600, "accounts.json n'est pas en 0600");
+    assert!(accounts_path.exists(), "accounts.json absent");
+    #[cfg(unix)]
+    {
+        let mode = fs::metadata(&accounts_path)
+            .expect("accounts.json")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "accounts.json n'est pas en 0600");
+    }
 
     let response = client
         .get(daemon.url("/api/accounts"))

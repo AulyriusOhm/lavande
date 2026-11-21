@@ -4,6 +4,7 @@
 
 use std::fs;
 use std::io::{ErrorKind, Write};
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
@@ -17,6 +18,9 @@ pub const TOKEN_FILE: &str = "daemon-token";
 
 /// Lit le jeton, ou le crée au premier lancement. Création exclusive : deux
 /// démarrages concurrents (coquille + démon) aboutissent au même jeton.
+///
+/// `0o600` sur Unix ; sous Windows le fichier hérite des ACL du répertoire
+/// parent, faute de durcissement explicite (chantier séparé).
 pub fn load_or_create(data_dir: &Path) -> Result<String, ApiError> {
     let path = data_dir.join(TOKEN_FILE);
     if let Some(token) = read(&path)? {
@@ -25,12 +29,11 @@ pub fn load_or_create(data_dir: &Path) -> Result<String, ApiError> {
     let mut bytes = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut bytes);
     let token = URL_SAFE_NO_PAD.encode(bytes);
-    match fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)
-    {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    match options.open(&path) {
         Ok(mut file) => {
             file.write_all(token.as_bytes())
                 .and_then(|_| file.sync_all())
