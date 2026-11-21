@@ -7,6 +7,7 @@ import {
   filterMailsForLlm,
   fromApiDecision,
   indexDecisions,
+  reasonFromDecision,
   stableDecisionKey,
   summaryGroupsFromDecisions,
   toApiDecision,
@@ -208,10 +209,52 @@ describe("triage · summaryGroupsFromDecisions", () => {
 
     const groups = summaryGroupsFromDecisions(mails, decisions, THRESHOLDS);
     expect(groups.actions.map((ref) => ref.mailId)).toEqual(["perso:INBOX:1"]);
-    expect(groups.actions[0].reason).toBe("Réponse attendue");
+    expect(groups.actions[0].reason).toBe("Urgent · Réponse attendue · Tâche détectée");
     expect(groups.infos.map((ref) => ref.mailId)).toEqual(["perso:INBOX:2"]);
     expect(groups.notifications.map((ref) => ref.mailId)).toEqual(["perso:INBOX:4", "perso:INBOX:3"]);
     expect(groups.notifications[0].reason).toContain("482917");
+  });
+
+  it("génère des raisons courtes combinées via reasonFromDecision (au plus 3 signaux)", () => {
+    expect(
+      reasonFromDecision(
+        makeDecision({ urgency: 2.4, needsReply: 0.9, hasTask: 0.1, hasEvent: 0.1 }),
+        THRESHOLDS,
+      ),
+    ).toBe("Urgent · Réponse attendue");
+
+    expect(
+      reasonFromDecision(
+        makeDecision({ urgency: 1.0, needsReply: 0.1, hasTask: 0.1, hasEvent: 0.85 }),
+        THRESHOLDS,
+      ),
+    ).toBe("Rendez-vous proposé");
+
+    expect(
+      reasonFromDecision(
+        makeDecision({
+          urgency: 1.2,
+          needsReply: 0.1,
+          hasTask: 0.8,
+          hasEvent: 0.1,
+          assignee: "Camille",
+        }),
+        THRESHOLDS,
+      ),
+    ).toBe("Tâche détectée · Assigné à Camille");
+
+    expect(
+      reasonFromDecision(
+        makeDecision({
+          urgency: 1.0,
+          needsReply: 0.1,
+          hasTask: 0.1,
+          hasEvent: 0.1,
+          assignee: "moi",
+        }),
+        THRESHOLDS,
+      ),
+    ).toBe("Message prioritaire");
   });
 });
 

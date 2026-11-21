@@ -16,6 +16,7 @@ import {
   type SummaryMailInput,
 } from "@/lib/summary";
 import { THRESHOLD_PRESETS, type MailDecision } from "@/lib/decision";
+import { createMemoryDecisionDb } from "@/lib/decision-db";
 import { llmChat } from "@/lib/llm";
 
 vi.mock("@/lib/llm", async (importOriginal) => {
@@ -439,7 +440,7 @@ describe("pipeline hybride (Système 1 + Système 2)", () => {
       ["perso:INBOX:3", makeDec(3, { category: "important", security: "prompt_injection", securityConf: 0.95, hasTask: 0.9 })],
     ]);
 
-    // Sans LLM : groupes classés par Système 1
+    // Sans LLM : groupes classés par Système 1 -> source "decision"
     const noLlm = await generateSummary(
       { ...DEFAULT_SUMMARY, llmConsent: true },
       { endpoint: "", apiKey: "", model: "" },
@@ -449,11 +450,12 @@ describe("pipeline hybride (Système 1 + Système 2)", () => {
       "",
       { hybrid: true, decisionReady: true, decisions, thresholds },
     );
-    expect(noLlm.source).toBe("fallback");
+    expect(noLlm.source).toBe("decision");
     expect(noLlm.groups.actions.map((r) => r.mailId)).toEqual(["perso:INBOX:1"]);
+    expect(noLlm.groups.actions[0].reason).toContain("Urgent");
     expect(noLlm.groups.notifications.map((r) => r.mailId)).toEqual(["perso:INBOX:3", "perso:INBOX:2"]);
 
-    // Avec LLM : seul m1 est transmis au LLM, et l'assignee Système 1 est réutilisé
+    // Avec LLM : seul m1 est transmis au LLM, et l'assignee Système 1 est réutilisé -> source "hybrid"
     vi.mocked(llmChat).mockResolvedValue(
       JSON.stringify({
         accroche: "1 action attendue.",
@@ -472,7 +474,7 @@ describe("pipeline hybride (Système 1 + Système 2)", () => {
       "",
       { hybrid: true, decisionReady: true, decisions, thresholds },
     );
-    expect(withLlm.source).toBe("llm");
+    expect(withLlm.source).toBe("hybrid");
     expect(withLlm.tasks[0].assignee).toBe("Camille");
     const [, , user] = vi.mocked(llmChat).mock.calls[0];
     expect(user).toContain("perso:INBOX:1");
@@ -501,5 +503,221 @@ describe("pipeline hybride (Système 1 + Système 2)", () => {
     expect(tasks).toEqual([]);
     expect(events).toEqual([]);
     expect(llmChat).not.toHaveBeenCalled();
+  });
+
+  it("cache incrémental : un mail déjà traité par Décision + LLM n'est pas renvoyé au LLM quand un 2e mail arrive", async () => {
+    const llmCache = createMemoryDecisionDb();
+    const m1 = mail("perso:INBOX:1", now.getTime() - 2 * H, "Peux-tu valider le devis ?");
+    const m2 = mail("perso:INBOX:2", now.getTime() - H, "Peux-tu signer le contrat ?");
+    const decisions = new Map<string, MailDecision>([
+      ["perso:INBOX:1", makeDec(1, { category: "important", urgency: 2.2 })],
+      ["perso:INBOX:2", makeDec(2, { category: "important", urgency: 2.1 })],
+    ]);
+
+    vi.mocked(llmChat).mockResolvedValueOnce(
+      JSON.stringify({
+        accroche: "1 action.",
+        actions: [{ mailId: "perso:INBOX:1", raison: "Valider le devis", echeance: "2026-01-06" }],
+        infos: [],
+        notifications: [],
+        taches: [{ titre: "Valider le devis", echeance: "2026-01-06", de: "Camille", mailId: "perso:INBOX:1" }],
+      }),
+    );
+
+    const first = await generateSummary(
+      { ...DEFAULT_SUMMARY, llmConsent: true },
+      llm,
+      [m1],
+      now,
+      undefined,
+      "",
+      { hybrid: true, decisionReady: true, decisions, thresholds, llmCache },
+    );
+    expect(first.source).toBe("hybrid");
+    expect(llmChat).toHaveBeenCalledTimes(1);
+
+    // 2e passe avec m1 (inchangé) + m2 (nouveau) : seul m2 doit être envoyé au LLM
+    vi.mocked(llmChat).mockResolvedValueOnce(
+      JSON.stringify({
+        accroche: "1 nouvelle action.",
+        actions: [{ mailId: "perso:INBOX:2", raison: "Signer le contrat" }],
+        infos: [],
+        notifications: [],
+        taches: [{ titre: "Signer le contrat", echeance: "aucune", de: "Camille", mailId: "perso:INBOX:2" }],
+      }),
+    );
+
+    const second = await generateSummary(
+      { ...DEFAULT_SUMMARY, llmConsent: true },
+      llm,
+      [m1, m2],
+      now,
+      undefined,
+      "",
+      { hybrid: true, decisionReady: true, decisions, thresholds, llmCache },
+    );
+
+    expect(llmChat).toHaveBeenCalledTimes(2);
+    const [, , secondUser] = vi.mocked(llmChat).mock.calls[1];
+    expect(secondUser).toContain("perso:INBOX:2");
+    expect(secondUser).not.toContain("perso:INBOX:1");
+    expect(second.source).toBe("hybrid");
+    expect(second.groups.actions.find((r) => r.mailId === "perso:INBOX:1")?.reason).toBe("Valider le devis");
+    expect(second.groups.actions.find((r) => r.mailId === "perso:INBOX:2")?.reason).toBe("Signer le contrat");
+    expect(second.tasks.map((t) => t.title).sort()).toEqual(["Signer le contrat", "Valider le devis"]);
+
+    // 3e passe avec les mêmes mails : 0 appel LLM
+    const third = await generateSummary(
+      { ...DEFAULT_SUMMARY, llmConsent: true },
+      llm,
+      [m1, m2],
+      now,
+      undefined,
+      "",
+      { hybrid: true, decisionReady: true, decisions, thresholds, llmCache },
+    );
+    expect(llmChat).toHaveBeenCalledTimes(2);
+    expect(third.source).toBe("hybrid");
+    expect(third.groups.actions.find((r) => r.mailId === "perso:INBOX:1")?.reason).toBe("Valider le devis");
+  });
+
+  it("onPartial émet immédiatement un résumé source 'decision' avec raisons courtes avant le LLM", async () => {
+    const m1 = mail("perso:INBOX:1", now.getTime() - H, "Urgent, merci de répondre");
+    const decisions = new Map<string, MailDecision>([
+      ["perso:INBOX:1", makeDec(1, { urgency: 2.5, needsReply: 0.9, hasTask: 0.1, hasEvent: 0.1 })],
+    ]);
+    const partials: string[] = [];
+    const partialReasons: string[] = [];
+
+    vi.mocked(llmChat).mockImplementation(async () => {
+      // Au moment où le LLM est appelé, onPartial doit déjà avoir été déclenché
+      expect(partials).toEqual(["decision"]);
+      return JSON.stringify({
+        accroche: "1 action.",
+        actions: [{ mailId: "perso:INBOX:1", raison: "Répondre au mail urgent" }],
+        infos: [],
+        notifications: [],
+        taches: [],
+      });
+    });
+
+    const final = await generateSummary(
+      { ...DEFAULT_SUMMARY, llmConsent: true },
+      llm,
+      [m1],
+      now,
+      undefined,
+      "",
+      {
+        hybrid: true,
+        decisionReady: true,
+        decisions,
+        thresholds,
+        onPartial: (partial) => {
+          partials.push(partial.source);
+          partialReasons.push(partial.groups.actions[0]?.reason ?? "");
+        },
+      },
+    );
+
+    expect(partials).toEqual(["decision"]);
+    expect(partialReasons).toEqual(["Urgent · Réponse attendue"]);
+    expect(final.source).toBe("hybrid");
+    expect(final.groups.actions[0].reason).toBe("Répondre au mail urgent");
+  });
+
+  it("suggestTasks et suggestEvents réutilisent llmCache sans rappeler le LLM pour les mails déjà traités", async () => {
+    const llmCache = createMemoryDecisionDb();
+    const m1 = mail("perso:INBOX:1", now.getTime() - 2 * H, "Peux-tu envoyer le bilan ?");
+    const m2 = mail("perso:INBOX:2", now.getTime() - H, "On se voit jeudi à 14h ?");
+    const decisions = new Map<string, MailDecision>([
+      ["perso:INBOX:1", makeDec(1, { hasTask: 0.9, hasEvent: 0.9 })],
+      ["perso:INBOX:2", makeDec(2, { hasTask: 0.9, hasEvent: 0.9 })],
+    ]);
+
+    vi.mocked(llmChat).mockResolvedValueOnce(
+      JSON.stringify({ taches: [{ titre: "Envoyer le bilan", echeance: "aucune", de: "Camille", mailId: "perso:INBOX:1" }] }),
+    );
+    const firstTasks = await suggestTasks({ windowHours: 48 }, llm, [m1], now, undefined, "", {
+      hybrid: true,
+      decisionReady: true,
+      decisions,
+      thresholds,
+      llmCache,
+    });
+    expect(firstTasks).toHaveLength(1);
+    expect(llmChat).toHaveBeenCalledTimes(1);
+
+    // 2e appel tasks avec m1 + m2 : seul m2 part au LLM
+    vi.mocked(llmChat).mockResolvedValueOnce(
+      JSON.stringify({ taches: [{ titre: "Préparer la réunion", echeance: "aucune", de: "Camille", mailId: "perso:INBOX:2" }] }),
+    );
+    const secondTasks = await suggestTasks({ windowHours: 48 }, llm, [m1, m2], now, undefined, "", {
+      hybrid: true,
+      decisionReady: true,
+      decisions,
+      thresholds,
+      llmCache,
+    });
+    expect(llmChat).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(llmChat).mock.calls[1][2]).not.toContain("perso:INBOX:1");
+    expect(vi.mocked(llmChat).mock.calls[1][2]).toContain("perso:INBOX:2");
+    expect(secondTasks?.map((t) => t.title).sort()).toEqual(["Envoyer le bilan", "Préparer la réunion"]);
+
+    // 3e appel tasks sans nouveau mail : 0 appel LLM
+    const thirdTasks = await suggestTasks({ windowHours: 48 }, llm, [m1, m2], now, undefined, "", {
+      hybrid: true,
+      decisionReady: true,
+      decisions,
+      thresholds,
+      llmCache,
+    });
+    expect(llmChat).toHaveBeenCalledTimes(2);
+    expect(thirdTasks?.map((t) => t.title).sort()).toEqual(["Envoyer le bilan", "Préparer la réunion"]);
+
+    // Events sur m1 puis m1 + m2
+    vi.mocked(llmChat).mockResolvedValueOnce(
+      JSON.stringify({ evenements: [] }),
+    );
+    expect(
+      await suggestEvents({ windowHours: 48 }, llm, [m1], now, undefined, "", {
+        hybrid: true,
+        decisionReady: true,
+        decisions,
+        thresholds,
+        llmCache,
+      }),
+    ).toEqual([]);
+    expect(llmChat).toHaveBeenCalledTimes(3);
+
+    vi.mocked(llmChat).mockResolvedValueOnce(
+      JSON.stringify({
+        evenements: [
+          { titre: "Point jeudi", date: "2026-01-08", debut: "14:00", fin: "15:00", de: "Camille", mailId: "perso:INBOX:2" },
+        ],
+      }),
+    );
+    const secondEvents = await suggestEvents({ windowHours: 48 }, llm, [m1, m2], now, undefined, "", {
+      hybrid: true,
+      decisionReady: true,
+      decisions,
+      thresholds,
+      llmCache,
+    });
+    expect(llmChat).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(llmChat).mock.calls[3][2]).not.toContain("perso:INBOX:1");
+    expect(vi.mocked(llmChat).mock.calls[3][2]).toContain("perso:INBOX:2");
+    expect(secondEvents?.map((e) => e.title)).toEqual(["Point jeudi"]);
+
+    // 3e appel events : 0 appel LLM
+    const thirdEvents = await suggestEvents({ windowHours: 48 }, llm, [m1, m2], now, undefined, "", {
+      hybrid: true,
+      decisionReady: true,
+      decisions,
+      thresholds,
+      llmCache,
+    });
+    expect(llmChat).toHaveBeenCalledTimes(4);
+    expect(thirdEvents?.map((e) => e.title)).toEqual(["Point jeudi"]);
   });
 });

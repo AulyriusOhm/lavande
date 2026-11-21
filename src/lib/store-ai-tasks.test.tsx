@@ -222,6 +222,7 @@ const suggestionDoc = (id: string, proposal: string, timestamp?: number, account
 beforeEach(async () => {
   window.localStorage.clear();
   await decisionDb().clearDecisions();
+  await decisionDb().clearLlmExtractions();
   vi.stubGlobal("EventSource", undefined);
 });
 

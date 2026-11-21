@@ -197,6 +197,7 @@ const cachedResult = () => {
 beforeEach(async () => {
   window.localStorage.clear();
   await decisionDb().clearDecisions();
+  await decisionDb().clearLlmExtractions();
   vi.stubGlobal("EventSource", undefined);
 });
 
@@ -213,15 +214,15 @@ describe("résumé IA · portée de la boîte sélectionnée", () => {
     const prompts = mockBackend();
     const { result } = mount();
 
-    await waitFor(() => expect(result.current.summary?.source).toBe("llm"), { timeout: 3000 });
+    await waitFor(() => expect(result.current.summary?.source).toBe("hybrid"), { timeout: 3000 });
     expect(result.current.summary?.mailCount).toBe(THREADS.length);
     expect(summaryCalls(prompts).at(-1)?.user).toContain("Devis Léa");
 
     act(() => result.current.setAccount(ALPHA));
 
     await waitFor(() => expect(result.current.summary?.mailCount).toBe(2), { timeout: 3000 });
-    expect(summaryCalls(prompts).at(-1)?.user).not.toContain("Devis Léa");
-    expect(summaryCalls(prompts).at(-1)?.user).toContain("Maquettes v3");
+    expect(result.current.summary?.mailIds).toEqual([`${ALPHA}:INBOX:1`, `${ALPHA}:INBOX:2`]);
+    expect(summaryCalls(prompts)).toHaveLength(1);
     expect(Object.keys(cachedResult()).some((key) => key.startsWith(`${ALPHA}:${currentPeriod(DEFAULT_SUMMARY).id}:`))).toBe(
       true,
     );
@@ -251,15 +252,15 @@ describe("résumé IA · portée de la boîte sélectionnée", () => {
     const prompts = mockBackend();
     const { result } = mount();
 
-    await waitFor(() => expect(result.current.summary?.source).toBe("llm"), { timeout: 3000 });
+    await waitFor(() => expect(result.current.summary?.source).toBe("hybrid"), { timeout: 3000 });
     act(() => result.current.setAccount(BETA));
     await waitFor(() => expect(result.current.summary?.mailCount).toBe(1), { timeout: 3000 });
-    expect(summaryCalls(prompts)).toHaveLength(2);
+    expect(summaryCalls(prompts)).toHaveLength(1);
 
     act(() => result.current.setAccount(ALL));
 
     await waitFor(() => expect(result.current.summary?.mailCount).toBe(THREADS.length), { timeout: 3000 });
-    expect(summaryCalls(prompts).length).toBeLessThanOrEqual(3);
+    expect(summaryCalls(prompts)).toHaveLength(1);
   });
 });
 
@@ -270,7 +271,7 @@ describe("résumé IA · cache du passage", () => {
     const prompts = mockBackend();
     const first = mount();
 
-    await waitFor(() => expect(first.result.current.summary?.source).toBe("llm"), { timeout: 3000 });
+    await waitFor(() => expect(first.result.current.summary?.source).toBe("hybrid"), { timeout: 3000 });
     const headline = first.result.current.summary?.headline;
     expect(summaryCalls(prompts)).toHaveLength(1);
     first.unmount();
@@ -300,7 +301,7 @@ describe("résumé IA · cache du passage", () => {
     const prompts = mockBackend();
     const { result } = mount();
 
-    await waitFor(() => expect(result.current.summary?.source).toBe("llm"), { timeout: 3000 });
+    await waitFor(() => expect(result.current.summary?.source).toBe("hybrid"), { timeout: 3000 });
 
     const system = summaryCalls(prompts).at(-1)?.system ?? "";
     expect(system).toContain("CONTEXTE UTILISATEUR");
@@ -314,7 +315,7 @@ describe("résumé IA · cache du passage", () => {
     const prompts = mockBackend();
     const { result } = mount();
 
-    await waitFor(() => expect(result.current.summary?.source).toBe("llm"), { timeout: 3000 });
+    await waitFor(() => expect(result.current.summary?.source).toBe("hybrid"), { timeout: 3000 });
     await act(async () => {
       await result.current.refreshSummary(true);
     });
@@ -342,7 +343,7 @@ describe("résumé IA · pièces jointes des mails analysés", () => {
     mockBackend();
     const { result } = mount();
 
-    await waitFor(() => expect(result.current.summary?.source).toBe("llm"), { timeout: 3000 });
+    await waitFor(() => expect(result.current.summary?.source).toBe("hybrid"), { timeout: 3000 });
 
     const ids = result.current.summaryMails.map((mail) => mail.id).sort();
     expect(ids).toEqual(

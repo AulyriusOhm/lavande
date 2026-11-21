@@ -34,7 +34,7 @@ import type { SearchCriteria, SearchFilter } from "@/lib/search-query";
 import { threadOf } from "@/lib/threads";
 import type { Thread } from "@/lib/threads";
 import type { MailSuggestion, Task } from "@/lib/tasks";
-import { dueToneFor, formatDueDate } from "@/lib/tasks";
+import { dueToneFor, formatDueDate, isoToday } from "@/lib/tasks";
 import {
   currentPeriod,
   generateSummary,
@@ -384,6 +384,8 @@ export type MailStoreValue = {
    * « added » quand une suggestion est née, « existing » quand la dédup l'a déjà.
    */
   proposeSummaryAction: (ref: SummaryRef) => "added" | "existing";
+  /** Transforme une action du résumé en suggestion d'agenda en attente (jamais un événement). */
+  proposeSummaryEvent: (ref: SummaryRef) => "added" | "existing";
   /** Analyse à la demande du mail ouvert, avec son cache par mail. */
   analyse: MailAnalyse | null;
   runAnalyse: (mail: Mail, force?: boolean) => Promise<void>;
@@ -2931,11 +2933,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
             decisions: decisionIndex,
             thresholds: prefs.decision.thresholds,
             customCategories: prefs.decision.customCategories,
+            llmCache: decisionDb(),
+            force,
+            onPartial: (partial) => setSummary(partial),
           },
         );
         setSummary(result);
         if (result.mailCount > 0) summaryRun.current = runKey;
-        if (result.source === "llm" && hasDecisionLayer) {
+        if ((result.source === "hybrid" || result.source === "llm") && hasDecisionLayer) {
           writeSummaryCache(summaryStorage(), scope, result.period.id, signature, result);
         }
         proposeTasks(
@@ -3014,6 +3019,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           decisionReady: hasDecisionLayer,
           decisions: decisionIndex,
           thresholds: prefs.decision.thresholds,
+          llmCache: decisionDb(),
         },
       );
       if (proposed === null) return;
@@ -3056,7 +3062,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
    * un événement déjà présent à l'agenda.
    */
   const proposeEvents = useCallback(
-    (proposed: SummaryEvent[], byId: Map<string, Mail>, label: string) => {
+    (proposed: SummaryEvent[], byId: Map<string, Mail>, label: string): number => {
       const key = (mailId: string, title: string, date: string) => `${mailId}:${normalize(title)}:${date}`;
       const known = new Set([
         ...planning.suggestions.map((entry) => key(entry.mailId, entry.proposal, entry.date ?? "")),
@@ -3074,6 +3080,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           when: entry.date,
         })),
       ];
+      let added = 0;
       for (const event of proposed) {
         const mail = event.mailId ? byId.get(event.mailId) : undefined;
         if (alreadyReplied(mail)) continue;
@@ -3083,10 +3090,39 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         if (nearDuplicate(existing, candidate)) continue;
         known.add(dedup);
         existing.push(candidate);
-        planning.proposeSuggestion(eventSuggestion(event, mail, label));
+        if (planning.proposeSuggestion(eventSuggestion(event, mail, label))) added += 1;
       }
+      return added;
     },
     [planning],
+  );
+
+  /** Un rendez-vous du briefing : une suggestion d'agenda en attente, passée par le même circuit de dédup. */
+  const proposeSummaryEvent = useCallback(
+    (ref: SummaryRef): "added" | "existing" => {
+      const mail = inboxIndex.get(ref.mailId);
+      const date = ref.due && ISO_DAY.test(ref.due) ? ref.due : isoToday(0);
+      const subject = mail?.subject?.trim() ?? "";
+      const reason = ref.reason.trim();
+      const title =
+        subject || (reason && reason !== "Rendez-vous proposé" ? reason : "Rendez-vous proposé");
+      const added = proposeEvents(
+        [
+          {
+            title,
+            date,
+            start: "",
+            end: "",
+            from: mail?.name ?? "",
+            mailId: ref.mailId,
+          },
+        ],
+        inboxIndex,
+        summary?.period.label ?? "Résumé",
+      );
+      return added > 0 ? "added" : "existing";
+    },
+    [inboxIndex, proposeEvents, summary?.period.label],
   );
 
   /**
@@ -3129,6 +3165,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           decisionReady: hasDecisionLayer,
           decisions: decisionIndex,
           thresholds: prefs.decision.thresholds,
+          llmCache: decisionDb(),
         },
       );
       if (proposed === null) return;
@@ -3369,6 +3406,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       summaryMails,
       refreshSummary,
       proposeSummaryAction,
+      proposeSummaryEvent,
       analyse,
       runAnalyse,
       closeAnalyse,
@@ -3479,6 +3517,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       summaryMails,
       refreshSummary,
       proposeSummaryAction,
+      proposeSummaryEvent,
       analyse,
       runAnalyse,
       closeAnalyse,

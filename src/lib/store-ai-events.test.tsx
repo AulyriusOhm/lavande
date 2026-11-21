@@ -234,6 +234,7 @@ const eventDoc = (id: string, account = "perso"): Doc => ({
 beforeEach(async () => {
   window.localStorage.clear();
   await decisionDb().clearDecisions();
+  await decisionDb().clearLlmExtractions();
   vi.stubGlobal("EventSource", undefined);
 });
 

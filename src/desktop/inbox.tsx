@@ -37,7 +37,7 @@ import {
 } from "lucide-react";
 import type { FolderId, Mail, MailAttachment } from "@/lib/mail";
 import { canReplyAll, folderLabel } from "@/lib/mail";
-import { ISO_DAY, type SummaryRef, type SummaryResult } from "@/lib/summary";
+import { ISO_DAY, summarySourceLabel, type SummaryRef, type SummaryResult } from "@/lib/summary";
 import { dueToneFor, formatDueDate } from "@/lib/tasks";
 import { downloadAttachment } from "@/lib/attachments";
 import type { Thread } from "@/lib/threads";
@@ -54,7 +54,7 @@ import {
   type MailDecision,
 } from "@/lib/decision";
 import { countCleanupByFilter } from "@/lib/cleanup";
-import { indexDecisions, triageDecisionFor } from "@/lib/triage";
+import { asDecisionIndex, indexDecisions, triageDecisionFor, type DecisionLookup } from "@/lib/triage";
 import { suggestFolderForMail } from "@/lib/guards";
 import { PGP_STATE, formatKeyDate, keyLabel, keyState, shortFingerprint, type PgpKey } from "@/lib/pgp";
 import { listKeys } from "@/lib/pgp-api";
@@ -342,11 +342,14 @@ export function MorningSummary({
   summary,
   mails,
   loading,
+  decisions,
+  decisionThresholds = DEFAULT_DECISION_THRESHOLDS,
   onToggle,
   onOpen,
   onRefresh,
   onReply,
   onPropose,
+  onProposeEvent,
 }: {
   open: boolean;
   unread: number;
@@ -357,16 +360,21 @@ export function MorningSummary({
   /** Mails réellement analysés : index vivant des lignes du briefing. */
   mails: Mail[];
   loading: boolean;
+  decisions?: DecisionLookup;
+  decisionThresholds?: DecisionThresholds;
   onToggle: () => void;
   onOpen: (id: string) => void;
   onRefresh: () => void;
   onReply: (mail: Mail) => void;
   onPropose: (ref: SummaryRef) => "added" | "existing";
+  onProposeEvent?: (ref: SummaryRef) => "added" | "existing";
 }) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [proposed, setProposed] = useState<Record<string, "added" | "existing">>({});
+  const [proposedEvents, setProposedEvents] = useState<Record<string, "added" | "existing">>({});
   const label = summary?.period.label ?? "Résumé du matin";
-  const source = summary ? (summary.source === "llm" ? "IA" : "local") : null;
+  const source = summary ? summarySourceLabel(summary.source) : null;
+  const decisionLookup = useMemo(() => (decisions ? asDecisionIndex(decisions) : null), [decisions]);
   const byId = useMemo(() => new Map(mails.map((mail) => [mail.id, mail])), [mails]);
   const generatedClock = summary ? clockOf(summary.generatedAt) : "";
   const rowsOf = (refs: SummaryRef[]): SummaryRow[] =>
@@ -439,7 +447,7 @@ export function MorningSummary({
       <div className="relative px-4 pt-3 pb-1">
         <div className="flex items-center gap-2">
           <span className="grid size-7 shrink-0 place-items-center rounded-[9px] bg-accent text-accent-contrast">
-            <Sparkles className="size-4" strokeWidth={2.4} />
+            <Sparkles className={cn("size-4", loading && "animate-pulse")} strokeWidth={2.4} />
           </span>
           <p className="min-w-0 truncate text-[11px] font-bold tracking-[0.16em] text-accent-ink uppercase">
             {label}
@@ -447,9 +455,21 @@ export function MorningSummary({
           <span className="shrink-0 text-[11px] font-semibold text-ink-muted">
             <NumberTicker value={unread} /> non lus
           </span>
+          {loading ? (
+            <span
+              data-testid="summary-loading"
+              className="ml-auto inline-flex shrink-0 animate-pulse items-center gap-1 rounded-full border border-accent-ring/60 bg-accent-soft px-2 py-0.5 text-[10px] font-bold text-accent-ink"
+            >
+              <Sparkles className="size-3" strokeWidth={2.4} />
+              Enrichissement…
+            </span>
+          ) : null}
           <span
             data-testid={source ? "summary-source" : "summary-badge"}
-            className="ml-auto shrink-0 rounded-full border border-accent-ring/60 bg-surface/80 px-2 py-0.5 text-[10px] font-bold text-accent-ink"
+            className={cn(
+              "shrink-0 rounded-full border border-accent-ring/60 bg-surface/80 px-2 py-0.5 text-[10px] font-bold text-accent-ink",
+              !loading && "ml-auto",
+            )}
           >
             {source ?? (demo ? `${TO_DO} à traiter` : `${attachments} fichiers`)}
           </span>
@@ -481,6 +501,13 @@ export function MorningSummary({
                   <div className="space-y-1">
                     {actions.map(({ ref, mail }) => {
                       const due = ref.due && ISO_DAY.test(ref.due) ? ref.due : null;
+                      const dec = decisionLookup
+                        ? triageDecisionFor(mail, decisionLookup.byKey, decisionLookup.byMessageId)
+                        : undefined;
+                      const isUrgent = Boolean(dec && dec.urgency >= 2.0);
+                      const hasEventSignal = Boolean(
+                        dec && dec.hasEvent >= decisionThresholds.llmEscalate && onProposeEvent,
+                      );
                       return (
                         <article
                           key={ref.mailId}
@@ -490,9 +517,10 @@ export function MorningSummary({
                             {initials(mail.name)}
                           </span>
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-baseline gap-1.5">
+                            <div className="flex items-center gap-1.5">
                               <span className="min-w-0 truncate text-[11.5px] font-bold text-ink">{mail.name}</span>
-                              <span className="shrink-0 text-[10.5px] font-semibold text-ink-muted tabular-nums">
+                              {isUrgent ? <Badge tone="rose">Urgent</Badge> : null}
+                              <span className="ml-auto shrink-0 text-[10.5px] font-semibold text-ink-muted tabular-nums">
                                 {summaryClock(mail)}
                               </span>
                             </div>
@@ -523,12 +551,28 @@ export function MorningSummary({
                                   Planification
                                 </button>
                               )}
+                              {hasEventSignal ? (
+                                proposedEvents[ref.mailId] ? (
+                                  <button type="button" disabled className={SUMMARY_CHIP_DONE}>
+                                    <Check className="size-3 shrink-0" strokeWidth={2.8} />
+                                    {proposedEvents[ref.mailId] === "added" ? "Ajouté" : "Déjà proposé"}
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const outcome = onProposeEvent!(ref);
+                                      setProposedEvents((current) => ({ ...current, [ref.mailId]: outcome }));
+                                    }}
+                                    className={SUMMARY_CHIP}
+                                  >
+                                    + Agenda
+                                  </button>
+                                )
+                              ) : null}
                               <button type="button" onClick={() => onReply(mail)} className={SUMMARY_CHIP}>
                                 <CornerUpLeft className="size-3" strokeWidth={2.4} />
                                 Répondre
-                              </button>
-                              <button type="button" onClick={() => onOpen(mail.id)} className={SUMMARY_CHIP}>
-                                Voir le mail
                               </button>
                               {due ? (
                                 <Badge tone={SUMMARY_DUE_TONE[dueToneFor(due)]}>{formatDueDate(due)}</Badge>
@@ -589,12 +633,11 @@ export function MorningSummary({
       </div>
 
       {summary ? (
-        <div className="relative flex items-center gap-1.5 border-t border-accent-ring/25 px-4 py-2 text-[10.5px] font-bold text-ink-muted">
-          <span>Généré à {generatedClock}</span>
-          <span aria-hidden className="size-[3px] rounded-full bg-accent-ring" />
-          <span>{summary.source === "llm" ? "mis en cache" : "local"}</span>
-          <span aria-hidden className="size-[3px] rounded-full bg-accent-ring" />
-          <span className="tabular-nums">{summary.mailCount} mails analysés</span>
+        <div
+          data-testid="summary-footer"
+          className="relative flex items-center gap-1.5 border-t border-accent-ring/25 px-4 py-2 text-[10.5px] font-bold text-ink-muted"
+        >
+          <span>{loading ? "Mise à jour…" : `Généré à ${generatedClock}`}</span>
         </div>
       ) : null}
     </div>
@@ -877,6 +920,7 @@ export function DesktopInbox({
     summaryMails,
     refreshSummary,
     proposeSummaryAction,
+    proposeSummaryEvent,
     bodyFetching,
     fetchBody,
     hiddenFolderOptions,
@@ -2152,11 +2196,14 @@ export function DesktopInbox({
                 summary={summary}
                 mails={summaryMails}
                 loading={summaryLoading}
+                decisions={decisionIndex}
+                decisionThresholds={decisionPrefs.thresholds}
                 onToggle={() => setSummaryOpen(!summaryOpen)}
                 onOpen={openById}
                 onRefresh={() => void refreshSummary(true)}
                 onReply={replyTo}
                 onPropose={proposeSummaryAction}
+                onProposeEvent={proposeSummaryEvent}
               />
             </div>
           ) : null}

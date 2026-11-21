@@ -3,7 +3,7 @@ import { animate, motion, useMotionValue, useSpring, useTransform } from "motion
 import { Archive, Check, ChevronDown, ChevronUp, CornerUpLeft, Inbox, Layers, Loader2, PenLine, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2, type LucideIcon } from "lucide-react";
 import type { FolderId, Mail } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
-import type { SummaryRef } from "@/lib/summary";
+import { summarySourceLabel, type SummaryRef } from "@/lib/summary";
 import { dueToneFor, formatDueDate } from "@/lib/tasks";
 import { threadsInFolder, type Thread } from "@/lib/threads";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
@@ -171,6 +171,7 @@ export function InboxScreen({
     summaryMails,
     refreshSummary,
     proposeSummaryAction,
+    proposeSummaryEvent,
     openMail,
     closeMessage,
     decisions,
@@ -196,6 +197,7 @@ export function InboxScreen({
   const [sizes, setSizes] = useState({ hero: 0, card: 0, bar: 0 });
   const [cursor, setCursor] = useState<number | null>(null);
   const [proposed, setProposed] = useState<Record<string, "added" | "existing">>({});
+  const [proposedEvents, setProposedEvents] = useState<Record<string, "added" | "existing">>({});
   const rowsRef = useRef<HTMLDivElement>(null);
   const wasOpen = useRef(false);
 
@@ -674,17 +676,31 @@ export function InboxScreen({
               <motion.div ref={cardRef} style={{ opacity: cardBody }} className="p-4">
                 <div className="flex items-center gap-2 pr-16">
                   <span className="grid size-6 place-items-center rounded-full bg-accent/15">
-                    <Sparkles className="size-3.5 text-accent-ink" strokeWidth={2.4} />
+                    <Sparkles
+                      className={cn("size-3.5 text-accent-ink", summaryLoading && "animate-pulse")}
+                      strokeWidth={2.4}
+                    />
                   </span>
                   <p className="text-[10.5px] font-bold tracking-[0.14em] text-accent-ink uppercase">
                     {summary?.period.label ?? "Résumé du matin"}
                   </p>
+                  {summaryLoading ? (
+                    <span
+                      data-testid="summary-loading-mobile"
+                      className="ml-auto inline-flex shrink-0 animate-pulse items-center gap-1 rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-bold text-accent-ink"
+                    >
+                      Enrichissement…
+                    </span>
+                  ) : null}
                   {summary ? (
                     <span
                       data-testid="summary-source-mobile"
-                      className="ml-auto rounded-full bg-surface px-2 py-0.5 text-[10px] font-bold text-accent-ink"
+                      className={cn(
+                        "rounded-full bg-surface px-2 py-0.5 text-[10px] font-bold text-accent-ink",
+                        !summaryLoading && "ml-auto",
+                      )}
                     >
-                      {summary.source === "llm" ? "IA" : "local"}
+                      {summarySourceLabel(summary.source)}
                     </span>
                   ) : null}
                 </div>
@@ -701,6 +717,15 @@ export function InboxScreen({
                           <div className="space-y-1.5">
                             {actionRows.map(({ ref, mail }) => {
                               const due = ref.due && ISO_DAY.test(ref.due) ? ref.due : null;
+                              const dec = triageDecisionFor(
+                                mail,
+                                decisionIndex.byKey,
+                                decisionIndex.byMessageId,
+                              );
+                              const isUrgent = Boolean(dec && dec.urgency >= 2.0);
+                              const hasEventSignal = Boolean(
+                                dec && dec.hasEvent >= decisionPrefs.thresholds.llmEscalate,
+                              );
                               return (
                                 <article
                                   key={ref.mailId}
@@ -710,11 +735,16 @@ export function InboxScreen({
                                     {initials(mail.name)}
                                   </span>
                                   <div className="min-w-0 flex-1">
-                                    <div className="flex items-baseline gap-1.5">
+                                    <div className="flex items-center gap-1.5">
                                       <span className="min-w-0 truncate text-[11px] font-bold text-ink">
                                         {mail.name}
                                       </span>
-                                      <span className="shrink-0 text-[10px] font-semibold text-ink-muted tabular-nums">
+                                      {isUrgent ? (
+                                        <span className="inline-flex h-4 shrink-0 items-center rounded-full bg-rose-500/12 px-1.5 text-[9.5px] font-bold text-rose-700 dark:text-rose-300">
+                                          Urgent
+                                        </span>
+                                      ) : null}
+                                      <span className="ml-auto shrink-0 text-[10px] font-semibold text-ink-muted tabular-nums">
                                         {summaryClock(mail)}
                                       </span>
                                     </div>
@@ -749,6 +779,28 @@ export function InboxScreen({
                                           Planification
                                         </button>
                                       )}
+                                      {hasEventSignal ? (
+                                        proposedEvents[ref.mailId] ? (
+                                          <button type="button" disabled className={SUMMARY_CHIP_DONE}>
+                                            <Check className="size-3 shrink-0" strokeWidth={2.8} />
+                                            {proposedEvents[ref.mailId] === "added" ? "Ajouté" : "Déjà proposé"}
+                                          </button>
+                                        ) : (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              const outcome = proposeSummaryEvent(ref);
+                                              setProposedEvents((current) => ({
+                                                ...current,
+                                                [ref.mailId]: outcome,
+                                              }));
+                                            }}
+                                            className={SUMMARY_CHIP}
+                                          >
+                                            + Agenda
+                                          </button>
+                                        )
+                                      ) : null}
                                       <button
                                         type="button"
                                         onClick={() => onReply(mail)}
@@ -827,11 +879,7 @@ export function InboxScreen({
                     data-testid="summary-footer-mobile"
                     className="mt-2 flex items-center gap-1.5 text-[10px] font-bold text-ink-muted"
                   >
-                    <span>Généré à {clockOf(summary.generatedAt)}</span>
-                    <span aria-hidden className="size-[3px] rounded-full bg-accent-ring" />
-                    <span>{summary.source === "llm" ? "mis en cache" : "local"}</span>
-                    <span aria-hidden className="size-[3px] rounded-full bg-accent-ring" />
-                    <span className="tabular-nums">{summary.mailCount} mails analysés</span>
+                    <span>{summaryLoading ? "Mise à jour…" : `Généré à ${clockOf(summary.generatedAt)}`}</span>
                   </div>
                 ) : null}
               </motion.div>

@@ -5,6 +5,11 @@ import {
   type CustomCategory,
   type DecisionThresholds,
 } from "@/lib/decision";
+import {
+  decisionMailKey,
+  type DecisionCacheStore,
+  type MailLlmExtraction,
+} from "@/lib/decision-db";
 import { llmChat, llmReady, type LlmConfig } from "@/lib/llm";
 import type { MailSource } from "@/lib/mail";
 import {
@@ -95,6 +100,9 @@ export type SummaryHybridOptions = {
   decisions?: DecisionLookup;
   thresholds?: DecisionThresholds;
   customCategories?: readonly CustomCategory[];
+  llmCache?: DecisionCacheStore;
+  force?: boolean;
+  onPartial?: (partial: SummaryResult) => void;
 };
 
 export type SummaryTask = {
@@ -148,6 +156,19 @@ export const DEFAULT_AI_TASKS: AiTasksConfig = {
   events: false,
 };
 
+export type SummarySource = "hybrid" | "llm" | "decision" | "fallback";
+
+const SUMMARY_SOURCE_LABELS: Record<SummarySource, string> = {
+  hybrid: "Hybride",
+  llm: "IA",
+  decision: "Décision",
+  fallback: "local",
+};
+
+export function summarySourceLabel(source: SummarySource): string {
+  return SUMMARY_SOURCE_LABELS[source];
+}
+
 export type SummaryResult = {
   period: SummaryPeriod;
   /** Accroche d'une phrase : le détail est dans les groupes. */
@@ -156,7 +177,7 @@ export type SummaryResult = {
   tasks: SummaryTask[];
   mailCount: number;
   generatedAt: number;
-  source: "llm" | "fallback";
+  source: SummarySource;
   /** Ids des mails analysés : l'affichage retrouve leurs pièces jointes sur le poste. */
   mailIds: string[];
 };
@@ -309,6 +330,43 @@ function enrichTaskAssignees(
   });
 }
 
+export function mailExtractionKey(mail: Pick<SummaryMailInput, "id" | "source">): string {
+  return mail.source
+    ? decisionMailKey(mail.source.accountId, mail.source.folderPath, mail.source.uid)
+    : mail.id;
+}
+
+export function mailContentHash(mail: Pick<SummaryMailInput, "from" | "subject" | "snippet">): string {
+  return fingerprint(`${mail.from}|${mail.subject}|${mail.snippet}`);
+}
+
+function buildExtractionUpdate(
+  existing: MailLlmExtraction | undefined,
+  mail: SummaryMailInput,
+  patch: Partial<MailLlmExtraction>,
+  updatedAt: number,
+): MailLlmExtraction {
+  const mailKey = mailExtractionKey(mail);
+  const contentHash = mailContentHash(mail);
+  const base: MailLlmExtraction =
+    existing && existing.contentHash === contentHash
+      ? { ...existing }
+      : {
+          mailKey,
+          ...(mail.messageId ? { messageId: mail.messageId } : {}),
+          contentHash,
+          updatedAt,
+        };
+  return {
+    ...base,
+    ...(mail.messageId ? { messageId: mail.messageId } : {}),
+    ...patch,
+    mailKey,
+    contentHash,
+    updatedAt,
+  };
+}
+
 /**
  * Extraits de tâches : même isolation que le résumé (contenu mail non fiable,
  * sortie JSON validée), et un mailId hors fenêtre est supprimé pour qu'une
@@ -340,14 +398,64 @@ export async function suggestTasks(
   }
 
   if (!llmReady(llm)) return [];
+
+  const llmCache = options?.llmCache;
+  const force = Boolean(options?.force);
+  const cachedTasks: SummaryTask[] = [];
+  const existingByKey = new Map<string, MailLlmExtraction>();
+  let uncached = target;
+  let cachedCount = 0;
+
+  if (llmCache) {
+    uncached = [];
+    for (const mail of target) {
+      const key = mailExtractionKey(mail);
+      const hash = mailContentHash(mail);
+      const entry = await llmCache.getLlmExtraction(key);
+      if (entry) existingByKey.set(key, entry);
+      if (!force && entry?.tasksProcessed && entry.contentHash === hash) {
+        cachedCount += 1;
+        if (entry.tasks) {
+          for (const task of entry.tasks) {
+            cachedTasks.push({ ...task, mailId: task.mailId ?? mail.id });
+          }
+        }
+      } else {
+        uncached.push(mail);
+      }
+    }
+    if (cachedCount > 0) recordLlmSaved(cachedCount);
+    if (uncached.length === 0) {
+      return decisionIndex ? enrichTaskAssignees(cachedTasks, target, decisionIndex) : cachedTasks;
+    }
+  }
+
   try {
-    const { system, user } = buildTaskPrompt(target, context);
+    const { system, user } = buildTaskPrompt(uncached, context);
     const raw = await llmChat(llm, system, user, signal);
-    const known = new Set(target.map((mail) => mail.id));
-    const parsed = parseSummaryOutput(raw, target).tasks.map((task) =>
+    const known = new Set(uncached.map((mail) => mail.id));
+    const parsed = parseSummaryOutput(raw, uncached).tasks.map((task) =>
       task.mailId && !known.has(task.mailId) ? { ...task, mailId: undefined } : task,
     );
-    return decisionIndex ? enrichTaskAssignees(parsed, target, decisionIndex) : parsed;
+    const freshTasks = decisionIndex ? enrichTaskAssignees(parsed, uncached, decisionIndex) : parsed;
+    if (llmCache) {
+      const nowTs = Date.now();
+      await llmCache.putLlmExtractions(
+        uncached.map((mail) =>
+          buildExtractionUpdate(
+            existingByKey.get(mailExtractionKey(mail)),
+            mail,
+            {
+              tasks: freshTasks.filter((task) => task.mailId === mail.id),
+              tasksProcessed: true,
+            },
+            nowTs,
+          ),
+        ),
+      );
+    }
+    const merged = [...cachedTasks, ...freshTasks];
+    return decisionIndex ? enrichTaskAssignees(merged, target, decisionIndex) : merged;
   } catch {
     return null;
   }
@@ -383,13 +491,60 @@ export async function suggestEvents(
   }
 
   if (!llmReady(llm)) return [];
+
+  const llmCache = options?.llmCache;
+  const force = Boolean(options?.force);
+  const cachedEvents: SummaryEvent[] = [];
+  const existingByKey = new Map<string, MailLlmExtraction>();
+  let uncached = target;
+  let cachedCount = 0;
+
+  if (llmCache) {
+    uncached = [];
+    for (const mail of target) {
+      const key = mailExtractionKey(mail);
+      const hash = mailContentHash(mail);
+      const entry = await llmCache.getLlmExtraction(key);
+      if (entry) existingByKey.set(key, entry);
+      if (!force && entry?.eventsProcessed && entry.contentHash === hash) {
+        cachedCount += 1;
+        if (entry.events) {
+          for (const event of entry.events) {
+            cachedEvents.push({ ...event, mailId: event.mailId ?? mail.id });
+          }
+        }
+      } else {
+        uncached.push(mail);
+      }
+    }
+    if (cachedCount > 0) recordLlmSaved(cachedCount);
+    if (uncached.length === 0) return cachedEvents;
+  }
+
   try {
-    const { system, user } = buildEventPrompt(target, context);
+    const { system, user } = buildEventPrompt(uncached, context);
     const raw = await llmChat(llm, system, user, signal);
-    const known = new Set(target.map((mail) => mail.id));
-    return parseEventOutput(raw).map((event) =>
+    const known = new Set(uncached.map((mail) => mail.id));
+    const freshEvents = parseEventOutput(raw).map((event) =>
       event.mailId && !known.has(event.mailId) ? { ...event, mailId: undefined } : event,
     );
+    if (llmCache) {
+      const nowTs = Date.now();
+      await llmCache.putLlmExtractions(
+        uncached.map((mail) =>
+          buildExtractionUpdate(
+            existingByKey.get(mailExtractionKey(mail)),
+            mail,
+            {
+              events: freshEvents.filter((event) => event.mailId === mail.id),
+              eventsProcessed: true,
+            },
+            nowTs,
+          ),
+        ),
+      );
+    }
+    return [...cachedEvents, ...freshEvents];
   } catch {
     return null;
   }
@@ -591,6 +746,8 @@ function storedGroups(value: unknown): SummaryGroups | null {
   };
 }
 
+const SUMMARY_SOURCES: SummarySource[] = ["hybrid", "llm", "decision", "fallback"];
+
 function storedResult(value: unknown): SummaryResult | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Record<string, unknown>;
@@ -622,7 +779,7 @@ function storedResult(value: unknown): SummaryResult | null {
     tasks,
     mailCount: typeof raw.mailCount === "number" && Number.isFinite(raw.mailCount) ? raw.mailCount : 0,
     generatedAt: typeof raw.generatedAt === "number" && Number.isFinite(raw.generatedAt) ? raw.generatedAt : 0,
-    source: raw.source === "llm" ? "llm" : "fallback",
+    source: SUMMARY_SOURCES.find((entry) => entry === raw.source) ?? "fallback",
     mailIds: Array.isArray(raw.mailIds)
       ? raw.mailIds.filter((entry): entry is string => typeof entry === "string")
       : [],
@@ -765,7 +922,7 @@ function decisionSummary(
     tasks: [],
     mailCount: mails.length,
     generatedAt: Date.now(),
-    source: "fallback",
+    source: "decision",
     mailIds: mails.map((mail) => mail.id),
   };
 }
@@ -834,27 +991,129 @@ export async function generateSummary(
     return decisionSummary(recent, period, decisionGroups);
   }
 
-  try {
-    const { system, user } = buildPrompt(kept, context);
-    const raw = await llmChat(llm, system, user, signal);
-    const parsed = parseSummaryOutput(raw, kept);
-    if (!parsed.headline) return decisionSummary(recent, period, decisionGroups);
-    const keptIds = new Set(kept.map((mail) => mail.id));
-    const llmActions = parsed.groups.actions.filter((ref) => keptIds.has(ref.mailId));
-    const llmInfos = parsed.groups.infos.filter((ref) => keptIds.has(ref.mailId));
+  const llmCache = options.llmCache;
+  const force = Boolean(options.force);
+  const cachedByMailId = new Map<string, MailLlmExtraction>();
+  const existingByKey = new Map<string, MailLlmExtraction>();
+  let uncached = kept;
+
+  if (llmCache) {
+    uncached = [];
+    for (const mail of kept) {
+      const key = mailExtractionKey(mail);
+      const hash = mailContentHash(mail);
+      const entry = await llmCache.getLlmExtraction(key);
+      if (entry) existingByKey.set(key, entry);
+      if (!force && entry?.summaryProcessed && entry.contentHash === hash) {
+        cachedByMailId.set(mail.id, entry);
+      } else {
+        uncached.push(mail);
+      }
+    }
+  }
+
+  const applyCached = (refs: SummaryRef[]): SummaryRef[] =>
+    refs.map((ref) => {
+      const hit = cachedByMailId.get(ref.mailId);
+      if (!hit) return ref;
+      return {
+        ...ref,
+        reason: hit.summaryReason || ref.reason,
+        ...(hit.summaryDue && ISO_DAY.test(hit.summaryDue)
+          ? { due: hit.summaryDue }
+          : ref.due
+            ? { due: ref.due }
+            : {}),
+      };
+    });
+
+  const cachedTasks: SummaryTask[] = [];
+  for (const mail of kept) {
+    const entry = cachedByMailId.get(mail.id);
+    if (entry?.tasks) {
+      for (const task of entry.tasks) {
+        cachedTasks.push({ ...task, mailId: task.mailId ?? mail.id });
+      }
+    }
+  }
+
+  if (uncached.length === 0) {
+    recordLlmSaved(kept.length);
     const groups: SummaryGroups = {
-      actions: mergeRefs(llmActions, decisionGroups.actions, MAX_ACTIONS),
-      infos: mergeRefs(llmInfos, decisionGroups.infos, MAX_INFOS),
+      actions: applyCached(decisionGroups.actions),
+      infos: applyCached(decisionGroups.infos),
       notifications: decisionGroups.notifications,
     };
     return {
       period,
-      headline: parsed.headline,
+      headline: decisionHeadline(recent, groups),
       groups,
-      tasks: enrichTaskAssignees(parsed.tasks, kept, decisionIndex),
+      tasks: enrichTaskAssignees(cachedTasks, kept, decisionIndex),
       mailCount: recent.length,
       generatedAt: Date.now(),
-      source: "llm",
+      source: "hybrid",
+      mailIds: recent.map((mail) => mail.id),
+    };
+  }
+
+  options.onPartial?.(decisionSummary(recent, period, decisionGroups));
+  if (cachedByMailId.size > 0) recordLlmSaved(cachedByMailId.size);
+
+  try {
+    const { system, user } = buildPrompt(uncached, context);
+    const raw = await llmChat(llm, system, user, signal);
+    const parsed = parseSummaryOutput(raw, uncached);
+    if (!parsed.headline) return decisionSummary(recent, period, decisionGroups);
+
+    const freshTasks = enrichTaskAssignees(parsed.tasks, uncached, decisionIndex);
+
+    if (llmCache) {
+      const nowTs = Date.now();
+      const actionById = new Map(parsed.groups.actions.map((ref) => [ref.mailId, ref]));
+      const infoById = new Map(parsed.groups.infos.map((ref) => [ref.mailId, ref]));
+      const notifById = new Map(parsed.groups.notifications.map((ref) => [ref.mailId, ref]));
+      await llmCache.putLlmExtractions(
+        uncached.map((mail) => {
+          const ref = actionById.get(mail.id) ?? infoById.get(mail.id) ?? notifById.get(mail.id);
+          return buildExtractionUpdate(
+            existingByKey.get(mailExtractionKey(mail)),
+            mail,
+            {
+              summaryReason: ref?.reason || undefined,
+              summaryDue: ref?.due,
+              summaryProcessed: true,
+              tasks: freshTasks.filter((task) => task.mailId === mail.id),
+            },
+            nowTs,
+          );
+        }),
+      );
+    }
+
+    const uncachedIds = new Set(uncached.map((mail) => mail.id));
+    const llmActions = parsed.groups.actions.filter((ref) => uncachedIds.has(ref.mailId));
+    const llmInfos = parsed.groups.infos.filter((ref) => uncachedIds.has(ref.mailId));
+    const mergedActions = mergeRefs(llmActions, applyCached(decisionGroups.actions), MAX_ACTIONS);
+    const actionIds = new Set(mergedActions.map((ref) => ref.mailId));
+    const mergedInfos = mergeRefs(
+      llmInfos.filter((ref) => !actionIds.has(ref.mailId)),
+      applyCached(decisionGroups.infos).filter((ref) => !actionIds.has(ref.mailId)),
+      MAX_INFOS,
+    );
+    const groups: SummaryGroups = {
+      actions: mergedActions,
+      infos: mergedInfos,
+      notifications: decisionGroups.notifications,
+    };
+    const mergedTasks = [...cachedTasks, ...freshTasks];
+    return {
+      period,
+      headline: cachedByMailId.size > 0 ? decisionHeadline(recent, groups) : parsed.headline,
+      groups,
+      tasks: enrichTaskAssignees(mergedTasks, kept, decisionIndex),
+      mailCount: recent.length,
+      generatedAt: Date.now(),
+      source: "hybrid",
       mailIds: recent.map((mail) => mail.id),
     };
   } catch {

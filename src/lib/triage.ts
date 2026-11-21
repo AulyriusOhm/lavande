@@ -302,7 +302,10 @@ export function filterMailsForLlm<T extends TriageMailRef>(
   return { kept: qualified.map((entry) => entry.mail), skippedCount };
 }
 
-function decisionReason(dec: MailDecision, thresholds: DecisionThresholds): string {
+/**
+ * Génère une raison courte et lisible en français à partir des signaux Système 1.
+ */
+export function reasonFromDecision(dec: MailDecision, thresholds: DecisionThresholds): string {
   if (isPromptInjection(dec, thresholds)) return "Alerte sécurité · injection détectée";
   if (dec.category === "auth_totp") {
     if (dec.totpCode) {
@@ -315,10 +318,17 @@ function decisionReason(dec: MailDecision, thresholds: DecisionThresholds): stri
   if (dec.category === "promo") return "Publicité / offre";
   if (dec.category === "spam") return "Courrier indésirable";
   if (dec.category === "notification") return "Notification";
-  if (dec.needsReply >= thresholds.category) return "Réponse attendue";
-  if (dec.hasTask >= thresholds.llmEscalate) return "Action détectée";
-  if (dec.hasEvent >= thresholds.llmEscalate) return "Rendez-vous détecté";
-  if (dec.urgency >= 2.0) return "Urgent";
+
+  const signals: string[] = [];
+  if (dec.urgency >= 2.0) signals.push("Urgent");
+  if (dec.needsReply >= thresholds.category) signals.push("Réponse attendue");
+  if (dec.hasTask >= thresholds.llmEscalate) signals.push("Tâche détectée");
+  if (dec.hasEvent >= thresholds.llmEscalate) signals.push("Rendez-vous proposé");
+  const assignee = dec.assignee?.trim();
+  if (assignee && assignee.toLowerCase() !== "moi" && assignee.toLowerCase() !== "aucun") {
+    signals.push(`Assigné à ${assignee}`);
+  }
+  if (signals.length > 0) return signals.slice(0, 3).join(" · ");
   if (dec.category === "important") return "Message prioritaire";
   return "";
 }
@@ -359,7 +369,7 @@ export function summaryGroupsFromDecisions<T extends TriageMailRef>(
       continue;
     }
 
-    const reason = decisionReason(dec, thresholds);
+    const reason = reasonFromDecision(dec, thresholds);
     const ref: SummaryRef = { mailId: mail.id, reason };
 
     if (isPromptInjection(dec, thresholds) || isNoiseCategory(dec.category)) {

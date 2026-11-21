@@ -8,6 +8,9 @@ import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { ThemeProvider } from "@/lib/theme";
 import { createMemoryStorage } from "@/lib/sync/storage";
+import type { MailDecision } from "@/lib/decision";
+import { decisionDb } from "@/lib/decision-db";
+import type { DecisionLookup } from "@/lib/triage";
 import { MAILS } from "@/lib/mail";
 import type { Mail } from "@/lib/mail";
 import type { SummaryResult } from "@/lib/summary";
@@ -68,9 +71,12 @@ const briefing = (overrides: Partial<SummaryResult> = {}): SummaryResult => ({
 function renderSummary(
   summary: SummaryResult,
   handlers: {
+    loading?: boolean;
+    decisions?: DecisionLookup;
     onOpen?: (id: string) => void;
     onReply?: (mail: Mail) => void;
     onPropose?: (ref: { mailId: string; reason: string; due?: string }) => "added" | "existing";
+    onProposeEvent?: (ref: { mailId: string; reason: string; due?: string }) => "added" | "existing";
   } = {},
 ) {
   return render(
@@ -82,18 +88,22 @@ function renderSummary(
       demo={false}
       summary={summary}
       mails={BRIEFING_MAILS}
-      loading={false}
+      loading={Boolean(handlers.loading)}
+      decisions={handlers.decisions}
       onToggle={() => {}}
       onOpen={handlers.onOpen ?? (() => {})}
       onRefresh={() => {}}
       onReply={handlers.onReply ?? (() => {})}
       onPropose={handlers.onPropose ?? (() => "added")}
+      onProposeEvent={handlers.onProposeEvent}
     />,
   );
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   window.localStorage.clear();
+  await decisionDb().clearDecisions();
+  await decisionDb().clearLlmExtractions();
   vi.unstubAllGlobals();
 });
 
@@ -109,9 +119,8 @@ describe("Résumé du matin · briefing structuré", () => {
     expect(within(card).getByTestId("summary-source").textContent).toBe("local");
     expect(within(card).getByText(/sur la période/)).toBeTruthy();
     expect(within(card).getByText("Pour info")).toBeTruthy();
-    expect(card.textContent).toMatch(/Généré à \d{2}:\d{2}/);
-    expect(card.textContent).toContain("local");
-    expect(card.textContent).toContain("mails analysés");
+    expect(within(card).getByTestId("summary-footer").textContent).toMatch(/^Généré à \d{2}:\d{2}$/);
+    expect(card.textContent).not.toContain("mails analysés");
   });
 
   it("n'affiche pas de chips pièces jointes dans le briefing", async () => {
@@ -137,9 +146,10 @@ describe("Résumé du matin · briefing structuré", () => {
     expect(within(card).getByText("Régler la facture OVH")).toBeTruthy();
     expect(within(card).getByRole("button", { name: /Notifications & listes · 3/ })).toBeTruthy();
     expect(within(card).queryByText("[lavande] Rust backend: 3 pull requests")).toBeNull();
-    expect(card.textContent).toContain("Généré à 08:12");
-    expect(card.textContent).toContain("mis en cache");
-    expect(card.textContent).toContain("7 mails analysés");
+    expect(within(card).getByTestId("summary-source").textContent).toBe("IA");
+    expect(within(card).getByTestId("summary-footer").textContent).toBe("Généré à 08:12");
+    expect(card.textContent).not.toContain("mis en cache");
+    expect(card.textContent).not.toContain("7 mails analysés");
   });
 
   it("déplie puis replie les notifications et listes", () => {
@@ -157,18 +167,15 @@ describe("Résumé du matin · briefing structuré", () => {
     expect(fold.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("ouvre le mail depuis l'objet ou « Voir le mail »", () => {
+  it("ouvre le mail depuis l'objet sans bouton « Voir le mail » redondant", () => {
     const onOpen = vi.fn();
     renderSummary(briefing(), { onOpen });
     const card = screen.getByTestId("morning-summary");
 
     fireEvent.click(within(card).getByRole("button", { name: "Devis signé — retour de ma part" }));
-    const seeMail = within(card)
-      .getAllByRole("button", { name: "Voir le mail" })
-      .at(0) as HTMLButtonElement;
-    fireEvent.click(seeMail);
+    expect(within(card).queryByRole("button", { name: "Voir le mail" })).toBeNull();
 
-    expect(onOpen.mock.calls.map((call) => call[0])).toEqual(["3", "3"]);
+    expect(onOpen.mock.calls.map((call) => call[0])).toEqual(["3"]);
   });
 
   it("propose la ligne en planification et répond au mail", () => {
@@ -243,6 +250,82 @@ describe("Résumé du matin · briefing structuré", () => {
     expect(within(card).getByText("Résumé du matin")).toBeTruthy();
     expect(within(card).queryByTestId("summary-source")).toBeNull();
     expect(within(card).getByText(/conversations non lues/)).toBeTruthy();
+  });
+
+  it("affiche les libellés Hybride / Décision et l'animation discrète sans masquer les groupes progressifs", () => {
+    const { rerender } = renderSummary(briefing({ source: "decision" }), { loading: true });
+    const card = screen.getByTestId("morning-summary");
+
+    expect(within(card).getByTestId("summary-source").textContent).toBe("Décision");
+    expect(within(card).getByTestId("summary-loading").textContent).toContain("Enrichissement…");
+    expect(within(card).getByTestId("summary-footer").textContent).toBe("Mise à jour…");
+    // Les groupes Système 1 restent affichés pendant la génération LLM
+    expect(within(card).getByText("Renvoyer l'avenant signé")).toBeTruthy();
+
+    rerender(
+      <MorningSummary
+        open
+        unread={12}
+        attachments={2}
+        encrypted={1}
+        demo={false}
+        summary={briefing({ source: "hybrid" })}
+        mails={BRIEFING_MAILS}
+        loading={false}
+        onToggle={() => {}}
+        onOpen={() => {}}
+        onRefresh={() => {}}
+        onReply={() => {}}
+        onPropose={() => "added"}
+      />,
+    );
+    expect(within(card).getByTestId("summary-source").textContent).toBe("Hybride");
+    expect(within(card).queryByTestId("summary-loading")).toBeNull();
+    expect(within(card).getByTestId("summary-footer").textContent).toBe("Généré à 08:12");
+  });
+
+  it("affiche la pastille Urgent et le raccourci + Agenda selon les signaux Système 1", () => {
+    const decisions = new Map<string, MailDecision>([
+      [
+        "3",
+        {
+          accountId: "perso",
+          folderPath: "INBOX",
+          uid: 3,
+          contentHash: "h3",
+          schemaVersion: 1,
+          model: "mammoth-1",
+          category: "important",
+          categoryConf: 0.9,
+          categoryProbs: {},
+          urgency: 2.4,
+          needsReply: 0.8,
+          hasTask: 0.2,
+          hasEvent: 0.85,
+          security: "safe",
+          securityConf: 0.99,
+          cleanupScore: 0.05,
+          decidedAt: 1_731_000_000,
+          source: "local",
+        },
+      ],
+    ]);
+    const onProposeEvent = vi.fn(() => "added" as const);
+    renderSummary(briefing({ source: "hybrid" }), { decisions, onProposeEvent });
+    const card = screen.getByTestId("morning-summary");
+
+    expect(within(card).getByText("Urgent")).toBeTruthy();
+    const agendaBtn = within(card).getByRole("button", { name: "+ Agenda" });
+    fireEvent.click(agendaBtn);
+
+    expect(onProposeEvent).toHaveBeenCalledWith({
+      mailId: "3",
+      reason: "Renvoyer l'avenant signé",
+      due: isoToday(0),
+    });
+    const done = within(card).getByRole("button", { name: "Ajouté" }) as HTMLButtonElement;
+    expect(done.disabled).toBe(true);
+    expect(within(card).queryByRole("button", { name: "+ Agenda" })).toBeNull();
   });
 });
 

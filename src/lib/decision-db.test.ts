@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createMemoryDecisionDb, decisionMailKey } from "@/lib/decision-db";
+import { createMemoryDecisionDb, decisionMailKey, type MailLlmExtraction } from "@/lib/decision-db";
 import type { MailDecision } from "@/lib/decision";
 
 const sample = (overrides: Partial<MailDecision> = {}): MailDecision => ({
@@ -59,5 +59,46 @@ describe("decision-db", () => {
     await db.setSenderProtected("News@Boutique.FR", true);
     expect(await db.isSenderProtected("news@boutique.fr")).toBe(true);
     expect(await db.listProtectedSenders()).toEqual(["news@boutique.fr"]);
+  });
+
+  it("stocke, lit par lot et efface le cache incrémental LLM par mail", async () => {
+    const db = createMemoryDecisionDb();
+    const k1 = decisionMailKey("perso", "INBOX", 10);
+    const k2 = decisionMailKey("perso", "INBOX", 11);
+    const e1: MailLlmExtraction = {
+      mailKey: k1,
+      messageId: "<m10@exemple.fr>",
+      contentHash: "hash-10",
+      summaryReason: "Valider le devis",
+      summaryDue: "2026-11-25",
+      summaryProcessed: true,
+      tasks: [{ title: "Valider le devis", due: "2026-11-25", from: "Camille", mailId: k1 }],
+      tasksProcessed: true,
+      updatedAt: 1_700_000_100,
+    };
+    const e2: MailLlmExtraction = {
+      mailKey: k2,
+      contentHash: "hash-11",
+      events: [
+        { title: "Point produit", date: "2026-11-26", start: "10:00", end: "10:30", from: "Marc", mailId: k2 },
+      ],
+      eventsProcessed: true,
+      updatedAt: 1_700_000_200,
+    };
+
+    expect(await db.getLlmExtraction(k1)).toBeNull();
+    await db.putLlmExtraction(e1);
+    expect(await db.getLlmExtraction(k1)).toEqual(e1);
+
+    await db.putLlmExtractions([
+      { ...e1, summaryReason: "Valider le devis v2", updatedAt: 1_700_000_300 },
+      e2,
+    ]);
+    expect((await db.getLlmExtraction(k1))?.summaryReason).toBe("Valider le devis v2");
+    expect((await db.getLlmExtraction(k2))?.eventsProcessed).toBe(true);
+
+    await db.clearLlmExtractions();
+    expect(await db.getLlmExtraction(k1)).toBeNull();
+    expect(await db.getLlmExtraction(k2)).toBeNull();
   });
 });

@@ -192,6 +192,7 @@ const seedPrefs = (
 beforeEach(async () => {
   window.localStorage.clear();
   await decisionDb().clearDecisions();
+  await decisionDb().clearLlmExtractions();
   vi.stubGlobal("EventSource", undefined);
 });
 
@@ -265,7 +266,7 @@ describe("résumé périodique · pipeline hybride et tâches proposées", () =>
     });
     const { result } = mount();
 
-    await waitFor(() => expect(result.current.summary?.source).toBe("llm"), { timeout: 3000 });
+    await waitFor(() => expect(result.current.summary?.source).toBe("hybrid"), { timeout: 3000 });
 
     expect(llmCalls.length).toBeGreaterThan(0);
     expect(llmCalls.every((c) => !c.user.includes("Soldes -70%"))).toBe(true);
@@ -297,7 +298,7 @@ describe("résumé périodique · pipeline hybride et tâches proposées", () =>
     mockBackend();
     const { result } = mount();
 
-    await waitFor(() => expect(result.current.summary?.source).toBe("llm"), { timeout: 3000 });
+    await waitFor(() => expect(result.current.summary?.source).toBe("hybrid"), { timeout: 3000 });
     expect(result.current.suggestions).toHaveLength(2);
 
     await act(async () => {

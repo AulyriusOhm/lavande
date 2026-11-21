@@ -23,6 +23,20 @@ export type StoredDecisionRecord = MailDecision & {
   mailKey: string;
 };
 
+export type MailLlmExtraction = {
+  mailKey: string;
+  messageId?: string;
+  contentHash: string;
+  summaryReason?: string;
+  summaryDue?: string;
+  summaryProcessed?: boolean;
+  tasks?: { title: string; due: string; from: string; mailId?: string; assignee?: string }[];
+  tasksProcessed?: boolean;
+  events?: { title: string; date: string; start: string; end: string; location?: string; from: string; mailId?: string }[];
+  eventsProcessed?: boolean;
+  updatedAt: number;
+};
+
 export function decisionMailKey(accountId: string, folderPath: string, uid: number): string {
   return `${accountId}:${folderPath}:${uid}`;
 }
@@ -45,13 +59,18 @@ export interface DecisionCacheStore {
   isSenderProtected(senderEmail: string): Promise<boolean>;
   setSenderProtected(senderEmail: string, protectedFlag: boolean): Promise<void>;
   listProtectedSenders(): Promise<string[]>;
+  getLlmExtraction(mailKey: string): Promise<MailLlmExtraction | null>;
+  putLlmExtraction(entry: MailLlmExtraction): Promise<void>;
+  putLlmExtractions(entries: MailLlmExtraction[]): Promise<void>;
+  clearLlmExtractions(): Promise<void>;
 }
 
 const DB_NAME = "lavande-decisions-v1";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_DECISIONS = "decisions";
 const STORE_CLEANUP = "cleanup_reviews";
 const STORE_PROTECTED = "protected_senders";
+const STORE_LLM_EXTRACTIONS = "llm_extractions";
 
 function toRecord(decision: MailDecision): StoredDecisionRecord {
   return {
@@ -65,6 +84,7 @@ export function createMemoryDecisionDb(): DecisionCacheStore {
   const decisions = new Map<string, StoredDecisionRecord>();
   const reviews = new Map<string, CleanupReview>();
   const protectedSenders = new Set<string>();
+  const llmExtractions = new Map<string, MailLlmExtraction>();
 
   return {
     async getDecision(mailKey) {
@@ -127,6 +147,20 @@ export function createMemoryDecisionDb(): DecisionCacheStore {
     async listProtectedSenders() {
       return [...protectedSenders.values()].sort();
     },
+    async getLlmExtraction(mailKey) {
+      return llmExtractions.get(mailKey) ?? null;
+    },
+    async putLlmExtraction(entry) {
+      llmExtractions.set(entry.mailKey, entry);
+    },
+    async putLlmExtractions(entries) {
+      for (const entry of entries) {
+        llmExtractions.set(entry.mailKey, entry);
+      }
+    },
+    async clearLlmExtractions() {
+      llmExtractions.clear();
+    },
   };
 }
 
@@ -151,6 +185,10 @@ function openDatabase(dbName = DB_NAME): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_PROTECTED)) {
         db.createObjectStore(STORE_PROTECTED, { keyPath: "email" });
+      }
+      if (!db.objectStoreNames.contains(STORE_LLM_EXTRACTIONS)) {
+        const store = db.createObjectStore(STORE_LLM_EXTRACTIONS, { keyPath: "mailKey" });
+        store.createIndex("by_message_id", "messageId", { unique: false });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -303,6 +341,36 @@ export function createIndexedDecisionDb(dbName = DB_NAME): DecisionCacheStore {
       const tx = conn.transaction(STORE_PROTECTED, "readonly");
       const all = (await reqPromise(tx.objectStore(STORE_PROTECTED).getAll())) as { email: string }[];
       return all.map((entry) => entry.email).sort();
+    },
+    async getLlmExtraction(mailKey) {
+      const conn = await db();
+      if (!conn) return fallback.getLlmExtraction(mailKey);
+      const tx = conn.transaction(STORE_LLM_EXTRACTIONS, "readonly");
+      const found = await reqPromise(tx.objectStore(STORE_LLM_EXTRACTIONS).get(mailKey));
+      return (found as MailLlmExtraction | undefined) ?? null;
+    },
+    async putLlmExtraction(entry) {
+      const conn = await db();
+      if (!conn) return fallback.putLlmExtraction(entry);
+      const tx = conn.transaction(STORE_LLM_EXTRACTIONS, "readwrite");
+      tx.objectStore(STORE_LLM_EXTRACTIONS).put(entry);
+      await txDone(tx);
+    },
+    async putLlmExtractions(entries) {
+      if (entries.length === 0) return;
+      const conn = await db();
+      if (!conn) return fallback.putLlmExtractions(entries);
+      const tx = conn.transaction(STORE_LLM_EXTRACTIONS, "readwrite");
+      const store = tx.objectStore(STORE_LLM_EXTRACTIONS);
+      for (const entry of entries) store.put(entry);
+      await txDone(tx);
+    },
+    async clearLlmExtractions() {
+      const conn = await db();
+      if (!conn) return fallback.clearLlmExtractions();
+      const tx = conn.transaction(STORE_LLM_EXTRACTIONS, "readwrite");
+      tx.objectStore(STORE_LLM_EXTRACTIONS).clear();
+      await txDone(tx);
     },
   };
 }

@@ -214,6 +214,7 @@ beforeEach(async () => {
   window.innerWidth = 1600;
   window.localStorage.clear();
   await decisionDb().clearDecisions();
+  await decisionDb().clearLlmExtractions();
   vi.stubGlobal("EventSource", undefined);
   Element.prototype.scrollTo = () => {};
 });
