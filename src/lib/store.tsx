@@ -67,6 +67,12 @@ import { decisionMailDocId, syncedDecisionDocs } from "@/lib/ai-sync";
 import { decisionDomain, decisionReady, type MailDecision } from "@/lib/decision";
 import { decisionDb, decisionMailKey } from "@/lib/decision-db";
 import {
+  DEMO_DECISIONS_ON,
+  DEMO_EXTRA_MAILS,
+  DEMO_TOTP_ALERT,
+  buildDemoDecisions,
+} from "@/lib/demo-decisions";
+import {
   filterMailsForLlm,
   fromApiDecision,
   indexDecisions,
@@ -520,7 +526,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const [backendError, setBackendError] = useState<string | null>(null);
   const [accounts, setAccounts] = useState<Account[]>(() => (mode === "demo" ? ACCOUNTS : []));
   const [folderRecords, setFolderRecords] = useState<FolderRecord[]>([]);
-  const [mails, setMails] = useState<Mail[]>(() => (mode === "demo" ? MAILS : []));
+  const [mails, setMails] = useState<Mail[]>(() =>
+    mode === "demo" ? (DEMO_DECISIONS_ON ? [...DEMO_EXTRA_MAILS, ...MAILS] : MAILS) : [],
+  );
   const [account, setAccountState] = useState<string>(() => (mode === "demo" ? ALL_ACCOUNTS : ""));
   const [folder, setFolderState] = useState<FolderId>(() => (mode === "demo" ? "unified" : "inbox"));
   const [folderPath, setFolderPath] = useState<string | null>(null);
@@ -565,11 +573,15 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const summaryRun = useRef<string | null>(null);
   const summaryRunning = useRef(false);
-  const [decisions, setDecisions] = useState<Record<string, MailDecision>>({});
+  const [decisions, setDecisions] = useState<Record<string, MailDecision>>(() =>
+    mode === "demo" && DEMO_DECISIONS_ON ? buildDemoDecisions() : {},
+  );
   const decisionsRef = useRef(decisions);
   decisionsRef.current = decisions;
   const [daemonDecisionReady, setDaemonDecisionReady] = useState(false);
-  const [totpAlert, setTotpAlert] = useState<TotpAlert | null>(null);
+  const [totpAlert, setTotpAlert] = useState<TotpAlert | null>(() =>
+    mode === "demo" && DEMO_DECISIONS_ON ? DEMO_TOTP_ALERT : null,
+  );
   const dismissTotpAlert = useCallback(() => setTotpAlert(null), []);
   const decisionIndex = useMemo(() => indexDecisions(decisions), [decisions]);
   const decisionPrefsRef = useRef(prefs.decision);

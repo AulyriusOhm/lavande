@@ -1,0 +1,277 @@
+import type { CustomCategory, MailDecision } from "@/lib/decision";
+import type { Mail } from "@/lib/mail";
+
+/**
+ * Jeu de démonstration dédié à la maquette de prévisualisation
+ * (`VITE_DEMO_DECISIONS=1`). Inactif en production et dans les tests.
+ */
+export const DEMO_DECISIONS_ON = import.meta.env.VITE_DEMO_DECISIONS === "1";
+
+const NOW = Date.now();
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+
+export const DEMO_CUSTOM_CATEGORIES: CustomCategory[] = [
+  {
+    id: "factures",
+    name: "Factures",
+    description: "Factures, devis, justificatifs de paiement et abonnements",
+    color: "emerald",
+    excludeFromPriority: false,
+    allowNotifications: true,
+    cleanupEligible: false,
+  },
+];
+
+export const DEMO_EXTRA_MAILS: Mail[] = [
+  {
+    id: "demo-totp-live",
+    account: "perso",
+    folder: "inbox",
+    name: "GitHub Security",
+    email: "noreply@github.com",
+    subject: "Votre code de vérification GitHub",
+    preview: "Votre code de vérification à usage unique est 482917. Il expire dans 10 minutes.",
+    body: [
+      "Bonjour Roman,",
+      "Voici votre code de vérification GitHub : 482917.",
+      "Ce code expire dans 10 minutes. Si vous n'êtes pas à l'origine de cette connexion, ignorez cet email.",
+    ],
+    time: "À l'instant",
+    date: "aujourd'hui",
+    timestamp: NOW - 30_000,
+    unread: true,
+    starred: false,
+    pgp: "none",
+    tone: 1,
+  },
+  {
+    id: "demo-totp-old",
+    account: "pro",
+    folder: "inbox",
+    name: "Stripe",
+    email: "auth@stripe.com",
+    subject: "Code de connexion Stripe : 901442",
+    preview: "Utilisez le code 901442 pour confirmer votre connexion au tableau de bord.",
+    body: [
+      "Votre code de vérification à usage unique Stripe est 901442.",
+      "Il était valable 10 minutes.",
+    ],
+    time: "Il y a 5 j",
+    date: "il y a 5 jours",
+    timestamp: NOW - 5 * DAY,
+    unread: false,
+    starred: false,
+    pgp: "none",
+    tone: 2,
+  },
+  {
+    id: "demo-promo-2",
+    account: "gmail",
+    folder: "inbox",
+    name: "Spotify",
+    email: "no-reply@spotify.com",
+    subject: "Offre Duo -50 % pendant 3 mois",
+    preview: "Profitez de Spotify Duo à moitié prix cette semaine seulement.",
+    body: [
+      "Passez à Spotify Duo et économisez 50 % pendant 3 mois.",
+      "Se désinscrire de nos offres promotionnelles.",
+    ],
+    time: "Hier",
+    date: "hier",
+    timestamp: NOW - 30 * HOUR,
+    unread: false,
+    starred: false,
+    pgp: "none",
+    tone: 3,
+  },
+  {
+    id: "demo-phish-1",
+    account: "perso",
+    folder: "inbox",
+    name: "Service Bancaire Urgent",
+    email: "alerte@securite-compte-verif.xyz",
+    subject: "Action immédiate : votre carte sera bloquée ce soir",
+    preview: "Cliquez sur le lien ci-dessous pour confirmer vos identifiants bancaires immédiatement.",
+    body: [
+      "Cher client, nous avons détecté une activité inhabituelle.",
+      "Veuillez confirmer vos identifiants et votre code PIN sous 2 heures sur le portail de vérification.",
+    ],
+    time: "09:14",
+    date: "aujourd'hui",
+    timestamp: NOW - 2 * HOUR,
+    unread: true,
+    starred: false,
+    pgp: "none",
+    tone: 4,
+  },
+];
+
+function dec(id: string, accountId: string, overrides: Partial<MailDecision>): MailDecision {
+  return {
+    accountId,
+    folderPath: "INBOX",
+    uid: 0,
+    contentHash: `demo-${id}`,
+    schemaVersion: 1,
+    model: "mammoth-1",
+    category: "info",
+    categoryConf: 0.9,
+    categoryProbs: { info: 0.9 },
+    urgency: 0.8,
+    needsReply: 0.1,
+    hasTask: 0.1,
+    hasEvent: 0.0,
+    security: "safe",
+    securityConf: 0.98,
+    cleanupScore: 0.1,
+    decidedAt: Math.floor(NOW / 1000),
+    source: "synced",
+    ...overrides,
+  };
+}
+
+export function buildDemoDecisions(): Record<string, MailDecision> {
+  return {
+    "1": dec("1", "perso", {
+      category: "important",
+      categoryConf: 0.96,
+      categoryProbs: { important: 0.96 },
+      urgency: 2.3,
+      needsReply: 0.92,
+      hasTask: 0.88,
+      cleanupScore: 0.02,
+    }),
+    "1c": dec("1c", "perso", {
+      category: "important",
+      categoryConf: 0.95,
+      categoryProbs: { important: 0.95 },
+      urgency: 2.2,
+      needsReply: 0.9,
+      hasTask: 0.85,
+      cleanupScore: 0.02,
+    }),
+    "1d": dec("1d", "perso", {
+      category: "important",
+      categoryConf: 0.94,
+      categoryProbs: { important: 0.94 },
+      urgency: 2.0,
+      needsReply: 0.86,
+      hasTask: 0.8,
+      cleanupScore: 0.02,
+    }),
+    "3": dec("3", "pro", {
+      category: "important",
+      categoryConf: 0.95,
+      categoryProbs: { important: 0.95 },
+      urgency: 1.9,
+      needsReply: 0.85,
+      hasTask: 0.84,
+      cleanupScore: 0.03,
+    }),
+    "4": dec("4", "perso", {
+      category: "important",
+      categoryConf: 0.93,
+      categoryProbs: { important: 0.93 },
+      urgency: 1.4,
+      needsReply: 0.94,
+      hasEvent: 0.96,
+      cleanupScore: 0.04,
+    }),
+    "5": dec("5", "gmail", {
+      category: "info",
+      categoryConf: 0.91,
+      categoryProbs: { info: 0.91 },
+      urgency: 0.5,
+      needsReply: 0.25,
+      cleanupScore: 0.08,
+    }),
+    "2": dec("2", "perso", {
+      category: "notification",
+      categoryConf: 0.94,
+      categoryProbs: { notification: 0.94 },
+      urgency: 0.7,
+      needsReply: 0.04,
+      cleanupScore: 0.82,
+    }),
+    "6": dec("6", "pro", {
+      category: "notification",
+      categoryConf: 0.95,
+      categoryProbs: { notification: 0.95 },
+      urgency: 0.4,
+      needsReply: 0.02,
+      cleanupScore: 0.89,
+    }),
+    "7": dec("7", "gmail", {
+      category: "promo",
+      categoryConf: 0.94,
+      categoryProbs: { promo: 0.94 },
+      urgency: 0.2,
+      needsReply: 0.01,
+      cleanupScore: 0.96,
+    }),
+    "8": dec("8", "pro", {
+      category: "custom:factures",
+      categoryConf: 0.95,
+      categoryProbs: { "custom:factures": 0.95, notification: 0.05 },
+      urgency: 0.9,
+      needsReply: 0.05,
+      suggestedFolder: "Factures",
+      suggestedFolderConf: 0.94,
+      cleanupScore: 0.08,
+    }),
+    "9": dec("9", "perso", {
+      category: "spam",
+      categoryConf: 0.99,
+      categoryProbs: { spam: 0.99 },
+      urgency: 0.1,
+      security: "phishing",
+      securityConf: 0.97,
+      cleanupScore: 0.99,
+    }),
+    "demo-totp-live": dec("demo-totp-live", "perso", {
+      category: "auth_totp",
+      categoryConf: 0.99,
+      categoryProbs: { auth_totp: 0.99 },
+      urgency: 1.5,
+      needsReply: 0.01,
+      totpCode: "482917",
+      totpService: "GitHub",
+      cleanupScore: 0.98,
+    }),
+    "demo-totp-old": dec("demo-totp-old", "pro", {
+      category: "auth_totp",
+      categoryConf: 0.98,
+      categoryProbs: { auth_totp: 0.98 },
+      urgency: 0.3,
+      needsReply: 0.01,
+      totpCode: "901442",
+      totpService: "Stripe",
+      cleanupScore: 0.99,
+    }),
+    "demo-promo-2": dec("demo-promo-2", "gmail", {
+      category: "promo",
+      categoryConf: 0.96,
+      categoryProbs: { promo: 0.96 },
+      urgency: 0.15,
+      needsReply: 0.01,
+      cleanupScore: 0.97,
+    }),
+    "demo-phish-1": dec("demo-phish-1", "perso", {
+      category: "important",
+      categoryConf: 0.65,
+      categoryProbs: { important: 0.65, spam: 0.35 },
+      urgency: 1.2,
+      security: "phishing",
+      securityConf: 0.96,
+      cleanupScore: 0.85,
+    }),
+  };
+}
+
+export const DEMO_TOTP_ALERT = {
+  code: "482917",
+  service: "GitHub",
+  mailId: "demo-totp-live",
+  receivedAt: NOW,
+};

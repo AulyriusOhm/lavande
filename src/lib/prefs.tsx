@@ -34,6 +34,7 @@ import {
   type DecisionProvider,
   type NotifFilterMode,
 } from "@/lib/decision";
+import { DEMO_CUSTOM_CATEGORIES, DEMO_DECISIONS_ON } from "@/lib/demo-decisions";
 import { EMPTY_LLM, llmDomain, setUsageSink, type LlmConfig } from "@/lib/llm";
 import { demoReadOnly } from "@/lib/mail-backend";
 import { setMcpRights } from "@/lib/mcp";
@@ -152,7 +153,9 @@ const DEFAULTS: Prefs = {
   pgpAccounts: {},
   teamContext: {},
   llm: EMPTY_LLM,
-  decision: DEFAULT_DECISION,
+  decision: DEMO_DECISIONS_ON
+    ? { ...DEFAULT_DECISION, customCategories: DEMO_CUSTOM_CATEGORIES }
+    : DEFAULT_DECISION,
   aiReplyEnabled: true,
   summary: DEFAULT_SUMMARY,
   aiTasks: DEFAULT_AI_TASKS,
