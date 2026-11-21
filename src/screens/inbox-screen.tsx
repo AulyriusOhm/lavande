@@ -215,7 +215,7 @@ export function InboxScreen({
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [compact, setCompact] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [sizes, setSizes] = useState({ hero: 0, card: 0, bar: 0 });
+  const [sizes, setSizes] = useState({ hero: 0, bar: 0 });
   const [cursor, setCursor] = useState<number | null>(null);
   const [proposed, setProposed] = useState<Record<string, "added" | "existing">>({});
   const [proposedEvents, setProposedEvents] = useState<Record<string, "added" | "existing">>({});
@@ -295,7 +295,6 @@ export function InboxScreen({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const heroRef = useRef<HTMLDivElement>(null);
-  const cardRef = useRef<HTMLDivElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
 
   const raw = useMotionValue(0);
@@ -304,7 +303,6 @@ export function InboxScreen({
   const heroHeight = useTransform(progress, [0, 0.7], [sizes.hero, 0]);
   const heroOpacity = useTransform(progress, [0, 0.45], [1, 0]);
   const heroScale = useTransform(progress, [0, 1], [1, 0.96]);
-  const cardHeight = useTransform(progress, [0, 0.9], [sizes.card, 50]);
   const cardBody = useTransform(progress, [0, 0.45], [1, 0]);
   const barOpacity = useTransform(progress, [0.55, 0.95], [0, 1]);
   const barY = useTransform(progress, [0.55, 0.95], [-14, 0]);
@@ -316,7 +314,6 @@ export function InboxScreen({
     const measure = () =>
       setSizes({
         hero: heroRef.current?.offsetHeight ?? 0,
-        card: cardRef.current?.offsetHeight ?? 0,
         bar: barRef.current?.offsetHeight ?? 0,
       });
     measure();
@@ -549,9 +546,6 @@ export function InboxScreen({
     );
   };
 
-  useLayoutEffect(() => {
-    if (cardRef.current) setSizes((current) => ({ ...current, card: cardRef.current?.offsetHeight ?? current.card }));
-  }, [summary, summaryMails.length, notificationsOpen]);
   const current = accountById(account);
 
   const visible = threads.filter((thread) => {
@@ -772,7 +766,9 @@ export function InboxScreen({
         {reception && (
           <>
             <motion.div
-              style={{ height: cardHeight }}
+              initial={false}
+              animate={{ height: compact ? 50 : "auto" }}
+              transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
               className="relative mx-5 overflow-hidden rounded-[26px] bg-accent-soft ring-1 ring-accent-ring/40"
             >
               <BorderBeam duration={9} />
@@ -806,7 +802,10 @@ export function InboxScreen({
                 </motion.button>
               ) : null}
 
-              <motion.div ref={cardRef} style={{ opacity: cardBody }} className="p-3.5">
+              <motion.div
+                style={{ opacity: cardBody }}
+                className={cn("p-3.5", compact && "pointer-events-none")}
+              >
                 <div className="flex items-center gap-2 pr-16">
                   <span className="grid size-6 place-items-center rounded-full bg-accent/15">
                     <Sparkles
@@ -1346,9 +1345,14 @@ export function InboxScreen({
               <motion.button
                 type="button"
                 onClick={expand}
+                aria-hidden={!compact}
+                tabIndex={compact ? 0 : -1}
                 aria-label={`Réafficher le ${(summary?.period.label ?? "Résumé du matin").toLowerCase()}`}
                 style={{ opacity: cardCompact }}
-                className="absolute inset-0 flex w-full items-center gap-2 px-4 text-left"
+                className={cn(
+                  "absolute inset-0 flex w-full items-center gap-2 px-4 text-left",
+                  !compact && "pointer-events-none",
+                )}
               >
                 <Sparkles className="size-3.5 shrink-0 text-accent-ink" strokeWidth={2.4} />
                 <p className="truncate text-[11px] font-bold text-accent-ink">

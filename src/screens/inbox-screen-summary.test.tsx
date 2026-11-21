@@ -171,12 +171,22 @@ describe("Boîte de réception mobile · résumé périodique", () => {
     expect(screen.getByTestId("summary-source-mobile").textContent).toBe("IA");
     expect(screen.getByTestId("summary-footer-mobile").textContent).toBe("Généré à 08:12");
 
+    const expandOverlay = screen.getByLabelText(/^Réafficher le /) as HTMLButtonElement;
+    expect(expandOverlay.className).toContain("pointer-events-none");
+    expect(expandOverlay.getAttribute("aria-hidden")).toBe("true");
+    expect(expandOverlay.tabIndex).toBe(-1);
+
+    const cardRoot = body.closest(".overflow-hidden") as HTMLElement | null;
+    expect(cardRoot).toBeTruthy();
+    expect(cardRoot?.style.height).not.toMatch(/^\d+px$/);
+
     const fold = within(body).getByRole("button", { name: /Notifications & listes · 1/ });
     expect(within(body).queryByText("[lavande] Rust backend: 3 pull requests")).toBeNull();
 
     fireEvent.click(fold);
     expect(within(body).getByText("[lavande] Rust backend: 3 pull requests")).toBeTruthy();
     expect(fold.getAttribute("aria-expanded")).toBe("true");
+    expect(cardRoot?.style.height).not.toMatch(/^\d+px$/);
 
     fireEvent.click(fold);
     expect(within(body).queryByText("[lavande] Rust backend: 3 pull requests")).toBeNull();
