@@ -27,12 +27,16 @@ source scripts/android-env.sh
 java -version && echo "$NDK_HOME"     # contrôle rapide
 ```
 
-| Variable | Valeur |
+| Variable | Valeur par défaut |
 | --- | --- |
 | `JAVA_HOME` | `~/.local/share/jdk-21` |
 | `ANDROID_HOME` / `ANDROID_SDK_ROOT` | `~/Android/Sdk` |
 | `NDK_HOME` | `~/Android/Sdk/ndk/28.2.13676358` |
 | `PATH` | JDK, `platform-tools` (donc `adb`), plus `~/.local/share/hostgcc/bin` si la machine n'a pas de `cc` |
+
+Les trois chemins sont des **replis** : `JAVA_HOME`, `ANDROID_HOME` et `NDK_HOME` déjà exportés sont
+conservés, et le script ne pose plus que le `PATH` et le `cc` hôte. C'est ainsi que le job CI `android`
+réutilise ce script avec ses propres outils (voir [`CI.md`](./CI.md)).
 
 Le script est à **sourcer**, pas à exécuter : les variables doivent rester dans le shell appelant.
 
@@ -96,6 +100,12 @@ mesurés dans `src-tauri/target/*` allaient de 112 à 127 Mo **avant** `strip`.
 
 `[profile.dev] strip = "debuginfo"` dans `src-tauri/Cargo.toml` fait passer le `.so` de 127 Mo à
 21,7 Mo : c'est ce qui rend l'APK installable sans attendre des centaines de Mo.
+
+Côté release, `scripts/build-android-release.sh` passe le même `-t aarch64` : l'APK livré est donc
+**déjà mono-ABI arm64** (le flavor `universal` ne contient que `lib/arm64-v8a/`), 28 Mo signés.
+`--split-per-abi` ne découperait que des ABI déjà absentes : aucun gain de taille. Décision Roman
+(21/11) : statu quo — ni `--split-per-abi`, ni build multi-ABI ; un support 32 bits (téléphones
+anciens, émulateur `x86_64`) serait un chantier séparé, à ouvrir seulement si le besoin apparaît.
 
 ## Où se trouve l'APK
 
@@ -367,7 +377,14 @@ le dock est visible, c'est le premier suspect.
   elles sont enregistrées dans le dossier de téléchargements, chemin affiché et bouton « Ouvrir le dossier ».
 - **Démon mail embarqué** : API locale `127.0.0.1:8790`, données dans le stockage privé de l'app ;
   planification synchronisée (voir ci-dessous) ; thème, accent et préférences de gestes en `localStorage`.
-- Pas de `--split-per-abi`, pas de CI Android : l'APK arm64 est signé par `scripts/build-android-release.sh`.
+- **Split-per-abi : statu quo** (décision Roman 21/11). L'APK release est déjà mono-ABI arm64 —
+  `scripts/build-android-release.sh` construit avec `-t aarch64`, donc le flavor `universal` ne contient
+  que `arm64-v8a` (28 Mo) — et `--split-per-abi` n'apporterait aucun gain de taille, il ne découperait
+  que des ABI déjà absentes. Un build multi-ABI (32 bits, émulateur `x86_64`) resterait un chantier
+  séparé, à ouvrir si le besoin apparaît.
+- **CI Android = vérification de compilation seulement** (job `android`, voir [`CI.md`](./CI.md)) : Kotlin
+  de l'app + `cargo check` arm64, sans clé, sans APK, sans émulateur. La release continue d'être signée
+  à la main par `scripts/build-android-release.sh`, hors CI (voir [`SIGNING.md`](./SIGNING.md)).
 
 ## Synchronisation de la planification (APK)
 

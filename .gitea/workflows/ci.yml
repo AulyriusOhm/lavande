@@ -57,6 +57,69 @@ jobs:
 
       - run: npm audit --omit=dev --audit-level=high
 
+  android:
+    name: Android — Kotlin + cargo check arm64 (vérification, sans signature)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: rustup stable + cible Android
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" target add aarch64-linux-android
+
+      - name: SDK Android + NDK
+        run: |
+          if ! command -v unzip >/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq unzip
+          fi
+          SDK="$HOME/android-sdk"
+          SDKM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          mkdir -p "$SDK/cmdline-tools"
+          curl -sSLo /tmp/cmdline.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q /tmp/cmdline.zip -d "$SDK/cmdline-tools"
+          mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
+          printf 'y\n%.0s' {1..20} | "$SDKM" --licenses >/dev/null
+          "$SDKM" --install "platform-tools" "platforms;android-37.0" "build-tools;36.0.0" "ndk;28.2.13676358"
+          {
+            echo "ANDROID_HOME=$SDK"
+            echo "ANDROID_SDK_ROOT=$SDK"
+            echo "NDK_HOME=$SDK/ndk/28.2.13676358"
+          } >> "$GITHUB_ENV"
+
+      - run: npm ci
+
+      - name: Sources crates Tauri dans le registre (tauri.settings.gradle à chemins absolus)
+        run: cargo fetch --manifest-path src-tauri/Cargo.toml
+
+      - name: Générer le projet Gradle + patch
+        run: |
+          npx tauri android init --ci --skip-targets-install
+          node scripts/patch-android.mjs
+
+      - name: cargo check arm64 (NDK clang pour le C cross-compilé)
+        run: |
+          source scripts/android-env.sh
+          CLANG="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$CLANG/aarch64-linux-android24-clang"
+          export AR_aarch64_linux_android="$CLANG/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CLANG/aarch64-linux-android24-clang"
+          cargo check --manifest-path src-tauri/Cargo.toml --target aarch64-linux-android
+
+      - name: Compiler le Kotlin (aucun APK, aucune signature)
+        working-directory: src-tauri/gen/android
+        run: ./gradlew :app:compileUniversalDebugKotlin --no-daemon
+
   vitrine:
     name: Site vitrine — build, audit
     runs-on: ubuntu-latest
