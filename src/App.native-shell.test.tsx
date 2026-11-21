@@ -53,14 +53,14 @@ describe("coquille native", () => {
     expect(sheet!.className).toContain("overflow-hidden");
   });
 
-  it("déclare la bande fondue et les coins hauts dans les deux thèmes", () => {
+  it("déclare la bande plate et les coins hauts dans les deux thèmes", () => {
     const css = readFileSync(path.join(process.cwd(), "src/index.css"), "utf8");
 
-    expect(css.split("--statusband-top:").length - 1).toBe(2);
-    expect(css).toContain("background-size: 100% var(--native-top)");
-    expect(css).toContain(
-      "linear-gradient(to bottom, var(--statusband-top), color-mix(in oklab, var(--statusband-top) 45%, var(--canvas)))",
-    );
+    expect(css.split("--statusband:").length - 1).toBe(2);
+    expect(css).toMatch(/\.native-shell \{[^}]*background-color: var\(--canvas\)/);
+    expect(css).toMatch(/\.native-shell::before \{[^}]*height: var\(--native-top\)[^}]*background: var\(--statusband\)/);
+    expect(css).not.toContain("linear-gradient");
+    expect(css).not.toContain("background-size");
     expect(css).toMatch(/\.native-sheet \{[^}]*border-radius: 18px 18px 0 0/);
   });
 });

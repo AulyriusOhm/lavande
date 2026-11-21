@@ -22,6 +22,11 @@ const REQUIRED_IMPORTS = [
 const CLASS_BODY = `class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
+    // Sans SHORT_EDGES, l'encoche reste peinte par le fond natif (blanc) au lieu de la bande web.
+    val attrs = window.attributes
+    attrs.layoutInDisplayCutoutMode =
+      android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+    window.attributes = attrs
     // Après enableEdgeToEdge() : SystemBarStyle.auto écraserait l'apparence sinon.
     LavandeUiBars.appearance(this, LavandeUiBars.dark(this))
     super.onCreate(savedInstanceState)
@@ -91,10 +96,12 @@ object LavandeUiBars {
     val web = findWebView(root) ?: return
     web.setBackgroundColor(canvas(activity))
     val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+    val topInsets =
+      insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
     val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
     val density = activity.resources.displayMetrics.density
     fun css(px: Int): Int = Math.round(px / density)
-    val top = css(bars.top)
+    val top = css(topInsets.top)
     val bottom = css(bars.bottom)
     val imeBottom = css(ime.bottom)
     val signature = "$top|$bottom|$imeBottom"
@@ -178,6 +185,7 @@ class LavandeUiBarsPlugin(private val activity: Activity) : Plugin(activity) {
 const CANVAS_NIGHT_COLORS = `<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="lavande_canvas">#0e0c13</color>
+    <color name="lavande_band">#1a1724</color>
 </resources>
 `;
 
@@ -206,17 +214,20 @@ function upsertColor(source, name, value) {
 }
 
 function patchColors(source) {
-  return upsertColor(upsertColor(source, "lavande_canvas", "#fbfaff"), "ic_launcher_background", "#8b7cf6");
+  return [
+    ["lavande_canvas", "#fbfaff"],
+    ["lavande_band", "#eceaf3"],
+    ["ic_launcher_background", "#8b7cf6"],
+  ].reduce((acc, [name, value]) => upsertColor(acc, name, value), source);
 }
 
 function patchThemes(source) {
-  if (source.includes('name="android:windowBackground"')) return source;
+  const item = '<item name="android:windowBackground">@color/lavande_band</item>';
+  const existing = /<item name="android:windowBackground">[^<]*<\/item>/;
+  if (existing.test(source)) return source.replace(existing, item);
   const pattern = /([ \t]*)<\/style>/;
   if (!pattern.test(source)) throw new Error("balise </style> introuvable dans themes.xml");
-  return source.replace(
-    pattern,
-    (_, indent) => `${indent}    <item name="android:windowBackground">@color/lavande_canvas</item>\n${indent}</style>`,
-  );
+  return source.replace(pattern, (_, indent) => `${indent}    ${item}\n${indent}</style>`);
 }
 
 const MANIFEST_ATTRS = [
@@ -1821,7 +1832,7 @@ if (existsSync(strayLauncherBg)) {
 await writeStatic(
   path.join(appDir, "res", "values-night", "colors.xml"),
   CANVAS_NIGHT_COLORS,
-  "res/values-night/colors.xml (canvas sombre, windowBackground avant le premier paint)",
+  "res/values-night/colors.xml (canvas et bande sombres, windowBackground avant le premier paint)",
 );
 await writeStatic(
   path.join(resXmlDir, "network_security_config.xml"),
