@@ -48,6 +48,7 @@ function mount({
   suggestions = [] as MailSuggestion[],
   onAcceptSuggestion,
   onDismissSuggestion,
+  onOpenEvent,
   events = [] as CalendarEvent[],
   externalEvents = [] as CalendarEvent[],
   sourceCount = 0,
@@ -55,6 +56,7 @@ function mount({
   suggestions?: MailSuggestion[];
   onAcceptSuggestion?: (draft: Record<string, string | undefined>) => void;
   onDismissSuggestion?: (suggestion: MailSuggestion) => void;
+  onOpenEvent?: (event: CalendarEvent) => void;
   events?: CalendarEvent[];
   externalEvents?: CalendarEvent[];
   sourceCount?: number;
@@ -76,9 +78,9 @@ function mount({
         externalEvents={externalEvents}
         sourceCount={sourceCount}
         suggestions={suggestions}
-        onNewEvent={() => {}}
         onAcceptSuggestion={onAcceptSuggestion}
         onDismissSuggestion={onDismissSuggestion}
+        onOpenEvent={onOpenEvent}
       />
     </>,
     { wrapper },
@@ -114,10 +116,44 @@ describe("Agenda mobile · suggestions de rendez-vous", () => {
     const group = screen.getByTestId("event-suggestions");
     expect(within(group).getByText("Suggestions de RDV")).toBeTruthy();
     expect(within(group).getByText("1 proposition")).toBeTruthy();
-    const card = within(group).getByTestId("event-suggestion-card");
-    expect(within(card).getByTestId("event-suggestion-account").textContent).toBe("Perso");
-    expect(within(card).getByTestId("event-suggestion-when").textContent).toContain("10:00 → 10:30");
-    expect(card.textContent).toContain("Visio");
+    const row = within(group).getByTestId("event-suggestion-card");
+    expect(within(row).getByTestId("event-suggestion-account").textContent).toBe("Perso");
+    const when = within(row).getByTestId("event-suggestion-when");
+    expect(within(when).getByText("10:00")).toBeTruthy();
+    expect(within(when).getByText("ven. 20")).toBeTruthy();
+    expect(row.textContent).toContain("Atelier budget");
+    expect(row.textContent).toContain("Camille Rousseau");
+    expect(row.textContent).toContain("Visio");
+  });
+
+  it("aligne la suggestion sur la colonne horaire : début proposé et date courte", () => {
+    mount({ suggestions: [MEETING] });
+
+    const row = screen.getByTestId("event-suggestion-card");
+    const when = within(row).getByTestId("event-suggestion-when");
+    expect(within(when).getByText("10:00")).toBeTruthy();
+    expect(within(when).getByText("ven. 20")).toBeTruthy();
+    expect(within(row).getByText("Atelier budget")).toBeTruthy();
+  });
+
+  it("garde Accepter et Ignorer cliquables dans la rangée", () => {
+    const onAcceptSuggestion = vi.fn();
+    const onDismissSuggestion = vi.fn();
+    mount({ suggestions: [MEETING], onAcceptSuggestion, onDismissSuggestion });
+
+    const row = screen.getByTestId("event-suggestion-card");
+    fireEvent.click(within(row).getByRole("button", { name: "Accepter : Atelier budget" }));
+    fireEvent.click(within(row).getByRole("button", { name: "Ignorer la suggestion" }));
+
+    expect(onAcceptSuggestion).toHaveBeenCalledTimes(1);
+    expect(onDismissSuggestion).toHaveBeenCalledWith(MEETING);
+  });
+
+  it("masque l'icône du mail quand le mail source n'est pas chargé", () => {
+    mount({ suggestions: [{ ...MEETING, mailId: "absent" }] });
+
+    const row = screen.getByTestId("event-suggestion-card");
+    expect(within(row).queryByRole("button", { name: "Ouvrir le mail" })).toBeNull();
   });
 
   it("garde les suggestions de RDV hors de la liste du jour", () => {
@@ -202,6 +238,49 @@ function seedExternalSources() {
   );
   return externalCalendarEvents(loadIcsState(), agendaCalendars(loadCalendars()));
 }
+
+describe("Agenda mobile · rangées du jour", () => {
+  it("colore la pastille du ton du calendrier de l'événement", () => {
+    mount({ events: [{ ...EVENT, calendar: "Perso" }] });
+
+    const row = screen.getByTestId("calendar-event");
+    expect(row.querySelector(".bg-emerald-500")).toBeTruthy();
+  });
+
+  it("montre le badge récurrent et la micro-icône du mail lié", () => {
+    mount({ events: [{ ...EVENT, recurring: true, fromMail: true, mailId: "1" }] });
+
+    const row = screen.getByTestId("calendar-event");
+    expect(within(row).getByRole("img", { name: "Récurrent" })).toBeTruthy();
+    expect(within(row).getByRole("img", { name: "Mail lié" })).toBeTruthy();
+  });
+
+  it("signale un chevauchement par l'icône de conflit", () => {
+    mount({
+      events: [EVENT, { ...EVENT, id: "e2", title: "Point client", start: "09:15", end: "10:00" }],
+    });
+
+    expect(screen.getAllByRole("img", { name: "Conflit" })).toHaveLength(2);
+  });
+
+  it("écrit « jour » en colonne horaire d'un événement sans heure", () => {
+    mount({ events: [{ ...EVENT, start: "", end: "", title: "Journée off" }] });
+
+    const row = screen.getByTestId("calendar-event");
+    expect(within(row).getByText("jour")).toBeTruthy();
+    expect(within(row).getByText("Journée entière")).toBeTruthy();
+    expect(within(row).queryByText("09:00")).toBeNull();
+  });
+
+  it("ouvre le détail d'un événement au tap sur la rangée", () => {
+    const onOpenEvent = vi.fn();
+    mount({ events: [EVENT], onOpenEvent });
+
+    fireEvent.click(screen.getByTestId("calendar-event"));
+
+    expect(onOpenEvent).toHaveBeenCalledWith(EVENT);
+  });
+});
 
 describe("Agenda mobile · sources externes", () => {
   it("ajoute l'événement externe au fil du jour avec son badge ICS", () => {
