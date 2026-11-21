@@ -183,8 +183,11 @@ est **idempotent** et rejoué après `init` puis avant chaque build (les deux co
 
 | Fichier écrit | Contenu | Pourquoi |
 | --- | --- | --- |
-| `app/src/main/java/mail/lavande/app/MainActivity.kt` | `enableEdgeToEdge()`, listener `WindowInsetsCompat` sur `android.R.id.content`, recherche récursive de la WebView, injection de `--safe-bottom` et `--ime-bottom` en px CSS | `env(safe-area-inset-*)` vaut **0** dans la WebView Android |
+| `app/src/main/java/mail/lavande/app/MainActivity.kt` | `enableEdgeToEdge()`, apparence des barres et fond de WebView relus dans les `SharedPreferences` avant le premier paint, listener `WindowInsetsCompat` sur `android.R.id.content`, injection de `--native-top`, `--safe-bottom` et `--ime-bottom` en px CSS | `env(safe-area-inset-*)` vaut **0** dans la WebView Android ; le haut n'est plus une constante |
+| `java/mail/lavande/app/LavandeUiBars.kt` | `object` : préférence `lavande_ui`/`bars_dark` (défaut clair), `appearance(activity, dark)` via `WindowInsetsControllerCompat` (`isAppearanceLightStatusBars`/`…NavigationBars`), `canvas()` = `#FBFAFF` / `#0E0C13`, `paint()` qui peint le fond de la WebView, `findWebView()` partagé avec `MainActivity` | un seul propriétaire de l'apparence des barres et du fond sous la WebView |
+| `java/mail/lavande/app/LavandeUiBarsPlugin.kt` | plugin Tauri `lavandeuibars` : `setBarsAppearance` (`{dark}`) | le thème de l'app pilote les icônes système, plus le mode nuit du téléphone |
 | `res/values/colors.xml` | `lavande_canvas` `#fbfaff`, `ic_launcher_background` `#8b7cf6` | fond de fenêtre et fond de l'icône adaptative |
+| `res/values-night/colors.xml` | `lavande_canvas` `#0e0c13` | le même `windowBackground` reste canvas avec le mode nuit système : pas de flash blanc en thème sombre |
 | `res/values/themes.xml` et `res/values-night/themes.xml` | `android:windowBackground` = `@color/lavande_canvas` | évite le flash blanc au lancement (thème `Theme.Material3.DayNight.NoActionBar`) |
 | `res/mipmap-anydpi-v26/ic_launcher.xml` et `ic_launcher_round.xml` | icône adaptative : fond couleur + `@mipmap/ic_launcher_foreground` (dégradé plein cadre) | icône ronde / adaptative = carré dégradé violet |
 | `AndroidManifest.xml` | retire `android:usesCleartextTraffic`, pose `android:networkSecurityConfig`, `android:allowBackup="false"`, `android:fullBackupContent="false"`, `android:dataExtractionRules`, `REQUEST_INSTALL_PACKAGES`, `RECEIVE_BOOT_COMPLETED`, le receiver `.InstallResultReceiver`, le receiver `.LavandeWidgetProvider` (exporté, `APPWIDGET_UPDATE` + méta-données du widget) et le receiver `.BootReceiver` (`BOOT_COMPLETED`) | cleartext borné, sauvegarde fermée (voir ci-dessous), installation d'APK (mises à jour), widget et synchro de fond |
@@ -230,11 +233,15 @@ Le cleartext de la config réseau ne s'applique qu'à la pile réseau Java/WebVi
 (`crates/mail-api`) sort par des sockets Rust : IMAP/SMTP en clair, souvent le seul mode proposé par un
 serveur mail local, ne sont pas bridés par ce fichier.
 
-Détails du pont d'insets : il ne s'occupe que du **bas** (barre de navigation + clavier). Le haut n'est pas
-mesuré : `.native-shell` réserve une marge fixe de 44 px (`--native-top`), parce qu'une hauteur de barre de statut ou
-d'encoche change selon la marque et le modèle — une valeur mesurée serait juste ici et fausse ailleurs.
-Le listener garde la dernière valeur, réinjecte après `onResume` et sur `addOnGlobalLayoutListener`, et
-**n'injecte rien** si la signature `bottom|ime` n'a pas changé.
+Détails du pont d'insets : il pousse le **haut** (`--native-top`), le **bas** (barre de navigation) et le clavier
+(`--safe-bottom`, `--ime-bottom`). Le haut est la vraie `bars.top` du système, convertie en px CSS par la densité de
+l'écran : elle couvre la barre de statut **et** l'encoche, sans valeur devinée. `--native-top: 44px` ne reste
+qu'un repli (`:root`), pour le navigateur en mode `?app` où aucun pont n'existe. Le listener garde la dernière
+valeur, réinjecte après `onResume` et sur `addOnGlobalLayoutListener`, et **n'injecte rien** si la signature
+`top|bottom|ime` n'a pas changé — le haut en fait partie, sinon un changement de barre seule passerait inaperçu.
+Les tout premiers insets arrivent avant le chargement de la page et partent dans le document vide : `setBarsAppearance`
+(appelé par l'effet du thème, une fois la page vivante) et `onResume` réinitialisent la signature pour réinjecter
+les valeurs dans le document chargé.
 
 ## Synchronisation en arrière-plan et widget
 
@@ -278,8 +285,9 @@ quand même.
 | Élément | Rôle |
 | --- | --- |
 | `isNativeShell()` (`src/lib/native.ts`) | vrai si l'URL contient `?app`, ou si `__TAURI_INTERNALS__` existe et que l'UA contient `Android` |
-| `NativeShell` (`src/App.tsx`) | `PhoneApp` en plein écran, classe `.native-shell`, sans le `Stage` (cadre téléphone + barre de statut factice) |
-| `src/index.css` | marge haute fixe `--native-top: 44px`, tokens `--safe-bottom` et `--ime-bottom` (défaut `0px`) pour le bas, consommés par `.native-shell` (`bottom: max(--safe-bottom, --ime-bottom)` pour le clavier) |
+| `NativeShell` (`src/App.tsx`) | `PhoneApp` en plein écran dans une feuille `.native-sheet` (coins hauts 18 px), elle-même dans `.native-shell` (bande de statut fondue), sans le `Stage` (cadre téléphone + barre de statut factice) |
+| `src/index.css` | tokens `--native-top` (repli `44px`, écrasé par le pont), `--safe-bottom`/`--ime-bottom` (défaut `0px`, `bottom: max(--safe-bottom, --ime-bottom)` pour le clavier) et `--statusband-top` (`#d8d4e3` en clair, `#2b2836` en sombre) ; `.native-shell` porte le dégradé de la bande (`background-size: 100% var(--native-top)`) et `.native-sheet` ses coins arrondis en haut |
+| `applySystemBars()` (`src/lib/system-bars.ts`) | appelle `plugin:lavandeuibars\|set_bars_appearance` (`{dark}`) depuis l'effet du thème, en coquille native seulement |
 | Polices | deux `@font-face` locaux (Plus Jakarta Sans, `src/assets/fonts/`, licence OFL) ; `index.html` ne charge plus Google Fonts |
 | Icône | `app-icon.svg` (carré dégradé violet, sans monogramme) + `app-icon-adaptive.svg` (même dégradé, plein cadre, calques de l'icône adaptative) → `./node_modules/.bin/tauri icon icon-manifest.json` → `src-tauri/icons/`, `src-tauri/gen/android/app/src/main/res/mipmap-*`, `bundle.icon` renseigné dans `src-tauri/tauri.conf.json` |
 
@@ -302,7 +310,12 @@ Le rendu de l'APK est **identique à la maquette** : aucun effet n'est coupé (l
 | Glissement entre onglets | reste **déclaratif** (état React → `transform`) : une version en écriture directe (`strip.style.transform`) avait été tentée, puis abandonnée — une fermeture périmée réappliquait l'ancien index après un tap sur le dock, d'où un double clic nécessaire. Le coût par événement est faible parce que les 4 écrans sont mémoïsés. |
 | Écrans mémoïsés | `memo` + gestionnaires `useCallback` + `Set` des mails mémoïsé : un tap ou un toast ne réconcilie plus les 4 écrans, seulement celui qui change |
 | Coquille PC en différé | `import()` de `desktop-shell` : 86 kB de JS absents du bundle mobile |
-| Fond peint avant le JS | `background: #fbfaff` inline dans `index.html` et `setBackgroundColor()` sur la WebView : plus de flash blanc au lancement |
+| Fond peint avant le JS | aucun `background` inline dans `index.html` (les styles inline y sont interdits par la CSP à nonce) ; `windowBackground` = `@color/lavande_canvas`, avec `values-night` sombre, et `setBackgroundColor()` sur la WebView avec le canvas du thème mémorisé |
+
+**Piège corrigé (#81)** : `setBackgroundColor(0xFFFBFAFF)` figé en dur était la **source** d'un flash blanc en thème
+sombre — la WebView repeignait son fond en clair avant que le CSS n'arrive. La couleur vient maintenant du thème
+mémorisé (`lavande_ui`/`bars_dark`), lue au `onCreate` et mise à jour par le pont. `Color.TRANSPARENT` a été écarté :
+la fenêtre laisse alors voir le gris/noir du premier paint du système.
 
 **Piège écarté** : `content-visibility: hidden` sur les écrans hors champ masquait l'écran sortant pendant
 l'animation de changement d'onglet (page blanche intermittente). Retiré — la fluidité ne venait pas de là.
@@ -315,11 +328,17 @@ le dock est visible, c'est le premier suspect.
 
 
 
-- **Barre de statut** : elle n'est pas mesurée. Une marge fixe de 44 px est réservée en haut (`.native-shell`,
-  token `--native-top`)
-  parce que la hauteur de la barre et de l'encoche change selon la marque et le modèle : mieux vaut une
-  valeur constante qu'une valeur juste sur un seul appareil. Sur un modèle à grosse encoche, le titre peut
-  se rapprocher des icônes. Le fond reste transparent, donc le lavande de l'app passe dessous.
+- **Barre de statut** : elle est mesurée (`bars.top`, convertie en px CSS) et poussée dans `--native-top` par le
+  pont d'insets ; les 44 px de `src/index.css` ne servent plus qu'au navigateur (`?app`). **Décision (21/11)** : le
+  thème de l'app — et lui seul — décide de l'apparence des icônes système (`WindowInsetsControllerCompat`,
+  `isAppearanceLightStatusBars`/`…NavigationBars`) ; ni `AppCompatDelegate.setDefaultNightMode` ni un `values-night`
+  global, les widgets gardent leur propre mode nuit. Visuel retenu, « bande fondue » : `.native-shell` peint un
+  dégradé vertical `--statusband-top` → mélange 45 % `--statusband-top`/`--canvas` sur la hauteur de la bande (la
+  queue reste teintée pour que les coins de la feuille se lisent), et le contenu est une feuille à
+  coins arrondis **en haut seulement** (18 px) — les arrondir en bas re-floute le dock (voir plus haut). Le header
+  `glass` des écrans reste `absolute top-0` **dans** la feuille : il passe donc sous la bande, c'est voulu.
+  `setStatusBarColor` ne peint plus rien depuis l'edge-to-edge imposé (targetSdk 37) : on règle les icônes, jamais
+  la couleur native de la barre.
 - **Bas mesuré, non validé sur appareil physique** : le pont renvoie la barre de navigation et le clavier,
   mais rien n'a été mesuré sur un téléphone réel ; en mode `?app` ces marges valent 0 par construction.
 - **Pas de gestes natifs, haptique par la WebView** : seuls les gestes WebView existants (swipe d'onglets,

@@ -33,6 +33,9 @@ const tauri = vi.hoisted(() => {
 
 vi.mock("@tauri-apps/api/window", () => tauri.api);
 
+const invokeMock = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
+
 function stubMatches(initial: boolean) {
   const query = { matches: initial, listeners: new Set<() => void>() };
   Object.defineProperty(window, "matchMedia", {
@@ -84,6 +87,8 @@ describe("thème auto", () => {
     tauri.state.theme = "light";
     tauri.state.handlers.length = 0;
     tauri.state.unlistened = 0;
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue({});
   });
 
   afterEach(() => {
@@ -173,5 +178,49 @@ describe("thème auto", () => {
     act(() => flip(false));
     expect(isDark()).toBe(false);
     expect(tauri.state.handlers).toHaveLength(0);
+  });
+
+  it("annonce le thème aux barres système en coquille Android", async () => {
+    stubUserAgent(ANDROID_UA);
+    stubTauriShell();
+    stubMatches(false);
+    storeMode("dark");
+    mount();
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("plugin:lavandeuibars|set_bars_appearance", { dark: true }),
+    );
+  });
+
+  it("suit les bascules système en mode auto pour les barres système", async () => {
+    stubUserAgent(ANDROID_UA);
+    stubTauriShell();
+    const flip = stubMatches(false);
+    storeMode("auto");
+    mount();
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenLastCalledWith("plugin:lavandeuibars|set_bars_appearance", {
+        dark: false,
+      }),
+    );
+
+    act(() => flip(true));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenLastCalledWith("plugin:lavandeuibars|set_bars_appearance", {
+        dark: true,
+      }),
+    );
+  });
+
+  it("ne touche pas aux barres système dans le navigateur ni en coquille de bureau", async () => {
+    stubMatches(false);
+    storeMode("dark");
+    mount();
+
+    stubTauriShell();
+    mount();
+
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 });

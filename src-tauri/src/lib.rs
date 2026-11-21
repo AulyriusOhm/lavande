@@ -19,6 +19,9 @@ struct SyncPluginHandle(tauri::plugin::PluginHandle<tauri::Wry>);
 #[cfg(target_os = "android")]
 struct AttachmentsPluginHandle(tauri::plugin::PluginHandle<tauri::Wry>);
 
+#[cfg(target_os = "android")]
+struct UiBarsPluginHandle(tauri::plugin::PluginHandle<tauri::Wry>);
+
 /// Boucle locale : la coquille Tauri embarque le routeur HTTP du démon mail.
 const BIND: &str = "127.0.0.1:8790";
 
@@ -111,7 +114,7 @@ fn update_host() -> serde_json::Value {
 /// Relais des commandes du plugin Kotlin `LavandeUpdaterPlugin`.
 #[cfg(target_os = "android")]
 mod android_commands {
-    use super::{AttachmentsPluginHandle, SyncPluginHandle, UpdaterPluginHandle};
+    use super::{AttachmentsPluginHandle, SyncPluginHandle, UiBarsPluginHandle, UpdaterPluginHandle};
     use serde_json::Value;
     use tauri::State;
 
@@ -197,6 +200,14 @@ mod android_commands {
     }
 
     #[tauri::command]
+    pub async fn set_bars_appearance(
+        bars: State<'_, UiBarsPluginHandle>,
+        dark: bool,
+    ) -> Result<Value, String> {
+        forward(&bars.0, "setBarsAppearance", serde_json::json!({ "dark": dark })).await
+    }
+
+    #[tauri::command]
     pub async fn open_attachment(
         attachments: State<'_, AttachmentsPluginHandle>,
         name: String,
@@ -269,6 +280,19 @@ pub fn run() {
             })
             .invoke_handler(tauri::generate_handler![
                 android_commands::open_attachment
+            ])
+            .build(),
+    );
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<_, ()>::new("lavandeuibars")
+            .setup(|app, api| {
+                let handle = api.register_android_plugin("mail.lavande.app", "LavandeUiBarsPlugin")?;
+                app.manage(UiBarsPluginHandle(handle));
+                Ok(())
+            })
+            .invoke_handler(tauri::generate_handler![
+                android_commands::set_bars_appearance
             ])
             .build(),
     );

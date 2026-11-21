@@ -14,62 +14,123 @@ if (!existsSync(genDir)) {
 
 const REQUIRED_IMPORTS = [
   "android.os.Bundle",
-  "android.view.View",
   "android.view.ViewGroup",
-  "android.webkit.WebView",
   "androidx.activity.enableEdgeToEdge",
   "androidx.core.view.ViewCompat",
-  "androidx.core.view.WindowInsetsCompat",
 ];
 
 const CLASS_BODY = `class MainActivity : TauriActivity() {
-  private var lastInsets: WindowInsetsCompat? = null
-  private var lastPushed: String = ""
-
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
+    // Après enableEdgeToEdge() : SystemBarStyle.auto écraserait l'apparence sinon.
+    LavandeUiBars.appearance(this, LavandeUiBars.dark(this))
     super.onCreate(savedInstanceState)
+    LavandeUiBars.paint(this)
 
     val root = findViewById<ViewGroup>(android.R.id.content)
     ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
-      lastInsets = insets
-      pushInsets(root, insets)
+      LavandeUiBars.remember(insets)
+      LavandeUiBars.push(this, root, insets)
       insets
     }
     root.requestApplyInsets()
     root.viewTreeObserver.addOnGlobalLayoutListener {
-      lastInsets?.let { pushInsets(root, it) }
+      LavandeUiBars.pushLast(this, root)
     }
   }
 
   override fun onResume() {
     super.onResume()
-    val root = findViewById<ViewGroup>(android.R.id.content)
-    root.post {
-      lastInsets?.let { pushInsets(root, it) }
-    }
+    // Un reload de la WebView perd les styles injectés : forcer la réinjection.
+    LavandeUiBars.refresh(this)
+  }
+}
+`;
+
+const UI_BARS_KT = `package mail.lavande.app
+
+import android.app.Activity
+import android.content.Context
+import android.view.View
+import android.view.ViewGroup
+import android.webkit.WebView
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+
+/**
+ * Apparence des barres système, possédée par le thème de l'app : le mode nuit du
+ * téléphone ne la décide plus (elle contrôlait les icônes sans rapport avec le
+ * fond Lavande, d'où du blanc sur blanc). targetSdk 37 impose l'edge-to-edge, où
+ * setStatusBarColor ne peint plus rien : on ne règle que les icônes, la bande
+ * colorée est dessinée par le contenu web.
+ */
+object LavandeUiBars {
+  private const val PREFS = "lavande_ui"
+  private const val KEY_DARK = "bars_dark"
+  private const val CANVAS_LIGHT = 0xFFFBFAFF.toInt()
+  private const val CANVAS_DARK = 0xFF0E0C13.toInt()
+
+  fun dark(context: Context): Boolean =
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_DARK, false)
+
+  fun setDark(context: Context, dark: Boolean) {
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_DARK, dark).apply()
   }
 
-  private fun pushInsets(root: View, insets: WindowInsetsCompat) {
+  /** Fond peint sous la WebView : transparent laisserait voir le blanc/gris du premier paint. */
+  fun canvas(context: Context): Int = if (dark(context)) CANVAS_DARK else CANVAS_LIGHT
+
+  private var lastInsets: WindowInsetsCompat? = null
+  private var lastPushed: String = ""
+
+  fun remember(insets: WindowInsetsCompat) {
+    lastInsets = insets
+  }
+
+  fun push(activity: Activity, root: View, insets: WindowInsetsCompat) {
     val web = findWebView(root) ?: return
-    web.setBackgroundColor(0xFFFBFAFF.toInt())
+    web.setBackgroundColor(canvas(activity))
     val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
     val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-    val density = resources.displayMetrics.density
+    val density = activity.resources.displayMetrics.density
     fun css(px: Int): Int = Math.round(px / density)
+    val top = css(bars.top)
     val bottom = css(bars.bottom)
     val imeBottom = css(ime.bottom)
-    val signature = "$bottom|$imeBottom"
+    val signature = "$top|$bottom|$imeBottom"
     if (signature == lastPushed) return
     lastPushed = signature
     val js = "(function(){var s=document.documentElement.style;" +
+      "s.setProperty('--native-top','" + top + "px');" +
       "s.setProperty('--safe-bottom','" + bottom + "px');" +
       "s.setProperty('--ime-bottom','" + imeBottom + "px');" +
       "})();"
     web.evaluateJavascript(js, null)
   }
 
-  private fun findWebView(view: View): WebView? {
+  fun pushLast(activity: Activity, root: View) {
+    lastInsets?.let { push(activity, root, it) }
+  }
+
+  /** Les premiers insets partent dans le document vide d'avant chargement : le front rappelle ceci une fois la page vivante. */
+  fun refresh(activity: Activity) {
+    lastPushed = ""
+    val root = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
+    pushLast(activity, root)
+  }
+
+  fun appearance(activity: Activity, dark: Boolean) {
+    val controller = WindowInsetsControllerCompat(activity.window, activity.window.decorView)
+    controller.isAppearanceLightStatusBars = !dark
+    controller.isAppearanceLightNavigationBars = !dark
+  }
+
+  fun paint(activity: Activity) {
+    val content = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
+    findWebView(content)?.setBackgroundColor(canvas(activity))
+  }
+
+  fun findWebView(view: View): WebView? {
     if (view is WebView) return view
     if (view is ViewGroup) {
       for (index in 0 until view.childCount) {
@@ -80,6 +141,44 @@ const CLASS_BODY = `class MainActivity : TauriActivity() {
     return null
   }
 }
+`;
+
+const UI_BARS_PLUGIN_KT = `package mail.lavande.app
+
+import android.app.Activity
+import app.tauri.annotation.Command
+import app.tauri.annotation.InvokeArg
+import app.tauri.annotation.TauriPlugin
+import app.tauri.plugin.Invoke
+import app.tauri.plugin.JSObject
+import app.tauri.plugin.Plugin
+
+@InvokeArg
+class BarsAppearanceArgs { var dark: Boolean = false }
+
+@TauriPlugin
+class LavandeUiBarsPlugin(private val activity: Activity) : Plugin(activity) {
+
+  @Command
+  fun setBarsAppearance(invoke: Invoke) {
+    val args = invoke.parseArgs(BarsAppearanceArgs::class.java)
+    LavandeUiBars.setDark(activity, args.dark)
+    activity.runOnUiThread {
+      LavandeUiBars.appearance(activity, args.dark)
+      LavandeUiBars.paint(activity)
+      LavandeUiBars.refresh(activity)
+    }
+    val result = JSObject()
+    result.put("dark", args.dark)
+    invoke.resolve(result)
+  }
+}
+`;
+
+const CANVAS_NIGHT_COLORS = `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="lavande_canvas">#0e0c13</color>
+</resources>
 `;
 
 function patchMainActivity(source) {
@@ -1720,6 +1819,11 @@ if (existsSync(strayLauncherBg)) {
   summary.push("res/values/ic_launcher_background.xml : supprimé (doublon de colors.xml)");
 }
 await writeStatic(
+  path.join(appDir, "res", "values-night", "colors.xml"),
+  CANVAS_NIGHT_COLORS,
+  "res/values-night/colors.xml (canvas sombre, windowBackground avant le premier paint)",
+);
+await writeStatic(
   path.join(resXmlDir, "network_security_config.xml"),
   networkSecurityConfig(cleartextHosts),
   `res/xml/network_security_config.xml (cleartext : ${cleartextHosts.join(", ")})`,
@@ -1738,6 +1842,16 @@ await patchFile(
   "AndroidManifest.xml (sauvegarde fermée, cleartext restreint au LAN, notifications, installation d'APK, widget et démarrage)",
 );
 const kotlinDir = path.join(appDir, "java", "mail", "lavande", "app");
+await writeStatic(
+  path.join(kotlinDir, "LavandeUiBars.kt"),
+  UI_BARS_KT,
+  "java/mail/lavande/app/LavandeUiBars.kt",
+);
+await writeStatic(
+  path.join(kotlinDir, "LavandeUiBarsPlugin.kt"),
+  UI_BARS_PLUGIN_KT,
+  "java/mail/lavande/app/LavandeUiBarsPlugin.kt",
+);
 await writeStatic(
   path.join(kotlinDir, "LavandeUpdaterPlugin.kt"),
   UPDATER_PLUGIN_KT,

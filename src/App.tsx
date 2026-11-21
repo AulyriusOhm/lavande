@@ -90,7 +90,9 @@ export default function App() {
 function NativeShell() {
   return (
     <div className="relative h-full w-full overflow-hidden bg-canvas native-shell">
-      <PhoneApp native />
+      <div className="native-sheet relative h-full w-full overflow-hidden">
+        <PhoneApp native />
+      </div>
     </div>
   );
 }
@@ -457,7 +459,7 @@ function PhoneApp({ native }: { native?: boolean }) {
 
   if (mode === "api" && phase === "empty") {
     return (
-      <div className="h-full w-full pt-[env(safe-area-inset-top,0px)]">
+      <div className={cn("h-full w-full", !native && "pt-[env(safe-area-inset-top,0px)]")}>
         <ConnectScreen />
       </div>
     );
