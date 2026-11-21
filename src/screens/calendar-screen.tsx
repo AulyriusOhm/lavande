@@ -1,7 +1,16 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { CalendarCheck, ChevronLeft, ChevronRight, Clock, Mail, MapPin, Plus, Users } from "lucide-react";
-import type { CalendarEvent } from "@/lib/calendar";
+import {
+  AlertTriangle,
+  CalendarCheck,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Mail,
+  Repeat,
+  Sparkles,
+} from "lucide-react";
+import { longDate, type CalendarEvent } from "@/lib/calendar";
 import {
   CURRENT_MONTH,
   CURRENT_YEAR,
@@ -14,62 +23,49 @@ import {
   monthGrid,
   monthLabel,
 } from "@/lib/calendar";
+import { TONE_DOT, toneOfEvent, useCalendars } from "@/lib/calendars";
 import { externalBadge } from "@/lib/ics";
-import { TONES } from "@/lib/mail";
 import { draftFromSuggestion, type EventDraft, type MailSuggestion } from "@/lib/tasks";
 import { sourceAccountLabel } from "@/lib/accounts";
 import { useMailStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
-import { EventSuggestionCard } from "@/components/event-suggestion-card";
+import { EventSuggestionRow } from "@/components/event-suggestion-row";
 import { SectionTitle } from "@/components/ui/primitives";
 import { AnimatedGradientText } from "@/components/ui/animated-text";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { MeshGlow } from "@/components/ui/backdrops";
-import { ShimmerButton } from "@/components/ui/shimmer-button";
 
 const DATE_FMT = new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "long" });
 const SHORT_FMT = new Intl.DateTimeFormat("fr-FR", { weekday: "short", day: "numeric", month: "long" });
-const FULL_FMT = new Intl.DateTimeFormat("fr-FR", {
-  weekday: "long",
-  day: "numeric",
-  month: "long",
-  year: "numeric",
-});
-
-const fullDate = (iso: string) =>
-  capitalizeFirst(FULL_FMT.format(new Date(`${iso}T12:00:00`)).replace(/[\u202f\u00a0]/g, " "));
 
 /** Les tons d'une source relue à son serveur, alignés sur ceux de l'agenda PC. */
 const BADGE_TONE = {
-  sky: "bg-sky-500/12 text-sky-700 dark:text-sky-300",
-  green: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
-  amber: "bg-amber-500/14 text-amber-700 dark:text-amber-300",
+  sky: "border-sky-500/40 text-sky-700 dark:text-sky-300",
+  green: "border-emerald-500/40 text-emerald-700 dark:text-emerald-300",
+  amber: "border-amber-500/40 text-amber-700 dark:text-amber-300",
 };
 
 export function CalendarScreen({
   events,
   externalEvents = [],
   sourceCount = 0,
-  onNewEvent,
   onAcceptSuggestion,
   onDismissSuggestion,
-  onOpenMail,
+  onOpenEvent,
   onSelectedDateChange,
-  availableMailIds,
   suggestions = [],
 }: {
   events: CalendarEvent[];
   externalEvents?: CalendarEvent[];
   sourceCount?: number;
-  onNewEvent?: (date: string) => void;
   onAcceptSuggestion?: (draft: EventDraft) => void;
   onDismissSuggestion?: (suggestion: MailSuggestion) => void;
-  onOpenMail?: (event: CalendarEvent) => void;
+  onOpenEvent?: (event: CalendarEvent) => void;
   onSelectedDateChange?: (date: string) => void;
-  availableMailIds?: Set<string>;
   suggestions?: MailSuggestion[];
 }) {
   const { accounts, mails, openMessage } = useMailStore();
+  const [calendars] = useCalendars();
   const footerSources =
     sourceCount === 0
       ? "Aucune source externe"
@@ -194,7 +190,7 @@ export function CalendarScreen({
                 type="button"
                 onClick={() => pick(date)}
                 aria-pressed={isSelected}
-                aria-label={`${fullDate(date)} — ${
+                aria-label={`${longDate(date)} — ${
                   count === 0 ? "aucun événement" : `${count} événement${count > 1 ? "s" : ""}`
                 }`}
                 className={cn(
@@ -228,112 +224,85 @@ export function CalendarScreen({
         </span>
       </div>
 
-      <div className="mt-3 space-y-2 px-4">
+      <div className="mt-2 px-5">
         {dayEvents.map((event, index) => {
           const conflict = conflicts.has(event.id);
           const badge = event.external ? externalBadge(event) : null;
-          const openable =
-            onOpenMail && event.mailId && (!availableMailIds || availableMailIds.has(event.mailId))
-              ? () => onOpenMail(event)
-              : undefined;
+          const fromMail = Boolean(event.fromMail || event.mailId);
+          const extra = Boolean(event.location || fromMail || event.recurring || badge);
           return (
             <BlurFade key={event.id} delay={0.05 * index} yOffset={10}>
-              <div className="flex gap-3" data-testid="calendar-event">
-                <div className="w-11 shrink-0 pt-1 text-right">
-                  {event.start && (
-                    <p className="text-[11.5px] font-bold whitespace-nowrap text-ink">{event.start}</p>
-                  )}
-                  {event.start && event.end && (
-                    <p className="text-[10px] font-medium whitespace-nowrap text-ink-muted">{event.end}</p>
-                  )}
-                </div>
-                <div
-                  role={openable ? "button" : undefined}
-                  tabIndex={openable ? 0 : undefined}
-                  onClick={openable}
-                  onKeyDown={
-                    openable
-                      ? (keyEvent) => {
-                          if (keyEvent.key === "Enter" || keyEvent.key === " ") {
-                            keyEvent.preventDefault();
-                            openable();
-                          }
-                        }
-                      : undefined
-                  }
-                  className={cn(
-                    "min-w-0 flex-1 rounded-2xl border border-line bg-surface p-3 border-l-[3px]",
-                    openable && "cursor-pointer transition-colors hover:border-accent-ring/70",
-                  )}
-                  style={{ borderLeftColor: `var(--accent)` }}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="text-[13px] leading-tight font-bold text-ink">{event.title}</p>
-                    <div className="flex shrink-0 items-center gap-1">
-                      {conflict && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-red-500/12 px-2 py-0.5 text-[10px] font-extrabold text-red-700 dark:text-red-300">
-                          En conflit
-                        </span>
-                      )}
-                      {event.fromMail && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-bold text-accent-ink">
-                          <Mail className="size-2.5" />
-                          mail
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  {event.location && (
-                    <p className="mt-1 flex items-center gap-1 text-[11px] font-medium text-ink-muted">
-                      <MapPin className="size-3" />
-                      {event.location}
-                    </p>
-                  )}
-                  <div className="mt-2 flex items-center gap-1.5">
-                    {badge && (
-                      <span
-                        data-testid="external-badge"
-                        className={cn(
-                          "rounded-full px-2 py-0.5 text-[9.5px] font-bold",
-                          BADGE_TONE[badge.tone],
-                        )}
-                      >
-                        {badge.label}
+              <button
+                type="button"
+                data-testid="calendar-event"
+                onClick={onOpenEvent ? () => onOpenEvent(event) : undefined}
+                aria-label={`${event.title}${event.start ? ` · ${event.start}` : " · journée entière"}`}
+                className={cn(
+                  "flex min-h-11 w-full items-start gap-3 py-2.5 text-left",
+                  index < dayEvents.length - 1 && "border-b border-line",
+                  onOpenEvent && "transition-colors active:bg-surface-2",
+                )}
+              >
+                <span className="w-10 shrink-0 text-right">
+                  {event.start ? (
+                    <>
+                      <span className="block text-[12px] leading-tight font-bold text-ink tabular-nums">
+                        {event.start}
                       </span>
-                    )}
+                      {event.end && (
+                        <span className="block text-[10px] leading-tight font-medium text-ink-soft tabular-nums">
+                          {event.end}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="block text-[10px] leading-tight font-semibold text-ink-muted">jour</span>
+                  )}
+                </span>
+
+                <span className="block min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5">
+                    <span
+                      className={cn("size-2 shrink-0 rounded-full", TONE_DOT[toneOfEvent(event, calendars)])}
+                    />
+                    <span className="min-w-0 truncate text-[13px] font-semibold text-ink">{event.title}</span>
                     {!event.start && (
-                      <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[9.5px] font-bold text-ink-soft">
-                        Journée entière
-                      </span>
+                      <span className="shrink-0 text-[9.5px] font-bold text-ink-muted">Journée entière</span>
                     )}
-                    {event.calendar && (
-                      <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[9.5px] font-bold text-ink-soft">
-                        {event.calendar}
-                      </span>
+                    {conflict && (
+                      <AlertTriangle
+                        role="img"
+                        aria-label="Conflit"
+                        className="size-3.5 shrink-0 text-red-600 dark:text-red-300"
+                        strokeWidth={2.4}
+                      />
                     )}
-                    {event.attendees?.length ? (
-                      <div className="flex items-center gap-1.5">
-                        <Users className="size-3 text-ink-muted" />
-                        {event.attendees.map((person) => (
-                          <span
-                            key={person}
-                            className={cn(
-                              "grid size-5 place-items-center rounded-full bg-gradient-to-br text-[8.5px] font-black",
-                              TONES[person.length % TONES.length],
-                            )}
-                          >
-                            {person
-                              .split(" ")
-                              .map((part) => part[0])
-                              .join("")
-                              .slice(0, 2)}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
+                  </span>
+
+                  {extra && (
+                    <span className="mt-0.5 flex min-w-0 items-center gap-1.5 pl-3.5 text-[11px] font-medium text-ink-muted">
+                      {event.location && <span className="min-w-0 truncate">{event.location}</span>}
+                      {fromMail && (
+                        <Mail role="img" aria-label="Mail lié" className="size-3 shrink-0" strokeWidth={2.4} />
+                      )}
+                      {event.recurring && (
+                        <Repeat role="img" aria-label="Récurrent" className="size-3 shrink-0" strokeWidth={2.4} />
+                      )}
+                      {badge && (
+                        <span
+                          data-testid="external-badge"
+                          className={cn(
+                            "shrink-0 rounded border px-1 text-[9px] leading-4 font-bold",
+                            BADGE_TONE[badge.tone],
+                          )}
+                        >
+                          {badge.label}
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </span>
+              </button>
             </BlurFade>
           );
         })}
@@ -350,15 +319,19 @@ export function CalendarScreen({
           <SectionTitle
             hint={`${eventSuggestions.length} proposition${eventSuggestions.length > 1 ? "s" : ""}`}
           >
-            Suggestions de RDV
+            <span className="inline-flex items-center gap-1.5">
+              <Sparkles className="size-3 text-accent-ink" strokeWidth={2.6} aria-hidden="true" />
+              Suggestions de RDV
+            </span>
           </SectionTitle>
-          <div className="space-y-2 px-4">
-            {eventSuggestions.map((suggestion) => (
-              <EventSuggestionCard
+          <div className="px-5">
+            {eventSuggestions.map((suggestion, index) => (
+              <EventSuggestionRow
                 key={suggestion.id}
                 suggestion={suggestion}
                 account={sourceAccountLabel(accounts, suggestion.account)}
                 mail={mails.find((mail) => mail.id === suggestion.mailId)}
+                last={index === eventSuggestions.length - 1}
                 onAccept={() => onAcceptSuggestion?.(draftFromSuggestion(suggestion))}
                 onOpenMail={(mail) => openMessage(mail)}
                 onDismiss={() => onDismissSuggestion?.(suggestion)}
@@ -368,22 +341,10 @@ export function CalendarScreen({
         </section>
       )}
 
-      <div className="mt-5 px-5">
-        <ShimmerButton
-          size="md"
-          className="w-full"
-          shimmerDuration={5}
-          onClick={onNewEvent ? () => onNewEvent(selected) : undefined}
-          disabled={!onNewEvent}
-        >
-          <Plus className="size-4" />
-          Créer un événement
-        </ShimmerButton>
-        <p className="mt-2 flex items-center justify-center gap-1 text-[10.5px] font-medium text-ink-muted">
-          <Clock className="size-3" />
-          {footerLabel}
-        </p>
-      </div>
+      <p className="mt-5 flex items-center justify-center gap-1 px-5 text-[10.5px] font-medium text-ink-muted">
+        <Clock className="size-3" />
+        {footerLabel}
+      </p>
     </div>
   );
 }

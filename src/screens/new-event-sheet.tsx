@@ -46,17 +46,24 @@ function dateLabel(iso: string) {
 export function NewEventSheet({
   onClose,
   onCreate,
+  onUpdate,
   initialDate = TODAY_ISO,
   events = [],
   draft,
+  event,
 }: {
   onClose: () => void;
   onCreate: (event: CalendarEvent) => void;
+  onUpdate?: (event: CalendarEvent) => Promise<string | null>;
   initialDate?: string;
   events?: CalendarEvent[];
   draft?: NewEventDraft;
+  event?: CalendarEvent;
 }) {
   const [calendars] = useCalendars();
+  const editing = Boolean(event);
+  const allDay = Boolean(event) && !event?.start;
+  const locked = Boolean(event?.caldav);
   const draftDate = draft?.date && ISO_DAY.test(draft.date) ? draft.date : null;
   const draftStart = draft?.start && CLOCK.test(draft.start) ? draft.start : "";
   const draftEnd = draft?.end && CLOCK.test(draft.end) ? draft.end : "";
@@ -64,53 +71,94 @@ export function NewEventSheet({
     draftStart && draftEnd && totalMinutes(draftEnd, 0) > totalMinutes(draftStart, 0)
       ? totalMinutes(draftEnd, 0) - totalMinutes(draftStart, 0)
       : null;
-  const [title, setTitle] = useState(draft?.title ?? "");
-  const [date, setDate] = useState(draftDate ?? initialDate);
-  const [start, setStart] = useState(draftStart || "10:00");
+  const eventMinutes =
+    event?.start && event.end && totalMinutes(event.end, 0) > totalMinutes(event.start, 0)
+      ? totalMinutes(event.end, 0) - totalMinutes(event.start, 0)
+      : null;
+  const initialMinutes = draftMinutes ?? eventMinutes;
+  const [title, setTitle] = useState(event?.title ?? draft?.title ?? "");
+  const [date, setDate] = useState(event?.date ?? draftDate ?? initialDate);
+  const [start, setStart] = useState(event?.start ?? (draftStart || "10:00"));
   const [duration, setDuration] = useState(
-    DURATIONS.find((entry) => entry.minutes === draftMinutes) ??
-      (draftMinutes ? { label: `${draftMinutes} min`, minutes: draftMinutes } : DURATIONS[1]),
+    DURATIONS.find((entry) => entry.minutes === initialMinutes) ??
+      (initialMinutes ? { label: `${initialMinutes} min`, minutes: initialMinutes } : DURATIONS[1]),
   );
-  const [location, setLocation] = useState(draft?.location ?? "");
-  const [calendar, setCalendar] = useState<string | undefined>(calendars[0]?.name);
+  const [location, setLocation] = useState(event?.location ?? draft?.location ?? "");
+  const [calendar, setCalendar] = useState<string | undefined>(event?.calendar ?? calendars[0]?.name);
   const [confirmed, setConfirmed] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
 
-  const end = start ? addMinutes(start, duration.minutes) : "--:--";
-  const crossesMidnight = Boolean(start) && totalMinutes(start, duration.minutes) >= 24 * 60;
-  const canCreate = Boolean(title.trim() && date && start && !crossesMidnight);
-  const clashes = !start || crossesMidnight ? [] : overlappingEvents(events, date, start, end);
+  const end = allDay ? "" : start ? addMinutes(start, duration.minutes) : "--:--";
+  const crossesMidnight = !allDay && Boolean(start) && totalMinutes(start, duration.minutes) >= 24 * 60;
+  const canSave = Boolean(title.trim() && date) && (allDay || Boolean(start)) && !crossesMidnight;
+  const clashes =
+    allDay || !start || crossesMidnight
+      ? []
+      : overlappingEvents(
+          events.filter((entry) => entry.id !== event?.id),
+          date,
+          start,
+          end,
+        );
 
   const reset = () => {
     setConfirmed(false);
   };
 
-  const submit = () => {
-    if (!canCreate) return;
+  const submit = async () => {
+    if (!canSave || saving) return;
     if (clashes.length > 0 && !confirmed) {
       setConfirmed(true);
       return;
     }
-    onCreate({
-      id: "e-" + Date.now(),
-      date,
-      start,
-      end,
-      title: title.trim(),
-      location: location.trim() || undefined,
-      tone: undefined,
-      calendar,
-      ...(draft?.mailId ? { mailId: draft.mailId, fromMail: true } : {}),
-    });
+    const next: CalendarEvent = event
+      ? {
+          ...event,
+          date,
+          start,
+          end,
+          title: title.trim(),
+          location: location.trim() || undefined,
+          calendar,
+        }
+      : {
+          id: "e-" + Date.now(),
+          date,
+          start,
+          end,
+          title: title.trim(),
+          location: location.trim() || undefined,
+          tone: undefined,
+          calendar,
+          ...(draft?.mailId ? { mailId: draft.mailId, fromMail: true } : {}),
+        };
+    if (event && onUpdate) {
+      setSaving(true);
+      setFailure(null);
+      const message = await onUpdate(next);
+      setSaving(false);
+      if (message) {
+        setFailure(message);
+        return;
+      }
+      onClose();
+      return;
+    }
+    onCreate(next);
     onClose();
   };
 
   const shortcut = DAYS.find((entry) => isoInDays(entry.offset) === date);
+  const confirmLabel = editing ? "Enregistrer quand même" : "Créer quand même";
 
   return (
     <div className="flex h-full flex-col bg-canvas">
       <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-line" />
       <div className="flex items-center gap-2 px-4 pt-3 pb-2">
-        <h2 className="text-[15px] font-bold tracking-tight text-ink">Nouveau rendez-vous</h2>
+        <h2 className="text-[15px] font-bold tracking-tight text-ink">
+          {editing ? "Modifier le rendez-vous" : "Nouveau rendez-vous"}
+        </h2>
         <button type="button" onClick={onClose} className="ml-auto text-[11.5px] font-bold text-accent-ink">
           Annuler
         </button>
@@ -201,55 +249,63 @@ export function NewEventSheet({
           />
         </div>
 
-        <p className="mt-4 mb-2 text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Heure</p>
-        <div className="flex items-center gap-2">
-          <input
-            type="time"
-            value={start}
-            onChange={(event) => {
-              setStart(event.target.value);
-              reset();
-            }}
-            className="rounded-2xl border border-line bg-surface px-3 py-2.5 text-[13px] font-bold text-ink outline-none focus:border-accent-ring"
-          />
-          <span className="text-[11.5px] font-semibold whitespace-nowrap text-ink-muted">{`→ ${end}`}</span>
-        </div>
-
-        {crossesMidnight && (
-          <p
-            role="alert"
-            className="mt-2 flex items-start gap-2 rounded-2xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-[11px] font-semibold text-red-700 dark:text-red-300"
-          >
-            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-            Le rendez-vous doit se terminer le même jour (fin {end} ≤ début {start}). Raccourcis la durée.
+        {allDay ? (
+          <p className="mt-4 rounded-2xl border border-line bg-surface px-3 py-2 text-[11px] font-semibold text-ink-muted">
+            Journée entière · les horaires ne s'appliquent pas, le rendez-vous reste sur toute la journée.
           </p>
-        )}
-
-        <p className="mt-4 mb-2 text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Durée</p>
-        <div className="flex flex-wrap gap-1.5">
-          {DURATIONS.map((entry) => {
-            const active = entry.label === duration.label;
-            return (
-              <button
-                key={entry.label}
-                type="button"
-                aria-pressed={active}
-                onClick={() => {
-                  setDuration(entry);
+        ) : (
+          <>
+            <p className="mt-4 mb-2 text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Heure</p>
+            <div className="flex items-center gap-2">
+              <input
+                type="time"
+                value={start}
+                onChange={(event) => {
+                  setStart(event.target.value);
                   reset();
                 }}
-                className={cn(
-                  "min-h-11 rounded-full px-3 text-[11.5px] font-bold transition-all",
-                  active
-                    ? "bg-accent text-accent-contrast shadow-[0_6px_16px_-8px_var(--accent)]"
-                    : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
-                )}
+                className="rounded-2xl border border-line bg-surface px-3 py-2.5 text-[13px] font-bold text-ink outline-none focus:border-accent-ring"
+              />
+              <span className="text-[11.5px] font-semibold whitespace-nowrap text-ink-muted">{`→ ${end}`}</span>
+            </div>
+
+            {crossesMidnight && (
+              <p
+                role="alert"
+                className="mt-2 flex items-start gap-2 rounded-2xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-[11px] font-semibold text-red-700 dark:text-red-300"
               >
-                {entry.label}
-              </button>
-            );
-          })}
-        </div>
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                Le rendez-vous doit se terminer le même jour (fin {end} ≤ début {start}). Raccourcis la durée.
+              </p>
+            )}
+
+            <p className="mt-4 mb-2 text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">Durée</p>
+            <div className="flex flex-wrap gap-1.5">
+              {DURATIONS.map((entry) => {
+                const active = entry.label === duration.label;
+                return (
+                  <button
+                    key={entry.label}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => {
+                      setDuration(entry);
+                      reset();
+                    }}
+                    className={cn(
+                      "min-h-11 rounded-full px-3 text-[11.5px] font-bold transition-all",
+                      active
+                        ? "bg-accent text-accent-contrast shadow-[0_6px_16px_-8px_var(--accent)]"
+                        : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
+                    )}
+                  >
+                    {entry.label}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
 
         {calendars.length > 0 ? (
           <>
@@ -262,12 +318,14 @@ export function NewEventSheet({
                     key={def.id}
                     type="button"
                     aria-pressed={active}
+                    disabled={locked}
                     onClick={() => setCalendar(def.name)}
                     className={cn(
                       "min-h-11 rounded-full px-3 text-[11.5px] font-bold transition-all",
                       active
                         ? "bg-accent text-accent-contrast shadow-[0_6px_16px_-8px_var(--accent)]"
                         : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
+                      locked && "opacity-60",
                     )}
                   >
                     {def.name}
@@ -288,13 +346,27 @@ export function NewEventSheet({
               {clashes.length > 1
                 ? `${clashes.length} événements se chevauchent, dont « ${clashes[0].title} »`
                 : `« ${clashes[0].title} » (${clashes[0].start} → ${clashes[0].end})`}
-              . Cliquez sur « Créer quand même » pour confirmer.
+              . Cliquez sur « {confirmLabel} » pour confirmer.
             </p>
           </div>
         )}
-        <ShimmerButton className="w-full" onClick={submit} disabled={!canCreate}>
+        {failure && (
+          <p
+            role="alert"
+            className="mb-2 rounded-2xl bg-red-500/10 px-3 py-2 text-[11.5px] font-semibold text-red-600 dark:text-red-300"
+          >
+            {failure}
+          </p>
+        )}
+        <ShimmerButton className="w-full" onClick={() => void submit()} disabled={!canSave || saving}>
           <CalendarPlus className="size-4" strokeWidth={2.4} />
-          {confirmed && clashes.length > 0 ? "Créer quand même" : "Créer le rendez-vous"}
+          {editing
+            ? confirmed && clashes.length > 0
+              ? confirmLabel
+              : "Enregistrer"
+            : confirmed && clashes.length > 0
+              ? confirmLabel
+              : "Créer le rendez-vous"}
         </ShimmerButton>
       </div>
     </div>

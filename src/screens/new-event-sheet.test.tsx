@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { NewEventSheet } from "@/screens/new-event-sheet";
 import { NewTaskSheet } from "@/screens/new-task-sheet";
 import { PrefsProvider } from "@/lib/prefs";
@@ -71,6 +71,95 @@ describe("Nouveau rendez-vous mobile · préremplissage par une suggestion", () 
     expect(titleInput().value).toBe("Sans créneau");
     expect(dateInput().value).toBe("2026-12-01");
     expect(screen.getByText("→ 11:00")).toBeTruthy();
+  });
+});
+
+describe("Modifier un rendez-vous mobile", () => {
+  const EVENT: CalendarEvent = {
+    id: "e1",
+    date: "2026-11-20",
+    start: "09:00",
+    end: "09:30",
+    title: "Standup",
+    location: "Visio",
+    calendar: "Pro",
+  };
+
+  it("préremplit les champs de l'événement et propose Enregistrer", () => {
+    render(<NewEventSheet onClose={() => {}} onCreate={() => {}} onUpdate={async () => null} event={EVENT} />);
+
+    expect(screen.getByText("Modifier le rendez-vous")).toBeTruthy();
+    expect(titleInput().value).toBe("Standup");
+    expect(dateInput().value).toBe("2026-11-20");
+    expect(locationInput().value).toBe("Visio");
+    expect(screen.getByText("→ 09:30")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "30 min" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Enregistrer" })).toBeTruthy();
+  });
+
+  it("enregistre la modification de l'événement existant", async () => {
+    const onUpdate = vi.fn(async () => null);
+    const onClose = vi.fn();
+    const onCreate = vi.fn();
+    render(<NewEventSheet onClose={onClose} onCreate={onCreate} onUpdate={onUpdate} event={EVENT} />);
+
+    fireEvent.change(titleInput(), { target: { value: "Standup équipe" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][0]).toMatchObject({
+      id: "e1",
+      title: "Standup équipe",
+      date: "2026-11-20",
+      start: "09:00",
+      end: "09:30",
+      location: "Visio",
+      calendar: "Pro",
+    });
+    expect(onCreate).not.toHaveBeenCalled();
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("ne se signale pas en conflit avec lui-même", () => {
+    const onUpdate = vi.fn(async () => null);
+    render(<NewEventSheet onClose={() => {}} onCreate={() => {}} onUpdate={onUpdate} events={[EVENT]} event={EVENT} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Enregistrer quand même" })).toBeNull();
+  });
+
+  it("garde la journée entière sans horaires", () => {
+    render(
+      <NewEventSheet
+        onClose={() => {}}
+        onCreate={() => {}}
+        onUpdate={async () => null}
+        event={{ ...EVENT, start: "", end: "" }}
+      />,
+    );
+
+    expect(screen.getByText(/Journée entière · les horaires ne s'appliquent pas/)).toBeTruthy();
+    expect(screen.queryByText("Heure")).toBeNull();
+    expect(screen.queryByText("Durée")).toBeNull();
+  });
+
+  it("affiche l'échec d'écriture et garde la feuille ouverte", async () => {
+    const onClose = vi.fn();
+    render(
+      <NewEventSheet
+        onClose={onClose}
+        onCreate={() => {}}
+        onUpdate={async () => "Calendrier CalDAV · 412"}
+        event={EVENT}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Calendrier CalDAV · 412"));
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
 

@@ -95,11 +95,14 @@ describe("Mobile · agenda et sources externes", () => {
 
     expect(await screen.findByText("Réunion externe", {}, { timeout: 5000 })).toBeTruthy();
     expect(screen.getByTestId("external-badge").textContent).toBe("ICS");
-    expect(screen.getByText("exemple.tld")).toBeTruthy();
     const row = screen
       .getAllByTestId("calendar-event")
       .find((element) => element.textContent?.includes("Réunion externe"));
     expect(within(row!).getByText("11:00")).toBeTruthy();
+
+    fireEvent.click(row!);
+    const sheet = await screen.findByRole("dialog", { name: "Détail du rendez-vous" }, { timeout: 5000 });
+    expect(within(sheet).getByText("exemple.tld")).toBeTruthy();
   });
 
   it("suit une source ajoutée après le montage, sans recharger", async () => {

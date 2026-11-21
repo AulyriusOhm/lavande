@@ -28,6 +28,7 @@ import { PlanningScreen as PlanningView } from "@/screens/planning-screen";
 import { TaskScreen } from "@/screens/task-screen";
 import { NewTaskSheet, createTask, type NewTaskDraft } from "@/screens/new-task-sheet";
 import { NewEventSheet, type NewEventDraft } from "@/screens/new-event-sheet";
+import { EventDetailSheet } from "@/screens/event-detail-sheet";
 import { SettingsScreen as SettingsView } from "@/screens/settings-screen";
 import { MessageScreen } from "@/screens/message-screen";
 import { ComposeScreen } from "@/screens/compose-screen";
@@ -36,11 +37,15 @@ import { PgpScreen } from "@/screens/pgp-screen";
 import { TotpPopup } from "@/components/totp-popup";
 import { DotPattern, MeshGlow } from "@/components/ui/backdrops";
 import { Notice } from "@/components/ui/notice";
-import type { CalendarEvent } from "@/lib/calendar";
+import { conflictingIds, type CalendarEvent } from "@/lib/calendar";
 import type { Mail } from "@/lib/mail";
-import { useCalendars, isExternalCalendar } from "@/lib/calendars";
+import { caldavSourceIdOf, useCalendars, isExternalCalendar } from "@/lib/calendars";
 import {
+  caldavWriteFailure,
+  commitIcsState,
+  deleteCaldavEvent,
   externalCalendarEvents,
+  updateCaldavEvent,
   useExternalCalendarRefresh,
   useGoogleCalendarAutoAttach,
   useZimbraCalendarAutoAttach,
@@ -120,7 +125,9 @@ export default function App() {
 function NativeShell() {
   return (
     <div className="relative h-full w-full overflow-hidden bg-canvas native-shell">
-      <PhoneApp native />
+      <div className="native-sheet relative h-full w-full overflow-hidden">
+        <PhoneApp native />
+      </div>
     </div>
   );
 }
@@ -255,6 +262,8 @@ function PhoneApp({ native }: { native?: boolean }) {
   const [taskDraft, setTaskDraft] = useState<NewTaskDraft | null>(null);
   const [eventDraftOpen, setEventDraftOpen] = useState(false);
   const [eventDraft, setEventDraft] = useState<NewEventDraft | null>(null);
+  const [eventDetail, setEventDetail] = useState<CalendarEvent | null>(null);
+  const [eventEdit, setEventEdit] = useState<CalendarEvent | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [movingTask, setMovingTask] = useState<Task | null>(null);
   const [cleanupOpen, setCleanupOpen] = useState(false);
@@ -343,6 +352,11 @@ function PhoneApp({ native }: { native?: boolean }) {
   const closeEventDraft = useCallback(() => {
     setEventDraftOpen(false);
     setEventDraft(null);
+    setEventEdit(null);
+  }, []);
+  const openEventEdit = useCallback((target: CalendarEvent) => {
+    setEventDetail(null);
+    setEventEdit(target);
   }, []);
 
   useEffect(() => {
@@ -354,7 +368,9 @@ function PhoneApp({ native }: { native?: boolean }) {
     [Boolean(removeTarget), cancelRemoveAccount],
     [connectOpen, closeConnect],
     [composeOpen, minimizeCompose],
+    [Boolean(eventEdit), () => closeEventDraft()],
     [eventDraftOpen, () => closeEventDraft()],
+    [Boolean(eventDetail), () => setEventDetail(null)],
     [taskDraftOpen, () => closeTaskDraft()],
     [accountsOpen, () => setAccountsOpen(false)],
     [foldersOpen, () => setFoldersOpen(false)],
@@ -504,11 +520,73 @@ function PhoneApp({ native }: { native?: boolean }) {
     [mails, openMessage],
   );
   const availableMailIds = useMemo(() => new Set(mails.map((mail) => mail.id)), [mails]);
-
+  const openEvent = useCallback((target: CalendarEvent) => setEventDetail(target), []);
+  const openEventMail = useCallback(() => {
+    if (eventDetail) openMailFromEvent(eventDetail);
+  }, [eventDetail, openMailFromEvent]);
   const [calendars] = useCalendars();
   const { ics } = useExternalCalendarRefresh(calendars, notify);
   const externalEvents = useMemo(() => externalCalendarEvents(ics, calendars), [ics, calendars]);
   const sourceCount = useMemo(() => calendars.filter(isExternalCalendar).length, [calendars]);
+  const detailConflict = Boolean(
+    eventDetail && conflictingIds([...events, ...externalEvents]).has(eventDetail.id),
+  );
+  /** Un événement CalDAV s'écrit chez le démon ; un calendrier local garde le store. */
+  const updateEvent = useCallback(
+    async (next: CalendarEvent): Promise<string | null> => {
+      const def = next.caldav
+        ? calendars.find((entry) => caldavSourceIdOf(entry) === next.caldav?.sourceId)
+        : undefined;
+      if (next.caldav && !def) {
+        return "Calendrier CalDAV introuvable · relisez les réglages des calendriers";
+      }
+      if (def) {
+        try {
+          commitIcsState(
+            await updateCaldavEvent(def, next, {
+              title: next.title,
+              date: next.date,
+              ...(next.start && next.end ? { start: next.start, end: next.end } : {}),
+              location: next.location,
+              description: next.description,
+            }),
+          );
+          notify("Rendez-vous mis à jour");
+          return null;
+        } catch (error) {
+          return await caldavWriteFailure(def, error);
+        }
+      }
+      setEvents((current) => current.map((entry) => (entry.id === next.id ? next : entry)));
+      notify("Rendez-vous mis à jour");
+      return null;
+    },
+    [calendars, notify, setEvents],
+  );
+
+  const removeEvent = useCallback(
+    async (target: CalendarEvent) => {
+      if (!target.caldav) {
+        setEvents((current) => current.filter((entry) => entry.id !== target.id));
+        notify("Rendez-vous supprimé");
+        setEventDetail(null);
+        return;
+      }
+      const def = calendars.find((entry) => caldavSourceIdOf(entry) === target.caldav?.sourceId);
+      if (!def) {
+        notify("Calendrier CalDAV introuvable · relisez les réglages des calendriers");
+        return;
+      }
+      try {
+        commitIcsState(await deleteCaldavEvent(def, target));
+        notify("Rendez-vous supprimé");
+        setEventDetail(null);
+      } catch (error) {
+        notify(await caldavWriteFailure(def, error));
+      }
+    },
+    [calendars, notify, setEvents],
+  );
 
   const widgetEvents = useMemo(() => [...events, ...externalEvents], [events, externalEvents]);
   useWidgetAgendaSync(widgetEvents, calendars);
@@ -576,7 +654,7 @@ function PhoneApp({ native }: { native?: boolean }) {
 
   if (mode === "api" && phase === "empty") {
     return (
-      <div className="h-full w-full pt-[env(safe-area-inset-top,0px)]">
+      <div className={cn("h-full w-full", !native && "pt-[env(safe-area-inset-top,0px)]")}>
         <ConnectScreen />
       </div>
     );
@@ -636,12 +714,10 @@ function PhoneApp({ native }: { native?: boolean }) {
                   events={events}
                   externalEvents={externalEvents}
                   sourceCount={sourceCount}
-                  availableMailIds={availableMailIds}
                   suggestions={suggestions}
-                  onNewEvent={readOnly ? undefined : openEventDraft}
                   onAcceptSuggestion={openEventDraft}
                   onDismissSuggestion={dismissSuggestion}
-                  onOpenMail={openMailFromEvent}
+                  onOpenEvent={openEvent}
                   onSelectedDateChange={setSelectedDate}
                 />
               )}
@@ -997,7 +1073,7 @@ function PhoneApp({ native }: { native?: boolean }) {
         ) : null}
 
         <AnimatePresence>
-          {eventDraftOpen && (
+          {(eventDraftOpen || eventEdit) && (
             <motion.div key="newevent" className="absolute inset-0 z-[45]" initial={false}>
               <motion.div
                 className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
@@ -1014,14 +1090,48 @@ function PhoneApp({ native }: { native?: boolean }) {
                 transition={{ type: "spring", stiffness: 320, damping: 32 }}
               >
                 <NewEventSheet
+                  event={eventEdit ?? undefined}
                   initialDate={selectedDate}
-                  events={events}
+                  events={[...events, ...externalEvents]}
                   draft={eventDraft ?? undefined}
                   onClose={closeEventDraft}
+                  onUpdate={updateEvent}
                   onCreate={(event) => {
                     setEvents((current) => [...current, event]);
                     notify("Rendez-vous créé");
                   }}
+                />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {eventDetail && (
+            <motion.div key="eventdetail" className="absolute inset-0 z-[45]" initial={false}>
+              <motion.div
+                className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setEventDetail(null)}
+              />
+              <motion.div
+                className="absolute inset-x-0 bottom-0 top-16 overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-20px_60px_-20px_rgba(40,20,80,0.35)]"
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", stiffness: 320, damping: 32 }}
+              >
+                <EventDetailSheet
+                  event={eventDetail}
+                  conflict={detailConflict}
+                  onClose={() => setEventDetail(null)}
+                  onEdit={readOnly ? undefined : openEventEdit}
+                  onDelete={readOnly ? undefined : removeEvent}
+                  onOpenMail={
+                    eventDetail.mailId && availableMailIds.has(eventDetail.mailId) ? openEventMail : undefined
+                  }
                 />
               </motion.div>
             </motion.div>
