@@ -142,6 +142,8 @@ describe("Résumé du matin · briefing structuré", () => {
     await waitFor(() => expect(within(card).getByTestId("summary-attachments")).toBeTruthy());
 
     const groups = within(card).getByTestId("summary-attachments");
+    expect(groups.className).not.toContain("overflow-y-auto");
+    expect(groups.className).not.toMatch(/max-h-/);
     expect(groups.querySelectorAll("button[title]")).toHaveLength(0);
     expect(groups.textContent).not.toContain("inbox-v3.fig");
     expect(groups.textContent).not.toContain("specs-mobile.pdf");

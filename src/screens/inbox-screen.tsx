@@ -846,7 +846,7 @@ export function InboxScreen({
                     ) : null}
                     <div
                       data-testid="summary-attachments-mobile"
-                      className="mt-2 max-h-[38vh] space-y-2 overflow-y-auto pr-1"
+                      className="mt-2 space-y-2"
                     >
                       {!hasGroupedRows ? (
                         <p className="py-2 text-center text-[11.5px] font-medium text-ink-muted">

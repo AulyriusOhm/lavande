@@ -144,6 +144,8 @@ describe("Boîte de réception mobile · résumé périodique", () => {
 
     const body = await screen.findByTestId("summary-attachments-mobile");
 
+    expect(body.className).not.toContain("overflow-y-auto");
+    expect(body.className).not.toMatch(/max-h-/);
     expect(body.textContent).toContain("Pour info");
     expect(body.querySelectorAll("button[title]")).toHaveLength(0);
     expect(body.textContent).not.toContain("inbox-v3.fig");

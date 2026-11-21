@@ -704,7 +704,7 @@ export function MorningSummary({
             ) : null}
             <div
               data-testid="summary-attachments"
-              className="mt-2 max-h-[min(42vh,360px)] space-y-2 overflow-y-auto pr-1"
+              className="mt-2 space-y-2"
             >
               {!hasGroupedRows ? (
                 <p className="py-2 text-center text-[12px] font-medium text-ink-muted">
@@ -2568,130 +2568,132 @@ export function DesktopInbox({
             </div>
           </div>
 
-          {reception ? (
-            <div className="shrink-0 px-4">
-              <MorningSummary
-                open={summaryOpen}
-                unread={unreadThreads}
-                attachments={attachmentThreads}
-                encrypted={encryptedThreads}
-                demo={mode === "demo"}
-                summary={summary}
-                mails={summaryMails}
-                loading={summaryLoading}
-                decisions={decisionIndex}
-                decisionThresholds={decisionPrefs.thresholds}
-                customCategories={decisionPrefs.customCategories}
-                trustedSenders={decisionPrefs.trustedSenders}
-                trustedDomains={decisionPrefs.trustedDomains}
-                onToggle={() => setSummaryOpen(!summaryOpen)}
-                onOpen={openById}
-                onRefresh={() => void refreshSummary(true)}
-                onReply={replyTo}
-                onPropose={proposeSummaryAction}
-                onProposeEvent={proposeSummaryEvent}
-                onPlanMail={
-                  onOpenNewTask
-                    ? (ref, entry) => {
-                        const rawDec = triageDecisionFor(
-                          entry,
-                          decisionIndex.byKey,
-                          decisionIndex.byMessageId,
-                        );
-                        const dec = rawDec
-                          ? applyTrustRules(rawDec, entry.email, decisionPrefs)
-                          : undefined;
-                        onOpenNewTask(taskDraftFromMail(entry, ref, dec));
-                      }
-                    : undefined
-                }
-                onScheduleMail={
-                  onOpenNewEvent
-                    ? (ref, entry) => onOpenNewEvent(eventDraftFromMail(entry, ref))
-                    : undefined
-                }
-                onTrustSender={readOnly ? undefined : (entry) => trustSender(entry.email)}
-                onTrustDomain={readOnly ? undefined : (entry) => trustDomain(entry.email)}
-                onDelete={readOnly ? undefined : (entry) => mailAction("delete", entry)}
-                onArchive={readOnly ? undefined : (entry) => mailAction("archive", entry)}
-                onMoveToFolder={
-                  readOnly
-                    ? undefined
-                    : (entry, target) => {
-                        const accId = entry.source?.accountId ?? entry.account;
-                        const match = folderRecords.find(
-                          (record) =>
-                            record.accountId === accId &&
-                            (record.path === target || record.name === target),
-                        );
-                        moveToFolder(entry, match?.path ?? target);
-                      }
-                }
-              />
-            </div>
-          ) : null}
-
-          <div ref={listRef} className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-[104px]">
-            {visible.map((thread, index) => (
-              <ThreadRow
-                key={thread.id}
-                thread={thread}
-                selected={selectedThreadId === thread.id}
-                checked={selectedIds.has(thread.id)}
-                delay={Math.min(0.4, 0.06 + index * 0.04)}
-                decision={decisionForThread(thread)}
-                decisionThresholds={decisionPrefs.thresholds}
-                customCategories={decisionPrefs.customCategories}
-                onOpen={(event) => selectThread(thread, index, event)}
-                onStar={() => toggleStar(thread.primary.id)}
-                onRead={() => mailAction("read", thread.primary)}
-                onArchive={() => mailAction("archive", thread.primary)}
-                onDelete={() => mailAction("delete", thread.primary)}
-                onRestore={() => restoreMail(thread.primary)}
-                onNotSpam={() => moveToInbox(thread.primary)}
-                onMenu={({ x, y }) => setMenu({ mail: thread.primary, x, y })}
-              />
-            ))}
-
-            {visible.length === 0 ? (
-              <div className="px-3 py-8">
-                <EmptyState
-                  icon={<MailIcon className="size-5" />}
-                  title="Aucun message"
-                  hint={
-                    filter === "all"
-                      ? mode === "api"
-                        ? "Ce dossier est vide. Synchronise pour récupérer les messages du serveur."
-                        : "Cette boîte est vide pour le compte sélectionné."
-                      : "Aucune conversation ne correspond à ce filtre."
+          <div ref={listRef} className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-[104px]">
+            {reception ? (
+              <div className="mb-2 px-2">
+                <MorningSummary
+                  open={summaryOpen}
+                  unread={unreadThreads}
+                  attachments={attachmentThreads}
+                  encrypted={encryptedThreads}
+                  demo={mode === "demo"}
+                  summary={summary}
+                  mails={summaryMails}
+                  loading={summaryLoading}
+                  decisions={decisionIndex}
+                  decisionThresholds={decisionPrefs.thresholds}
+                  customCategories={decisionPrefs.customCategories}
+                  trustedSenders={decisionPrefs.trustedSenders}
+                  trustedDomains={decisionPrefs.trustedDomains}
+                  onToggle={() => setSummaryOpen(!summaryOpen)}
+                  onOpen={openById}
+                  onRefresh={() => void refreshSummary(true)}
+                  onReply={replyTo}
+                  onPropose={proposeSummaryAction}
+                  onProposeEvent={proposeSummaryEvent}
+                  onPlanMail={
+                    onOpenNewTask
+                      ? (ref, entry) => {
+                          const rawDec = triageDecisionFor(
+                            entry,
+                            decisionIndex.byKey,
+                            decisionIndex.byMessageId,
+                          );
+                          const dec = rawDec
+                            ? applyTrustRules(rawDec, entry.email, decisionPrefs)
+                            : undefined;
+                          onOpenNewTask(taskDraftFromMail(entry, ref, dec));
+                        }
+                      : undefined
+                  }
+                  onScheduleMail={
+                    onOpenNewEvent
+                      ? (ref, entry) => onOpenNewEvent(eventDraftFromMail(entry, ref))
+                      : undefined
+                  }
+                  onTrustSender={readOnly ? undefined : (entry) => trustSender(entry.email)}
+                  onTrustDomain={readOnly ? undefined : (entry) => trustDomain(entry.email)}
+                  onDelete={readOnly ? undefined : (entry) => mailAction("delete", entry)}
+                  onArchive={readOnly ? undefined : (entry) => mailAction("archive", entry)}
+                  onMoveToFolder={
+                    readOnly
+                      ? undefined
+                      : (entry, target) => {
+                          const accId = entry.source?.accountId ?? entry.account;
+                          const match = folderRecords.find(
+                            (record) =>
+                              record.accountId === accId &&
+                              (record.path === target || record.name === target),
+                          );
+                          moveToFolder(entry, match?.path ?? target);
+                        }
                   }
                 />
-                {filter !== "all" ? (
-                  <div className="mt-3 flex justify-center">
-                    <DButton size="sm" variant="ghost" onClick={() => selectFilter("all")}>
-                      <RotateCcw className="size-3.5" />
-                      Réinitialiser le filtre
-                    </DButton>
-                  </div>
-                ) : null}
-                {filter === "all" && mode === "api" ? (
-                  <div className="mt-3 flex justify-center">
-                    <DButton size="sm" variant="soft" onClick={syncFolder} disabled={syncing}>
-                      <RefreshCw className={cn("size-3.5", syncing && "animate-spin")} />
-                      Synchroniser
-                    </DButton>
-                  </div>
-                ) : null}
               </div>
             ) : null}
 
-            {mode === "api" && hasMore && !threadsLoading ? (
-              <div className="flex justify-center px-3 py-4">
-                <DButton size="sm" variant="ghost" onClick={loadMore}>
-                  Charger plus
-                </DButton>
-              </div>
-            ) : null}
+            <div className="space-y-1">
+              {visible.map((thread, index) => (
+                <ThreadRow
+                  key={thread.id}
+                  thread={thread}
+                  selected={selectedThreadId === thread.id}
+                  checked={selectedIds.has(thread.id)}
+                  delay={Math.min(0.4, 0.06 + index * 0.04)}
+                  decision={decisionForThread(thread)}
+                  decisionThresholds={decisionPrefs.thresholds}
+                  customCategories={decisionPrefs.customCategories}
+                  onOpen={(event) => selectThread(thread, index, event)}
+                  onStar={() => toggleStar(thread.primary.id)}
+                  onRead={() => mailAction("read", thread.primary)}
+                  onArchive={() => mailAction("archive", thread.primary)}
+                  onDelete={() => mailAction("delete", thread.primary)}
+                  onRestore={() => restoreMail(thread.primary)}
+                  onNotSpam={() => moveToInbox(thread.primary)}
+                  onMenu={({ x, y }) => setMenu({ mail: thread.primary, x, y })}
+                />
+              ))}
+
+              {visible.length === 0 ? (
+                <div className="px-3 py-8">
+                  <EmptyState
+                    icon={<MailIcon className="size-5" />}
+                    title="Aucun message"
+                    hint={
+                      filter === "all"
+                        ? mode === "api"
+                          ? "Ce dossier est vide. Synchronise pour récupérer les messages du serveur."
+                          : "Cette boîte est vide pour le compte sélectionné."
+                        : "Aucune conversation ne correspond à ce filtre."
+                    }
+                  />
+                  {filter !== "all" ? (
+                    <div className="mt-3 flex justify-center">
+                      <DButton size="sm" variant="ghost" onClick={() => selectFilter("all")}>
+                        <RotateCcw className="size-3.5" />
+                        Réinitialiser le filtre
+                      </DButton>
+                    </div>
+                  ) : null}
+                  {filter === "all" && mode === "api" ? (
+                    <div className="mt-3 flex justify-center">
+                      <DButton size="sm" variant="soft" onClick={syncFolder} disabled={syncing}>
+                        <RefreshCw className={cn("size-3.5", syncing && "animate-spin")} />
+                        Synchroniser
+                      </DButton>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {mode === "api" && hasMore && !threadsLoading ? (
+                <div className="flex justify-center px-3 py-4">
+                  <DButton size="sm" variant="ghost" onClick={loadMore}>
+                    Charger plus
+                  </DButton>
+                </div>
+              ) : null}
+            </div>
           </div>
 
           {selectedIds.size > 0 ? (
