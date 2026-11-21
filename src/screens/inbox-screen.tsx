@@ -476,11 +476,19 @@ export function InboxScreen({
     );
     moveToFolder(targetMail, match?.path ?? target);
   };
-  const summaryRow = ({ ref, mail }: { ref: SummaryRef; mail: Mail }) => {
+  const summaryRow = ({ ref, mail }: { ref: SummaryRef; mail: Mail }, variant: "card" | "list" = "card") => {
     const meta = summaryMetaFor(mail);
     return (
-      <div key={ref.mailId} className="flex items-center gap-1.5 py-1.5">
-        <span className="grid size-5 shrink-0 place-items-center rounded-md bg-surface text-[8.5px] font-bold text-ink-soft">
+      <div
+        key={ref.mailId}
+        className={cn(
+          "flex min-h-[34px] items-center gap-1.5",
+          variant === "card"
+            ? "rounded-[11px] border border-line bg-surface/90 px-2.5 py-1"
+            : "px-2.5 py-1.5",
+        )}
+      >
+        <span className="grid size-5 shrink-0 place-items-center rounded-[6px] bg-surface-2 text-[8.5px] font-bold text-ink-soft">
           {initials(mail.name)}
         </span>
         <button
@@ -500,7 +508,7 @@ export function InboxScreen({
             {meta.customCategory.name}
           </span>
         ) : meta.noiseTag ? (
-          <span className="shrink-0 rounded-full bg-surface px-1.5 py-0.5 text-[9px] font-bold text-ink-muted">
+          <span className="shrink-0 rounded-full bg-surface-2 px-1.5 py-0.5 text-[9px] font-bold text-ink-muted">
             {meta.noiseTag}
           </span>
         ) : null}
@@ -520,7 +528,7 @@ export function InboxScreen({
               type="button"
               aria-label="Archiver"
               onClick={() => onMailAction("archive", mail)}
-              className="focus-ring grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-surface hover:text-ink"
+              className="focus-ring grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
             >
               <Archive className="size-3" />
             </button>
@@ -798,7 +806,7 @@ export function InboxScreen({
                 </motion.button>
               ) : null}
 
-              <motion.div ref={cardRef} style={{ opacity: cardBody }} className="p-4">
+              <motion.div ref={cardRef} style={{ opacity: cardBody }} className="p-3.5">
                 <div className="flex items-center gap-2 pr-16">
                   <span className="grid size-6 place-items-center rounded-full bg-accent/15">
                     <Sparkles
@@ -832,13 +840,13 @@ export function InboxScreen({
                 {summary ? (
                   <>
                     {showSummaryHeadline ? (
-                      <p className="mt-2 text-[12px] leading-relaxed font-medium text-ink">
+                      <p className="mt-1.5 text-[12px] leading-relaxed font-medium text-ink">
                         {summary.headline}
                       </p>
                     ) : null}
                     <div
                       data-testid="summary-attachments-mobile"
-                      className="mt-2.5 max-h-[38vh] space-y-2.5 overflow-y-auto pr-1"
+                      className="mt-2 max-h-[38vh] space-y-2 overflow-y-auto pr-1"
                     >
                       {!hasGroupedRows ? (
                         <p className="py-2 text-center text-[11.5px] font-medium text-ink-muted">
@@ -848,198 +856,18 @@ export function InboxScreen({
                       {authRows.length > 0 ? (
                         <section>
                           <SummaryTitle label="Vérification & accès" count={authRows.length} />
-                          <div className="space-y-1.5">
+                          <div className="space-y-1">
                             {authRows.map(({ ref, mail }) => {
                               const meta = summaryMetaFor(mail);
                               const copied = Boolean(copiedCodes[ref.mailId]);
                               return (
                                 <article
                                   key={ref.mailId}
-                                  className="flex gap-2 rounded-[14px] bg-surface px-2.5 py-1.5 ring-1 ring-accent-ring/40"
+                                  className="flex flex-col gap-1.5 rounded-[12px] border border-accent-ring/55 bg-surface px-2.5 py-1.5"
                                 >
-                                  <span className="grid size-7 shrink-0 place-items-center rounded-[9px] bg-accent/15 text-accent-ink">
-                                    <KeyRound className="size-3.5" strokeWidth={2.4} />
-                                  </span>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="min-w-0 truncate text-[11px] font-bold text-ink">
-                                        {mail.name}
-                                      </span>
-                                      <span className="inline-flex h-4 shrink-0 items-center rounded-full bg-accent-soft px-1.5 text-[9.5px] font-bold text-accent-ink">
-                                        {meta.totpCode
-                                          ? meta.totpService
-                                            ? `Code · ${meta.totpService}`
-                                            : "Code"
-                                          : meta.totpService
-                                            ? `Accès · ${meta.totpService}`
-                                            : "Vérification"}
-                                      </span>
-                                      <span className="ml-auto shrink-0 text-[10px] font-semibold text-ink-muted tabular-nums">
-                                        {summaryClock(mail)}
-                                      </span>
-                                    </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => onOpen(mail)}
-                                      className="focus-ring mt-0.5 block max-w-full truncate text-left text-[12px] leading-[1.4] font-bold text-accent-ink underline decoration-[1.5px] underline-offset-2"
-                                    >
-                                      {mail.subject}
-                                    </button>
-                                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                                      {meta.totpCode ? (
-                                        <>
-                                          <span
-                                            data-testid="summary-totp-code-mobile"
-                                            className="inline-flex h-6 items-center rounded-lg border border-accent-ring/50 bg-accent-soft px-2 font-mono text-[12.5px] font-extrabold tracking-[0.14em] text-ink tabular-nums select-all"
-                                          >
-                                            {formatTotpCode(meta.totpCode)}
-                                          </span>
-                                          <button
-                                            type="button"
-                                            onClick={() => copyTotp(ref.mailId, meta.totpCode!)}
-                                            className={copied ? SUMMARY_CHIP_DONE : SUMMARY_CHIP_FILLED}
-                                          >
-                                            {copied ? (
-                                              <Check className="size-3" strokeWidth={2.8} />
-                                            ) : (
-                                              <Copy className="size-3" strokeWidth={2.4} />
-                                            )}
-                                            {copied ? "Copié !" : "Copier"}
-                                          </button>
-                                        </>
-                                      ) : meta.authLink ? (
-                                        <button
-                                          type="button"
-                                          onClick={() => openExternal(meta.authLink!)}
-                                          className={SUMMARY_CHIP_FILLED}
-                                        >
-                                          <ExternalLink className="size-3" strokeWidth={2.4} />
-                                          Ouvrir le lien
-                                        </button>
-                                      ) : null}
-                                      {!readOnly ? (
-                                        <button
-                                          type="button"
-                                          onClick={() => onMailAction("delete", mail)}
-                                          className={SUMMARY_CHIP}
-                                        >
-                                          <Trash2 className="size-3" strokeWidth={2.4} />
-                                          Supprimer
-                                        </button>
-                                      ) : null}
-                                    </div>
-                                  </div>
-                                </article>
-                              );
-                            })}
-                          </div>
-                        </section>
-                      ) : null}
-                      {actionRows.length > 0 ? (
-                        <section>
-                          <SummaryTitle label="À traiter" count={actionRows.length} />
-                          <div className="space-y-1.5">
-                            {actionRows.map(({ ref, mail }) => {
-                              const due = ref.due && ISO_DAY.test(ref.due) ? ref.due : null;
-                              const meta = summaryMetaFor(mail);
-
-                              if (meta.suspect) {
-                                const suspectReason =
-                                  ref.reason ||
-                                  (meta.phishing
-                                    ? "Hameçonnage détecté · Ne cliquez sur aucun lien"
-                                    : "Alerte sécurité · injection détectée");
-                                const domain = senderDomain(mail.email);
-                                return (
-                                  <article
-                                    key={ref.mailId}
-                                    className={cn(
-                                      "flex gap-2 rounded-[14px] bg-surface px-2.5 py-1.5 ring-1",
-                                      meta.phishing ? "ring-rose-500/35" : "ring-amber-500/35",
-                                    )}
-                                  >
-                                    <span
-                                      className={cn(
-                                        "grid size-7 shrink-0 place-items-center rounded-[9px]",
-                                        meta.phishing
-                                          ? "bg-rose-500/15 text-rose-700 dark:text-rose-300"
-                                          : "bg-amber-500/15 text-amber-700 dark:text-amber-300",
-                                      )}
-                                    >
-                                      <ShieldAlert className="size-3.5" strokeWidth={2.4} />
-                                    </span>
-                                    <div className="min-w-0 flex-1">
-                                      <div className="flex items-center gap-1.5">
-                                        <span className="min-w-0 truncate text-[11px] font-bold text-ink">
-                                          {mail.name}
-                                        </span>
-                                        <span
-                                          className={cn(
-                                            "inline-flex h-4 shrink-0 items-center rounded-full px-1.5 text-[9.5px] font-bold",
-                                            meta.phishing
-                                              ? "bg-rose-500/12 text-rose-700 dark:text-rose-300"
-                                              : "bg-amber-500/14 text-amber-700 dark:text-amber-300",
-                                          )}
-                                        >
-                                          {meta.phishing ? "Suspect · Phishing" : "Injection IA"}
-                                        </span>
-                                        <span className="ml-auto shrink-0 text-[10px] font-semibold text-ink-muted tabular-nums">
-                                          {summaryClock(mail)}
-                                        </span>
-                                      </div>
-                                      <button
-                                        type="button"
-                                        onClick={() => onOpen(mail)}
-                                        className="focus-ring mt-0.5 block max-w-full truncate text-left text-[12px] leading-[1.4] font-bold text-accent-ink underline decoration-[1.5px] underline-offset-2"
-                                      >
-                                        {mail.subject}
-                                      </button>
-                                      <p className="mt-1 line-clamp-2 text-[11px] leading-[1.45] font-medium text-ink-soft">
-                                        {suspectReason}
-                                      </p>
-                                      {!readOnly ? (
-                                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                                          <button
-                                            type="button"
-                                            onClick={() => onMailAction("delete", mail)}
-                                            className="focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-rose-600 px-2 text-[10px] font-bold text-white"
-                                          >
-                                            <Trash2 className="size-3" strokeWidth={2.4} />
-                                            Supprimer
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => trustSender(mail.email)}
-                                            className={SUMMARY_CHIP}
-                                          >
-                                            <ShieldCheck className="size-3" strokeWidth={2.4} />
-                                            Pas suspect
-                                          </button>
-                                          {domain ? (
-                                            <button
-                                              type="button"
-                                              onClick={() => trustDomain(mail.email)}
-                                              className={SUMMARY_CHIP}
-                                            >
-                                              Faire confiance au domaine
-                                            </button>
-                                          ) : null}
-                                        </div>
-                                      ) : null}
-                                    </div>
-                                  </article>
-                                );
-                              }
-
-                              if (meta.totpCode) {
-                                const copied = Boolean(copiedCodes[ref.mailId]);
-                                return (
-                                  <article
-                                    key={ref.mailId}
-                                    className="flex gap-2 rounded-[14px] bg-surface px-2.5 py-1.5"
-                                  >
-                                    <span className="grid size-7 shrink-0 place-items-center rounded-[9px] bg-accent/15 text-accent-ink">
-                                      <KeyRound className="size-3.5" strokeWidth={2.4} />
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <span className="grid size-[22px] shrink-0 place-items-center rounded-[7px] border border-accent-ring bg-accent-soft text-accent-ink">
+                                      <KeyRound className="size-3" strokeWidth={2.4} />
                                     </span>
                                     <div className="min-w-0 flex-1">
                                       <div className="flex items-center gap-1.5">
@@ -1047,7 +875,13 @@ export function InboxScreen({
                                           {mail.name}
                                         </span>
                                         <span className="inline-flex h-4 shrink-0 items-center rounded-full bg-accent-soft px-1.5 text-[9.5px] font-bold text-accent-ink">
-                                          {meta.totpService ? `Code · ${meta.totpService}` : "Code"}
+                                          {meta.totpCode
+                                            ? meta.totpService
+                                              ? `Code · ${meta.totpService}`
+                                              : "Code"
+                                            : meta.totpService
+                                              ? `Accès · ${meta.totpService}`
+                                              : "Vérification"}
                                         </span>
                                         <span className="ml-auto shrink-0 text-[10px] font-semibold text-ink-muted tabular-nums">
                                           {summaryClock(mail)}
@@ -1056,11 +890,15 @@ export function InboxScreen({
                                       <button
                                         type="button"
                                         onClick={() => onOpen(mail)}
-                                        className="focus-ring mt-0.5 block max-w-full truncate text-left text-[12px] leading-[1.4] font-bold text-accent-ink underline decoration-[1.5px] underline-offset-2"
+                                        className="focus-ring mt-0.5 block max-w-full truncate text-left text-[12px] leading-[1.35] font-bold text-accent-ink underline decoration-[1.5px] underline-offset-2"
                                       >
                                         {mail.subject}
                                       </button>
-                                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                    </div>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-1.5 pl-[30px]">
+                                    {meta.totpCode ? (
+                                      <>
                                         <span
                                           data-testid="summary-totp-code-mobile"
                                           className="inline-flex h-6 items-center rounded-lg border border-accent-ring/50 bg-accent-soft px-2 font-mono text-[12.5px] font-extrabold tracking-[0.14em] text-ink tabular-nums select-all"
@@ -1079,17 +917,198 @@ export function InboxScreen({
                                           )}
                                           {copied ? "Copié !" : "Copier"}
                                         </button>
-                                        {!readOnly ? (
+                                      </>
+                                    ) : meta.authLink ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => openExternal(meta.authLink!)}
+                                        className={SUMMARY_CHIP_FILLED}
+                                      >
+                                        <ExternalLink className="size-3" strokeWidth={2.4} />
+                                        Ouvrir le lien
+                                      </button>
+                                    ) : null}
+                                    {!readOnly ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => onMailAction("delete", mail)}
+                                        className={SUMMARY_CHIP}
+                                      >
+                                        <Trash2 className="size-3" strokeWidth={2.4} />
+                                        Supprimer
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                </article>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      ) : null}
+                      {actionRows.length > 0 ? (
+                        <section>
+                          <SummaryTitle label="À traiter" count={actionRows.length} />
+                          <div className="space-y-1">
+                            {actionRows.map(({ ref, mail }) => {
+                              const due = ref.due && ISO_DAY.test(ref.due) ? ref.due : null;
+                              const meta = summaryMetaFor(mail);
+
+                              if (meta.suspect) {
+                                const suspectReason =
+                                  ref.reason ||
+                                  (meta.phishing
+                                    ? "Hameçonnage détecté · Ne cliquez sur aucun lien"
+                                    : "Alerte sécurité · injection détectée");
+                                const domain = senderDomain(mail.email);
+                                return (
+                                  <article
+                                    key={ref.mailId}
+                                    className={cn(
+                                      "flex flex-col gap-1.5 rounded-[12px] border bg-surface px-2.5 py-1.5",
+                                      meta.phishing ? "border-rose-500/35" : "border-amber-500/35",
+                                    )}
+                                  >
+                                    <div className="flex min-w-0 items-center gap-2">
+                                      <span
+                                        className={cn(
+                                          "grid size-[22px] shrink-0 place-items-center rounded-[7px]",
+                                          meta.phishing
+                                            ? "bg-rose-500/15 text-rose-700 dark:text-rose-300"
+                                            : "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+                                        )}
+                                      >
+                                        <ShieldAlert className="size-3.5" strokeWidth={2.4} />
+                                      </span>
+                                      <div className="min-w-0 flex-1">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="min-w-0 truncate text-[11px] font-bold text-ink">
+                                            {mail.name}
+                                          </span>
+                                          <span
+                                            className={cn(
+                                              "inline-flex h-4 shrink-0 items-center rounded-full px-1.5 text-[9.5px] font-bold",
+                                              meta.phishing
+                                                ? "bg-rose-500/12 text-rose-700 dark:text-rose-300"
+                                                : "bg-amber-500/14 text-amber-700 dark:text-amber-300",
+                                            )}
+                                          >
+                                            {meta.phishing ? "Suspect · Phishing" : "Injection IA"}
+                                          </span>
+                                          <span className="ml-auto shrink-0 text-[10px] font-semibold text-ink-muted tabular-nums">
+                                            {summaryClock(mail)}
+                                          </span>
+                                        </div>
+                                        <div className="mt-0.5 flex min-w-0 items-baseline gap-1">
                                           <button
                                             type="button"
-                                            onClick={() => onMailAction("delete", mail)}
+                                            onClick={() => onOpen(mail)}
+                                            className="focus-ring min-w-0 max-w-full truncate text-left text-[12px] leading-[1.35] font-bold text-accent-ink underline decoration-[1.5px] underline-offset-2"
+                                          >
+                                            {mail.subject}
+                                          </button>
+                                          <span aria-hidden="true" className="shrink-0 text-[11px] text-ink-muted">
+                                            —
+                                          </span>
+                                          <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-ink-soft">
+                                            {suspectReason}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    {!readOnly ? (
+                                      <div className="flex flex-wrap items-center gap-1.5 pl-[30px]">
+                                        <button
+                                          type="button"
+                                          onClick={() => onMailAction("delete", mail)}
+                                          className="focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-rose-600 px-2 text-[10px] font-bold text-white"
+                                        >
+                                          <Trash2 className="size-3" strokeWidth={2.4} />
+                                          Supprimer
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => trustSender(mail.email)}
+                                          className={SUMMARY_CHIP}
+                                        >
+                                          <ShieldCheck className="size-3" strokeWidth={2.4} />
+                                          Pas suspect
+                                        </button>
+                                        {domain ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => trustDomain(mail.email)}
                                             className={SUMMARY_CHIP}
                                           >
-                                            <Trash2 className="size-3" strokeWidth={2.4} />
-                                            Supprimer
+                                            Faire confiance au domaine
                                           </button>
                                         ) : null}
                                       </div>
+                                    ) : null}
+                                  </article>
+                                );
+                              }
+
+                              if (meta.totpCode) {
+                                const copied = Boolean(copiedCodes[ref.mailId]);
+                                return (
+                                  <article
+                                    key={ref.mailId}
+                                    className="flex flex-col gap-1.5 rounded-[12px] border border-accent-ring/55 bg-surface px-2.5 py-1.5"
+                                  >
+                                    <div className="flex min-w-0 items-center gap-2">
+                                      <span className="grid size-[22px] shrink-0 place-items-center rounded-[7px] border border-accent-ring bg-accent-soft text-accent-ink">
+                                        <KeyRound className="size-3" strokeWidth={2.4} />
+                                      </span>
+                                      <div className="min-w-0 flex-1">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="min-w-0 truncate text-[11px] font-bold text-ink">
+                                            {mail.name}
+                                          </span>
+                                          <span className="inline-flex h-4 shrink-0 items-center rounded-full bg-accent-soft px-1.5 text-[9.5px] font-bold text-accent-ink">
+                                            {meta.totpService ? `Code · ${meta.totpService}` : "Code"}
+                                          </span>
+                                          <span className="ml-auto shrink-0 text-[10px] font-semibold text-ink-muted tabular-nums">
+                                            {summaryClock(mail)}
+                                          </span>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() => onOpen(mail)}
+                                          className="focus-ring mt-0.5 block max-w-full truncate text-left text-[12px] leading-[1.35] font-bold text-accent-ink underline decoration-[1.5px] underline-offset-2"
+                                        >
+                                          {mail.subject}
+                                        </button>
+                                      </div>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-1.5 pl-[30px]">
+                                      <span
+                                        data-testid="summary-totp-code-mobile"
+                                        className="inline-flex h-6 items-center rounded-lg border border-accent-ring/50 bg-accent-soft px-2 font-mono text-[12.5px] font-extrabold tracking-[0.14em] text-ink tabular-nums select-all"
+                                      >
+                                        {formatTotpCode(meta.totpCode)}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => copyTotp(ref.mailId, meta.totpCode!)}
+                                        className={copied ? SUMMARY_CHIP_DONE : SUMMARY_CHIP_FILLED}
+                                      >
+                                        {copied ? (
+                                          <Check className="size-3" strokeWidth={2.8} />
+                                        ) : (
+                                          <Copy className="size-3" strokeWidth={2.4} />
+                                        )}
+                                        {copied ? "Copié !" : "Copier"}
+                                      </button>
+                                      {!readOnly ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => onMailAction("delete", mail)}
+                                          className={SUMMARY_CHIP}
+                                        >
+                                          <Trash2 className="size-3" strokeWidth={2.4} />
+                                          Supprimer
+                                        </button>
+                                      ) : null}
                                     </div>
                                   </article>
                                 );
@@ -1098,157 +1117,166 @@ export function InboxScreen({
                               return (
                                 <article
                                   key={ref.mailId}
-                                  className="flex gap-2 rounded-[14px] bg-surface px-2.5 py-1.5"
+                                  className="flex flex-col gap-1.5 rounded-[12px] border border-line bg-surface px-2.5 py-1.5"
                                 >
-                                  <span className="grid size-7 shrink-0 place-items-center rounded-[9px] bg-accent/15 text-[9.5px] font-bold text-accent-ink">
-                                    {initials(mail.name)}
-                                  </span>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="min-w-0 truncate text-[11px] font-bold text-ink">
-                                        {mail.name}
-                                      </span>
-                                      {meta.urgent ? (
-                                        <span className="inline-flex h-4 shrink-0 items-center rounded-full bg-rose-500/12 px-1.5 text-[9.5px] font-bold text-rose-700 dark:text-rose-300">
-                                          Urgent
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <span className="grid size-[22px] shrink-0 place-items-center rounded-[7px] bg-accent/15 text-[9.5px] font-bold text-accent-ink">
+                                      {initials(mail.name)}
+                                    </span>
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="min-w-0 truncate text-[11px] font-bold text-ink">
+                                          {mail.name}
                                         </span>
-                                      ) : null}
-                                      {meta.customCategory ? (
-                                        <span
-                                          className={cn(
-                                            "inline-flex h-4 shrink-0 items-center rounded-full px-1.5 text-[9.5px] font-bold",
-                                            categoryColorStyle(meta.customCategory.color).pill,
-                                          )}
+                                        {meta.urgent ? (
+                                          <span className="inline-flex h-4 shrink-0 items-center rounded-full bg-rose-500/12 px-1.5 text-[9.5px] font-bold text-rose-700 dark:text-rose-300">
+                                            Urgent
+                                          </span>
+                                        ) : null}
+                                        {meta.customCategory ? (
+                                          <span
+                                            className={cn(
+                                              "inline-flex h-4 shrink-0 items-center rounded-full px-1.5 text-[9.5px] font-bold",
+                                              categoryColorStyle(meta.customCategory.color).pill,
+                                            )}
+                                          >
+                                            {meta.customCategory.name}
+                                          </span>
+                                        ) : null}
+                                        {due ? (
+                                          <span
+                                            className={cn(
+                                              "inline-flex h-4 shrink-0 items-center rounded-md px-1.5 text-[9.5px] font-bold",
+                                              SUMMARY_DUE_TONE[dueToneFor(due)],
+                                            )}
+                                          >
+                                            {formatDueDate(due)}
+                                          </span>
+                                        ) : null}
+                                        <span className="ml-auto shrink-0 text-[10px] font-semibold text-ink-muted tabular-nums">
+                                          {summaryClock(mail)}
+                                        </span>
+                                      </div>
+                                      <div className="mt-0.5 flex min-w-0 items-baseline gap-1">
+                                        <button
+                                          type="button"
+                                          onClick={() => onOpen(mail)}
+                                          className="focus-ring min-w-0 max-w-full truncate text-left text-[12px] leading-[1.35] font-bold text-accent-ink underline decoration-[1.5px] underline-offset-2"
                                         >
-                                          {meta.customCategory.name}
-                                        </span>
-                                      ) : null}
-                                      <span className="ml-auto shrink-0 text-[10px] font-semibold text-ink-muted tabular-nums">
-                                        {summaryClock(mail)}
-                                      </span>
+                                          {mail.subject}
+                                        </button>
+                                        {ref.reason ? (
+                                          <>
+                                            <span aria-hidden="true" className="shrink-0 text-[11px] text-ink-muted">
+                                              —
+                                            </span>
+                                            <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-ink-soft">
+                                              {ref.reason}
+                                            </span>
+                                          </>
+                                        ) : null}
+                                      </div>
                                     </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => onOpen(mail)}
-                                      className="focus-ring mt-0.5 block max-w-full truncate text-left text-[12px] leading-[1.4] font-bold text-accent-ink underline decoration-[1.5px] underline-offset-2"
-                                    >
-                                      {mail.subject}
-                                    </button>
-                                    {ref.reason ? (
-                                      <p className="mt-1 line-clamp-2 text-[11px] leading-[1.45] font-medium text-ink-soft">
-                                        {ref.reason}
-                                      </p>
-                                    ) : null}
-                                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                                      {!onPlanMail && proposed[ref.mailId] ? (
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-1.5 pl-[30px]">
+                                    {!onPlanMail && proposed[ref.mailId] ? (
+                                      <button type="button" disabled className={SUMMARY_CHIP_DONE}>
+                                        <Check className="size-3 shrink-0" strokeWidth={2.8} />
+                                        {proposed[ref.mailId] === "added" ? "Ajouté" : "Déjà proposé"}
+                                      </button>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (onPlanMail) {
+                                            const rawDec = triageDecisionFor(
+                                              mail,
+                                              decisionIndex.byKey,
+                                              decisionIndex.byMessageId,
+                                            );
+                                            const dec = rawDec
+                                              ? applyTrustRules(rawDec, mail.email, decisionPrefs)
+                                              : undefined;
+                                            onPlanMail(taskDraftFromMail(mail, ref, dec));
+                                            return;
+                                          }
+                                          const outcome = proposeSummaryAction(ref);
+                                          setProposed((current) => ({ ...current, [ref.mailId]: outcome }));
+                                        }}
+                                        className={SUMMARY_CHIP_FILLED}
+                                      >
+                                        <Plus className="size-3" strokeWidth={2.8} />
+                                        Planification
+                                      </button>
+                                    )}
+                                    {meta.hasEvent ? (
+                                      !onScheduleMail && proposedEvents[ref.mailId] ? (
                                         <button type="button" disabled className={SUMMARY_CHIP_DONE}>
                                           <Check className="size-3 shrink-0" strokeWidth={2.8} />
-                                          {proposed[ref.mailId] === "added" ? "Ajouté" : "Déjà proposé"}
+                                          {proposedEvents[ref.mailId] === "added" ? "Ajouté" : "Déjà proposé"}
                                         </button>
                                       ) : (
                                         <button
                                           type="button"
                                           onClick={() => {
-                                            if (onPlanMail) {
-                                              const rawDec = triageDecisionFor(
-                                                mail,
-                                                decisionIndex.byKey,
-                                                decisionIndex.byMessageId,
-                                              );
-                                              const dec = rawDec
-                                                ? applyTrustRules(rawDec, mail.email, decisionPrefs)
-                                                : undefined;
-                                              onPlanMail(taskDraftFromMail(mail, ref, dec));
+                                            if (onScheduleMail) {
+                                              onScheduleMail(eventDraftFromMail(mail, ref));
                                               return;
                                             }
-                                            const outcome = proposeSummaryAction(ref);
-                                            setProposed((current) => ({ ...current, [ref.mailId]: outcome }));
+                                            const outcome = proposeSummaryEvent(ref);
+                                            setProposedEvents((current) => ({
+                                              ...current,
+                                              [ref.mailId]: outcome,
+                                            }));
                                           }}
-                                          className={SUMMARY_CHIP_FILLED}
-                                        >
-                                          <Plus className="size-3" strokeWidth={2.8} />
-                                          Planification
-                                        </button>
-                                      )}
-                                      {meta.hasEvent ? (
-                                        !onScheduleMail && proposedEvents[ref.mailId] ? (
-                                          <button type="button" disabled className={SUMMARY_CHIP_DONE}>
-                                            <Check className="size-3 shrink-0" strokeWidth={2.8} />
-                                            {proposedEvents[ref.mailId] === "added" ? "Ajouté" : "Déjà proposé"}
-                                          </button>
-                                        ) : (
-                                          <button
-                                            type="button"
-                                            onClick={() => {
-                                              if (onScheduleMail) {
-                                                onScheduleMail(eventDraftFromMail(mail, ref));
-                                                return;
-                                              }
-                                              const outcome = proposeSummaryEvent(ref);
-                                              setProposedEvents((current) => ({
-                                                ...current,
-                                                [ref.mailId]: outcome,
-                                              }));
-                                            }}
-                                            className={SUMMARY_CHIP}
-                                          >
-                                            + Agenda
-                                          </button>
-                                        )
-                                      ) : null}
-                                      <button
-                                        type="button"
-                                        onClick={() => onReply(mail)}
-                                        className={SUMMARY_CHIP}
-                                      >
-                                        {meta.needsReply ? (
-                                          <Sparkles className="size-3 text-accent-ink" strokeWidth={2.4} />
-                                        ) : (
-                                          <CornerUpLeft className="size-3" strokeWidth={2.4} />
-                                        )}
-                                        Répondre
-                                      </button>
-                                      {!readOnly && meta.folderSuggestion ? (
-                                        <button
-                                          type="button"
-                                          onClick={() => moveSummaryMail(mail, meta.folderSuggestion!.path)}
                                           className={SUMMARY_CHIP}
                                         >
-                                          <FolderInput className="size-3" strokeWidth={2.4} />
-                                          Ranger dans {meta.folderSuggestion.label}
+                                          + Agenda
                                         </button>
-                                      ) : null}
-                                      {due ? (
-                                        <span
-                                          className={cn(
-                                            "inline-flex h-6 shrink-0 items-center rounded-md px-1.5 text-[10px] font-bold",
-                                            SUMMARY_DUE_TONE[dueToneFor(due)],
-                                          )}
+                                      )
+                                    ) : null}
+                                    <button
+                                      type="button"
+                                      onClick={() => onReply(mail)}
+                                      className={SUMMARY_CHIP}
+                                    >
+                                      {meta.needsReply ? (
+                                        <Sparkles className="size-3 text-accent-ink" strokeWidth={2.4} />
+                                      ) : (
+                                        <CornerUpLeft className="size-3" strokeWidth={2.4} />
+                                      )}
+                                      Répondre
+                                    </button>
+                                    {!readOnly && meta.folderSuggestion ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => moveSummaryMail(mail, meta.folderSuggestion!.path)}
+                                        className={SUMMARY_CHIP}
+                                      >
+                                        <FolderInput className="size-3" strokeWidth={2.4} />
+                                        Ranger dans {meta.folderSuggestion.label}
+                                      </button>
+                                    ) : null}
+                                    {!readOnly ? (
+                                      <div className="ml-auto flex items-center gap-0.5">
+                                        <button
+                                          type="button"
+                                          aria-label="Archiver"
+                                          onClick={() => onMailAction("archive", mail)}
+                                          className="focus-ring grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
                                         >
-                                          {formatDueDate(due)}
-                                        </span>
-                                      ) : null}
-                                      {!readOnly ? (
-                                        <div className="ml-auto flex items-center gap-0.5">
-                                          <button
-                                            type="button"
-                                            aria-label="Archiver"
-                                            onClick={() => onMailAction("archive", mail)}
-                                            className="focus-ring grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
-                                          >
-                                            <Archive className="size-3" />
-                                          </button>
-                                          <button
-                                            type="button"
-                                            aria-label="Supprimer"
-                                            onClick={() => onMailAction("delete", mail)}
-                                            className="focus-ring grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-rose-500/10 hover:text-rose-700 dark:hover:text-rose-300"
-                                          >
-                                            <Trash2 className="size-3" />
-                                          </button>
-                                        </div>
-                                      ) : null}
-                                    </div>
+                                          <Archive className="size-3" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          aria-label="Supprimer"
+                                          onClick={() => onMailAction("delete", mail)}
+                                          className="focus-ring grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-rose-500/10 hover:text-rose-700 dark:hover:text-rose-300"
+                                        >
+                                          <Trash2 className="size-3" />
+                                        </button>
+                                      </div>
+                                    ) : null}
                                   </div>
                                 </article>
                               );
@@ -1260,7 +1288,7 @@ export function InboxScreen({
                       {infoRows.length > 0 ? (
                         <section>
                           <SummaryTitle label="Pour info" count={infoRows.length} />
-                          <div className="divide-y divide-line/70">{infoRows.map(summaryRow)}</div>
+                          <div className="space-y-1">{infoRows.map((row) => summaryRow(row, "card"))}</div>
                         </section>
                       ) : null}
 
@@ -1270,7 +1298,7 @@ export function InboxScreen({
                             type="button"
                             onClick={() => setNotificationsOpen(!notificationsOpen)}
                             aria-expanded={notificationsOpen}
-                            className="focus-ring flex w-full items-center gap-2 rounded-[12px] border border-dashed border-accent-ring bg-surface/60 px-2.5 py-1.5 text-left"
+                            className="focus-ring flex w-full items-center gap-2 rounded-[11px] border border-dashed border-accent-ring bg-surface/60 px-2.5 py-1.5 text-left"
                           >
                             <span className="shrink-0 text-[10px] font-bold text-accent-ink">
                               Notifications &amp; listes · {notificationRows.length}
@@ -1287,7 +1315,9 @@ export function InboxScreen({
                             />
                           </button>
                           {notificationsOpen ? (
-                            <div className="mt-1 divide-y divide-line/70">{notificationRows.map(summaryRow)}</div>
+                            <div className="mt-1 divide-y divide-line/70 rounded-[11px] border border-line bg-surface">
+                              {notificationRows.map((row) => summaryRow(row, "list"))}
+                            </div>
                           ) : null}
                         </section>
                       ) : null}
