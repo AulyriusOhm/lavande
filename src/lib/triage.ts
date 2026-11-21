@@ -739,6 +739,7 @@ export function toApiDecisionConfig(
     notif_mode: config.notifMode,
     pre_send_guard: config.preSendGuard,
     totp_popup: config.totpPopup,
+    spam_enabled: config.spamEnabled,
     trusted_senders: config.trustedSenders ?? [],
     trusted_domains: config.trustedDomains ?? [],
     ...(options?.apiKey ? { api_key: options.apiKey } : {}),

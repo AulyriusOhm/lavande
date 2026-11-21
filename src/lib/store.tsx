@@ -64,7 +64,12 @@ import {
 import { suggestionsInWindow, usePlanning } from "@/lib/planning-store";
 import { allTeamMembers, teamContextOf, teamPromptBlock } from "@/lib/team";
 import { decisionMailDocId, syncedDecisionDocs } from "@/lib/ai-sync";
-import { decisionDomain, decisionReady, type MailDecision } from "@/lib/decision";
+import {
+  decisionDomain,
+  decisionReady,
+  withoutSpamCategory,
+  type MailDecision,
+} from "@/lib/decision";
 import { decisionDb, decisionMailKey } from "@/lib/decision-db";
 import {
   DEMO_DECISIONS_ON,
@@ -769,10 +774,12 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
   const mergeDecisions = useCallback((items: MailDecision[]) => {
     if (items.length === 0) return;
+    const spamEnabled = decisionPrefsRef.current.spamEnabled;
+    const incoming = items.map((item) => withoutSpamCategory(item, spamEnabled));
     setDecisions((current) => {
       let changed = false;
       const next = { ...current };
-      for (const item of items) {
+      for (const item of incoming) {
         const key = decisionMailKey(item.accountId, item.folderPath, item.uid);
         const existing = next[key];
         if (!existing || item.decidedAt >= existing.decidedAt) {
@@ -785,6 +792,25 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       return changed ? next : current;
     });
   }, []);
+
+  // Couper la catégorisation spam en session doit neutraliser les décisions
+  // déjà en mémoire, pas seulement les prochaines : sans cela les badges Spam
+  // et le filtre pub resteraient affichés jusqu'au rechargement.
+  useEffect(() => {
+    if (prefs.decision.spamEnabled) return;
+    setDecisions((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const [key, item] of Object.entries(next)) {
+        const normalized = withoutSpamCategory(item, false);
+        if (normalized !== item) {
+          next[key] = normalized;
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [prefs.decision.spamEnabled]);
 
   useEffect(() => {
     if (isComposeWindow()) return;

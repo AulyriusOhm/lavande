@@ -316,6 +316,30 @@ describe("Réglages PC · Modèle de décision · Système 1", () => {
       }),
     );
   });
+
+  it("laisse la catégorisation spam coupée par défaut et persiste la bascule", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "demo");
+    const fetchMock = vi.fn(async (input: unknown) => {
+      if (String(input).endsWith("/pgp/keys")) return response({ keys: [] });
+      return response([]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    mount(<DesktopSettings />);
+
+    const toggle = screen.getByRole("switch", { name: /Catégorisation spam/ });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    await waitFor(() => expect(storedPrefs().decision).toMatchObject({ spamEnabled: false }));
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(storedPrefs().decision).toMatchObject({ spamEnabled: true }));
+    expect(screen.getByRole("switch", { name: /Catégorisation spam/ }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: /Catégorisation spam/ }));
+    await waitFor(() => expect(storedPrefs().decision).toMatchObject({ spamEnabled: false }));
+  });
 });
 
 describe("Boîte & Lecteur PC · catégories, nettoyage, sécurité et rangement", () => {

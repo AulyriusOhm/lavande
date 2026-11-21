@@ -75,7 +75,11 @@ pub fn new_mail_notices_with_config(
             let decision = store
                 .get_decision(account, folder, message.uid)
                 .ok()
-                .flatten();
+                .flatten()
+                .map(|mut d| {
+                    decision::neutralize_spam(cfg, &mut d);
+                    d
+                });
             WidgetMail {
                 id: format!("{account}:{folder}:{}", message.uid),
                 account: account.to_string(),
@@ -576,6 +580,72 @@ mod tests {
         assert_eq!(notices[0].should_notify, Some(true));
         assert_eq!(notices[1].category.as_deref(), Some("promo"));
         assert_eq!(notices[1].should_notify, Some(false));
+    }
+
+    #[test]
+    fn a_stored_spam_decision_reaches_the_widget_as_info_when_disabled() {
+        use lavande_mail::store::MailDecision;
+        use std::collections::HashMap;
+
+        let store = store();
+        store
+            .upsert_message(&message(1, "Faux positif", Some("Banque"), 1_731_000_060))
+            .expect("mail");
+        let spam_dec = MailDecision {
+            account_id: "perso".into(),
+            folder_path: "INBOX".into(),
+            uid: 1,
+            message_id: Some("<m1@x>".into()),
+            content_hash: "h1".into(),
+            schema_version: 1,
+            model: "mammoth-1".into(),
+            category: "spam".into(),
+            category_conf: 0.95,
+            category_probs: HashMap::from([("spam".to_string(), 0.95)]),
+            urgency: 0.2,
+            needs_reply: 0.01,
+            has_task: 0.0,
+            has_event: 0.0,
+            security: "safe".into(),
+            security_conf: 0.99,
+            cleanup_score: 0.95,
+            assignee: None,
+            assignee_conf: None,
+            totp_code: None,
+            totp_service: None,
+            suggested_folder: None,
+            suggested_folder_conf: None,
+            decided_at: 1_731_000_065,
+            source: "local".into(),
+        };
+        store.upsert_decision(&spam_dec).expect("upsert spam");
+
+        let disabled = DecisionConfig::default();
+        let notices = new_mail_notices_with_config(
+            &store,
+            "perso",
+            "Perso",
+            "INBOX",
+            &[1],
+            5,
+            Some(&disabled),
+        );
+        assert_eq!(notices[0].category.as_deref(), Some("info"));
+
+        let enabled = DecisionConfig {
+            spam_enabled: true,
+            ..Default::default()
+        };
+        let notices = new_mail_notices_with_config(
+            &store,
+            "perso",
+            "Perso",
+            "INBOX",
+            &[1],
+            5,
+            Some(&enabled),
+        );
+        assert_eq!(notices[0].category.as_deref(), Some("spam"));
     }
 
     #[tokio::test]

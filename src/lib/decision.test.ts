@@ -11,6 +11,8 @@ import {
   isBlockedFromAutoLlm,
   parseDecisionPayload,
   setDecisionUsageSink,
+  withoutSpamCategory,
+  type MailDecision,
 } from "@/lib/decision";
 
 afterEach(() => {
@@ -126,5 +128,52 @@ describe("decision (Système 1)", () => {
 
     await decisionCallDirect(cfg, "state", { ok: { type: "noul", instructions: "ok?" } });
     expect(events).toHaveLength(2);
+  });
+});
+
+describe("decision · catégorisation spam désactivée", () => {
+  const spamDecision = (): MailDecision => ({
+    accountId: "perso",
+    folderPath: "INBOX",
+    uid: 7,
+    messageId: "<spam@example.com>",
+    contentHash: "hash",
+    schemaVersion: 1,
+    model: "mammoth-1",
+    category: "spam",
+    categoryConf: 0.95,
+    categoryProbs: { spam: 0.95, important: 0.05 },
+    urgency: 1.1,
+    needsReply: 0.1,
+    hasTask: 0,
+    hasEvent: 0,
+    security: "safe",
+    securityConf: 0.97,
+    cleanupScore: 0.6,
+    decidedAt: 1_731_000_000,
+    source: "local",
+  });
+
+  it("rapatrie spam en info et renomme la probabilité quand la catégorisation est coupée", () => {
+    const decision = spamDecision();
+    const neutral = withoutSpamCategory(decision, false);
+
+    expect(neutral.category).toBe("info");
+    expect(neutral.categoryProbs).toEqual({ info: 0.95, important: 0.05 });
+    expect(decision.category).toBe("spam");
+    expect(decision.categoryProbs).toEqual({ spam: 0.95, important: 0.05 });
+  });
+
+  it("garde la probabilité info déjà présente", () => {
+    const decision = { ...spamDecision(), categoryProbs: { spam: 0.6, info: 0.35 } };
+    expect(withoutSpamCategory(decision, false).categoryProbs).toEqual({ info: 0.35 });
+  });
+
+  it("rend la même référence quand la catégorisation est active ou la catégorie autre", () => {
+    const decision = spamDecision();
+    expect(withoutSpamCategory(decision, true)).toBe(decision);
+
+    const promo = { ...spamDecision(), category: "promo" };
+    expect(withoutSpamCategory(promo, false)).toBe(promo);
   });
 });

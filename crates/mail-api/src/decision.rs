@@ -183,6 +183,10 @@ pub struct DecisionConfig {
     pub pre_send_guard: bool,
     #[serde(default = "default_true")]
     pub totp_popup: bool,
+    /// Autorise le modèle à classer un mail en `spam`. Désactivé par défaut :
+    /// les faux positifs coupaient les notifications et le résumé de mails légitimes.
+    #[serde(default)]
+    pub spam_enabled: bool,
     #[serde(default)]
     pub trusted_senders: Vec<String>,
     #[serde(default)]
@@ -204,6 +208,7 @@ impl Default for DecisionConfig {
             notif_mode: NotifFilterMode::All,
             pre_send_guard: true,
             totp_popup: true,
+            spam_enabled: false,
             trusted_senders: Vec::new(),
             trusted_domains: Vec::new(),
         }
@@ -284,6 +289,25 @@ pub fn apply_trust_rules(config: &DecisionConfig, sender_email: &str, decision: 
     decision.security_conf = 1.0;
     if decision.category == "spam" || decision.category == "promo" {
         decision.category = "important".to_string();
+    }
+}
+
+/// Rapatrie en `info` une décision `spam` enregistrée alors que la catégorisation
+/// spam était active : sans ce filtre, les libellés déjà stockés continueraient de
+/// couper notifications et résumé, et les faux positifs resteraient muets. La
+/// probabilité `spam` est renommée `info` (la valeur `info` existante est gardée).
+/// En lecture seulement : les décisions stockées ne sont jamais réécrites, donc
+/// réactiver la catégorisation rend les libellés d'origine.
+pub fn neutralize_spam(config: &DecisionConfig, decision: &mut MailDecision) {
+    if config.spam_enabled || decision.category != "spam" {
+        return;
+    }
+    decision.category = "info".to_string();
+    if let Some(prob) = decision.category_probs.remove("spam") {
+        decision
+            .category_probs
+            .entry("info".to_string())
+            .or_insert(prob);
     }
 }
 
@@ -824,10 +848,12 @@ pub fn build_triage_questions(
         "promo".to_string(),
         "Publicité, offre commerciale, marketing ou newsletter promotionnelle".to_string(),
     );
-    criteria.insert(
-        "spam".to_string(),
-        "Courrier indésirable, démarchage agressif ou message non sollicité".to_string(),
-    );
+    if config.spam_enabled {
+        criteria.insert(
+            "spam".to_string(),
+            "Courrier indésirable, démarchage agressif ou message non sollicité".to_string(),
+        );
+    }
     for cat in &config.custom_categories {
         let key = format!("custom:{}", cat.id.trim());
         criteria.insert(
@@ -999,6 +1025,7 @@ pub async fn triage_message_with_timeout(
         {
             if existing.content_hash == hash && existing.schema_version == TRIAGE_SCHEMA_VERSION {
                 apply_trust_rules(&config, &message.from.email, &mut existing);
+                neutralize_spam(&config, &mut existing);
                 return Ok(TriageOutcome {
                     decision: existing,
                     cached: true,
@@ -1130,6 +1157,7 @@ pub async fn triage_message_with_timeout(
     };
 
     apply_trust_rules(&config, &message.from.email, &mut decision);
+    neutralize_spam(&config, &mut decision);
 
     state.store().upsert_decision(&decision)?;
 
@@ -1145,29 +1173,29 @@ pub async fn triage_message_with_timeout(
 /// Détermine si un mail trié doit déclencher une notification système selon le
 /// mode de filtrage configuré.
 pub fn should_notify(config: &DecisionConfig, decision: &MailDecision) -> bool {
+    let category = if !config.spam_enabled && decision.category == "spam" {
+        "info"
+    } else {
+        decision.category.as_str()
+    };
     match config.notif_mode {
         NotifFilterMode::All => true,
         NotifFilterMode::UrgentOnly => {
-            decision.totp_code.is_some()
-                || decision.category == "auth_totp"
-                || decision.urgency >= 2.0
+            decision.totp_code.is_some() || category == "auth_totp" || decision.urgency >= 2.0
         }
         NotifFilterMode::Smart => {
-            if decision.totp_code.is_some() || decision.category == "auth_totp" {
+            if decision.totp_code.is_some() || category == "auth_totp" {
                 return true;
             }
-            if matches!(
-                decision.category.as_str(),
-                "promo" | "spam" | "notification"
-            ) {
+            if matches!(category, "promo" | "spam" | "notification") {
                 return decision.urgency >= 2.2;
             }
-            if let Some(custom_id) = decision.category.strip_prefix("custom:") {
+            if let Some(custom_id) = category.strip_prefix("custom:") {
                 if let Some(cat) = config.custom_categories.iter().find(|c| c.id == custom_id) {
                     return cat.allow_notifications;
                 }
             }
-            decision.category == "important"
+            category == "important"
                 || decision.needs_reply >= config.thresholds.category
                 || decision.urgency >= 1.5
         }
@@ -1332,5 +1360,121 @@ mod tests {
         apply_trust_rules(&config, "unknown@evil.xyz", &mut untrusted);
         assert_eq!(untrusted.security, "phishing");
         assert_eq!(untrusted.category, "spam");
+    }
+
+    fn mail_decision(category: &str) -> MailDecision {
+        MailDecision {
+            account_id: "a".into(),
+            folder_path: "INBOX".into(),
+            uid: 1,
+            message_id: None,
+            content_hash: "h".into(),
+            schema_version: 1,
+            model: "mammoth-1".into(),
+            category: category.into(),
+            category_conf: 0.9,
+            category_probs: HashMap::new(),
+            urgency: 1.0,
+            needs_reply: 0.1,
+            has_task: 0.0,
+            has_event: 0.0,
+            security: "safe".into(),
+            security_conf: 0.99,
+            cleanup_score: 0.1,
+            assignee: None,
+            assignee_conf: None,
+            totp_code: None,
+            totp_service: None,
+            suggested_folder: None,
+            suggested_folder_conf: None,
+            decided_at: 0,
+            source: "local".into(),
+        }
+    }
+
+    fn category_criteria(config: &DecisionConfig) -> BTreeMap<String, String> {
+        match build_triage_questions(config, &[]).get("category") {
+            Some(DecisionQuestion::Choice { criteria, .. }) => criteria.clone(),
+            _ => panic!("question `category` absente"),
+        }
+    }
+
+    #[test]
+    fn triage_questions_offer_spam_only_when_enabled() {
+        let disabled = DecisionConfig::default();
+        assert!(!disabled.spam_enabled);
+        let criteria = category_criteria(&disabled);
+        assert!(!criteria.contains_key("spam"));
+        assert!(criteria.contains_key("promo"));
+
+        let enabled = DecisionConfig {
+            spam_enabled: true,
+            ..Default::default()
+        };
+        assert!(category_criteria(&enabled).contains_key("spam"));
+    }
+
+    #[test]
+    fn neutralize_spam_renames_category_and_probability() {
+        let mut decision = mail_decision("spam");
+        decision.category_probs =
+            HashMap::from([("spam".to_string(), 0.95), ("important".to_string(), 0.05)]);
+
+        neutralize_spam(&DecisionConfig::default(), &mut decision);
+
+        assert_eq!(decision.category, "info");
+        assert_eq!(decision.category_probs.get("info"), Some(&0.95));
+        assert!(!decision.category_probs.contains_key("spam"));
+        assert_eq!(decision.category_probs.get("important"), Some(&0.05));
+    }
+
+    #[test]
+    fn neutralize_spam_keeps_existing_info_probability() {
+        let mut decision = mail_decision("spam");
+        decision.category_probs =
+            HashMap::from([("spam".to_string(), 0.6), ("info".to_string(), 0.4)]);
+
+        neutralize_spam(&DecisionConfig::default(), &mut decision);
+
+        assert_eq!(decision.category_probs.get("info"), Some(&0.4));
+        assert!(!decision.category_probs.contains_key("spam"));
+    }
+
+    #[test]
+    fn neutralize_spam_is_a_no_op_when_enabled_or_other_category() {
+        let enabled = DecisionConfig {
+            spam_enabled: true,
+            ..Default::default()
+        };
+        let mut spam = mail_decision("spam");
+        spam.category_probs = HashMap::from([("spam".to_string(), 0.9)]);
+        neutralize_spam(&enabled, &mut spam);
+        assert_eq!(spam.category, "spam");
+        assert_eq!(spam.category_probs.get("spam"), Some(&0.9));
+
+        let mut promo = mail_decision("promo");
+        neutralize_spam(&DecisionConfig::default(), &mut promo);
+        assert_eq!(promo.category, "promo");
+    }
+
+    #[test]
+    fn smart_notifications_treat_spam_as_info_when_disabled() {
+        let enabled = DecisionConfig {
+            notif_mode: NotifFilterMode::Smart,
+            spam_enabled: true,
+            ..Default::default()
+        };
+        let mut spam = mail_decision("spam");
+        spam.urgency = 1.8;
+        assert!(!should_notify(&enabled, &spam));
+
+        let disabled = DecisionConfig {
+            notif_mode: NotifFilterMode::Smart,
+            ..Default::default()
+        };
+        assert!(should_notify(&disabled, &spam));
+
+        spam.urgency = 0.2;
+        assert!(!should_notify(&disabled, &spam));
     }
 }

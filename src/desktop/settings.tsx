@@ -23,6 +23,7 @@ import {
   RefreshCw,
   RotateCcw,
   ShieldCheck,
+  ShieldOff,
   SlidersHorizontal,
   Sparkles,
   Sun,
@@ -2504,6 +2505,13 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                       hint="Vérifie pièce jointe oubliée, question sans réponse et secrets en clair"
                       checked={decision.preSendGuard}
                       onChange={(value) => updateDecision({ preSendGuard: value })}
+                    />
+                    <ToggleRow
+                      icon={<ShieldOff className="size-4" />}
+                      label="Catégorisation spam"
+                      hint="Autoriser le modèle à classer des mails en spam (désactivé : moins de faux positifs)"
+                      checked={decision.spamEnabled}
+                      onChange={(value) => updateDecision({ spamEnabled: value })}
                     />
                   </div>
                   <div className="space-y-2 border-t border-line/70 pt-3">

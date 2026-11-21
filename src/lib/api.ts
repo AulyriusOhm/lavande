@@ -347,6 +347,7 @@ export type ApiDecisionConfig = {
   notif_mode: "all" | "smart" | "urgent_only";
   pre_send_guard: boolean;
   totp_popup: boolean;
+  spam_enabled: boolean;
   trusted_senders: string[];
   trusted_domains: string[];
 };

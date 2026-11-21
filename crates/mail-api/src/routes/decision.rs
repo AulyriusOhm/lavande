@@ -130,11 +130,15 @@ async fn list_decisions(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<MailDecision>>, ApiError> {
     let limit = query.limit.unwrap_or(500);
-    let items = state.store().list_decisions(
+    let mut items = state.store().list_decisions(
         query.account_id.as_deref(),
         query.folder_path.as_deref(),
         limit,
     )?;
+    let config = state.decision_config()?;
+    for item in &mut items {
+        decision::neutralize_spam(&config, item);
+    }
     Ok(Json(items))
 }
 

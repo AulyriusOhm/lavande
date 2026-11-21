@@ -8,6 +8,7 @@ import {
   PERIMETER_EVENT,
   PrefsProvider,
   accountPgp,
+  asDecision,
   asFolderOrder,
   asHiddenFolders,
   asNotifications,
@@ -761,5 +762,13 @@ describe("préférences · moi et mon équipe", () => {
       { name: "Camille", scope: "Ateliers" },
       { name: "Noé", scope: "Stage" },
     ]);
+  });
+});
+
+describe("préférences · modèle de décision", () => {
+  it("garde la catégorisation spam coupée quand le stockage ne la mentionne pas", () => {
+    expect(asDecision({}).spamEnabled).toBe(false);
+    expect(asDecision({ spamEnabled: "oui" }).spamEnabled).toBe(false);
+    expect(asDecision({ spamEnabled: true }).spamEnabled).toBe(true);
   });
 });

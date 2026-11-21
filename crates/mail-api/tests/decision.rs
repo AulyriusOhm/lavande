@@ -4,7 +4,7 @@
 //! de décisions synchronisées entre appareils.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::extract::State as AxumState;
@@ -472,4 +472,193 @@ async fn trusted_senders_and_domains_override_phishing_and_spam_in_triage() {
     assert_eq!(triaged["results"][0]["decision"]["security"], "safe");
     assert_eq!(triaged["results"][0]["decision"]["security_conf"], 1.0);
     assert_eq!(triaged["results"][0]["decision"]["category"], "important");
+}
+
+#[tokio::test]
+async fn spam_category_is_offered_and_kept_only_when_enabled() {
+    let sent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&sent);
+    let router = Router::new().route(
+        "/v1/systemone",
+        post(move |Json(body): Json<Value>| {
+            let recorder = Arc::clone(&recorder);
+            async move {
+                if let Some(questions) = body.get("questions") {
+                    recorder.lock().expect("lock").push(questions.clone());
+                }
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "model": "mammoth-1",
+                        "answers": {
+                            "category": {
+                                "type": "choice",
+                                "choice": "spam",
+                                "probabilities": { "spam": 0.95 },
+                                "confidence": 0.95
+                            },
+                            "urgency": { "type": "score", "score": 1.1 },
+                            "needs_reply": { "type": "noul", "noul": 0.1 },
+                            "has_task": { "type": "noul", "noul": 0.0 },
+                            "has_event": { "type": "noul", "noul": 0.0 },
+                            "security": {
+                                "type": "choice",
+                                "choice": "safe",
+                                "probabilities": { "safe": 0.97 },
+                                "confidence": 0.97
+                            },
+                            "cleanup_candidate": { "type": "noul", "noul": 0.6 }
+                        },
+                        "usage": { "input_tokens": 60, "output_tokens": 0 }
+                    })),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+
+    let (_dir, state, app_router, token) = setup_daemon().await;
+
+    // 1. Sans `spam_enabled` : le défaut est désactivé et le modèle ne voit pas la catégorie.
+    let (status, saved) = send_json(
+        &app_router,
+        &token,
+        Method::PUT,
+        "/api/ai/decision/config",
+        Some(json!({
+            "enabled": true,
+            "provider": "custom",
+            "protocol": "systemone",
+            "endpoint": format!("http://{addr}/v1/systemone"),
+            "model": "mammoth-1",
+            "auth_header": "none"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["spam_enabled"], false);
+
+    state
+        .store()
+        .upsert_account("perso", "Perso", "roman@lavande.fr")
+        .expect("account");
+    state
+        .store()
+        .upsert_message(&Message {
+            account_id: "perso".into(),
+            folder_path: "INBOX".into(),
+            uid: 30,
+            uidvalidity: 1,
+            thread_id: "t-30".into(),
+            message_id: Some("<30@promo.example>".into()),
+            in_reply_to: None,
+            references: vec![],
+            from: Address {
+                name: Some("Promo".into()),
+                email: "offres@promo.example".into(),
+            },
+            to: vec![],
+            cc: vec![],
+            subject: "Offre du jour".into(),
+            date: None,
+            flags: Flags {
+                unread: true,
+                starred: false,
+                answered: false,
+            },
+            size: 90,
+            pgp: PgpState::None,
+            preview: "Une offre exceptionnelle".into(),
+            body_text: Some("Une offre exceptionnelle vous attend.".into()),
+            body_html: None,
+            pgp_detail: None,
+            attachments: vec![],
+        })
+        .expect("msg");
+
+    let (status, triaged) = send_json(
+        &app_router,
+        &token,
+        Method::POST,
+        "/api/ai/decisions/triage",
+        Some(json!({
+            "targets": [{ "account_id": "perso", "folder_path": "INBOX", "uid": 30 }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(triaged["results"][0]["decision"]["category"], "info");
+    assert_eq!(
+        triaged["results"][0]["decision"]["category_probs"]["info"],
+        0.95
+    );
+    assert!(triaged["results"][0]["decision"]["category_probs"]
+        .get("spam")
+        .is_none());
+
+    let first = sent.lock().expect("lock")[0].clone();
+    let criteria = &first["category"]["criteria"];
+    assert!(criteria.get("spam").is_none());
+    assert_eq!(
+        criteria["important"],
+        "Message humain ou professionnel important nécessitant attention ou suivi"
+    );
+
+    // 2. La liste relue ne garde pas le libellé spam stocké.
+    let (status, listed) =
+        send_json(&app_router, &token, Method::GET, "/api/ai/decisions", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed[0]["category"], "info");
+
+    // 3. Catégorisation réactivée : la catégorie est de nouveau offerte et conservée.
+    let (status, saved) = send_json(
+        &app_router,
+        &token,
+        Method::PUT,
+        "/api/ai/decision/config",
+        Some(json!({
+            "enabled": true,
+            "provider": "custom",
+            "protocol": "systemone",
+            "endpoint": format!("http://{addr}/v1/systemone"),
+            "model": "mammoth-1",
+            "auth_header": "none",
+            "spam_enabled": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["spam_enabled"], true);
+
+    let (status, retriaged) = send_json(
+        &app_router,
+        &token,
+        Method::POST,
+        "/api/ai/decisions/triage",
+        Some(json!({
+            "targets": [{ "account_id": "perso", "folder_path": "INBOX", "uid": 30 }],
+            "force": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(retriaged["results"][0]["decision"]["category"], "spam");
+    assert_eq!(
+        retriaged["results"][0]["decision"]["category_probs"]["spam"],
+        0.95
+    );
+
+    let last = sent
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("questions");
+    assert!(last["category"]["criteria"].get("spam").is_some());
 }

@@ -121,4 +121,26 @@ describe("Réglages IA · segmentation Modèle de décision (Système 1) vs LLM"
       }),
     );
   });
+
+  it("laisse la catégorisation spam coupée par défaut et persiste la bascule", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response([])),
+    );
+
+    mount();
+
+    const toggle = screen.getByRole("switch", { name: /Catégorisation spam/ });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    await waitFor(() => expect(stored().decision).toMatchObject({ spamEnabled: false }));
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(stored().decision).toMatchObject({ spamEnabled: true }));
+    expect(screen.getByRole("switch", { name: /Catégorisation spam/ }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: /Catégorisation spam/ }));
+    await waitFor(() => expect(stored().decision).toMatchObject({ spamEnabled: false }));
+  });
 });

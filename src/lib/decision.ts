@@ -55,6 +55,8 @@ export type DecisionConfig = {
   notifMode: NotifFilterMode;
   preSendGuard: boolean;
   totpPopup: boolean;
+  /** Autorise le modèle à classer un mail en `spam` ; coupé par défaut (faux positifs). */
+  spamEnabled: boolean;
   trustedSenders: string[];
   trustedDomains: string[];
 };
@@ -220,6 +222,7 @@ export const DEFAULT_DECISION: DecisionConfig = {
   notifMode: "all",
   preSendGuard: true,
   totpPopup: true,
+  spamEnabled: false,
   trustedSenders: [],
   trustedDomains: [],
 };
@@ -287,6 +290,24 @@ export const NOISE_CATEGORIES = new Set(["promo", "spam", "auth_totp", "notifica
 
 export function isNoiseCategory(category: string): boolean {
   return NOISE_CATEGORIES.has(category);
+}
+
+/**
+ * Rapatrie en `info` une décision `spam` enregistrée quand la catégorisation spam
+ * était active : sans cela, les libellés déjà stockés continuent de couper
+ * notifications, résumé et nettoyage, et les faux positifs restent muets. La
+ * probabilité `spam` est renommée `info` (une valeur `info` existante est gardée).
+ * Rien n'est réécrit en base : réactiver la catégorisation rend les libellés d'origine.
+ * Rend la décision inchangée (même référence) hors du cas concerné, pour que
+ * `mergeDecisions` continue d'ignorer les éléments sans changement.
+ */
+export function withoutSpamCategory(decision: MailDecision, spamEnabled: boolean): MailDecision {
+  if (spamEnabled || decision.category !== "spam") return decision;
+  const categoryProbs = { ...decision.categoryProbs };
+  const spam = categoryProbs.spam;
+  delete categoryProbs.spam;
+  if (categoryProbs.info === undefined && spam !== undefined) categoryProbs.info = spam;
+  return { ...decision, category: "info", categoryProbs };
 }
 
 export function isPromptInjection(

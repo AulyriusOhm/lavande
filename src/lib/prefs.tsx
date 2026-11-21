@@ -379,6 +379,7 @@ export const asDecision = (value: unknown): DecisionConfig => {
     notifMode,
     preSendGuard: asBoolean(raw.preSendGuard, DEFAULT_DECISION.preSendGuard),
     totpPopup: asBoolean(raw.totpPopup, DEFAULT_DECISION.totpPopup),
+    spamEnabled: asBoolean(raw.spamEnabled, DEFAULT_DECISION.spamEnabled),
     trustedSenders: asTrustedList(raw.trustedSenders, false),
     trustedDomains: asTrustedList(raw.trustedDomains, true),
   };
