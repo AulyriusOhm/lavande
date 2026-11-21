@@ -122,6 +122,7 @@ echo "== étape 5 : paquets $VERSION dans le bundle lu par release-updater.mjs"
 # version courante et on archive les anciennes pour qu'il n'y ait aucun doute.
 for target in rpm deb appimage; do
   mkdir -p "artifacts/release-build/$target"
+  mkdir -p "src-tauri/target/release/bundle/$target"
   find "src-tauri/target/release/bundle/$target" -maxdepth 1 -type f ! -name "*$VERSION*" \
     -exec mv -t "artifacts/release-build/$target/" {} +
   shopt -s nullglob
