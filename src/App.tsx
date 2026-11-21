@@ -10,7 +10,13 @@ import { insertAt } from "@/lib/draft";
 import { MailStoreProvider, useMailStore } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
 import { suggestFolderForMail } from "@/lib/guards";
-import { indexDecisions, triageDecisionFor } from "@/lib/triage";
+import {
+  applyTrustRules,
+  eventDraftFromMail,
+  indexDecisions,
+  taskDraftFromMail,
+  triageDecisionFor,
+} from "@/lib/triage";
 import { Dock, TABS, type TabId } from "@/components/dock";
 import { AccountSwitchSheet, InboxScreen as InboxView, MailboxSheet } from "@/screens/inbox-screen";
 import { MailContextMenu } from "@/components/mail-context-menu";
@@ -20,7 +26,7 @@ import { CalendarScreen as CalendarView } from "@/screens/calendar-screen";
 import { McpApprovalHost, McpScreen } from "@/screens/mcp-screen";
 import { PlanningScreen as PlanningView } from "@/screens/planning-screen";
 import { TaskScreen } from "@/screens/task-screen";
-import { NewTaskSheet, createTask } from "@/screens/new-task-sheet";
+import { NewTaskSheet, createTask, type NewTaskDraft } from "@/screens/new-task-sheet";
 import { NewEventSheet, type NewEventDraft } from "@/screens/new-event-sheet";
 import { SettingsScreen as SettingsView } from "@/screens/settings-screen";
 import { MessageScreen } from "@/screens/message-screen";
@@ -63,7 +69,8 @@ const DesktopShell = lazy(() =>
 const OVERLAY_STATE = { lavandeOverlay: true };
 
 function TotpHost() {
-  const { totpAlert, dismissTotpAlert, mails, openMessage, mailAction } = useMailStore();
+  const { totpAlert, dismissTotpAlert, mails, openMessage, mailAction, inboxActive } = useMailStore();
+  if (inboxActive) return null;
   return (
     <TotpPopup
       alert={totpAlert}
@@ -215,6 +222,9 @@ function PhoneApp({ native }: { native?: boolean }) {
     decisions,
     isDecisionReady,
     triageMails,
+    setInboxActive,
+    trustSender,
+    trustDomain,
     mode,
     readOnly,
     phase,
@@ -242,6 +252,7 @@ function PhoneApp({ native }: { native?: boolean }) {
   const [mcpOpen, setMcpOpen] = useState(false);
   const [detail, setDetail] = useState<{ task: Task; suggestion?: MailSuggestion } | null>(null);
   const [taskDraftOpen, setTaskDraftOpen] = useState(false);
+  const [taskDraft, setTaskDraft] = useState<NewTaskDraft | null>(null);
   const [eventDraftOpen, setEventDraftOpen] = useState(false);
   const [eventDraft, setEventDraft] = useState<NewEventDraft | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -250,13 +261,11 @@ function PhoneApp({ native }: { native?: boolean }) {
   const [cleanupScanning, setCleanupScanning] = useState(false);
 
   const decisionIndex = useMemo(() => indexDecisions(decisions), [decisions]);
-  const openMailDecision = useMemo(
-    () =>
-      openMail
-        ? (triageDecisionFor(openMail, decisionIndex.byKey, decisionIndex.byMessageId) ?? null)
-        : null,
-    [openMail, decisionIndex],
-  );
+  const openMailDecision = useMemo(() => {
+    if (!openMail) return null;
+    const raw = triageDecisionFor(openMail, decisionIndex.byKey, decisionIndex.byMessageId);
+    return raw ? applyTrustRules(raw, openMail.email, prefs.decision) : null;
+  }, [openMail, decisionIndex, prefs.decision]);
 
   const openMailCustomFolders = useMemo(() => {
     if (!openMail) return [];
@@ -326,10 +335,19 @@ function PhoneApp({ native }: { native?: boolean }) {
     if (!order.includes(tab)) setTab("inbox");
   }, [order, tab]);
 
+  const closeTaskDraft = useCallback(() => {
+    setTaskDraftOpen(false);
+    setTaskDraft(null);
+  }, []);
+
   const closeEventDraft = useCallback(() => {
     setEventDraftOpen(false);
     setEventDraft(null);
   }, []);
+
+  useEffect(() => {
+    setInboxActive(tab === "inbox" && !pgpOpen && !mcpOpen && !cleanupOpen);
+  }, [cleanupOpen, mcpOpen, pgpOpen, setInboxActive, tab]);
 
   const layers: [boolean, () => void][] = [
     [helpOpen, () => setHelpOpen(false)],
@@ -337,7 +355,7 @@ function PhoneApp({ native }: { native?: boolean }) {
     [connectOpen, closeConnect],
     [composeOpen, minimizeCompose],
     [eventDraftOpen, () => closeEventDraft()],
-    [taskDraftOpen, () => setTaskDraftOpen(false)],
+    [taskDraftOpen, () => closeTaskDraft()],
     [accountsOpen, () => setAccountsOpen(false)],
     [foldersOpen, () => setFoldersOpen(false)],
     [Boolean(contextMail), () => setContextMail(null)],
@@ -450,10 +468,14 @@ function PhoneApp({ native }: { native?: boolean }) {
   const openSearch = useCallback(() => setSearchOpen(true), []);
   const openPgp = useCallback(() => setPgpOpen(true), []);
   const openMcp = useCallback(() => setMcpOpen(true), []);
-  const openTaskDraft = useCallback(() => {
-    if (readOnly) return;
-    setTaskDraftOpen(true);
-  }, [readOnly]);
+  const openTaskDraft = useCallback(
+    (draft?: NewTaskDraft) => {
+      if (readOnly) return;
+      setTaskDraft(draft ?? null);
+      setTaskDraftOpen(true);
+    },
+    [readOnly],
+  );
   const openTask = useCallback((task: Task) => setDetail({ task }), []);
   const openSuggestion = useCallback(
     (suggestion: MailSuggestion) =>
@@ -501,8 +523,8 @@ function PhoneApp({ native }: { native?: boolean }) {
       planningEnabled,
       calendarActive: tab === "calendar",
       compose: openComposer,
-      newTask: openTaskDraft,
-      newEvent: openEventDraft,
+      newTask: () => openTaskDraft(),
+      newEvent: () => openEventDraft(),
       search: openSearch,
       toggleHelp: () => setHelpOpen((current) => !current),
       mail: {
@@ -605,6 +627,8 @@ function PhoneApp({ native }: { native?: boolean }) {
                   onRestore={restoreMail}
                   onOpenMenu={setContextMail}
                   onOpenCleanup={() => setCleanupOpen(true)}
+                  onPlanMail={readOnly ? undefined : openTaskDraft}
+                  onScheduleMail={readOnly ? undefined : openEventDraft}
                 />
               )}
               {id === "calendar" && (
@@ -655,7 +679,7 @@ function PhoneApp({ native }: { native?: boolean }) {
           active={tab}
           onChange={changeTab}
           onCompose={openComposer}
-          onNewTask={() => setTaskDraftOpen(true)}
+          onNewTask={() => openTaskDraft()}
           onNewEvent={() => openEventDraft()}
           readOnly={readOnly}
         />
@@ -722,6 +746,15 @@ function PhoneApp({ native }: { native?: boolean }) {
                 customFolders={openMailCustomFolders}
                 onMoveToFolder={moveToFolder}
                 onSuggestFolder={handleSuggestFolder}
+                onPlan={
+                  readOnly
+                    ? undefined
+                    : (mail) =>
+                        openTaskDraft(taskDraftFromMail(mail, undefined, openMailDecision ?? undefined))
+                }
+                onSchedule={readOnly ? undefined : (mail) => openEventDraft(eventDraftFromMail(mail))}
+                onTrustSender={readOnly ? undefined : (mail) => trustSender(mail.email)}
+                onTrustDomain={readOnly ? undefined : (mail) => trustDomain(mail.email)}
               />
               {analyse && analyse.mailId === openMail.id ? (
                 <AnalysePanel
@@ -1003,7 +1036,7 @@ function PhoneApp({ native }: { native?: boolean }) {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                onClick={() => setTaskDraftOpen(false)}
+                onClick={closeTaskDraft}
               />
               <motion.div
                 className="absolute inset-x-0 bottom-0 top-16 overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-20px_60px_-20px_rgba(40,20,80,0.35)]"
@@ -1013,7 +1046,8 @@ function PhoneApp({ native }: { native?: boolean }) {
                 transition={{ type: "spring", stiffness: 320, damping: 32 }}
               >
                 <NewTaskSheet
-                  onClose={() => setTaskDraftOpen(false)}
+                  draft={taskDraft ?? undefined}
+                  onClose={closeTaskDraft}
                   onCreate={(task) => {
                     setTasks((current) => createTask(current, task));
                     notify("Tâche créée");

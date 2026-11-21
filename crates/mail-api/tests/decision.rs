@@ -349,3 +349,127 @@ async fn config_probe_triage_cache_and_sync_import() {
     assert_eq!(listed[0]["source"], "synced");
     assert_eq!(listed[0]["category"], "important");
 }
+
+#[tokio::test]
+async fn trusted_senders_and_domains_override_phishing_and_spam_in_triage() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&hits);
+    let router = Router::new()
+        .route(
+            "/v1/systemone",
+            post(
+                move |AxumState(_): AxumState<Arc<AtomicUsize>>| async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "model": "mammoth-1",
+                            "answers": {
+                                "category": {
+                                    "type": "choice",
+                                    "choice": "spam",
+                                    "probabilities": { "spam": 0.95 },
+                                    "confidence": 0.95
+                                },
+                                "urgency": { "type": "score", "score": 1.2 },
+                                "needs_reply": { "type": "noul", "noul": 0.1 },
+                                "has_task": { "type": "noul", "noul": 0.0 },
+                                "has_event": { "type": "noul", "noul": 0.0 },
+                                "security": {
+                                    "type": "choice",
+                                    "choice": "phishing",
+                                    "probabilities": { "phishing": 0.96 },
+                                    "confidence": 0.96
+                                },
+                                "cleanup_candidate": { "type": "noul", "noul": 0.8 }
+                            },
+                            "usage": { "input_tokens": 50, "output_tokens": 0 }
+                        })),
+                    )
+                },
+            ),
+        )
+        .with_state(hits);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+
+    let (_dir, state, app_router, token) = setup_daemon().await;
+    let (status, saved) = send_json(
+        &app_router,
+        &token,
+        Method::PUT,
+        "/api/ai/decision/config",
+        Some(json!({
+            "enabled": true,
+            "provider": "custom",
+            "protocol": "systemone",
+            "endpoint": format!("http://{addr}/v1/systemone"),
+            "model": "mammoth-1",
+            "auth_header": "none",
+            "trusted_senders": ["Alertes@Banque.FR"],
+            "trusted_domains": ["@boursorama.fr"]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["trusted_senders"], json!(["alertes@banque.fr"]));
+    assert_eq!(saved["trusted_domains"], json!(["boursorama.fr"]));
+
+    state
+        .store()
+        .upsert_account("perso", "Perso", "roman@lavande.fr")
+        .expect("account");
+    state
+        .store()
+        .upsert_message(&Message {
+            account_id: "perso".into(),
+            folder_path: "INBOX".into(),
+            uid: 20,
+            uidvalidity: 1,
+            thread_id: "t-20".into(),
+            message_id: Some("<20@boursorama.fr>".into()),
+            in_reply_to: None,
+            references: vec![],
+            from: Address {
+                name: Some("Service Client".into()),
+                email: "service@boursorama.fr".into(),
+            },
+            to: vec![],
+            cc: vec![],
+            subject: "Relevé mensuel".into(),
+            date: None,
+            flags: Flags {
+                unread: true,
+                starred: false,
+                answered: false,
+            },
+            size: 100,
+            pgp: PgpState::None,
+            preview: "Votre relevé".into(),
+            body_text: Some("Votre relevé est disponible.".into()),
+            body_html: None,
+            pgp_detail: None,
+            attachments: vec![],
+        })
+        .expect("msg");
+
+    let (status, triaged) = send_json(
+        &app_router,
+        &token,
+        Method::POST,
+        "/api/ai/decisions/triage",
+        Some(json!({
+            "targets": [{ "account_id": "perso", "folder_path": "INBOX", "uid": 20 }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(triaged["results"][0]["decision"]["security"], "safe");
+    assert_eq!(triaged["results"][0]["decision"]["security_conf"], 1.0);
+    assert_eq!(triaged["results"][0]["decision"]["category"], "important");
+}

@@ -55,6 +55,8 @@ export type DecisionConfig = {
   notifMode: NotifFilterMode;
   preSendGuard: boolean;
   totpPopup: boolean;
+  trustedSenders: string[];
+  trustedDomains: string[];
 };
 
 export type DecisionQuestion =
@@ -218,6 +220,8 @@ export const DEFAULT_DECISION: DecisionConfig = {
   notifMode: "all",
   preSendGuard: true,
   totpPopup: true,
+  trustedSenders: [],
+  trustedDomains: [],
 };
 
 export function decisionProviderPreset(provider: DecisionProvider) {

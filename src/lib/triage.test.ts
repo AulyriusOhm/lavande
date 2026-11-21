@@ -5,12 +5,17 @@ import { buildDemoDecisions } from "@/lib/demo-decisions";
 import type { Mail } from "@/lib/mail";
 import {
   MAX_RECENT_TRIAGE,
+  applyTrustRules,
+  eventDraftFromMail,
+  extractAuthLink,
   filterMailsForLlm,
   fromApiDecision,
   indexDecisions,
+  isTrustedSender,
   reasonFromDecision,
   stableDecisionKey,
   summaryGroupsFromDecisions,
+  taskDraftFromMail,
   toApiDecision,
   triageDecisionFor,
   triageRecentMails,
@@ -248,7 +253,7 @@ describe("triage · summaryGroupsFromDecisions", () => {
     expect(groups.notifications[0].reason).toContain("482917");
   });
 
-  it("met les suspects en tête d'actions, les TOTP récents (< 24 h) en actions et les vieux TOTP en notifications", () => {
+  it("met les TOTP récents (< 24 h) tout en premier, puis les suspects, puis les importantes, et les vieux TOTP en notifications", () => {
     const now = Date.now();
     const HOUR = 3_600_000;
     const mails = [
@@ -256,21 +261,28 @@ describe("triage · summaryGroupsFromDecisions", () => {
       makeMail(2, { timestamp: now - 2 * HOUR }),
       makeMail(3, { timestamp: now - 30 * HOUR }),
       makeMail(4, { timestamp: now - 3 * HOUR }),
+      makeMail(5, {
+        timestamp: now - HOUR,
+        body: ["Cliquez sur https://app.example.com/verify?token=xyz pour activer votre compte."],
+        preview: "Lien de vérification https://app.example.com/verify?token=xyz",
+      }),
     ];
     const decisions = indexDecisions([
       makeDecision({ uid: 1, messageId: "<m1@example.com>", category: "important", urgency: 2.8, needsReply: 0.9 }),
       makeDecision({ uid: 2, messageId: "<m2@example.com>", category: "auth_totp", totpCode: "482917", totpService: "GitHub", urgency: 0.5 }),
       makeDecision({ uid: 3, messageId: "<m3@example.com>", category: "auth_totp", totpCode: "901442", totpService: "Stripe", urgency: 0.3 }),
       makeDecision({ uid: 4, messageId: "<m4@example.com>", category: "spam", security: "phishing", securityConf: 0.96, urgency: 0.2 }),
+      makeDecision({ uid: 5, messageId: "<m5@example.com>", category: "auth_totp", totpService: "Linear", urgency: 0.4 }),
     ]);
 
     const groups = summaryGroupsFromDecisions(mails, decisions, THRESHOLDS, { now });
     expect(groups.actions.map((ref) => ref.mailId)).toEqual([
+      "perso:INBOX:2",
+      "perso:INBOX:5",
       "perso:INBOX:4",
       "perso:INBOX:1",
-      "perso:INBOX:2",
     ]);
-    expect(groups.actions[0].reason).toContain("Hameçonnage détecté");
+    expect(groups.actions[2].reason).toContain("Hameçonnage détecté");
     expect(groups.notifications.map((ref) => ref.mailId)).toEqual(["perso:INBOX:3"]);
   });
 
@@ -375,5 +387,68 @@ describe("triage · triageRecentMails (file bornée)", () => {
 
     const stored54 = await db.getDecision(decisionMailKey("perso", "INBOX", 54));
     expect(stored54?.category).toBe("important");
+  });
+});
+
+describe("triage · extractAuthLink, whitelist de confiance et drafts", () => {
+  it("extrait le lien de vérification HTTPS en excluant unsubscribe", () => {
+    const body = [
+      "Pour vous désabonner : https://example.com/unsubscribe?id=1",
+      "Confirmez votre compte : https://auth.service.fr/verify?token=abc123.",
+    ].join("\n");
+    expect(extractAuthLink(body)).toBe("https://auth.service.fr/verify?token=abc123");
+    expect(extractAuthLink("https://example.com/unsubscribe")).toBeNull();
+  });
+
+  it("applique la whitelist expéditeurs et domaines sans appel API", () => {
+    expect(isTrustedSender("Alertes@Banque.FR", ["alertes@banque.fr"], [])).toBe(true);
+    expect(isTrustedSender("conseiller@boursorama.fr", [], ["boursorama.fr"])).toBe(true);
+    expect(isTrustedSender("evil@phish.xyz", ["alertes@banque.fr"], ["boursorama.fr"])).toBe(false);
+
+    const phish = makeDecision({
+      category: "spam",
+      security: "phishing",
+      securityConf: 0.95,
+    });
+    const cleared = applyTrustRules(phish, "alertes@banque.fr", {
+      trustedSenders: ["alertes@banque.fr"],
+      trustedDomains: [],
+    });
+    expect(cleared.security).toBe("safe");
+    expect(cleared.securityConf).toBe(1);
+    expect(cleared.category).toBe("important");
+
+    const infoCleared = applyTrustRules(
+      makeDecision({ category: "info", security: "prompt_injection", securityConf: 0.92 }),
+      "bot@boursorama.fr",
+      { trustedSenders: [], trustedDomains: ["boursorama.fr"] },
+    );
+    expect(infoCleared.security).toBe("safe");
+    expect(infoCleared.category).toBe("info");
+  });
+
+  it("construit NewTaskDraft et EventDraft pré-remplis depuis un mail", () => {
+    const mail = makeMail(10, {
+      name: "Camille",
+      subject: "Devis signé",
+      preview: "Peux-tu envoyer la facture ?",
+    });
+    const dec = makeDecision({ assignee: "Marc" });
+    expect(taskDraftFromMail(mail, { reason: "Facturer le client", due: "2026-11-25" }, dec)).toEqual({
+      title: "Devis signé",
+      description: "Facturer le client\n\nPeux-tu envoyer la facture ?",
+      dueDate: "2026-11-25",
+      assignee: "Marc",
+      mailId: mail.id,
+      mailFrom: "Camille",
+      mailSubject: "Devis signé",
+    });
+    expect(eventDraftFromMail(mail, { reason: "Point", due: "2026-11-25" })).toEqual({
+      title: "Devis signé",
+      date: "2026-11-25",
+      mailId: mail.id,
+      mailFrom: "Camille",
+      mailSubject: "Devis signé",
+    });
   });
 });

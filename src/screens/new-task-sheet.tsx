@@ -1,10 +1,14 @@
 import { useState } from "react";
-import { Check } from "lucide-react";
-import type { Task, TaskState } from "@/lib/tasks";
+import { Check, Mail } from "lucide-react";
+import type { NewTaskDraft, Task, TaskState } from "@/lib/tasks";
 import { TASK_STATES, dueToneFor, formatDueDate, isoEndOfWeek, isoToday, sortTasks } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 import { TeamDatalist } from "@/components/team-datalist";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
+
+export type { NewTaskDraft };
+
+const ISO_DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 const SHORTCUTS = [
   { label: "Aujourd'hui", iso: () => isoToday(0) },
@@ -15,15 +19,18 @@ const SHORTCUTS = [
 export function NewTaskSheet({
   onClose,
   onCreate,
+  draft,
 }: {
   onClose: () => void;
   onCreate: (task: Task) => void;
+  draft?: NewTaskDraft;
 }) {
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
+  const initialDue = draft?.dueDate && ISO_DAY.test(draft.dueDate) ? draft.dueDate : isoToday(0);
+  const [title, setTitle] = useState(draft?.title ?? "");
+  const [description, setDescription] = useState(draft?.description ?? "");
   const [state, setState] = useState<TaskState>("todo");
-  const [dueDate, setDueDate] = useState(isoToday(0));
-  const [assignee, setAssignee] = useState("");
+  const [dueDate, setDueDate] = useState(initialDue);
+  const [assignee, setAssignee] = useState(draft?.assignee ?? "");
 
   const dueLabel = dueDate ? formatDueDate(dueDate) : "sans échéance";
 
@@ -32,13 +39,14 @@ export function NewTaskSheet({
     onCreate({
       id: "n-" + Date.now(),
       title: title.trim(),
-      meta: "manuel",
+      meta: draft?.mailFrom ? `mail · ${draft.mailFrom}` : "manuel",
       state,
       due: dueLabel,
       dueTone: dueDate ? dueToneFor(dueDate) : "none",
       dueDate: dueDate || undefined,
       description: description.trim() || undefined,
       assignee: assignee.trim() || undefined,
+      ...(draft?.mailId ? { mailId: draft.mailId } : {}),
     });
     onClose();
   };
@@ -58,6 +66,22 @@ export function NewTaskSheet({
       </div>
 
       <div className="flex-1 overflow-y-auto no-scrollbar px-4">
+        {draft?.mailId ? (
+          <div className="mb-3 flex items-start gap-2 rounded-2xl border border-accent-ring/50 bg-accent-soft/50 px-3 py-2">
+            <Mail className="mt-0.5 size-3.5 shrink-0 text-accent-ink" strokeWidth={2.4} />
+            <div className="min-w-0 flex-1 leading-tight">
+              <p className="text-[10px] font-bold tracking-[0.14em] text-accent-ink uppercase">
+                Mail lié
+              </p>
+              {draft.mailFrom ? (
+                <p className="mt-0.5 truncate text-[11.5px] font-bold text-ink">{draft.mailFrom}</p>
+              ) : null}
+              {draft.mailSubject ? (
+                <p className="truncate text-[11px] font-medium text-ink-soft">{draft.mailSubject}</p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         <label className="block text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase" htmlFor="task-title">
           Intitulé
         </label>

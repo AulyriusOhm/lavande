@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DesktopInbox } from "@/desktop/inbox";
+import { NewTaskDialog } from "@/desktop/planning";
 import { DesktopSettings } from "@/desktop/settings";
 import type { ApiAccount, ApiFolder, ApiMailDecision, ApiMessage, ApiThread } from "@/lib/api";
 import {
@@ -300,6 +301,20 @@ describe("Réglages PC · Modèle de décision · Système 1", () => {
     // Gestionnaire de catégories custom
     fireEvent.click(screen.getByRole("button", { name: "Gérer les catégories personnalisées" }));
     expect(screen.getByRole("dialog", { name: "Catégories personnalisées" })).toBeTruthy();
+
+    // Whitelist expéditeurs & domaines de confiance
+    const trustInput = screen.getByLabelText("Expéditeur ou domaine de confiance");
+    const addTrust = screen.getByRole("button", { name: "Approuver" });
+    fireEvent.change(trustInput, { target: { value: "alertes@banque.fr" } });
+    fireEvent.click(addTrust);
+    fireEvent.change(trustInput, { target: { value: "boursorama.fr" } });
+    fireEvent.click(addTrust);
+    await waitFor(() =>
+      expect(storedPrefs().decision).toMatchObject({
+        trustedSenders: ["alertes@banque.fr"],
+        trustedDomains: ["boursorama.fr"],
+      }),
+    );
   });
 });
 
@@ -430,11 +445,16 @@ describe("Boîte & Lecteur PC · catégories, nettoyage, sécurité et rangement
       }),
     );
 
-    // Retour sur Prioritaire et ouvrir le mail Phishing (alerte role="alert")
+    // Retour sur Prioritaire et ouvrir le mail Phishing (alerte role="alert") + action 1 clic "Pas suspect"
     fireEvent.click(screen.getByRole("button", { name: /^Prioritaire/ }));
     fireEvent.click(document.querySelector<HTMLElement>(`[data-mail-row="${ACCOUNT}:t-5"]`)!);
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Alerte hameçonnage (phishing)");
+    fireEvent.click(within(alert).getByRole("button", { name: "Pas suspect" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(storedPrefs().decision).toMatchObject({
+      trustedSenders: ["banque@test.fr"],
+    });
 
     // Ouvrir le mail Prompt Injection (bandeau role="status" + confirmation avant Analyse)
     fireEvent.click(document.querySelector<HTMLElement>(`[data-mail-row="${ACCOUNT}:t-6"]`)!);
@@ -462,5 +482,30 @@ describe("Boîte & Lecteur PC · catégories, nettoyage, sécurité et rangement
 
     fireEvent.click(within(cleanupDialog).getByLabelText("Retour à la boîte"));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Nettoyage de boîte" })).toBeNull());
+  });
+
+  it("pré-remplit NewTaskDialog avec un NewTaskDraft et affiche le mail lié", () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "demo");
+    mount(
+      <NewTaskDialog
+        open
+        draft={{
+          title: "Valider la v3",
+          description: "Retour attendu avant vendredi",
+          dueDate: "2026-11-27",
+          assignee: "Camille",
+          mailId: "1",
+          mailFrom: "Camille Rousseau",
+          mailSubject: "Maquettes mobiles — version 3",
+        }}
+        onClose={() => {}}
+      />,
+    );
+
+    expect((screen.getByLabelText("Intitulé") as HTMLInputElement).value).toBe("Valider la v3");
+    expect((screen.getByLabelText("Échéance") as HTMLInputElement).value).toBe("2026-11-27");
+    expect((screen.getByLabelText("Assignée à") as HTMLInputElement).value).toBe("Camille");
+    expect(screen.getByText("Mail lié")).toBeTruthy();
+    expect(screen.getByText("Camille Rousseau")).toBeTruthy();
   });
 });

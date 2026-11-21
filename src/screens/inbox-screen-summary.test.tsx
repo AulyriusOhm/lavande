@@ -153,10 +153,10 @@ describe("Boîte de réception mobile · résumé périodique", () => {
   });
 
   it("affiche le briefing du modèle : actions, échéance, notifications repliées et pied épuré", async () => {
-    seedSummary("7 mails sur 24 h · 1 action attendue, 2 pour info, 3 notifications.", {
+    seedSummary("7 mails sur 24 h · 1 action attendue, 1 pour info, 1 notification.", {
       actions: [{ mailId: "3", reason: "Renvoyer l'avenant signé", due: isoToday(0) }],
-      infos: [{ mailId: "1", reason: "" }, { mailId: "4", reason: "" }],
-      notifications: [{ mailId: "2", reason: "" }, { mailId: "6", reason: "" }, { mailId: "7", reason: "" }],
+      infos: [{ mailId: "1", reason: "" }],
+      notifications: [{ mailId: "2", reason: "" }],
     });
     mount();
 
@@ -169,7 +169,7 @@ describe("Boîte de réception mobile · résumé périodique", () => {
     expect(screen.getByTestId("summary-source-mobile").textContent).toBe("IA");
     expect(screen.getByTestId("summary-footer-mobile").textContent).toBe("Généré à 08:12");
 
-    const fold = within(body).getByRole("button", { name: /Notifications & listes · 3/ });
+    const fold = within(body).getByRole("button", { name: /Notifications & listes · 1/ });
     expect(within(body).queryByText("[lavande] Rust backend: 3 pull requests")).toBeNull();
 
     fireEvent.click(fold);
@@ -178,6 +178,22 @@ describe("Boîte de réception mobile · résumé périodique", () => {
 
     fireEvent.click(fold);
     expect(within(body).queryByText("[lavande] Rust backend: 3 pull requests")).toBeNull();
+  });
+
+  it("exclut les mails déjà lus du Résumé et affiche le message zen quand tout est lu", async () => {
+    seedSummary("Mails lus", {
+      actions: [],
+      infos: [{ mailId: "4", reason: "" }],
+      notifications: [{ mailId: "6", reason: "" }],
+    });
+    mount();
+
+    const body = await screen.findByTestId("summary-attachments-mobile");
+    await waitFor(() =>
+      expect(within(body).getByText("Tout a été lu sur la période.")).toBeTruthy(),
+    );
+    expect(within(body).queryByText("Déjeuner jeudi ?")).toBeNull();
+    expect(within(body).queryByText("Ton récapitulatif hebdomadaire")).toBeNull();
   });
 
   it("ouvre le mail résumé et répond depuis une carte d'action", async () => {
@@ -581,6 +597,7 @@ describe("Boîte de réception mobile · résumé périodique", () => {
     expect(screen.getByTestId("summary-source-mobile").textContent).toBe("Décision");
     // Accroche robotique masquée en mode Décision
     expect(screen.queryByText(/3 mails :/)).toBeNull();
+    expect(within(body).getByText("Vérification & accès")).toBeTruthy();
     expect(within(body).getByText("Suspect · Phishing")).toBeTruthy();
     expect(within(body).getByText("Code · GitHub")).toBeTruthy();
     expect(within(body).getByTestId("summary-totp-code-mobile").textContent).toBe("482 917");
@@ -591,8 +608,12 @@ describe("Boîte de réception mobile · résumé périodique", () => {
     expect(writeText).toHaveBeenCalledWith("482917");
     expect(within(body).getByRole("button", { name: "Copié !" })).toBeTruthy();
 
-    fireEvent.click(within(body).getAllByRole("button", { name: "Supprimer" })[0]);
-    expect(onMailAction).toHaveBeenCalledTimes(1);
-    expect((onMailAction.mock.calls[0][1] as Mail).id).toBe("alpha:INBOX:102");
+    const deleteButtons = within(body).getAllByRole("button", { name: "Supprimer" });
+    // Le bloc Vérification & accès (101) est tout en haut avant À traiter (102)
+    fireEvent.click(deleteButtons[0]);
+    fireEvent.click(deleteButtons[1]);
+    expect(onMailAction).toHaveBeenCalledTimes(2);
+    expect((onMailAction.mock.calls[0][1] as Mail).id).toBe("alpha:INBOX:101");
+    expect((onMailAction.mock.calls[1][1] as Mail).id).toBe("alpha:INBOX:102");
   });
 });

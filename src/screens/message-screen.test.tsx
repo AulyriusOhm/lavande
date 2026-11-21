@@ -736,4 +736,49 @@ describe("bouclier sécurité et rangement par dossier", () => {
 
     expect(screen.queryByRole("button", { name: /Ranger dans/ })).toBeNull();
   });
+
+  it("permet d'approuver l'expéditeur ou le domaine en 1 clic sur une alerte phishing", () => {
+    render(
+      <PrefsProvider>
+        <MessageScreen
+          thread={THREAD}
+          decision={{ ...BASE_DECISION, security: "phishing", securityConf: 0.92 }}
+          onClose={() => {}}
+          onToggleStar={() => {}}
+          onReply={() => {}}
+        />
+      </PrefsProvider>,
+    );
+
+    expect(screen.getByRole("alert")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Pas suspect" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    const saved = JSON.parse(window.localStorage.getItem("lavande.prefs") ?? "{}") as {
+      decision?: { trustedSenders?: string[] };
+    };
+    expect(saved.decision?.trustedSenders).toContain("camille@studio-lilas.fr");
+  });
+
+  it("propose Planifier et + Agenda dans les actions du message", () => {
+    const onPlan = vi.fn();
+    const onSchedule = vi.fn();
+    render(
+      <PrefsProvider>
+        <MessageScreen
+          thread={THREAD}
+          onClose={() => {}}
+          onToggleStar={() => {}}
+          onReply={() => {}}
+          onPlan={onPlan}
+          onSchedule={onSchedule}
+        />
+      </PrefsProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Planifier" }));
+    fireEvent.click(screen.getByRole("button", { name: "+ Agenda" }));
+    expect(onPlan).toHaveBeenCalledWith(MAIL);
+    expect(onSchedule).toHaveBeenCalledWith(MAIL);
+  });
 });

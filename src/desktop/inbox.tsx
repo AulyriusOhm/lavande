@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Archive,
+  CalendarPlus,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -10,12 +11,14 @@ import {
   CornerUpLeft,
   CornerUpRight,
   Download,
+  ExternalLink,
   FolderInput,
   FolderOpen,
   Forward,
   Inbox,
   KeyRound,
   Layers,
+  ListTodo,
   Loader2,
   Lock,
   Mail as MailIcon,
@@ -56,7 +59,20 @@ import {
   type MailDecision,
 } from "@/lib/decision";
 import { countCleanupByFilter } from "@/lib/cleanup";
-import { asDecisionIndex, indexDecisions, summaryDecisionMeta, triageDecisionFor, type DecisionLookup } from "@/lib/triage";
+import {
+  applyTrustRules,
+  asDecisionIndex,
+  eventDraftFromMail,
+  indexDecisions,
+  senderDomain,
+  summaryDecisionMeta,
+  taskDraftFromMail,
+  triageDecisionFor,
+  type DecisionLookup,
+} from "@/lib/triage";
+import { openExternal } from "@/lib/open-external";
+import type { NewEventInit } from "@/desktop/calendar";
+import type { NewTaskDraft } from "@/desktop/planning";
 import { suggestFolderForMail } from "@/lib/guards";
 import { formatTotpCode } from "@/components/totp-popup";
 import { PGP_STATE, formatKeyDate, keyLabel, keyState, shortFingerprint, type PgpKey } from "@/lib/pgp";
@@ -348,12 +364,18 @@ export function MorningSummary({
   decisions,
   decisionThresholds = DEFAULT_DECISION_THRESHOLDS,
   customCategories = [],
+  trustedSenders = [],
+  trustedDomains = [],
   onToggle,
   onOpen,
   onRefresh,
   onReply,
   onPropose,
   onProposeEvent,
+  onPlanMail,
+  onScheduleMail,
+  onTrustSender,
+  onTrustDomain,
   onDelete,
   onArchive,
   onMoveToFolder,
@@ -370,12 +392,18 @@ export function MorningSummary({
   decisions?: DecisionLookup;
   decisionThresholds?: DecisionThresholds;
   customCategories?: readonly CustomCategory[];
+  trustedSenders?: readonly string[];
+  trustedDomains?: readonly string[];
   onToggle: () => void;
   onOpen: (id: string) => void;
   onRefresh: () => void;
   onReply: (mail: Mail) => void;
   onPropose: (ref: SummaryRef) => "added" | "existing";
   onProposeEvent?: (ref: SummaryRef) => "added" | "existing";
+  onPlanMail?: (ref: SummaryRef, mail: Mail) => void;
+  onScheduleMail?: (ref: SummaryRef, mail: Mail) => void;
+  onTrustSender?: (mail: Mail) => void;
+  onTrustDomain?: (mail: Mail) => void;
   onDelete?: (mail: Mail) => void;
   onArchive?: (mail: Mail) => void;
   onMoveToFolder?: (mail: Mail, folderPath: string) => void;
@@ -416,14 +444,37 @@ export function MorningSummary({
   const rowsOf = (refs: SummaryRef[]): SummaryRow[] =>
     refs.flatMap((ref) => {
       const mail = byId.get(ref.mailId);
-      return mail ? [{ ref, mail }] : [];
+      return mail && mail.unread ? [{ ref, mail }] : [];
     });
-  const actions = summary ? rowsOf(summary.groups.actions) : [];
+  const metaFor = (mail: Mail) => {
+    const rawDec = decisionLookup
+      ? triageDecisionFor(mail, decisionLookup.byKey, decisionLookup.byMessageId)
+      : undefined;
+    const dec = rawDec
+      ? applyTrustRules(rawDec, mail.email, {
+          trustedSenders: [...trustedSenders],
+          trustedDomains: [...trustedDomains],
+        })
+      : undefined;
+    return summaryDecisionMeta(mail, dec, decisionThresholds, customCategories);
+  };
+  const allActions = summary ? rowsOf(summary.groups.actions) : [];
+  const authRows: SummaryRow[] = [];
+  const actions: SummaryRow[] = [];
+  for (const row of allActions) {
+    const meta = metaFor(row.mail);
+    if (!meta.suspect && (meta.totpCode || meta.authLink)) {
+      authRows.push(row);
+    } else {
+      actions.push(row);
+    }
+  }
   const infos = summary ? rowsOf(summary.groups.infos) : [];
   const notifications = summary ? rowsOf(summary.groups.notifications) : [];
-  const hasGroupedRows = actions.length > 0 || infos.length > 0 || notifications.length > 0;
+  const hasGroupedRows =
+    authRows.length > 0 || actions.length > 0 || infos.length > 0 || notifications.length > 0;
   const showHeadline = Boolean(
-    summary?.headline && !(summary.source === "decision" && hasGroupedRows),
+    summary?.headline && hasGroupedRows && !(summary.source === "decision" && hasGroupedRows),
   );
   const senders = [...new Set(notifications.map((row) => row.mail.name))];
   const notified = senders
@@ -433,13 +484,6 @@ export function MorningSummary({
       return count > 1 ? `${name} ×${count}` : name;
     })
     .join(", ");
-
-  const metaFor = (mail: Mail) => {
-    const dec = decisionLookup
-      ? triageDecisionFor(mail, decisionLookup.byKey, decisionLookup.byMessageId)
-      : undefined;
-    return summaryDecisionMeta(mail, dec, decisionThresholds, customCategories);
-  };
 
   const infoRow = ({ ref, mail }: SummaryRow) => {
     const meta = metaFor(mail);
@@ -588,6 +632,97 @@ export function MorningSummary({
               data-testid="summary-attachments"
               className="mt-2 max-h-[min(42vh,360px)] space-y-2.5 overflow-y-auto pr-1"
             >
+              {!hasGroupedRows ? (
+                <p className="py-2 text-center text-[12px] font-medium text-ink-muted">
+                  Tout a été lu sur la période.
+                </p>
+              ) : null}
+              {authRows.length > 0 ? (
+                <section>
+                  <SummaryGroupTitle label="Vérification & accès" count={authRows.length} />
+                  <div className="space-y-1">
+                    {authRows.map(({ ref, mail }) => {
+                      const meta = metaFor(mail);
+                      const copied = Boolean(copiedCodes[ref.mailId]);
+                      return (
+                        <article
+                          key={ref.mailId}
+                          className="flex gap-2.5 rounded-[14px] border border-accent-ring/50 bg-surface px-2.5 py-2"
+                        >
+                          <span className="grid size-[26px] shrink-0 place-items-center rounded-[10px] border border-accent-ring bg-accent-soft text-accent-ink">
+                            <KeyRound className="size-3.5" strokeWidth={2.4} />
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="min-w-0 truncate text-[11.5px] font-bold text-ink">
+                                {mail.name}
+                              </span>
+                              <Badge tone="accent">
+                                {meta.totpCode
+                                  ? meta.totpService
+                                    ? `Code · ${meta.totpService}`
+                                    : "Code"
+                                  : meta.totpService
+                                    ? `Accès · ${meta.totpService}`
+                                    : "Vérification"}
+                              </Badge>
+                              <span className="ml-auto shrink-0 text-[10.5px] font-semibold text-ink-muted tabular-nums">
+                                {summaryClock(mail)}
+                              </span>
+                            </div>
+                            <button type="button" onClick={() => onOpen(mail.id)} className={SUMMARY_SUBJECT}>
+                              {mail.subject}
+                            </button>
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                              {meta.totpCode ? (
+                                <>
+                                  <span
+                                    data-testid="summary-totp-code"
+                                    className="inline-flex h-6 items-center rounded-lg border border-accent-ring/50 bg-accent-soft px-2 font-mono text-[13px] font-extrabold tracking-[0.14em] text-ink tabular-nums select-all"
+                                  >
+                                    {formatTotpCode(meta.totpCode)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => copyTotp(ref.mailId, meta.totpCode!)}
+                                    className={copied ? SUMMARY_CHIP_DONE : SUMMARY_CHIP_FILLED}
+                                  >
+                                    {copied ? (
+                                      <Check className="size-3" strokeWidth={2.8} />
+                                    ) : (
+                                      <Copy className="size-3" strokeWidth={2.4} />
+                                    )}
+                                    {copied ? "Copié !" : "Copier"}
+                                  </button>
+                                </>
+                              ) : meta.authLink ? (
+                                <button
+                                  type="button"
+                                  onClick={() => openExternal(meta.authLink!)}
+                                  className={SUMMARY_CHIP_FILLED}
+                                >
+                                  <ExternalLink className="size-3" strokeWidth={2.4} />
+                                  Ouvrir le lien
+                                </button>
+                              ) : null}
+                              {onDelete ? (
+                                <button
+                                  type="button"
+                                  onClick={() => onDelete(mail)}
+                                  className={SUMMARY_CHIP}
+                                >
+                                  <Trash2 className="size-3" strokeWidth={2.4} />
+                                  Supprimer
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </section>
+              ) : null}
               {actions.length > 0 ? (
                 <section>
                   <SummaryGroupTitle label="À traiter" count={actions.length} />
@@ -602,6 +737,7 @@ export function MorningSummary({
                           (meta.phishing
                             ? "Hameçonnage détecté · Ne cliquez sur aucun lien"
                             : "Alerte sécurité · injection détectée");
+                        const domain = senderDomain(mail.email);
                         return (
                           <article
                             key={ref.mailId}
@@ -640,16 +776,37 @@ export function MorningSummary({
                               <p className="mt-1 line-clamp-2 text-[11.5px] leading-[1.5] font-medium text-ink-soft">
                                 {suspectReason}
                               </p>
-                              {onDelete ? (
-                                <div className="mt-1.5 flex items-center gap-1.5">
-                                  <button
-                                    type="button"
-                                    onClick={() => onDelete(mail)}
-                                    className="focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-rose-600 px-2.5 text-[10.5px] font-bold text-white transition-colors hover:bg-rose-700"
-                                  >
-                                    <Trash2 className="size-3" strokeWidth={2.4} />
-                                    Supprimer
-                                  </button>
+                              {onDelete || onTrustSender || onTrustDomain ? (
+                                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                  {onDelete ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => onDelete(mail)}
+                                      className="focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-rose-600 px-2.5 text-[10.5px] font-bold text-white transition-colors hover:bg-rose-700"
+                                    >
+                                      <Trash2 className="size-3" strokeWidth={2.4} />
+                                      Supprimer
+                                    </button>
+                                  ) : null}
+                                  {onTrustSender ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => onTrustSender(mail)}
+                                      className={SUMMARY_CHIP}
+                                    >
+                                      <ShieldCheck className="size-3" strokeWidth={2.4} />
+                                      Pas suspect
+                                    </button>
+                                  ) : null}
+                                  {onTrustDomain && domain ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => onTrustDomain(mail)}
+                                      className={SUMMARY_CHIP}
+                                    >
+                                      Faire confiance au domaine
+                                    </button>
+                                  ) : null}
                                 </div>
                               ) : null}
                             </div>
@@ -752,7 +909,7 @@ export function MorningSummary({
                               </p>
                             ) : null}
                             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                              {proposed[ref.mailId] ? (
+                              {!onPlanMail && proposed[ref.mailId] ? (
                                 <button type="button" disabled className={SUMMARY_CHIP_DONE}>
                                   <Check className="size-3 shrink-0" strokeWidth={2.8} />
                                   {proposed[ref.mailId] === "added" ? "Ajouté" : "Déjà proposé"}
@@ -761,6 +918,10 @@ export function MorningSummary({
                                 <button
                                   type="button"
                                   onClick={() => {
+                                    if (onPlanMail) {
+                                      onPlanMail(ref, mail);
+                                      return;
+                                    }
                                     const outcome = onPropose(ref);
                                     setProposed((current) => ({ ...current, [ref.mailId]: outcome }));
                                   }}
@@ -770,8 +931,8 @@ export function MorningSummary({
                                   Planification
                                 </button>
                               )}
-                              {meta.hasEvent && onProposeEvent ? (
-                                proposedEvents[ref.mailId] ? (
+                              {meta.hasEvent && (onScheduleMail || onProposeEvent) ? (
+                                !onScheduleMail && proposedEvents[ref.mailId] ? (
                                   <button type="button" disabled className={SUMMARY_CHIP_DONE}>
                                     <Check className="size-3 shrink-0" strokeWidth={2.8} />
                                     {proposedEvents[ref.mailId] === "added" ? "Ajouté" : "Déjà proposé"}
@@ -780,6 +941,11 @@ export function MorningSummary({
                                   <button
                                     type="button"
                                     onClick={() => {
+                                      if (onScheduleMail) {
+                                        onScheduleMail(ref, mail);
+                                        return;
+                                      }
+                                      if (!onProposeEvent) return;
                                       const outcome = onProposeEvent(ref);
                                       setProposedEvents((current) => ({ ...current, [ref.mailId]: outcome }));
                                     }}
@@ -1127,10 +1293,14 @@ export function DesktopInbox({
   onOpenSearch,
   navigationRef,
   onOpenPgp,
+  onOpenNewTask,
+  onOpenNewEvent,
 }: {
   onOpenSearch: () => void;
   navigationRef?: React.RefObject<MailNavigation | null>;
   onOpenPgp?: () => void;
+  onOpenNewTask?: (draft: NewTaskDraft) => void;
+  onOpenNewEvent?: (draft: NewEventInit) => void;
 }) {
   const {
     mails,
@@ -1186,6 +1356,8 @@ export function DesktopInbox({
     decisions,
     isDecisionReady,
     triageMails,
+    trustSender,
+    trustDomain,
   } = useMailStore();
   const { dark, setDark } = useTheme();
   const prefs = usePrefs();
@@ -1337,14 +1509,14 @@ export function DesktopInbox({
         decisionIndex.byKey,
         decisionIndex.byMessageId,
       );
-      if (primary) return primary;
+      if (primary) return applyTrustRules(primary, thread.primary.email, decisionPrefs);
       for (const msg of thread.messages) {
         const hit = triageDecisionFor(msg, decisionIndex.byKey, decisionIndex.byMessageId);
-        if (hit) return hit;
+        if (hit) return applyTrustRules(hit, msg.email, decisionPrefs);
       }
       return undefined;
     },
-    [decisionIndex],
+    [decisionIndex, decisionPrefs],
   );
 
   const smartCounts = useMemo(() => {
@@ -1552,13 +1724,11 @@ export function DesktopInbox({
     mail && mail.pgp === "encrypted" && !mail.bodyFetched && !resolvePgp(prefs, mail.account).enabled,
   );
 
-  const openMailDecision = useMemo(
-    () =>
-      mail
-        ? (triageDecisionFor(mail, decisionIndex.byKey, decisionIndex.byMessageId) ?? null)
-        : null,
-    [mail, decisionIndex],
-  );
+  const openMailDecision = useMemo(() => {
+    if (!mail) return null;
+    const raw = triageDecisionFor(mail, decisionIndex.byKey, decisionIndex.byMessageId);
+    return raw ? applyTrustRules(raw, mail.email, decisionPrefs) : null;
+  }, [mail, decisionIndex, decisionPrefs]);
   const securityThresholds = decisionPrefs.thresholds;
   const phishingAlert = Boolean(openMailDecision && isPhishing(openMailDecision, securityThresholds));
   const promptInjectionAlert = Boolean(
@@ -2456,12 +2626,36 @@ export function DesktopInbox({
                 decisions={decisionIndex}
                 decisionThresholds={decisionPrefs.thresholds}
                 customCategories={decisionPrefs.customCategories}
+                trustedSenders={decisionPrefs.trustedSenders}
+                trustedDomains={decisionPrefs.trustedDomains}
                 onToggle={() => setSummaryOpen(!summaryOpen)}
                 onOpen={openById}
                 onRefresh={() => void refreshSummary(true)}
                 onReply={replyTo}
                 onPropose={proposeSummaryAction}
                 onProposeEvent={proposeSummaryEvent}
+                onPlanMail={
+                  onOpenNewTask
+                    ? (ref, entry) => {
+                        const rawDec = triageDecisionFor(
+                          entry,
+                          decisionIndex.byKey,
+                          decisionIndex.byMessageId,
+                        );
+                        const dec = rawDec
+                          ? applyTrustRules(rawDec, entry.email, decisionPrefs)
+                          : undefined;
+                        onOpenNewTask(taskDraftFromMail(entry, ref, dec));
+                      }
+                    : undefined
+                }
+                onScheduleMail={
+                  onOpenNewEvent
+                    ? (ref, entry) => onOpenNewEvent(eventDraftFromMail(entry, ref))
+                    : undefined
+                }
+                onTrustSender={readOnly ? undefined : (entry) => trustSender(entry.email)}
+                onTrustDomain={readOnly ? undefined : (entry) => trustDomain(entry.email)}
                 onDelete={readOnly ? undefined : (entry) => mailAction("delete", entry)}
                 onArchive={readOnly ? undefined : (entry) => mailAction("archive", entry)}
                 onMoveToFolder={
@@ -2636,7 +2830,7 @@ export function DesktopInbox({
                   </div>
                 </header>
 
-                <div className="flex items-center gap-2 border-b border-line bg-surface/70 px-5 py-2.5 backdrop-blur">
+                <div className="flex flex-wrap items-center gap-2 border-b border-line bg-surface/70 px-5 py-2.5 backdrop-blur">
                   {readOnly ? (
                     <p className="flex items-center gap-1.5 text-[11.5px] font-semibold text-ink-muted">
                       <Lock className="size-3.5" strokeWidth={2.4} />
@@ -2681,6 +2875,30 @@ export function DesktopInbox({
                         <Sparkles className="size-3.5" />
                         Analyse
                       </DButton>
+                      {onOpenNewTask ? (
+                        <DButton
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            onOpenNewTask(
+                              taskDraftFromMail(mail, undefined, openMailDecision ?? undefined),
+                            )
+                          }
+                        >
+                          <ListTodo className="size-3.5" />
+                          Planifier
+                        </DButton>
+                      ) : null}
+                      {onOpenNewEvent ? (
+                        <DButton
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => onOpenNewEvent(eventDraftFromMail(mail))}
+                        >
+                          <CalendarPlus className="size-3.5" />
+                          + Agenda
+                        </DButton>
+                      ) : null}
                     </>
                   )}
                 </div>
@@ -2853,6 +3071,27 @@ export function DesktopInbox({
                         <p className="mt-1 text-[11.5px] leading-snug font-medium">
                           Ce message présente des signes d'hameçonnage. Ne clique pas sur les liens et n'ouvre pas les pièces jointes.
                         </p>
+                        {!readOnly ? (
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => trustSender(mail.email)}
+                              className="focus-ring inline-flex h-7 items-center gap-1 rounded-full border border-red-500/30 bg-surface px-2.5 text-[11px] font-bold text-ink transition-colors hover:border-accent-ring"
+                            >
+                              <ShieldCheck className="size-3.5" strokeWidth={2.2} />
+                              Pas suspect
+                            </button>
+                            {senderDomain(mail.email) ? (
+                              <button
+                                type="button"
+                                onClick={() => trustDomain(mail.email)}
+                                className="focus-ring inline-flex h-7 items-center rounded-full border border-red-500/20 bg-surface/75 px-2.5 text-[11px] font-semibold text-ink-soft transition-colors hover:border-accent-ring hover:text-ink"
+                              >
+                                Faire confiance au domaine
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   ) : null}
@@ -2870,6 +3109,27 @@ export function DesktopInbox({
                         <p className="mt-0.5 text-[11px] leading-snug font-medium">
                           Tentative d'injection de prompt détectée · exclu des résumés et extractions automatiques.
                         </p>
+                        {!readOnly ? (
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => trustSender(mail.email)}
+                              className="focus-ring inline-flex h-7 items-center gap-1 rounded-full border border-amber-500/30 bg-surface px-2.5 text-[11px] font-bold text-ink transition-colors hover:border-accent-ring"
+                            >
+                              <ShieldCheck className="size-3.5" strokeWidth={2.2} />
+                              Pas suspect
+                            </button>
+                            {senderDomain(mail.email) ? (
+                              <button
+                                type="button"
+                                onClick={() => trustDomain(mail.email)}
+                                className="focus-ring inline-flex h-7 items-center rounded-full border border-amber-500/20 bg-surface/75 px-2.5 text-[11px] font-semibold text-ink-soft transition-colors hover:border-accent-ring hover:text-ink"
+                              >
+                                Faire confiance au domaine
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   ) : null}

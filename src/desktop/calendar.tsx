@@ -1780,6 +1780,7 @@ function NewEventForm({
       attendees: attendees.length > 0 ? attendees : undefined,
       calendar,
       description: description.trim() || undefined,
+      ...(event?.mailId ? {} : draft?.mailId ? { mailId: draft.mailId, fromMail: true } : {}),
     };
 
     if (event) {
@@ -1844,6 +1845,22 @@ function NewEventForm({
         </div>
 
         <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-5 py-4">
+          {!editing && draft?.mailId ? (
+            <div className="flex items-start gap-2.5 rounded-[16px] border border-accent-ring/50 bg-accent-soft/45 px-3 py-2">
+              <Mail className="mt-0.5 size-3.5 shrink-0 text-accent-ink" strokeWidth={2.4} />
+              <div className="min-w-0 flex-1 leading-tight">
+                <p className="text-[10px] font-bold tracking-[0.14em] text-accent-ink uppercase">
+                  Mail lié
+                </p>
+                {draft.mailFrom ? (
+                  <p className="mt-0.5 truncate text-[12px] font-bold text-ink">{draft.mailFrom}</p>
+                ) : null}
+                {draft.mailSubject ? (
+                  <p className="truncate text-[11.5px] font-medium text-ink-soft">{draft.mailSubject}</p>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
           <Field label="Titre">
             <TextInput
               autoFocus

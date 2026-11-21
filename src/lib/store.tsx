@@ -73,11 +73,16 @@ import {
   buildDemoDecisions,
 } from "@/lib/demo-decisions";
 import {
+  extractAuthLink,
   filterMailsForLlm,
   fromApiDecision,
   indexDecisions,
+  normalizeTrustedDomain,
+  normalizeTrustedSender,
+  senderDomain,
   stableDecisionKey,
   toApiDecision,
+  toApiDecisionConfig,
   triageDecisionFor,
   triageRecentMails,
 } from "@/lib/triage";
@@ -482,6 +487,13 @@ export type MailStoreValue = {
   decisions: Record<string, MailDecision>;
   /** Indique si le modèle de décision est prêt (config locale ou trousseau démon). */
   isDecisionReady: boolean;
+  /** Indique si la vue Mails est actuellement au premier plan (pour ne pas superposer le popup TOTP). */
+  inboxActive: boolean;
+  setInboxActive: (active: boolean) => void;
+  /** Ajoute un expéditeur à la liste blanche de confiance (anti-faux-positif). */
+  trustSender: (email: string) => void;
+  /** Ajoute un domaine à la liste blanche de confiance (anti-faux-positif). */
+  trustDomain: (emailOrDomain: string) => void;
   /** Alerte TOTP instantanée émise à la réception SSE. */
   totpAlert: TotpAlert | null;
   dismissTotpAlert: () => void;
@@ -581,6 +593,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const decisionsRef = useRef(decisions);
   decisionsRef.current = decisions;
   const [daemonDecisionReady, setDaemonDecisionReady] = useState(false);
+  const [inboxActive, setInboxActive] = useState(true);
   const [totpAlert, setTotpAlert] = useState<TotpAlert | null>(() =>
     mode === "demo" && DEMO_DECISIONS_ON ? DEMO_TOTP_ALERT : null,
   );
@@ -624,6 +637,47 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     notify(READ_ONLY_NOTICE);
     return true;
   }, [notify]);
+
+  const trustSender = useCallback(
+    (email: string) => {
+      if (readOnlyBlocked()) return;
+      const normalized = normalizeTrustedSender(email);
+      if (!normalized) return;
+      const current = decisionPrefsRef.current;
+      if (!current.trustedSenders.includes(normalized)) {
+        const nextList = [...current.trustedSenders, normalized];
+        const nextConfig = { ...current, trustedSenders: nextList };
+        prefs.setDecision({ trustedSenders: nextList });
+        if (mode === "api") {
+          void mailApi.saveDecisionConfig(toApiDecisionConfig(nextConfig)).catch(() => {});
+        }
+      }
+      notify(`Expéditeur approuvé · ${normalized}`);
+    },
+    [mode, notify, prefs, readOnlyBlocked],
+  );
+
+  const trustDomain = useCallback(
+    (emailOrDomain: string) => {
+      if (readOnlyBlocked()) return;
+      const domain =
+        emailOrDomain.includes("@") && !emailOrDomain.trim().startsWith("@")
+          ? senderDomain(emailOrDomain)
+          : normalizeTrustedDomain(emailOrDomain);
+      if (!domain) return;
+      const current = decisionPrefsRef.current;
+      if (!current.trustedDomains.includes(domain)) {
+        const nextList = [...current.trustedDomains, domain];
+        const nextConfig = { ...current, trustedDomains: nextList };
+        prefs.setDecision({ trustedDomains: nextList });
+        if (mode === "api") {
+          void mailApi.saveDecisionConfig(toApiDecisionConfig(nextConfig)).catch(() => {});
+        }
+      }
+      notify(`Domaine approuvé · ${domain}`);
+    },
+    [mode, notify, prefs, readOnlyBlocked],
+  );
 
   const accountById = useCallback(
     (id: string) => accounts.find((entry) => entry.id === id),
@@ -2793,11 +2847,13 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
               {
                 id: mail.id,
                 from: mail.name,
+                email: mail.email,
                 subject: mail.subject,
                 snippet: mail.preview,
                 timestamp: mail.timestamp,
                 ...(mail.messageId ? { messageId: mail.messageId } : {}),
                 ...(mail.source ? { source: mail.source } : {}),
+                ...(extractAuthLink(mail) ? { hasAuthLink: true } : {}),
               },
             ]
           : [],
@@ -2933,6 +2989,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
             decisions: decisionIndex,
             thresholds: prefs.decision.thresholds,
             customCategories: prefs.decision.customCategories,
+            trustedSenders: prefs.decision.trustedSenders,
+            trustedDomains: prefs.decision.trustedDomains,
             llmCache: decisionDb(),
             force,
             onPartial: (partial) => setSummary(partial),
@@ -2970,6 +3028,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       notify,
       prefs.decision.customCategories,
       prefs.decision.thresholds,
+      prefs.decision.trustedDomains,
+      prefs.decision.trustedSenders,
       prefs.llm,
       prefs.summary,
       proposeTasks,
@@ -2998,6 +3058,10 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       decisionIndex,
       prefs.decision.thresholds,
       "tasks",
+      {
+        trustedSenders: prefs.decision.trustedSenders,
+        trustedDomains: prefs.decision.trustedDomains,
+      },
     );
     const signature = `${config.windowHours}:${recent.map((mail) => mail.id).join(",")}:d${Object.keys(decisions).length}:k${kept.map((mail) => mail.id).join(",")}`;
     if (taskRun.current === signature) return;
@@ -3144,6 +3208,10 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       decisionIndex,
       prefs.decision.thresholds,
       "events",
+      {
+        trustedSenders: prefs.decision.trustedSenders,
+        trustedDomains: prefs.decision.trustedDomains,
+      },
     );
     const signature = `${config.windowHours}:${recent.map((mail) => mail.id).join(",")}:d${Object.keys(decisions).length}:k${kept.map((mail) => mail.id).join(",")}`;
     if (eventRun.current === signature) return;
@@ -3485,6 +3553,10 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       setFolderOrder,
       decisions,
       isDecisionReady,
+      inboxActive,
+      setInboxActive,
+      trustSender,
+      trustDomain,
       totpAlert,
       dismissTotpAlert,
       triageMails,
@@ -3590,6 +3662,10 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       setFolderOrder,
       decisions,
       isDecisionReady,
+      inboxActive,
+      setInboxActive,
+      trustSender,
+      trustDomain,
       totpAlert,
       dismissTotpAlert,
       triageMails,

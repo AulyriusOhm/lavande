@@ -87,11 +87,13 @@ export function periodSince(config: SummaryConfig, now = new Date()): Date {
 export type SummaryMailInput = {
   id: string;
   from: string;
+  email?: string;
   subject: string;
   snippet: string;
   timestamp: number;
   messageId?: string;
   source?: MailSource;
+  hasAuthLink?: boolean;
 };
 
 export type SummaryHybridOptions = {
@@ -100,6 +102,8 @@ export type SummaryHybridOptions = {
   decisions?: DecisionLookup;
   thresholds?: DecisionThresholds;
   customCategories?: readonly CustomCategory[];
+  trustedSenders?: readonly string[];
+  trustedDomains?: readonly string[];
   llmCache?: DecisionCacheStore;
   force?: boolean;
   onPartial?: (partial: SummaryResult) => void;
@@ -979,9 +983,13 @@ export async function generateSummary(
   const decisionIndex = asDecisionIndex(options.decisions ?? new Map());
   const decisionGroups = summaryGroupsFromDecisions(recent, decisionIndex, thresholds, {
     customCategories: options.customCategories,
+    trustedSenders: options.trustedSenders,
+    trustedDomains: options.trustedDomains,
   });
   const { kept, skippedCount } = filterMailsForLlm(recent, decisionIndex, thresholds, "summary", {
     customCategories: options.customCategories,
+    trustedSenders: options.trustedSenders,
+    trustedDomains: options.trustedDomains,
   });
   if (config.llmConsent && llmReady(llm) && skippedCount > 0) {
     recordLlmSaved(skippedCount);

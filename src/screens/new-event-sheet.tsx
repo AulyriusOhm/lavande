@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, CalendarPlus } from "lucide-react";
+import { AlertTriangle, CalendarPlus, Mail } from "lucide-react";
 import type { CalendarEvent } from "@/lib/calendar";
 import { TODAY_ISO, isoInDays, overlappingEvents } from "@/lib/calendar";
 import { useCalendars } from "@/lib/calendars";
@@ -99,6 +99,7 @@ export function NewEventSheet({
       location: location.trim() || undefined,
       tone: undefined,
       calendar,
+      ...(draft?.mailId ? { mailId: draft.mailId, fromMail: true } : {}),
     });
     onClose();
   };
@@ -116,6 +117,22 @@ export function NewEventSheet({
       </div>
 
       <div className="flex-1 overflow-y-auto no-scrollbar px-4 pb-4">
+        {draft?.mailId ? (
+          <div className="mb-3 flex items-start gap-2 rounded-2xl border border-accent-ring/50 bg-accent-soft/50 px-3 py-2">
+            <Mail className="mt-0.5 size-3.5 shrink-0 text-accent-ink" strokeWidth={2.4} />
+            <div className="min-w-0 flex-1 leading-tight">
+              <p className="text-[10px] font-bold tracking-[0.14em] text-accent-ink uppercase">
+                Mail lié
+              </p>
+              {draft.mailFrom ? (
+                <p className="mt-0.5 truncate text-[11.5px] font-bold text-ink">{draft.mailFrom}</p>
+              ) : null}
+              {draft.mailSubject ? (
+                <p className="truncate text-[11px] font-medium text-ink-soft">{draft.mailSubject}</p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         <label className="block text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase" htmlFor="event-title">
           Titre
         </label>

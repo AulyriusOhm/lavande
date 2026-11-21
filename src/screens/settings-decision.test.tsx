@@ -99,5 +99,26 @@ describe("Réglages IA · segmentation Modèle de décision (Système 1) vs LLM"
         thresholds: { llmEscalate: 0.68, category: 0.6, security: 0.72, folder: 0.78 },
       }),
     );
+
+    const trustInput = screen.getByLabelText("Expéditeur ou domaine de confiance");
+    fireEvent.change(trustInput, { target: { value: "alice@banque.fr" } });
+    fireEvent.click(screen.getByRole("button", { name: "Approuver" }));
+    fireEvent.change(trustInput, { target: { value: "@boursorama.fr" } });
+    fireEvent.click(screen.getByRole("button", { name: "Approuver" }));
+
+    await waitFor(() =>
+      expect(stored().decision).toMatchObject({
+        trustedSenders: ["alice@banque.fr"],
+        trustedDomains: ["boursorama.fr"],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Retirer alice@banque.fr" }));
+    await waitFor(() =>
+      expect(stored().decision).toMatchObject({
+        trustedSenders: [],
+        trustedDomains: ["boursorama.fr"],
+      }),
+    );
   });
 });

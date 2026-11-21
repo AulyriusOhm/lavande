@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
 import { Check, EyeOff, Mail, Plus, Sparkles, Trash2, UserRound, X } from "lucide-react";
 import type { Mail as MailType } from "@/lib/mail";
-import type { MailSuggestion, Task, TaskState } from "@/lib/tasks";
+import type { MailSuggestion, NewTaskDraft, Task, TaskState } from "@/lib/tasks";
+export type { NewTaskDraft };
 import {
   TASK_STATES,
   dueToneFor,
@@ -743,7 +744,17 @@ function SuggestionDetail({
   );
 }
 
-export function NewTaskDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+const ISO_DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+export function NewTaskDialog({
+  open,
+  draft,
+  onClose,
+}: {
+  open: boolean;
+  draft?: NewTaskDraft;
+  onClose: () => void;
+}) {
   const { setTasks, notify } = useMailStore();
   if (!open) return null;
 
@@ -753,15 +764,28 @@ export function NewTaskDialog({ open, onClose }: { open: boolean; onClose: () =>
     onClose();
   };
 
-  return <NewTaskForm onCreate={submit} onClose={onClose} />;
+  return <NewTaskForm draft={draft} onCreate={submit} onClose={onClose} />;
 }
 
-function NewTaskForm({ onCreate, onClose }: { onCreate: (task: Task) => void; onClose: () => void }) {
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
+function NewTaskForm({
+  draft,
+  onCreate,
+  onClose,
+}: {
+  draft?: NewTaskDraft;
+  onCreate: (task: Task) => void;
+  onClose: () => void;
+}) {
+  const initialDue = draft
+    ? draft.dueDate && ISO_DAY.test(draft.dueDate)
+      ? draft.dueDate
+      : isoToday(0)
+    : isoToday(1);
+  const [title, setTitle] = useState(draft?.title ?? "");
+  const [description, setDescription] = useState(draft?.description ?? "");
   const [state, setState] = useState<TaskState>("todo");
-  const [dueDate, setDueDate] = useState(isoToday(1));
-  const [assignee, setAssignee] = useState("");
+  const [dueDate, setDueDate] = useState(initialDue);
+  const [assignee, setAssignee] = useState(draft?.assignee ?? "");
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -778,13 +802,14 @@ function NewTaskForm({ onCreate, onClose }: { onCreate: (task: Task) => void; on
     onCreate({
       id: `t-${Date.now()}`,
       title: title.trim(),
-      meta: "manuel",
+      meta: draft?.mailFrom ? `mail · ${draft.mailFrom}` : "manuel",
       state,
       due: dueDate ? formatDueDate(dueDate) : "sans échéance",
       dueTone: dueDate ? dueToneFor(dueDate) : "none",
       dueDate: dueDate || undefined,
       description: description.trim() || undefined,
       assignee: assignee.trim() || undefined,
+      ...(draft?.mailId ? { mailId: draft.mailId } : {}),
     });
   };
 
@@ -813,6 +838,23 @@ function NewTaskForm({ onCreate, onClose }: { onCreate: (task: Task) => void; on
             <X className="size-4" />
           </DIconButton>
         </div>
+
+        {draft?.mailId ? (
+          <div className="mt-3 flex items-start gap-2.5 rounded-[16px] border border-accent-ring/50 bg-accent-soft/45 px-3 py-2">
+            <Mail className="mt-0.5 size-3.5 shrink-0 text-accent-ink" strokeWidth={2.4} />
+            <div className="min-w-0 flex-1 leading-tight">
+              <p className="text-[10px] font-bold tracking-[0.14em] text-accent-ink uppercase">
+                Mail lié
+              </p>
+              {draft.mailFrom ? (
+                <p className="mt-0.5 truncate text-[12px] font-bold text-ink">{draft.mailFrom}</p>
+              ) : null}
+              {draft.mailSubject ? (
+                <p className="truncate text-[11.5px] font-medium text-ink-soft">{draft.mailSubject}</p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         <label className={cn(LABEL, "mt-3")} htmlFor="new-task-title">
           Intitulé

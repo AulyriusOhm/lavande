@@ -43,8 +43,10 @@ const byId = (id: string): Mail => {
   return mail;
 };
 
-/** Mails indexés par le briefing de test : trois groupes, deux pièces jointes. */
-const BRIEFING_MAILS: Mail[] = ["3", "8", "1", "4", "2", "6", "7"].map(byId);
+const unreadMail = (id: string): Mail => ({ ...byId(id), unread: true });
+
+/** Mails indexés par le briefing de test : tous non lus dans le Résumé. */
+const BRIEFING_MAILS: Mail[] = ["3", "8", "1", "4", "2", "6", "7"].map(unreadMail);
 
 const GENERATED_AT = new Date();
 GENERATED_AT.setHours(8, 12, 0, 0);
@@ -516,13 +518,98 @@ describe("Résumé du matin · briefing structuré", () => {
 
     expect(within(card).getByText("Factures")).toBeTruthy();
     fireEvent.click(within(card).getByRole("button", { name: "Ranger dans Factures" }));
-    expect(onMoveToFolder).toHaveBeenCalledWith(byId("8"), "Factures");
+    expect(onMoveToFolder).toHaveBeenCalledWith(unreadMail("8"), "Factures");
 
     fireEvent.click(within(card).getByRole("button", { name: "Archiver" }));
-    expect(onArchive).toHaveBeenCalledWith(byId("8"));
+    expect(onArchive).toHaveBeenCalledWith(unreadMail("8"));
 
     fireEvent.click(within(card).getByRole("button", { name: "Supprimer" }));
-    expect(onDelete).toHaveBeenCalledWith(byId("8"));
+    expect(onDelete).toHaveBeenCalledWith(unreadMail("8"));
+  });
+
+  it("affiche Vérification & accès tout en haut (code TOTP et lien de vérification) et masque les mails lus", () => {
+    const linkMail: Mail = {
+      ...unreadMail("1"),
+      id: "auth-link-1",
+      name: "Linear",
+      subject: "Confirmez votre connexion",
+      preview: "Cliquez sur https://linear.app/verify?token=abc pour vous connecter",
+      body: [
+        "Se désabonner : https://linear.app/unsubscribe",
+        "Confirmer : https://linear.app/verify?token=abc",
+      ],
+    };
+    const readMail: Mail = { ...byId("3"), unread: false };
+    const decisions: Record<string, MailDecision> = {
+      "auth-link-1": {
+        accountId: "perso",
+        folderPath: "INBOX",
+        uid: 0,
+        contentHash: "h-link",
+        schemaVersion: 1,
+        model: "mammoth-1",
+        category: "auth_totp",
+        categoryConf: 0.98,
+        categoryProbs: { auth_totp: 0.98 },
+        urgency: 1.5,
+        needsReply: 0,
+        hasTask: 0,
+        hasEvent: 0,
+        security: "safe",
+        securityConf: 0.99,
+        cleanupScore: 0.9,
+        totpService: "Linear",
+        decidedAt: 1_731_000_000,
+        source: "synced",
+      },
+    };
+    const { rerender } = renderSummary(
+      briefing({
+        source: "decision",
+        groups: {
+          actions: [
+            { mailId: "auth-link-1", reason: "Vérification Linear" },
+            { mailId: "3", reason: "Mail déjà lu" },
+          ],
+          infos: [],
+          notifications: [],
+        },
+      }),
+      { mails: [linkMail, readMail], decisions },
+    );
+    const card = screen.getByTestId("morning-summary");
+    expect(within(card).getByText("Vérification & accès")).toBeTruthy();
+    expect(within(card).getByText("Accès · Linear")).toBeTruthy();
+    expect(within(card).getByRole("button", { name: "Ouvrir le lien" })).toBeTruthy();
+    // Le mail lu (unread: false) n'apparaît pas dans le Résumé
+    expect(within(card).queryByText("Mail déjà lu")).toBeNull();
+
+    // Si tous les mails du Résumé passent à unread: false, le message zen apparaît
+    rerender(
+      <MorningSummary
+        open
+        unread={0}
+        attachments={0}
+        encrypted={0}
+        demo={false}
+        summary={briefing({
+          source: "decision",
+          groups: {
+            actions: [{ mailId: "3", reason: "Mail déjà lu" }],
+            infos: [],
+            notifications: [],
+          },
+        })}
+        mails={[readMail]}
+        loading={false}
+        onToggle={() => {}}
+        onOpen={() => {}}
+        onRefresh={() => {}}
+        onReply={() => {}}
+        onPropose={() => "added"}
+      />,
+    );
+    expect(screen.getByText("Tout a été lu sur la période.")).toBeTruthy();
   });
 });
 

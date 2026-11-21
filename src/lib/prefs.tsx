@@ -311,6 +311,26 @@ const asCustomCategory = (value: unknown): CustomCategory | null => {
   };
 };
 
+const asTrustedList = (value: unknown, stripAt: boolean): string[] => {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    let normalized = item.trim().toLowerCase();
+    if (stripAt) {
+      normalized = normalized.replace(/^@+/, "").trim();
+    } else {
+      const match = normalized.match(/<([^>]+)>/);
+      if (match?.[1]) normalized = match[1].trim();
+    }
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+};
+
 export const asDecision = (value: unknown): DecisionConfig => {
   if (!value || typeof value !== "object") return { ...DEFAULT_DECISION };
   const raw = value as Record<string, unknown>;
@@ -359,6 +379,8 @@ export const asDecision = (value: unknown): DecisionConfig => {
     notifMode,
     preSendGuard: asBoolean(raw.preSendGuard, DEFAULT_DECISION.preSendGuard),
     totpPopup: asBoolean(raw.totpPopup, DEFAULT_DECISION.totpPopup),
+    trustedSenders: asTrustedList(raw.trustedSenders, false),
+    trustedDomains: asTrustedList(raw.trustedDomains, true),
   };
 };
 

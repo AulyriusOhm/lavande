@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { NewEventSheet } from "@/screens/new-event-sheet";
+import { NewTaskSheet } from "@/screens/new-task-sheet";
+import { PrefsProvider } from "@/lib/prefs";
 import type { CalendarEvent } from "@/lib/calendar";
+import type { Task } from "@/lib/tasks";
 import type { NewEventDraft } from "@/screens/new-event-sheet";
 
 const CALENDARS_KEY = "lavande.calendars.v1";
@@ -106,5 +109,45 @@ describe("Nouveau rendez-vous mobile · calendriers réels", () => {
     fireEvent.click(screen.getByRole("button", { name: "Créer le rendez-vous" }));
 
     expect(onCreate.mock.calls[0][0].calendar).toBe("Famille");
+  });
+});
+
+describe("Nouvelle tâche mobile · préremplissage par NewTaskDraft", () => {
+  it("préremplit la feuille, affiche le mail lié et attache mailId à la tâche créée", () => {
+    const onCreate = vi.fn<(task: Task) => void>();
+    render(
+      <PrefsProvider>
+        <NewTaskSheet
+          draft={{
+            title: "Envoyer l'avenant",
+            description: "Signature attendue",
+            dueDate: "2026-11-28",
+            assignee: "Marc",
+            mailId: "3",
+            mailFrom: "Marc Delaunay",
+            mailSubject: "Devis signé — retour de ma part",
+          }}
+          onClose={() => {}}
+          onCreate={onCreate}
+        />
+      </PrefsProvider>,
+    );
+
+    expect((screen.getByLabelText("Intitulé") as HTMLInputElement).value).toBe("Envoyer l'avenant");
+    expect((screen.getByLabelText("Description") as HTMLTextAreaElement).value).toBe("Signature attendue");
+    expect((screen.getByLabelText("Choisir une date") as HTMLInputElement).value).toBe("2026-11-28");
+    expect((screen.getByLabelText("Assignée à") as HTMLInputElement).value).toBe("Marc");
+    expect(screen.getByText("Mail lié")).toBeTruthy();
+    expect(screen.getByText("Marc Delaunay")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Créer la tâche" }));
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    expect(onCreate.mock.calls[0][0]).toMatchObject({
+      title: "Envoyer l'avenant",
+      dueDate: "2026-11-28",
+      assignee: "Marc",
+      mailId: "3",
+      meta: "mail · Marc Delaunay",
+    });
   });
 });

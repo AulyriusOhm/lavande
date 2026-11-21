@@ -163,6 +163,8 @@ export function useAiSync(): void {
     notifMode: decision.notifMode,
     preSendGuard: decision.preSendGuard,
     totpPopup: decision.totpPopup,
+    trustedSenders: decision.trustedSenders,
+    trustedDomains: decision.trustedDomains,
   });
 
   useEffect(() => {
@@ -188,6 +190,8 @@ export function useAiSync(): void {
         notifMode: parsed.notifMode,
         preSendGuard: parsed.preSendGuard,
         totpPopup: parsed.totpPopup,
+        trustedSenders: parsed.trustedSenders,
+        trustedDomains: parsed.trustedDomains,
       });
     };
     const pushLocal = () => {
@@ -198,7 +202,14 @@ export function useAiSync(): void {
 
     if (known === null) {
       if (!doc?.raw || Object.keys(doc.raw).length === 0) {
-        if (decision.enabled || decision.customCategories.length > 0) pushLocal();
+        if (
+          decision.enabled ||
+          decision.customCategories.length > 0 ||
+          decision.trustedSenders.length > 0 ||
+          decision.trustedDomains.length > 0
+        ) {
+          pushLocal();
+        }
         return;
       }
       applyRemote();
@@ -220,6 +231,8 @@ export function useAiSync(): void {
       notifMode: doc?.raw.notifMode,
       preSendGuard: doc?.raw.preSendGuard,
       totpPopup: doc?.raw.totpPopup,
+      trustedSenders: doc?.raw.trustedSenders,
+      trustedDomains: doc?.raw.trustedDomains,
     });
     if (remoteStr === decisionPayload) return;
     pushLocal();
@@ -227,6 +240,8 @@ export function useAiSync(): void {
     active,
     decision.customCategories.length,
     decision.enabled,
+    decision.trustedDomains.length,
+    decision.trustedSenders.length,
     decisionPayload,
     decisionSettingsKey,
     decisionSettingsUpdatedAt,

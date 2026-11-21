@@ -19,12 +19,14 @@ import {
 } from "@/lib/decision-db";
 import type { Mail, MailSource } from "@/lib/mail";
 import type { SummaryGroups, SummaryRef } from "@/lib/summary";
+import type { EventDraft, NewTaskDraft } from "@/lib/tasks";
 import { encodeBase64Url } from "@/lib/sync/crypto";
 
 export const MAX_RECENT_TRIAGE = 40;
 const MAX_SUMMARY_ACTIONS = 12;
 const MAX_SUMMARY_INFOS = 40;
 const MAX_SUMMARY_NOTIFICATIONS = 40;
+const ISO_DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const encoder = new TextEncoder();
 
 export type TriageMailRef = {
@@ -32,8 +34,14 @@ export type TriageMailRef = {
   source?: MailSource;
   messageId?: string;
   from?: string;
+  email?: string;
   subject?: string;
   timestamp?: number;
+  preview?: string;
+  snippet?: string;
+  body?: readonly string[];
+  html?: string;
+  hasAuthLink?: boolean;
 };
 
 export type DecisionIndex = {
@@ -236,19 +244,117 @@ function findCustomCategory(
 }
 
 const ONE_DAY_MS = 24 * 3_600_000;
+const UNSUBSCRIBE_LINK = /unsubscribe|desinscri|désinscri|opt[-_]?out/i;
+const AUTH_LINK_HINT =
+  /verify|verif|confirm|activat|token|magic|login|auth|signin|signup|register|account|valider|connexion/i;
+const ASSET_EXT = /\.(?:png|jpe?g|gif|svg|webp|ico|css|js)(?:\?|$)/i;
+
+export function normalizeTrustedSender(raw: string): string {
+  const trimmed = raw.trim();
+  const match = trimmed.match(/<([^>]+)>/);
+  return (match?.[1] ?? trimmed).trim().toLowerCase();
+}
+
+export function normalizeTrustedDomain(raw: string): string {
+  return raw.trim().replace(/^@+/, "").trim().toLowerCase();
+}
+
+export function senderDomain(email: string | null | undefined): string {
+  if (!email) return "";
+  const normalized = normalizeTrustedSender(email);
+  const at = normalized.lastIndexOf("@");
+  if (at === -1 || at === normalized.length - 1) return "";
+  return normalized.slice(at + 1).trim();
+}
+
+export function isTrustedSender(
+  email: string | null | undefined,
+  trustedSenders: readonly string[] | undefined,
+  trustedDomains: readonly string[] | undefined,
+): boolean {
+  if (!email) return false;
+  const normalized = normalizeTrustedSender(email);
+  if (!normalized) return false;
+  if (trustedSenders?.some((entry) => normalizeTrustedSender(entry) === normalized)) {
+    return true;
+  }
+  const domain = senderDomain(normalized);
+  if (!domain) return false;
+  return Boolean(trustedDomains?.some((entry) => normalizeTrustedDomain(entry) === domain));
+}
+
+export function applyTrustRules(
+  decision: MailDecision,
+  senderEmail: string | null | undefined,
+  config: Pick<DecisionConfig, "trustedSenders" | "trustedDomains">,
+): MailDecision {
+  if (!isTrustedSender(senderEmail, config.trustedSenders, config.trustedDomains)) {
+    return decision;
+  }
+  const nextCategory =
+    decision.category === "spam" || decision.category === "promo" ? "important" : decision.category;
+  if (decision.security === "safe" && decision.securityConf === 1 && nextCategory === decision.category) {
+    return decision;
+  }
+  return {
+    ...decision,
+    security: "safe",
+    securityConf: 1,
+    category: nextCategory,
+  };
+}
+
+export type AuthLinkSource =
+  | string
+  | readonly string[]
+  | { body?: readonly string[]; html?: string; preview?: string; snippet?: string }
+  | null
+  | undefined;
+
+function authSourceText(input: AuthLinkSource): string {
+  if (!input) return "";
+  if (typeof input === "string") return input;
+  if (Array.isArray(input)) return input.join("\n");
+  const obj = input as { body?: readonly string[]; html?: string; preview?: string; snippet?: string };
+  return [...(obj.body ?? []), obj.html ?? "", obj.preview ?? "", obj.snippet ?? ""].join("\n");
+}
+
+/**
+ * Extrait un lien HTTPS de vérification / connexion depuis le contenu d'un mail,
+ * en excluant tout lien de désinscription (`unsubscribe`).
+ */
+export function extractAuthLink(input: AuthLinkSource): string | null {
+  const text = authSourceText(input);
+  if (!text) return null;
+  const matches = text.match(/https:\/\/[^\s"'<>()]+/gi) ?? [];
+  const candidates: string[] = [];
+  for (const raw of matches) {
+    const cleaned = raw.replace(/&amp;/gi, "&").replace(/[.,;:!?)\]>'"]+$/, "");
+    if (!cleaned.toLowerCase().startsWith("https://")) continue;
+    if (UNSUBSCRIBE_LINK.test(cleaned)) continue;
+    if (!candidates.includes(cleaned)) candidates.push(cleaned);
+  }
+  if (candidates.length === 0) return null;
+  return (
+    candidates.find((url) => !ASSET_EXT.test(url) && AUTH_LINK_HINT.test(url)) ??
+    candidates.find((url) => !ASSET_EXT.test(url)) ??
+    candidates[0]
+  );
+}
 
 function decisionTimestampMs(mail: Pick<TriageMailRef, "timestamp">, dec: MailDecision): number {
   if (typeof mail.timestamp === "number" && Number.isFinite(mail.timestamp)) return mail.timestamp;
   return dec.decidedAt > 1e12 ? dec.decidedAt : dec.decidedAt * 1000;
 }
 
-function isRecentTotp(
-  mail: Pick<TriageMailRef, "timestamp">,
+function isRecentAuth(
+  mail: Pick<TriageMailRef, "timestamp" | "body" | "html" | "preview" | "snippet" | "hasAuthLink">,
   dec: MailDecision,
   nowMs: number,
 ): boolean {
-  if (dec.category !== "auth_totp" || !dec.totpCode?.trim()) return false;
-  return nowMs - decisionTimestampMs(mail, dec) < ONE_DAY_MS;
+  if (dec.category !== "auth_totp") return false;
+  if (nowMs - decisionTimestampMs(mail, dec) >= ONE_DAY_MS) return false;
+  return Boolean(dec.totpCode?.trim() || mail.hasAuthLink || extractAuthLink(mail));
 }
 
 export type SummaryDecisionMeta = {
@@ -258,6 +364,7 @@ export type SummaryDecisionMeta = {
   urgent: boolean;
   totpCode: string | null;
   totpService: string | null;
+  authLink: string | null;
   needsReply: boolean;
   hasEvent: boolean;
   customCategory: CustomCategory | undefined;
@@ -270,7 +377,9 @@ export type SummaryDecisionMeta = {
  * catégorie personnalisée et dossier suggéré) pour l'affichage du Résumé.
  */
 export function summaryDecisionMeta(
-  mail: Pick<TriageMailRef, "id" | "source"> & { folderName?: string },
+  mail: Pick<TriageMailRef, "id" | "source" | "body" | "html" | "preview" | "snippet"> & {
+    folderName?: string;
+  },
   dec: MailDecision | undefined,
   thresholds: DecisionThresholds,
   customCategories?: readonly CustomCategory[],
@@ -283,6 +392,7 @@ export function summaryDecisionMeta(
       urgent: false,
       totpCode: null,
       totpService: null,
+      authLink: null,
       needsReply: false,
       hasEvent: false,
       customCategory: undefined,
@@ -295,6 +405,8 @@ export function summaryDecisionMeta(
   const suspect = phishing || injection;
   const totpCode = dec.category === "auth_totp" && dec.totpCode?.trim() ? dec.totpCode.trim() : null;
   const totpService = dec.totpService?.trim() || null;
+  const authLink =
+    !suspect && dec.category === "auth_totp" && !totpCode ? extractAuthLink(mail) : null;
 
   let folderSuggestion: { path: string; label: string } | null = null;
   if (!suspect && dec.suggestedFolder && (dec.suggestedFolderConf ?? 0) >= thresholds.folder) {
@@ -325,8 +437,9 @@ export function summaryDecisionMeta(
     urgent: !suspect && dec.urgency >= 2.0,
     totpCode,
     totpService,
-    needsReply: !suspect && !totpCode && dec.needsReply >= thresholds.category,
-    hasEvent: !suspect && !totpCode && dec.hasEvent >= thresholds.llmEscalate,
+    authLink,
+    needsReply: !suspect && !totpCode && !authLink && dec.needsReply >= thresholds.category,
+    hasEvent: !suspect && !totpCode && !authLink && dec.hasEvent >= thresholds.llmEscalate,
     customCategory: findCustomCategory(dec.category, customCategories),
     folderSuggestion,
     noiseTag,
@@ -346,14 +459,23 @@ export function filterMailsForLlm<T extends TriageMailRef>(
   decisions: DecisionLookup,
   thresholds: DecisionThresholds,
   kind: "tasks" | "events" | "summary",
-  options?: { customCategories?: readonly CustomCategory[] },
+  options?: {
+    customCategories?: readonly CustomCategory[];
+    trustedSenders?: readonly string[];
+    trustedDomains?: readonly string[];
+  },
 ): { kept: T[]; skippedCount: number } {
   const index = asDecisionIndex(decisions);
+  const trustConfig = {
+    trustedSenders: [...(options?.trustedSenders ?? [])],
+    trustedDomains: [...(options?.trustedDomains ?? [])],
+  };
   const qualified: { mail: T; urgency: number; order: number }[] = [];
   let skippedCount = 0;
 
   mails.forEach((mail, order) => {
-    const dec = triageDecisionFor(mail, index.byKey, index.byMessageId);
+    const rawDec = triageDecisionFor(mail, index.byKey, index.byMessageId);
+    const dec = rawDec ? applyTrustRules(rawDec, mail.email, trustConfig) : undefined;
     if (!dec || isBlockedFromAutoLlm(dec, thresholds)) {
       skippedCount += 1;
       return;
@@ -448,18 +570,31 @@ export function summaryGroupsFromDecisions<T extends TriageMailRef>(
   mails: readonly T[],
   decisions: DecisionLookup,
   thresholds: DecisionThresholds,
-  options?: { customCategories?: readonly CustomCategory[]; now?: number },
+  options?: {
+    customCategories?: readonly CustomCategory[];
+    now?: number;
+    trustedSenders?: readonly string[];
+    trustedDomains?: readonly string[];
+  },
 ): SummaryGroups {
   const index = asDecisionIndex(decisions);
   const nowMs = options?.now ?? Date.now();
+  const trustConfig = {
+    trustedSenders: [...(options?.trustedSenders ?? [])],
+    trustedDomains: [...(options?.trustedDomains ?? [])],
+  };
   const ordered = mails
-    .map((mail, order) => ({
-      mail,
-      dec: triageDecisionFor(mail, index.byKey, index.byMessageId),
-      order,
-    }))
+    .map((mail, order) => {
+      const raw = triageDecisionFor(mail, index.byKey, index.byMessageId);
+      return {
+        mail,
+        dec: raw ? applyTrustRules(raw, mail.email, trustConfig) : undefined,
+        order,
+      };
+    })
     .sort((a, b) => (b.dec?.urgency ?? -1) - (a.dec?.urgency ?? -1) || a.order - b.order);
 
+  const authActions: SummaryRef[] = [];
   const suspectActions: SummaryRef[] = [];
   const normalActions: SummaryRef[] = [];
   const groups: SummaryGroups = { actions: [], infos: [], notifications: [] };
@@ -482,13 +617,13 @@ export function summaryGroupsFromDecisions<T extends TriageMailRef>(
     const reason = reasonFromDecision(dec, thresholds);
     const ref: SummaryRef = { mailId: mail.id, reason };
 
-    if (isPhishing(dec, thresholds) || isPromptInjection(dec, thresholds)) {
-      suspectActions.push(ref);
+    if (isRecentAuth(mail, dec, nowMs)) {
+      authActions.push(ref);
       continue;
     }
 
-    if (isRecentTotp(mail, dec, nowMs)) {
-      normalActions.push(ref);
+    if (isPhishing(dec, thresholds) || isPromptInjection(dec, thresholds)) {
+      suspectActions.push(ref);
       continue;
     }
 
@@ -517,8 +652,50 @@ export function summaryGroupsFromDecisions<T extends TriageMailRef>(
     }
   }
 
-  groups.actions = [...suspectActions, ...normalActions].slice(0, MAX_SUMMARY_ACTIONS);
+  groups.actions = [...authActions, ...suspectActions, ...normalActions].slice(0, MAX_SUMMARY_ACTIONS);
   return groups;
+}
+
+export function taskDraftFromMail(
+  mail: Pick<Mail, "id" | "name" | "subject" | "preview" | "body">,
+  ref?: Pick<SummaryRef, "reason" | "due">,
+  decision?: Pick<MailDecision, "assignee">,
+): NewTaskDraft {
+  const title = mail.subject.trim() || ref?.reason.trim() || "Action à traiter";
+  const reason = ref?.reason.trim() ?? "";
+  const excerpt = mail.preview.trim() || mail.body[0]?.trim() || "";
+  const description =
+    reason && excerpt && reason !== excerpt ? `${reason}\n\n${excerpt}` : reason || excerpt;
+  const dueDate = ref?.due && ISO_DAY.test(ref.due) ? ref.due : undefined;
+  const rawAssignee = decision?.assignee?.trim();
+  const assignee =
+    rawAssignee && rawAssignee.toLowerCase() !== "moi" && rawAssignee.toLowerCase() !== "aucun"
+      ? rawAssignee
+      : undefined;
+  return {
+    title,
+    ...(description ? { description } : {}),
+    ...(dueDate ? { dueDate } : {}),
+    ...(assignee ? { assignee } : {}),
+    mailId: mail.id,
+    mailFrom: mail.name,
+    mailSubject: mail.subject,
+  };
+}
+
+export function eventDraftFromMail(
+  mail: Pick<Mail, "id" | "name" | "subject">,
+  ref?: Pick<SummaryRef, "reason" | "due">,
+): EventDraft {
+  const title = mail.subject.trim() || ref?.reason.trim() || "Rendez-vous";
+  const date = ref?.due && ISO_DAY.test(ref.due) ? ref.due : undefined;
+  return {
+    title,
+    ...(date ? { date } : {}),
+    mailId: mail.id,
+    mailFrom: mail.name,
+    mailSubject: mail.subject,
+  };
 }
 
 export type TriageRecentOptions = {
@@ -562,6 +739,8 @@ export function toApiDecisionConfig(
     notif_mode: config.notifMode,
     pre_send_guard: config.preSendGuard,
     totp_popup: config.totpPopup,
+    trusted_senders: config.trustedSenders ?? [],
+    trusted_domains: config.trustedDomains ?? [],
     ...(options?.apiKey ? { api_key: options.apiKey } : {}),
     ...(options?.clearApiKey ? { clear_api_key: true } : {}),
   };

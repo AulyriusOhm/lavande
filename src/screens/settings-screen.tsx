@@ -58,6 +58,7 @@ import {
 } from "@/lib/decision";
 import { toApiDecisionConfig } from "@/lib/triage";
 import { CategoryManagerSheet, categoryColorStyle } from "@/components/category-manager-sheet";
+import { TrustedWhitelistSection } from "@/components/trusted-whitelist";
 import { mailApi } from "@/lib/api";
 import { DEFAULT_COPILOT_CLIENT_ID, copilotModels, useCopilotSession } from "@/lib/copilot";
 import { openExternal } from "@/lib/open-external";
@@ -1568,6 +1569,11 @@ export function SettingsScreen({
                   Gérer les catégories personnalisées
                 </button>
               </div>
+              <TrustedWhitelistSection
+                trustedSenders={decision.trustedSenders}
+                trustedDomains={decision.trustedDomains}
+                onUpdate={updateDecision}
+              />
             </Card>
           </BlurFade>
 

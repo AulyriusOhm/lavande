@@ -183,6 +183,10 @@ pub struct DecisionConfig {
     pub pre_send_guard: bool,
     #[serde(default = "default_true")]
     pub totp_popup: bool,
+    #[serde(default)]
+    pub trusted_senders: Vec<String>,
+    #[serde(default)]
+    pub trusted_domains: Vec<String>,
 }
 
 impl Default for DecisionConfig {
@@ -200,7 +204,86 @@ impl Default for DecisionConfig {
             notif_mode: NotifFilterMode::All,
             pre_send_guard: true,
             totp_popup: true,
+            trusted_senders: Vec::new(),
+            trusted_domains: Vec::new(),
         }
+    }
+}
+
+fn normalize_list<F>(values: Vec<String>, map: F) -> Vec<String>
+where
+    F: Fn(&str) -> String,
+{
+    let mut out = Vec::with_capacity(values.len());
+    for raw in values {
+        let normalized = map(&raw);
+        if !normalized.is_empty() && !out.contains(&normalized) {
+            out.push(normalized);
+        }
+    }
+    out
+}
+
+pub fn normalize_trusted_sender(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let extracted = match (trimmed.find('<'), trimmed.rfind('>')) {
+        (Some(start), Some(end)) if end > start + 1 => &trimmed[start + 1..end],
+        _ => trimmed,
+    };
+    extracted.trim().to_ascii_lowercase()
+}
+
+pub fn normalize_trusted_domain(raw: &str) -> String {
+    raw.trim()
+        .trim_start_matches('@')
+        .trim()
+        .to_ascii_lowercase()
+}
+
+pub fn sender_domain(email: &str) -> String {
+    let normalized = normalize_trusted_sender(email);
+    match normalized.rsplit_once('@') {
+        Some((_, domain)) => domain.trim().to_string(),
+        None => String::new(),
+    }
+}
+
+pub fn is_trusted_sender(
+    email: &str,
+    trusted_senders: &[String],
+    trusted_domains: &[String],
+) -> bool {
+    let normalized = normalize_trusted_sender(email);
+    if normalized.is_empty() {
+        return false;
+    }
+    if trusted_senders
+        .iter()
+        .any(|entry| normalize_trusted_sender(entry) == normalized)
+    {
+        return true;
+    }
+    let domain = sender_domain(&normalized);
+    if domain.is_empty() {
+        return false;
+    }
+    trusted_domains
+        .iter()
+        .any(|entry| normalize_trusted_domain(entry) == domain)
+}
+
+pub fn apply_trust_rules(config: &DecisionConfig, sender_email: &str, decision: &mut MailDecision) {
+    if !is_trusted_sender(
+        sender_email,
+        &config.trusted_senders,
+        &config.trusted_domains,
+    ) {
+        return;
+    }
+    decision.security = "safe".to_string();
+    decision.security_conf = 1.0;
+    if decision.category == "spam" || decision.category == "promo" {
+        decision.category = "important".to_string();
     }
 }
 
@@ -216,6 +299,8 @@ impl DecisionConfig {
         if self.default_inbox_filter.trim().is_empty() {
             self.default_inbox_filter = default_inbox_filter();
         }
+        self.trusted_senders = normalize_list(self.trusted_senders, normalize_trusted_sender);
+        self.trusted_domains = normalize_list(self.trusted_domains, normalize_trusted_domain);
         self
     }
 
@@ -907,12 +992,13 @@ pub async fn triage_message_with_timeout(
 
     let hash = content_hash(message, &config, team_members);
     if !force {
-        if let Some(existing) =
+        if let Some(mut existing) =
             state
                 .store()
                 .get_decision(&message.account_id, &message.folder_path, message.uid)?
         {
             if existing.content_hash == hash && existing.schema_version == TRIAGE_SCHEMA_VERSION {
+                apply_trust_rules(&config, &message.from.email, &mut existing);
                 return Ok(TriageOutcome {
                     decision: existing,
                     cached: true,
@@ -1015,7 +1101,7 @@ pub async fn triage_message_with_timeout(
         None
     };
 
-    let decision = MailDecision {
+    let mut decision = MailDecision {
         account_id: message.account_id.clone(),
         folder_path: message.folder_path.clone(),
         uid: message.uid,
@@ -1042,6 +1128,8 @@ pub async fn triage_message_with_timeout(
         decided_at: Utc::now().timestamp(),
         source: "local".to_string(),
     };
+
+    apply_trust_rules(&config, &message.from.email, &mut decision);
 
     state.store().upsert_decision(&decision)?;
 
@@ -1182,5 +1270,67 @@ mod tests {
         totp_mail.category = "auth_totp".into();
         totp_mail.totp_code = Some("482917".into());
         assert!(should_notify(&config, &totp_mail));
+    }
+
+    #[test]
+    fn trust_rules_clear_security_and_reclassify_spam_or_promo() {
+        let config = DecisionConfig {
+            trusted_senders: vec!["Alertes@Banque.FR".into(), "alice@banque.fr".into()],
+            trusted_domains: vec!["@Boursorama.FR".into()],
+            ..Default::default()
+        }
+        .normalized();
+        assert_eq!(
+            config.trusted_senders,
+            vec!["alertes@banque.fr", "alice@banque.fr"]
+        );
+        assert_eq!(config.trusted_domains, vec!["boursorama.fr"]);
+
+        let base = MailDecision {
+            account_id: "a".into(),
+            folder_path: "INBOX".into(),
+            uid: 1,
+            message_id: None,
+            content_hash: "h".into(),
+            schema_version: 1,
+            model: "mammoth-1".into(),
+            category: "spam".into(),
+            category_conf: 0.9,
+            category_probs: HashMap::new(),
+            urgency: 1.0,
+            needs_reply: 0.1,
+            has_task: 0.0,
+            has_event: 0.0,
+            security: "phishing".into(),
+            security_conf: 0.96,
+            cleanup_score: 0.9,
+            assignee: None,
+            assignee_conf: None,
+            totp_code: None,
+            totp_service: None,
+            suggested_folder: None,
+            suggested_folder_conf: None,
+            decided_at: 0,
+            source: "local".into(),
+        };
+
+        let mut by_sender = base.clone();
+        apply_trust_rules(&config, "alertes@banque.fr", &mut by_sender);
+        assert_eq!(by_sender.security, "safe");
+        assert!((by_sender.security_conf - 1.0).abs() < 1e-9);
+        assert_eq!(by_sender.category, "important");
+
+        let mut by_domain = base.clone();
+        by_domain.category = "info".into();
+        by_domain.security = "prompt_injection".into();
+        apply_trust_rules(&config, "Conseiller <jean@boursorama.fr>", &mut by_domain);
+        assert_eq!(by_domain.security, "safe");
+        assert!((by_domain.security_conf - 1.0).abs() < 1e-9);
+        assert_eq!(by_domain.category, "info");
+
+        let mut untrusted = base;
+        apply_trust_rules(&config, "unknown@evil.xyz", &mut untrusted);
+        assert_eq!(untrusted.security, "phishing");
+        assert_eq!(untrusted.category, "spam");
     }
 }

@@ -14,7 +14,7 @@ import { DesktopCompose } from "@/desktop/compose";
 import { DesktopCalendar, NewEventDialog, type NewEventInit } from "@/desktop/calendar";
 import type { CalendarEvent } from "@/lib/calendar";
 import type { MailSuggestion } from "@/lib/tasks";
-import { DesktopPlanning, NewTaskDialog } from "@/desktop/planning";
+import { DesktopPlanning, NewTaskDialog, type NewTaskDraft } from "@/desktop/planning";
 import { DesktopSettings } from "@/desktop/settings";
 import { PgpScreen } from "@/screens/pgp-screen";
 import { McpApprovalHost } from "@/screens/mcp-screen";
@@ -45,6 +45,7 @@ function DesktopMain() {
     composeOpen,
     removeTarget,
     dismissSuggestion,
+    setInboxActive,
   } = useMailStore();
   const { calendarEnabled, planningEnabled } = usePrefs();
   const [view, setView] = useState<DesktopView>(() => {
@@ -53,6 +54,7 @@ function DesktopMain() {
   });
   const [searchOpen, setSearchOpen] = useState(false);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
+  const [pendingTaskDraft, setPendingTaskDraft] = useState<NewTaskDraft | undefined>(undefined);
   const [newEventOpen, setNewEventOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const [pendingInit, setPendingInit] = useState<string | undefined>(undefined);
@@ -65,6 +67,10 @@ function DesktopMain() {
   useGoogleCalendarAutoAttach(notify);
   useZimbraCalendarAutoAttach(notify);
   useAiSync();
+
+  useEffect(() => {
+    setInboxActive(view === "inbox");
+  }, [setInboxActive, view]);
 
   const openMailId = openMail?.id ?? null;
   useEffect(() => {
@@ -91,6 +97,15 @@ function DesktopMain() {
   }, []);
 
   const toggleHelp = useCallback(() => setHelpOpen((current) => !current), []);
+
+  const openNewTask = useCallback(
+    (draft?: NewTaskDraft) => {
+      if (readOnly) return;
+      setPendingTaskDraft(draft);
+      setNewTaskOpen(true);
+    },
+    [readOnly],
+  );
 
   const openNewEvent = useCallback(
     (init?: string | NewEventInit, suggestion?: MailSuggestion) => {
@@ -121,7 +136,7 @@ function DesktopMain() {
       planningEnabled,
       calendarActive: view === "calendar",
       compose: openComposer,
-      newTask: () => setNewTaskOpen(true),
+      newTask: () => openNewTask(),
       newEvent: () => openNewEvent(),
       search: () => setSearchOpen(true),
       toggleHelp,
@@ -142,7 +157,7 @@ function DesktopMain() {
         forwardSelected: () => mailNav.current?.forwardSelected(),
       },
     }),
-    [changeView, calendarEnabled, planningEnabled, view, overlayOpen, openComposer, toggleHelp, openNewEvent],
+    [changeView, calendarEnabled, planningEnabled, view, overlayOpen, openComposer, toggleHelp, openNewTask, openNewEvent],
   );
   const shortcuts = useMemo(() => appShortcuts(shortcutActions), [shortcutActions]);
   const helpShortcuts = useMemo(
@@ -195,6 +210,8 @@ function DesktopMain() {
                 onOpenSearch={() => setSearchOpen(true)}
                 navigationRef={mailNav}
                 onOpenPgp={() => changeView("settings")}
+                onOpenNewTask={openNewTask}
+                onOpenNewEvent={openNewEvent}
               />
             )}
             {view === "calendar" && (
@@ -208,7 +225,7 @@ function DesktopMain() {
             )}
             {view === "planning" && (
               <DesktopPlanning
-                onNewTask={readOnly ? undefined : () => setNewTaskOpen(true)}
+                onNewTask={readOnly ? undefined : () => openNewTask()}
                 onOpenSync={() => changeView("settings")}
               />
             )}
@@ -221,14 +238,21 @@ function DesktopMain() {
         active={view}
         onChange={changeView}
         onCompose={openComposer}
-        onNewTask={() => setNewTaskOpen(true)}
+        onNewTask={() => openNewTask()}
         onNewEvent={() => openNewEvent()}
         onSearch={() => setSearchOpen(true)}
       />
 
       <DesktopCompose />
       <DesktopSearch open={searchOpen} onClose={() => setSearchOpen(false)} />
-      <NewTaskDialog open={newTaskOpen} onClose={() => setNewTaskOpen(false)} />
+      <NewTaskDialog
+        open={newTaskOpen}
+        draft={pendingTaskDraft}
+        onClose={() => {
+          setNewTaskOpen(false);
+          setPendingTaskDraft(undefined);
+        }}
+      />
       <NewEventDialog
         open={newEventOpen}
         event={editingEvent}

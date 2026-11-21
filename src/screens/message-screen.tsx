@@ -4,12 +4,14 @@ import {
   AlertTriangle,
   ArrowLeft,
   Archive,
+  CalendarPlus,
   ChevronDown,
   ChevronRight,
   CornerUpLeft,
   CornerUpRight,
   Download,
   FolderInput,
+  ListTodo,
   Loader2,
   Lock,
   Paperclip,
@@ -24,7 +26,10 @@ import {
   Trash2,
 } from "lucide-react";
 import { downloadAttachment } from "@/lib/attachments";
+import { mailApi } from "@/lib/api";
+import { mailMode } from "@/lib/mail-backend";
 import { isPhishing, isPromptInjection, type MailDecision } from "@/lib/decision";
+import { applyTrustRules, normalizeTrustedSender, senderDomain, toApiDecisionConfig } from "@/lib/triage";
 import type { Mail, MailAttachment } from "@/lib/mail";
 import { canReplyAll, folderLabel } from "@/lib/mail";
 import { messagePgpStatus } from "@/lib/pgp";
@@ -63,6 +68,10 @@ export function MessageScreen({
   customFolders,
   onMoveToFolder,
   onSuggestFolder,
+  onPlan,
+  onSchedule,
+  onTrustSender,
+  onTrustDomain,
 }: {
   thread: Thread;
   onClose: () => void;
@@ -101,6 +110,10 @@ export function MessageScreen({
   onSuggestFolder?: (
     mail: Mail,
   ) => Promise<{ folderPath: string; folderLabel: string; confidence: number } | null>;
+  onPlan?: (mail: Mail) => void;
+  onSchedule?: (mail: Mail) => void;
+  onTrustSender?: (mail: Mail) => void;
+  onTrustDomain?: (mail: Mail) => void;
 }) {
   const prefs = usePrefs();
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -118,10 +131,45 @@ export function MessageScreen({
   } | null>(null);
 
   const mail = thread.primary;
+  const effectiveDecision = decision ? applyTrustRules(decision, mail.email, prefs.decision) : null;
   const securityThresholds = prefs.decision.thresholds;
-  const phishingAlert = Boolean(decision && isPhishing(decision, securityThresholds));
-  const promptInjectionAlert = Boolean(decision && isPromptInjection(decision, securityThresholds));
+  const phishingAlert = Boolean(effectiveDecision && isPhishing(effectiveDecision, securityThresholds));
+  const promptInjectionAlert = Boolean(
+    effectiveDecision && isPromptInjection(effectiveDecision, securityThresholds),
+  );
   const folderThreshold = securityThresholds.folder;
+  const trustedDomain = senderDomain(mail.email);
+
+  const handleTrustSender = () => {
+    if (onTrustSender) {
+      onTrustSender(mail);
+      return;
+    }
+    const normalized = normalizeTrustedSender(mail.email);
+    if (!normalized || prefs.decision.trustedSenders.includes(normalized)) return;
+    const nextList = [...prefs.decision.trustedSenders, normalized];
+    prefs.setDecision({ trustedSenders: nextList });
+    if (mailMode() === "api" && typeof mailApi.saveDecisionConfig === "function") {
+      void mailApi
+        .saveDecisionConfig(toApiDecisionConfig({ ...prefs.decision, trustedSenders: nextList }))
+        .catch(() => {});
+    }
+  };
+
+  const handleTrustDomain = () => {
+    if (onTrustDomain) {
+      onTrustDomain(mail);
+      return;
+    }
+    if (!trustedDomain || prefs.decision.trustedDomains.includes(trustedDomain)) return;
+    const nextList = [...prefs.decision.trustedDomains, trustedDomain];
+    prefs.setDecision({ trustedDomains: nextList });
+    if (mailMode() === "api" && typeof mailApi.saveDecisionConfig === "function") {
+      void mailApi
+        .saveDecisionConfig(toApiDecisionConfig({ ...prefs.decision, trustedDomains: nextList }))
+        .catch(() => {});
+    }
+  };
 
   const isAlreadyInFolder = (path: string, label?: string) => {
     const currentPath = mail.source?.folderPath;
@@ -133,20 +181,23 @@ export function MessageScreen({
   };
 
   const decisionFolderSuggestion = (() => {
-    if (!decision?.suggestedFolder) return null;
-    if ((decision.suggestedFolderConf ?? 0) < folderThreshold) return null;
+    if (!effectiveDecision?.suggestedFolder) return null;
+    if ((effectiveDecision.suggestedFolderConf ?? 0) < folderThreshold) return null;
     const match = customFolders?.find(
-      (folder) => folder.path === decision.suggestedFolder || folder.label === decision.suggestedFolder,
+      (folder) =>
+        folder.path === effectiveDecision.suggestedFolder ||
+        folder.label === effectiveDecision.suggestedFolder,
     );
-    const folderPath = match?.path ?? decision.suggestedFolder;
+    const folderPath = match?.path ?? effectiveDecision.suggestedFolder;
     const labelText =
       match?.label ??
-      (decision.suggestedFolder.split(/[/.]/).filter(Boolean).pop() || decision.suggestedFolder);
+      (effectiveDecision.suggestedFolder.split(/[/.]/).filter(Boolean).pop() ||
+        effectiveDecision.suggestedFolder);
     if (isAlreadyInFolder(folderPath, labelText)) return null;
     return {
       folderPath,
       folderLabel: labelText,
-      confidence: decision.suggestedFolderConf ?? 0,
+      confidence: effectiveDecision.suggestedFolderConf ?? 0,
     };
   })();
 
@@ -709,6 +760,27 @@ export function MessageScreen({
                 <p className="mt-1 text-[11.5px] leading-snug font-medium">
                   Ce message présente des signes d'hameçonnage. Ne clique pas sur les liens et n'ouvre pas les pièces jointes.
                 </p>
+                {!readOnly ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleTrustSender}
+                      className="inline-flex min-h-8 items-center gap-1 rounded-full border border-red-500/30 bg-surface px-2.5 text-[11px] font-bold text-ink transition-colors hover:border-accent-ring"
+                    >
+                      <ShieldCheck className="size-3.5" strokeWidth={2.2} />
+                      Pas suspect
+                    </button>
+                    {trustedDomain ? (
+                      <button
+                        type="button"
+                        onClick={handleTrustDomain}
+                        className="inline-flex min-h-8 items-center rounded-full border border-red-500/20 bg-surface/75 px-2.5 text-[11px] font-semibold text-ink-soft transition-colors hover:border-accent-ring hover:text-ink"
+                      >
+                        Faire confiance au domaine
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </div>
           </BlurFade>
@@ -728,6 +800,27 @@ export function MessageScreen({
                 <p className="mt-0.5 text-[11px] leading-snug font-medium">
                   Tentative d'injection de prompt détectée · exclu des résumés et extractions automatiques.
                 </p>
+                {!readOnly ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleTrustSender}
+                      className="inline-flex min-h-8 items-center gap-1 rounded-full border border-amber-500/30 bg-surface px-2.5 text-[11px] font-bold text-ink transition-colors hover:border-accent-ring"
+                    >
+                      <ShieldCheck className="size-3.5" strokeWidth={2.2} />
+                      Pas suspect
+                    </button>
+                    {trustedDomain ? (
+                      <button
+                        type="button"
+                        onClick={handleTrustDomain}
+                        className="inline-flex min-h-8 items-center rounded-full border border-amber-500/20 bg-surface/75 px-2.5 text-[11px] font-semibold text-ink-soft transition-colors hover:border-accent-ring hover:text-ink"
+                      >
+                        Faire confiance au domaine
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </div>
           </BlurFade>
@@ -785,6 +878,31 @@ export function MessageScreen({
             Démo · données d'exemple
           </p>
         ) : (
+        <>
+        {mail.folder !== "drafts" && (onPlan || onSchedule) ? (
+          <div className="mb-2 flex items-center gap-1.5">
+            {onPlan ? (
+              <button
+                type="button"
+                onClick={() => onPlan(mail)}
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+              >
+                <ListTodo className="size-3.5" strokeWidth={2.3} />
+                Planifier
+              </button>
+            ) : null}
+            {onSchedule ? (
+              <button
+                type="button"
+                onClick={() => onSchedule(mail)}
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+              >
+                <CalendarPlus className="size-3.5" strokeWidth={2.3} />
+                + Agenda
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <div className="flex items-center gap-2">
           {mail.folder === "drafts" ? (
             <ShimmerButton
@@ -834,6 +952,7 @@ export function MessageScreen({
             </>
           )}
         </div>
+        </>
         )}
       </div>
     </div>

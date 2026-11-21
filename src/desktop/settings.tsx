@@ -114,6 +114,7 @@ import {
 } from "@/lib/decision";
 import { toApiDecisionConfig } from "@/lib/triage";
 import { CategoryManagerSheet, categoryColorStyle } from "@/components/category-manager-sheet";
+import { TrustedWhitelistSection } from "@/components/trusted-whitelist";
 import { DEFAULT_COPILOT_CLIENT_ID, copilotModels, useCopilotSession } from "@/lib/copilot";
 import { openExternal } from "@/lib/open-external";
 import { formatTokens, lastDays, resetAiStats, topModels } from "@/lib/ai-stats";
@@ -2545,6 +2546,11 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                       Gérer les catégories personnalisées
                     </DButton>
                   </div>
+                  <TrustedWhitelistSection
+                    trustedSenders={decision.trustedSenders}
+                    trustedDomains={decision.trustedDomains}
+                    onUpdate={updateDecision}
+                  />
                 </Surface>
 
                 <Surface className="mt-3 p-4">

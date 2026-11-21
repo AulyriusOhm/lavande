@@ -241,6 +241,17 @@ export function dueToneFor(iso: string): Task["dueTone"] {
 
 const DUE_ORDER: Record<Task["dueTone"], number> = { late: 0, soon: 1, soft: 2, none: 3 };
 
+/** Créneau prêt à préremplir la création d'une tâche. */
+export type NewTaskDraft = {
+  title?: string;
+  description?: string;
+  dueDate?: string;
+  assignee?: string;
+  mailId?: string;
+  mailFrom?: string;
+  mailSubject?: string;
+};
+
 /** Créneau prêt à préremplir la création d'un rendez-vous. */
 export type EventDraft = {
   title?: string;
@@ -248,6 +259,9 @@ export type EventDraft = {
   start?: string;
   end?: string;
   location?: string;
+  mailId?: string;
+  mailFrom?: string;
+  mailSubject?: string;
 };
 
 export function draftFromSuggestion(suggestion: MailSuggestion): EventDraft {
