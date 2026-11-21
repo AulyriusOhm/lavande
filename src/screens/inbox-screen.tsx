@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { animate, motion, useMotionValue, useSpring, useTransform } from "motion/react";
-import { Archive, Check, ChevronDown, ChevronUp, CornerUpLeft, Inbox, Layers, Loader2, PenLine, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2, type LucideIcon } from "lucide-react";
+import { Archive, Check, ChevronDown, ChevronUp, Copy, CornerUpLeft, FolderInput, Inbox, KeyRound, Layers, Loader2, PenLine, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, Sparkles, Trash2, type LucideIcon } from "lucide-react";
 import type { FolderId, Mail } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
 import { summarySourceLabel, type SummaryRef } from "@/lib/summary";
@@ -9,7 +9,8 @@ import { threadsInFolder, type Thread } from "@/lib/threads";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
 import { decisionReady, type CustomCategory, type MailDecision } from "@/lib/decision";
 import { countCleanupByFilter } from "@/lib/cleanup";
-import { indexDecisions, triageDecisionFor } from "@/lib/triage";
+import { indexDecisions, summaryDecisionMeta, triageDecisionFor } from "@/lib/triage";
+import { formatTotpCode } from "@/components/totp-popup";
 import { usePrefs } from "@/lib/prefs";
 import { useMailStore } from "@/lib/store";
 import type { MailNavigation } from "@/lib/app-shortcuts";
@@ -157,6 +158,7 @@ export function InboxScreen({
   const { decision: decisionPrefs } = usePrefs();
   const {
     mode,
+    readOnly,
     syncing,
     syncFolder,
     threadsLoading,
@@ -164,6 +166,7 @@ export function InboxScreen({
     loadMore,
     folderPath,
     folderOptions,
+    folderRecords,
     accountById,
     folderStats,
     summary,
@@ -172,6 +175,7 @@ export function InboxScreen({
     refreshSummary,
     proposeSummaryAction,
     proposeSummaryEvent,
+    moveToFolder,
     openMail,
     closeMessage,
     decisions,
@@ -198,6 +202,31 @@ export function InboxScreen({
   const [cursor, setCursor] = useState<number | null>(null);
   const [proposed, setProposed] = useState<Record<string, "added" | "existing">>({});
   const [proposedEvents, setProposedEvents] = useState<Record<string, "added" | "existing">>({});
+  const [copiedCodes, setCopiedCodes] = useState<Record<string, boolean>>({});
+  const copyTimers = useRef<Record<string, number>>({});
+  useEffect(
+    () => () => {
+      for (const timer of Object.values(copyTimers.current)) window.clearTimeout(timer);
+    },
+    [],
+  );
+  const copyTotp = (mailId: string, code: string) => {
+    try {
+      void Promise.resolve(navigator.clipboard?.writeText(code)).catch(() => {});
+    } catch {
+      // presse-papiers indisponible
+    }
+    setCopiedCodes((current) => ({ ...current, [mailId]: true }));
+    if (copyTimers.current[mailId]) window.clearTimeout(copyTimers.current[mailId]);
+    copyTimers.current[mailId] = window.setTimeout(() => {
+      setCopiedCodes((current) => {
+        const next = { ...current };
+        delete next[mailId];
+        return next;
+      });
+      delete copyTimers.current[mailId];
+    }, 2000);
+  };
   const rowsRef = useRef<HTMLDivElement>(null);
   const wasOpen = useRef(false);
 
@@ -398,23 +427,91 @@ export function InboxScreen({
   const actionRows = summary ? summaryRows(summary.groups.actions) : [];
   const infoRows = summary ? summaryRows(summary.groups.infos) : [];
   const notificationRows = summary ? summaryRows(summary.groups.notifications) : [];
-  const summaryRow = ({ ref, mail }: { ref: SummaryRef; mail: Mail }) => (
-    <div key={ref.mailId} className="flex items-center gap-1.5 py-1.5">
-      <span className="grid size-5 shrink-0 place-items-center rounded-md bg-surface text-[8.5px] font-bold text-ink-soft">
-        {initials(mail.name)}
-      </span>
-      <button
-        type="button"
-        onClick={() => onOpen(mail)}
-        className="focus-ring min-w-0 flex-1 truncate text-left text-[11.5px] font-semibold text-ink"
-      >
-        {mail.subject}
-      </button>
-      <span className="shrink-0 text-[9.5px] font-semibold text-ink-muted tabular-nums">
-        {summaryClock(mail)}
-      </span>
-    </div>
+  const hasGroupedRows =
+    actionRows.length > 0 || infoRows.length > 0 || notificationRows.length > 0;
+  const showSummaryHeadline = Boolean(
+    summary?.headline && !(summary.source === "decision" && hasGroupedRows),
   );
+  const summaryMetaFor = (mail: Mail) => {
+    const dec = triageDecisionFor(mail, decisionIndex.byKey, decisionIndex.byMessageId);
+    return summaryDecisionMeta(
+      mail,
+      dec,
+      decisionPrefs.thresholds,
+      decisionPrefs.customCategories,
+    );
+  };
+  const moveSummaryMail = (targetMail: Mail, target: string) => {
+    const accId = targetMail.source?.accountId ?? targetMail.account;
+    const match = folderRecords.find(
+      (record) => record.accountId === accId && (record.path === target || record.name === target),
+    );
+    moveToFolder(targetMail, match?.path ?? target);
+  };
+  const summaryRow = ({ ref, mail }: { ref: SummaryRef; mail: Mail }) => {
+    const meta = summaryMetaFor(mail);
+    return (
+      <div key={ref.mailId} className="flex items-center gap-1.5 py-1.5">
+        <span className="grid size-5 shrink-0 place-items-center rounded-md bg-surface text-[8.5px] font-bold text-ink-soft">
+          {initials(mail.name)}
+        </span>
+        <button
+          type="button"
+          onClick={() => onOpen(mail)}
+          className="focus-ring min-w-0 flex-1 truncate text-left text-[11.5px] font-semibold text-ink"
+        >
+          {mail.subject}
+        </button>
+        {meta.customCategory ? (
+          <span
+            className={cn(
+              "shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold",
+              categoryColorStyle(meta.customCategory.color).pill,
+            )}
+          >
+            {meta.customCategory.name}
+          </span>
+        ) : meta.noiseTag ? (
+          <span className="shrink-0 rounded-full bg-surface px-1.5 py-0.5 text-[9px] font-bold text-ink-muted">
+            {meta.noiseTag}
+          </span>
+        ) : null}
+        {!readOnly && meta.folderSuggestion ? (
+          <button
+            type="button"
+            onClick={() => moveSummaryMail(mail, meta.folderSuggestion!.path)}
+            className="focus-ring inline-flex h-5 shrink-0 items-center gap-0.5 rounded-full border border-accent-ring/60 bg-surface px-1.5 text-[9.5px] font-bold text-accent-ink"
+          >
+            <FolderInput className="size-2.5" />
+            Ranger dans {meta.folderSuggestion.label}
+          </button>
+        ) : null}
+        {!readOnly ? (
+          <>
+            <button
+              type="button"
+              aria-label="Archiver"
+              onClick={() => onMailAction("archive", mail)}
+              className="focus-ring grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-surface hover:text-ink"
+            >
+              <Archive className="size-3" />
+            </button>
+            <button
+              type="button"
+              aria-label="Supprimer"
+              onClick={() => onMailAction("delete", mail)}
+              className="focus-ring grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-rose-500/10 hover:text-rose-700 dark:hover:text-rose-300"
+            >
+              <Trash2 className="size-3" />
+            </button>
+          </>
+        ) : null}
+        <span className="shrink-0 text-[9.5px] font-semibold text-ink-muted tabular-nums">
+          {summaryClock(mail)}
+        </span>
+      </div>
+    );
+  };
 
   useLayoutEffect(() => {
     if (cardRef.current) setSizes((current) => ({ ...current, card: cardRef.current?.offsetHeight ?? current.card }));
@@ -706,7 +803,11 @@ export function InboxScreen({
                 </div>
                 {summary ? (
                   <>
-                    <p className="mt-2 text-[12px] leading-relaxed font-medium text-ink">{summary.headline}</p>
+                    {showSummaryHeadline ? (
+                      <p className="mt-2 text-[12px] leading-relaxed font-medium text-ink">
+                        {summary.headline}
+                      </p>
+                    ) : null}
                     <div
                       data-testid="summary-attachments-mobile"
                       className="mt-2.5 max-h-[38vh] space-y-2.5 overflow-y-auto pr-1"
@@ -717,15 +818,142 @@ export function InboxScreen({
                           <div className="space-y-1.5">
                             {actionRows.map(({ ref, mail }) => {
                               const due = ref.due && ISO_DAY.test(ref.due) ? ref.due : null;
-                              const dec = triageDecisionFor(
-                                mail,
-                                decisionIndex.byKey,
-                                decisionIndex.byMessageId,
-                              );
-                              const isUrgent = Boolean(dec && dec.urgency >= 2.0);
-                              const hasEventSignal = Boolean(
-                                dec && dec.hasEvent >= decisionPrefs.thresholds.llmEscalate,
-                              );
+                              const meta = summaryMetaFor(mail);
+
+                              if (meta.suspect) {
+                                const suspectReason =
+                                  ref.reason ||
+                                  (meta.phishing
+                                    ? "Hameçonnage détecté · Ne cliquez sur aucun lien"
+                                    : "Alerte sécurité · injection détectée");
+                                return (
+                                  <article
+                                    key={ref.mailId}
+                                    className={cn(
+                                      "flex gap-2 rounded-[14px] bg-surface px-2.5 py-1.5 ring-1",
+                                      meta.phishing ? "ring-rose-500/35" : "ring-amber-500/35",
+                                    )}
+                                  >
+                                    <span
+                                      className={cn(
+                                        "grid size-7 shrink-0 place-items-center rounded-[9px]",
+                                        meta.phishing
+                                          ? "bg-rose-500/15 text-rose-700 dark:text-rose-300"
+                                          : "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+                                      )}
+                                    >
+                                      <ShieldAlert className="size-3.5" strokeWidth={2.4} />
+                                    </span>
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="min-w-0 truncate text-[11px] font-bold text-ink">
+                                          {mail.name}
+                                        </span>
+                                        <span
+                                          className={cn(
+                                            "inline-flex h-4 shrink-0 items-center rounded-full px-1.5 text-[9.5px] font-bold",
+                                            meta.phishing
+                                              ? "bg-rose-500/12 text-rose-700 dark:text-rose-300"
+                                              : "bg-amber-500/14 text-amber-700 dark:text-amber-300",
+                                          )}
+                                        >
+                                          {meta.phishing ? "Suspect · Phishing" : "Injection IA"}
+                                        </span>
+                                        <span className="ml-auto shrink-0 text-[10px] font-semibold text-ink-muted tabular-nums">
+                                          {summaryClock(mail)}
+                                        </span>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => onOpen(mail)}
+                                        className="focus-ring mt-0.5 block max-w-full truncate text-left text-[12px] leading-[1.4] font-bold text-accent-ink underline decoration-[1.5px] underline-offset-2"
+                                      >
+                                        {mail.subject}
+                                      </button>
+                                      <p className="mt-1 line-clamp-2 text-[11px] leading-[1.45] font-medium text-ink-soft">
+                                        {suspectReason}
+                                      </p>
+                                      {!readOnly ? (
+                                        <div className="mt-1 flex items-center gap-1.5">
+                                          <button
+                                            type="button"
+                                            onClick={() => onMailAction("delete", mail)}
+                                            className="focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-rose-600 px-2 text-[10px] font-bold text-white"
+                                          >
+                                            <Trash2 className="size-3" strokeWidth={2.4} />
+                                            Supprimer
+                                          </button>
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  </article>
+                                );
+                              }
+
+                              if (meta.totpCode) {
+                                const copied = Boolean(copiedCodes[ref.mailId]);
+                                return (
+                                  <article
+                                    key={ref.mailId}
+                                    className="flex gap-2 rounded-[14px] bg-surface px-2.5 py-1.5"
+                                  >
+                                    <span className="grid size-7 shrink-0 place-items-center rounded-[9px] bg-accent/15 text-accent-ink">
+                                      <KeyRound className="size-3.5" strokeWidth={2.4} />
+                                    </span>
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="min-w-0 truncate text-[11px] font-bold text-ink">
+                                          {mail.name}
+                                        </span>
+                                        <span className="inline-flex h-4 shrink-0 items-center rounded-full bg-accent-soft px-1.5 text-[9.5px] font-bold text-accent-ink">
+                                          {meta.totpService ? `Code · ${meta.totpService}` : "Code"}
+                                        </span>
+                                        <span className="ml-auto shrink-0 text-[10px] font-semibold text-ink-muted tabular-nums">
+                                          {summaryClock(mail)}
+                                        </span>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => onOpen(mail)}
+                                        className="focus-ring mt-0.5 block max-w-full truncate text-left text-[12px] leading-[1.4] font-bold text-accent-ink underline decoration-[1.5px] underline-offset-2"
+                                      >
+                                        {mail.subject}
+                                      </button>
+                                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                        <span
+                                          data-testid="summary-totp-code-mobile"
+                                          className="inline-flex h-6 items-center rounded-lg border border-accent-ring/50 bg-accent-soft px-2 font-mono text-[12.5px] font-extrabold tracking-[0.14em] text-ink tabular-nums select-all"
+                                        >
+                                          {formatTotpCode(meta.totpCode)}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => copyTotp(ref.mailId, meta.totpCode!)}
+                                          className={copied ? SUMMARY_CHIP_DONE : SUMMARY_CHIP_FILLED}
+                                        >
+                                          {copied ? (
+                                            <Check className="size-3" strokeWidth={2.8} />
+                                          ) : (
+                                            <Copy className="size-3" strokeWidth={2.4} />
+                                          )}
+                                          {copied ? "Copié !" : "Copier"}
+                                        </button>
+                                        {!readOnly ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => onMailAction("delete", mail)}
+                                            className={SUMMARY_CHIP}
+                                          >
+                                            <Trash2 className="size-3" strokeWidth={2.4} />
+                                            Supprimer
+                                          </button>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                  </article>
+                                );
+                              }
+
                               return (
                                 <article
                                   key={ref.mailId}
@@ -739,9 +967,19 @@ export function InboxScreen({
                                       <span className="min-w-0 truncate text-[11px] font-bold text-ink">
                                         {mail.name}
                                       </span>
-                                      {isUrgent ? (
+                                      {meta.urgent ? (
                                         <span className="inline-flex h-4 shrink-0 items-center rounded-full bg-rose-500/12 px-1.5 text-[9.5px] font-bold text-rose-700 dark:text-rose-300">
                                           Urgent
+                                        </span>
+                                      ) : null}
+                                      {meta.customCategory ? (
+                                        <span
+                                          className={cn(
+                                            "inline-flex h-4 shrink-0 items-center rounded-full px-1.5 text-[9.5px] font-bold",
+                                            categoryColorStyle(meta.customCategory.color).pill,
+                                          )}
+                                        >
+                                          {meta.customCategory.name}
                                         </span>
                                       ) : null}
                                       <span className="ml-auto shrink-0 text-[10px] font-semibold text-ink-muted tabular-nums">
@@ -779,7 +1017,7 @@ export function InboxScreen({
                                           Planification
                                         </button>
                                       )}
-                                      {hasEventSignal ? (
+                                      {meta.hasEvent ? (
                                         proposedEvents[ref.mailId] ? (
                                           <button type="button" disabled className={SUMMARY_CHIP_DONE}>
                                             <Check className="size-3 shrink-0" strokeWidth={2.8} />
@@ -806,9 +1044,23 @@ export function InboxScreen({
                                         onClick={() => onReply(mail)}
                                         className={SUMMARY_CHIP}
                                       >
-                                        <CornerUpLeft className="size-3" strokeWidth={2.4} />
+                                        {meta.needsReply ? (
+                                          <Sparkles className="size-3 text-accent-ink" strokeWidth={2.4} />
+                                        ) : (
+                                          <CornerUpLeft className="size-3" strokeWidth={2.4} />
+                                        )}
                                         Répondre
                                       </button>
+                                      {!readOnly && meta.folderSuggestion ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => moveSummaryMail(mail, meta.folderSuggestion!.path)}
+                                          className={SUMMARY_CHIP}
+                                        >
+                                          <FolderInput className="size-3" strokeWidth={2.4} />
+                                          Ranger dans {meta.folderSuggestion.label}
+                                        </button>
+                                      ) : null}
                                       {due ? (
                                         <span
                                           className={cn(
@@ -818,6 +1070,26 @@ export function InboxScreen({
                                         >
                                           {formatDueDate(due)}
                                         </span>
+                                      ) : null}
+                                      {!readOnly ? (
+                                        <div className="ml-auto flex items-center gap-0.5">
+                                          <button
+                                            type="button"
+                                            aria-label="Archiver"
+                                            onClick={() => onMailAction("archive", mail)}
+                                            className="focus-ring grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+                                          >
+                                            <Archive className="size-3" />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            aria-label="Supprimer"
+                                            onClick={() => onMailAction("delete", mail)}
+                                            className="focus-ring grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-rose-500/10 hover:text-rose-700 dark:hover:text-rose-300"
+                                          >
+                                            <Trash2 className="size-3" />
+                                          </button>
+                                        </div>
                                       ) : null}
                                     </div>
                                   </div>

@@ -134,6 +134,7 @@ function dec(id: string, accountId: string, overrides: Partial<MailDecision>): M
 export function buildDemoDecisions(): Record<string, MailDecision> {
   return {
     "1": dec("1", "perso", {
+      uid: 101,
       category: "important",
       categoryConf: 0.96,
       categoryProbs: { important: 0.96 },
@@ -143,6 +144,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
       cleanupScore: 0.02,
     }),
     "1c": dec("1c", "perso", {
+      uid: 102,
       category: "important",
       categoryConf: 0.95,
       categoryProbs: { important: 0.95 },
@@ -152,6 +154,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
       cleanupScore: 0.02,
     }),
     "1d": dec("1d", "perso", {
+      uid: 103,
       category: "important",
       categoryConf: 0.94,
       categoryProbs: { important: 0.94 },
@@ -161,6 +164,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
       cleanupScore: 0.02,
     }),
     "3": dec("3", "pro", {
+      uid: 104,
       category: "important",
       categoryConf: 0.95,
       categoryProbs: { important: 0.95 },
@@ -170,6 +174,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
       cleanupScore: 0.03,
     }),
     "4": dec("4", "perso", {
+      uid: 105,
       category: "important",
       categoryConf: 0.93,
       categoryProbs: { important: 0.93 },
@@ -179,6 +184,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
       cleanupScore: 0.04,
     }),
     "5": dec("5", "gmail", {
+      uid: 106,
       category: "info",
       categoryConf: 0.91,
       categoryProbs: { info: 0.91 },
@@ -187,6 +193,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
       cleanupScore: 0.08,
     }),
     "2": dec("2", "perso", {
+      uid: 107,
       category: "notification",
       categoryConf: 0.94,
       categoryProbs: { notification: 0.94 },
@@ -195,6 +202,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
       cleanupScore: 0.82,
     }),
     "6": dec("6", "pro", {
+      uid: 108,
       category: "notification",
       categoryConf: 0.95,
       categoryProbs: { notification: 0.95 },
@@ -203,6 +211,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
       cleanupScore: 0.89,
     }),
     "7": dec("7", "gmail", {
+      uid: 109,
       category: "promo",
       categoryConf: 0.94,
       categoryProbs: { promo: 0.94 },
@@ -211,6 +220,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
       cleanupScore: 0.96,
     }),
     "8": dec("8", "pro", {
+      uid: 110,
       category: "custom:factures",
       categoryConf: 0.95,
       categoryProbs: { "custom:factures": 0.95, notification: 0.05 },
@@ -221,6 +231,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
       cleanupScore: 0.08,
     }),
     "9": dec("9", "perso", {
+      uid: 111,
       category: "spam",
       categoryConf: 0.99,
       categoryProbs: { spam: 0.99 },
@@ -230,6 +241,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
       cleanupScore: 0.99,
     }),
     "demo-totp-live": dec("demo-totp-live", "perso", {
+      uid: 112,
       category: "auth_totp",
       categoryConf: 0.99,
       categoryProbs: { auth_totp: 0.99 },
@@ -240,6 +252,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
       cleanupScore: 0.98,
     }),
     "demo-totp-old": dec("demo-totp-old", "pro", {
+      uid: 113,
       category: "auth_totp",
       categoryConf: 0.98,
       categoryProbs: { auth_totp: 0.98 },
@@ -250,6 +263,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
       cleanupScore: 0.99,
     }),
     "demo-promo-2": dec("demo-promo-2", "gmail", {
+      uid: 114,
       category: "promo",
       categoryConf: 0.96,
       categoryProbs: { promo: 0.96 },
@@ -258,6 +272,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
       cleanupScore: 0.97,
     }),
     "demo-phish-1": dec("demo-phish-1", "perso", {
+      uid: 115,
       category: "important",
       categoryConf: 0.65,
       categoryProbs: { important: 0.65, spam: 0.35 },

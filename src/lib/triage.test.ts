@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { THRESHOLD_PRESETS, setDecisionUsageSink, type MailDecision } from "@/lib/decision";
 import { createMemoryDecisionDb, decisionMailKey } from "@/lib/decision-db";
+import { buildDemoDecisions } from "@/lib/demo-decisions";
 import type { Mail } from "@/lib/mail";
 import {
   MAX_RECENT_TRIAGE,
@@ -116,6 +117,38 @@ describe("triage · convertisseurs et recherche multi-appareils", () => {
     expect(triageDecisionFor(makeMail(1), idx.byKey, idx.byMessageId)).toEqual(localDecision);
     expect(stableDecisionKey(pcDecision)).toBe(stableDecisionKey({ ...pcDecision, accountId: "mobile", uid: 77 }));
   });
+
+  it("indexDecisions retrouve chaque décision d'un Record par sa clé (y compris uid === 0 et démo)", () => {
+    const record: Record<string, MailDecision> = {
+      "1": makeDecision({ uid: 0, accountId: "perso", category: "important", messageId: undefined }),
+      "demo-totp-live": makeDecision({
+        uid: 0,
+        accountId: "perso",
+        category: "auth_totp",
+        totpCode: "482917",
+        totpService: "GitHub",
+        messageId: undefined,
+      }),
+      "demo-phish-1": makeDecision({
+        uid: 0,
+        accountId: "perso",
+        category: "important",
+        security: "phishing",
+        securityConf: 0.96,
+        messageId: undefined,
+      }),
+    };
+    const idx = indexDecisions(record);
+
+    expect(triageDecisionFor({ id: "1" }, idx.byKey, idx.byMessageId)?.category).toBe("important");
+    expect(triageDecisionFor({ id: "demo-totp-live" }, idx.byKey, idx.byMessageId)?.totpCode).toBe("482917");
+    expect(triageDecisionFor({ id: "demo-phish-1" }, idx.byKey, idx.byMessageId)?.security).toBe("phishing");
+
+    const demoIdx = indexDecisions(buildDemoDecisions());
+    expect(triageDecisionFor({ id: "demo-totp-live" }, demoIdx.byKey, demoIdx.byMessageId)?.totpCode).toBe("482917");
+    expect(triageDecisionFor({ id: "demo-phish-1" }, demoIdx.byKey, demoIdx.byMessageId)?.security).toBe("phishing");
+    expect(triageDecisionFor({ id: "8" }, demoIdx.byKey, demoIdx.byMessageId)?.suggestedFolder).toBe("Factures");
+  });
 });
 
 describe("triage · filterMailsForLlm (budget & pare-feu)", () => {
@@ -213,6 +246,32 @@ describe("triage · summaryGroupsFromDecisions", () => {
     expect(groups.infos.map((ref) => ref.mailId)).toEqual(["perso:INBOX:2"]);
     expect(groups.notifications.map((ref) => ref.mailId)).toEqual(["perso:INBOX:4", "perso:INBOX:3"]);
     expect(groups.notifications[0].reason).toContain("482917");
+  });
+
+  it("met les suspects en tête d'actions, les TOTP récents (< 24 h) en actions et les vieux TOTP en notifications", () => {
+    const now = Date.now();
+    const HOUR = 3_600_000;
+    const mails = [
+      makeMail(1, { timestamp: now - HOUR }),
+      makeMail(2, { timestamp: now - 2 * HOUR }),
+      makeMail(3, { timestamp: now - 30 * HOUR }),
+      makeMail(4, { timestamp: now - 3 * HOUR }),
+    ];
+    const decisions = indexDecisions([
+      makeDecision({ uid: 1, messageId: "<m1@example.com>", category: "important", urgency: 2.8, needsReply: 0.9 }),
+      makeDecision({ uid: 2, messageId: "<m2@example.com>", category: "auth_totp", totpCode: "482917", totpService: "GitHub", urgency: 0.5 }),
+      makeDecision({ uid: 3, messageId: "<m3@example.com>", category: "auth_totp", totpCode: "901442", totpService: "Stripe", urgency: 0.3 }),
+      makeDecision({ uid: 4, messageId: "<m4@example.com>", category: "spam", security: "phishing", securityConf: 0.96, urgency: 0.2 }),
+    ]);
+
+    const groups = summaryGroupsFromDecisions(mails, decisions, THRESHOLDS, { now });
+    expect(groups.actions.map((ref) => ref.mailId)).toEqual([
+      "perso:INBOX:4",
+      "perso:INBOX:1",
+      "perso:INBOX:2",
+    ]);
+    expect(groups.actions[0].reason).toContain("Hameçonnage détecté");
+    expect(groups.notifications.map((ref) => ref.mailId)).toEqual(["perso:INBOX:3"]);
   });
 
   it("génère des raisons courtes combinées via reasonFromDecision (au plus 3 signaux)", () => {

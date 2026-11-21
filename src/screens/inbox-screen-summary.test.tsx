@@ -13,6 +13,7 @@ import type { SummaryResult } from "@/lib/summary";
 import { isoToday } from "@/lib/tasks";
 import type { MailNavigation } from "@/lib/app-shortcuts";
 import { createMemoryStorage } from "@/lib/sync/storage";
+import type { MailDecision } from "@/lib/decision";
 import { decisionDb } from "@/lib/decision-db";
 
 vi.stubEnv("VITE_MAIL_BACKEND", "demo");
@@ -65,15 +66,19 @@ function seedSummary(
   );
 }
 
-function mount(spies: { onOpen?: (mail: Mail) => void; onReply?: (mail: Mail) => void } = {}) {
+function mount(spies: {
+  onOpen?: (mail: Mail) => void;
+  onReply?: (mail: Mail) => void;
+  onMailAction?: (kind: "delete" | "archive" | "read", mail: Mail) => void;
+} = {}) {
   function Host() {
     const navigationRef = useRef<MailNavigation | null>(null);
-    const { suggestions } = useMailStore();
+    const { suggestions, mails } = useMailStore();
     return (
       <>
         <output data-testid="suggestions">{suggestions.map((entry) => entry.proposal).join("|")}</output>
         <InboxScreen
-          mails={MAILS}
+          mails={mails.length > 0 ? mails : MAILS}
           account="all"
           folder="inbox"
           active
@@ -83,7 +88,7 @@ function mount(spies: { onOpen?: (mail: Mail) => void; onReply?: (mail: Mail) =>
           onOpen={spies.onOpen ?? (() => {})}
           onToggleStar={() => {}}
           onSearch={() => {}}
-          onMailAction={() => {}}
+          onMailAction={spies.onMailAction ?? (() => {})}
           onReply={spies.onReply ?? (() => {})}
         />
       </>
@@ -416,5 +421,178 @@ describe("Boîte de réception mobile · résumé périodique", () => {
     );
     const done = await within(body).findByRole("button", { name: "Ajouté" });
     expect((done as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("affiche TOTP, Phishing, Factures + actions rapides sur mobile et masque l'accroche Décision", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const now = Date.now();
+    const makeThread = (uid: number, from: string, email: string, subject: string) => {
+      const msg = {
+        account_id: "alpha",
+        folder_path: "INBOX",
+        uid,
+        uidvalidity: 1,
+        thread_id: `t-${uid}`,
+        message_id: `<${uid}@test.fr>`,
+        in_reply_to: null,
+        references: [],
+        from: { name: from, email },
+        to: [{ name: null, email: "alpha@test.fr" }],
+        cc: [],
+        subject,
+        date: new Date(now - uid * 60_000).toISOString(),
+        flags: { unread: true, starred: false, answered: false },
+        size: 512,
+        pgp: "none",
+        preview: subject,
+        body_text: subject,
+        body_html: null,
+        attachments: [],
+      };
+      return {
+        id: msg.thread_id,
+        account_id: "alpha",
+        messages: [msg],
+        primary: msg,
+        count: 1,
+        unread: 1,
+        starred: false,
+        encrypted: 0,
+        attachments: 0,
+        participants: [email],
+        subject,
+        preview: subject,
+      };
+    };
+    const threads = [
+      makeThread(101, "GitHub Security", "noreply@github.com", "Code GitHub"),
+      makeThread(102, "Banque", "alerte@phish.xyz", "Carte bloquée"),
+      makeThread(103, "OVH", "factures@ovh.com", "Facture avril"),
+    ];
+    const baseDecision = (uid: number, overrides: Partial<MailDecision>): MailDecision => ({
+      accountId: "alpha",
+      folderPath: "INBOX",
+      uid,
+      messageId: `<${uid}@test.fr>`,
+      contentHash: `h-${uid}`,
+      schemaVersion: 1,
+      model: "mammoth-1",
+      category: "info",
+      categoryConf: 0.95,
+      categoryProbs: {},
+      urgency: 0.8,
+      needsReply: 0.1,
+      hasTask: 0,
+      hasEvent: 0,
+      security: "safe",
+      securityConf: 0.99,
+      cleanupScore: 0.1,
+      decidedAt: Math.floor(now / 1000),
+      source: "synced",
+      ...overrides,
+    });
+    await decisionDb().putDecisions([
+      baseDecision(101, {
+        category: "auth_totp",
+        totpCode: "482917",
+        totpService: "GitHub",
+        urgency: 1.5,
+      }),
+      baseDecision(102, {
+        category: "important",
+        security: "phishing",
+        securityConf: 0.96,
+      }),
+      baseDecision(103, {
+        category: "custom:factures",
+        suggestedFolder: "Factures",
+        suggestedFolderConf: 0.94,
+      }),
+    ]);
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({
+        decision: {
+          enabled: false,
+          customCategories: [
+            {
+              id: "factures",
+              name: "Factures",
+              description: "Factures",
+              color: "emerald",
+              excludeFromPriority: false,
+              allowNotifications: true,
+              cleanupEligible: false,
+            },
+          ],
+        },
+        summary: { ...DEFAULT_SUMMARY, llmConsent: false },
+        aiTasks: { enabled: false },
+      }),
+    );
+    const jsonReply = (payload: unknown) =>
+      ({ ok: true, status: 200, statusText: "", json: async () => payload }) as unknown as Response;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const { pathname } = new URL(String(input), "http://localhost");
+      const path = decodeURIComponent(pathname);
+      if (path.endsWith("/api/accounts")) {
+        return jsonReply([
+          {
+            id: "alpha",
+            label: "alpha",
+            email: "alpha@test.fr",
+            username: "alpha@test.fr",
+            imap: { host: "imap.test", port: 993, encryption: "tls" },
+            smtp: { host: "smtp.test", port: 465, encryption: "tls" },
+            folders: 1,
+          },
+        ]);
+      }
+      if (path.endsWith("/api/accounts/alpha/folders")) {
+        return jsonReply([
+          {
+            account_id: "alpha",
+            path: "INBOX",
+            name: "Boîte de réception",
+            role: "inbox",
+            uidvalidity: 1,
+            uidnext: 105,
+            last_sync_at: null,
+          },
+        ]);
+      }
+      if (path.endsWith("/api/accounts/alpha/folders/INBOX/threads")) return jsonReply(threads);
+      return jsonReply([]);
+    });
+
+    const onMailAction = vi.fn();
+    mount({ onMailAction });
+
+    const body = await screen.findByTestId("summary-attachments-mobile");
+    await waitFor(() => expect(within(body).getByTestId("summary-totp-code-mobile")).toBeTruthy(), {
+      timeout: 3000,
+    });
+
+    expect(screen.getByTestId("summary-source-mobile").textContent).toBe("Décision");
+    // Accroche robotique masquée en mode Décision
+    expect(screen.queryByText(/3 mails :/)).toBeNull();
+    expect(within(body).getByText("Suspect · Phishing")).toBeTruthy();
+    expect(within(body).getByText("Code · GitHub")).toBeTruthy();
+    expect(within(body).getByTestId("summary-totp-code-mobile").textContent).toBe("482 917");
+    expect(within(body).getByText("Factures")).toBeTruthy();
+    expect(within(body).getByRole("button", { name: "Ranger dans Factures" })).toBeTruthy();
+
+    fireEvent.click(within(body).getByRole("button", { name: "Copier" }));
+    expect(writeText).toHaveBeenCalledWith("482917");
+    expect(within(body).getByRole("button", { name: "Copié !" })).toBeTruthy();
+
+    fireEvent.click(within(body).getAllByRole("button", { name: "Supprimer" })[0]);
+    expect(onMailAction).toHaveBeenCalledTimes(1);
+    expect((onMailAction.mock.calls[0][1] as Mail).id).toBe("alpha:INBOX:102");
   });
 });

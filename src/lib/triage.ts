@@ -4,6 +4,7 @@ import {
   emitDecisionUsage,
   isBlockedFromAutoLlm,
   isNoiseCategory,
+  isPhishing,
   isPromptInjection,
   type CustomCategory,
   type DecisionConfig,
@@ -126,22 +127,26 @@ export function indexDecisions(
 ): DecisionIndex {
   const byKey = new Map<string, MailDecision>();
   const byMessageId = new Map<string, MailDecision>();
-  const entries =
+  const entries: [string | null, MailDecision][] =
     Symbol.iterator in decisions
-      ? (decisions as Iterable<MailDecision>)
-      : Object.values(decisions as Record<string, MailDecision>);
-  for (const dec of entries) {
-    const key = decisionMailKey(dec.accountId, dec.folderPath, dec.uid);
-    const existing = byKey.get(key);
+      ? Array.from(decisions as Iterable<MailDecision>, (dec) => [null, dec])
+      : Object.entries(decisions as Record<string, MailDecision>);
+  const setBest = (map: Map<string, MailDecision>, key: string, dec: MailDecision) => {
+    const existing = map.get(key);
     if (!existing || dec.decidedAt >= existing.decidedAt) {
-      byKey.set(key, dec);
+      map.set(key, dec);
+    }
+  };
+  for (const [recordKey, dec] of entries) {
+    if (recordKey) {
+      setBest(byKey, recordKey, dec);
+    }
+    if (dec.uid > 0 || !recordKey) {
+      setBest(byKey, decisionMailKey(dec.accountId, dec.folderPath, dec.uid), dec);
     }
     const mid = normalizeMessageId(dec.messageId);
     if (mid) {
-      const existingMid = byMessageId.get(mid);
-      if (!existingMid || dec.decidedAt >= existingMid.decidedAt) {
-        byMessageId.set(mid, dec);
-      }
+      setBest(byMessageId, mid, dec);
     }
   }
   return { byKey, byMessageId };
@@ -222,9 +227,110 @@ function findCustomCategory(
   category: string,
   customCategories?: readonly CustomCategory[],
 ): CustomCategory | undefined {
-  if (!customCategories || !category.startsWith("custom:")) return undefined;
-  const id = category.slice("custom:".length);
-  return customCategories.find((cat) => cat.id === id);
+  if (!customCategories) return undefined;
+  if (category.startsWith("custom:")) {
+    const id = category.slice("custom:".length);
+    return customCategories.find((cat) => cat.id === id);
+  }
+  return customCategories.find((cat) => cat.id === category);
+}
+
+const ONE_DAY_MS = 24 * 3_600_000;
+
+function decisionTimestampMs(mail: Pick<TriageMailRef, "timestamp">, dec: MailDecision): number {
+  if (typeof mail.timestamp === "number" && Number.isFinite(mail.timestamp)) return mail.timestamp;
+  return dec.decidedAt > 1e12 ? dec.decidedAt : dec.decidedAt * 1000;
+}
+
+function isRecentTotp(
+  mail: Pick<TriageMailRef, "timestamp">,
+  dec: MailDecision,
+  nowMs: number,
+): boolean {
+  if (dec.category !== "auth_totp" || !dec.totpCode?.trim()) return false;
+  return nowMs - decisionTimestampMs(mail, dec) < ONE_DAY_MS;
+}
+
+export type SummaryDecisionMeta = {
+  phishing: boolean;
+  injection: boolean;
+  suspect: boolean;
+  urgent: boolean;
+  totpCode: string | null;
+  totpService: string | null;
+  needsReply: boolean;
+  hasEvent: boolean;
+  customCategory: CustomCategory | undefined;
+  folderSuggestion: { path: string; label: string } | null;
+  noiseTag: "Pub" | "Spam" | "Code expiré" | null;
+};
+
+/**
+ * Extrait les métadonnées d'action rapide (sécurité, TOTP, urgence,
+ * catégorie personnalisée et dossier suggéré) pour l'affichage du Résumé.
+ */
+export function summaryDecisionMeta(
+  mail: Pick<TriageMailRef, "id" | "source"> & { folderName?: string },
+  dec: MailDecision | undefined,
+  thresholds: DecisionThresholds,
+  customCategories?: readonly CustomCategory[],
+): SummaryDecisionMeta {
+  if (!dec) {
+    return {
+      phishing: false,
+      injection: false,
+      suspect: false,
+      urgent: false,
+      totpCode: null,
+      totpService: null,
+      needsReply: false,
+      hasEvent: false,
+      customCategory: undefined,
+      folderSuggestion: null,
+      noiseTag: null,
+    };
+  }
+  const phishing = isPhishing(dec, thresholds);
+  const injection = isPromptInjection(dec, thresholds);
+  const suspect = phishing || injection;
+  const totpCode = dec.category === "auth_totp" && dec.totpCode?.trim() ? dec.totpCode.trim() : null;
+  const totpService = dec.totpService?.trim() || null;
+
+  let folderSuggestion: { path: string; label: string } | null = null;
+  if (!suspect && dec.suggestedFolder && (dec.suggestedFolderConf ?? 0) >= thresholds.folder) {
+    const path = dec.suggestedFolder;
+    const label = path.split(/[/.]/).filter(Boolean).pop() || path;
+    const currentPath = mail.source?.folderPath;
+    const alreadyThere =
+      (currentPath && currentPath === path) ||
+      (mail.folderName && (mail.folderName === path || mail.folderName === label));
+    if (!alreadyThere) {
+      folderSuggestion = { path, label };
+    }
+  }
+
+  const noiseTag: SummaryDecisionMeta["noiseTag"] =
+    dec.category === "promo"
+      ? "Pub"
+      : dec.category === "spam"
+        ? "Spam"
+        : dec.category === "auth_totp"
+          ? "Code expiré"
+          : null;
+
+  return {
+    phishing,
+    injection,
+    suspect,
+    urgent: !suspect && dec.urgency >= 2.0,
+    totpCode,
+    totpService,
+    needsReply: !suspect && !totpCode && dec.needsReply >= thresholds.category,
+    hasEvent: !suspect && !totpCode && dec.hasEvent >= thresholds.llmEscalate,
+    customCategory: findCustomCategory(dec.category, customCategories),
+    folderSuggestion,
+    noiseTag,
+  };
 }
 
 /**
@@ -306,6 +412,7 @@ export function filterMailsForLlm<T extends TriageMailRef>(
  * Génère une raison courte et lisible en français à partir des signaux Système 1.
  */
 export function reasonFromDecision(dec: MailDecision, thresholds: DecisionThresholds): string {
+  if (isPhishing(dec, thresholds)) return "Hameçonnage détecté · Ne cliquez sur aucun lien";
   if (isPromptInjection(dec, thresholds)) return "Alerte sécurité · injection détectée";
   if (dec.category === "auth_totp") {
     if (dec.totpCode) {
@@ -341,9 +448,10 @@ export function summaryGroupsFromDecisions<T extends TriageMailRef>(
   mails: readonly T[],
   decisions: DecisionLookup,
   thresholds: DecisionThresholds,
-  options?: { customCategories?: readonly CustomCategory[] },
+  options?: { customCategories?: readonly CustomCategory[]; now?: number },
 ): SummaryGroups {
   const index = asDecisionIndex(decisions);
+  const nowMs = options?.now ?? Date.now();
   const ordered = mails
     .map((mail, order) => ({
       mail,
@@ -352,6 +460,8 @@ export function summaryGroupsFromDecisions<T extends TriageMailRef>(
     }))
     .sort((a, b) => (b.dec?.urgency ?? -1) - (a.dec?.urgency ?? -1) || a.order - b.order);
 
+  const suspectActions: SummaryRef[] = [];
+  const normalActions: SummaryRef[] = [];
   const groups: SummaryGroups = { actions: [], infos: [], notifications: [] };
   const seen = new Set<string>();
 
@@ -372,7 +482,17 @@ export function summaryGroupsFromDecisions<T extends TriageMailRef>(
     const reason = reasonFromDecision(dec, thresholds);
     const ref: SummaryRef = { mailId: mail.id, reason };
 
-    if (isPromptInjection(dec, thresholds) || isNoiseCategory(dec.category)) {
+    if (isPhishing(dec, thresholds) || isPromptInjection(dec, thresholds)) {
+      suspectActions.push(ref);
+      continue;
+    }
+
+    if (isRecentTotp(mail, dec, nowMs)) {
+      normalActions.push(ref);
+      continue;
+    }
+
+    if (isNoiseCategory(dec.category)) {
       if (groups.notifications.length < MAX_SUMMARY_NOTIFICATIONS) groups.notifications.push(ref);
       continue;
     }
@@ -391,12 +511,13 @@ export function summaryGroupsFromDecisions<T extends TriageMailRef>(
     }
 
     if (isAction) {
-      if (groups.actions.length < MAX_SUMMARY_ACTIONS) groups.actions.push(ref);
+      normalActions.push(ref);
     } else if (groups.infos.length < MAX_SUMMARY_INFOS) {
       groups.infos.push(ref);
     }
   }
 
+  groups.actions = [...suspectActions, ...normalActions].slice(0, MAX_SUMMARY_ACTIONS);
   return groups;
 }
 

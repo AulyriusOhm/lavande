@@ -451,9 +451,10 @@ describe("pipeline hybride (Système 1 + Système 2)", () => {
       { hybrid: true, decisionReady: true, decisions, thresholds },
     );
     expect(noLlm.source).toBe("decision");
-    expect(noLlm.groups.actions.map((r) => r.mailId)).toEqual(["perso:INBOX:1"]);
-    expect(noLlm.groups.actions[0].reason).toContain("Urgent");
-    expect(noLlm.groups.notifications.map((r) => r.mailId)).toEqual(["perso:INBOX:3", "perso:INBOX:2"]);
+    expect(noLlm.groups.actions.map((r) => r.mailId)).toEqual(["perso:INBOX:3", "perso:INBOX:1"]);
+    expect(noLlm.groups.actions[0].reason).toContain("injection");
+    expect(noLlm.groups.actions[1].reason).toContain("Urgent");
+    expect(noLlm.groups.notifications.map((r) => r.mailId)).toEqual(["perso:INBOX:2"]);
 
     // Avec LLM : seul m1 est transmis au LLM, et l'assignee Système 1 est réutilisé -> source "hybrid"
     vi.mocked(llmChat).mockResolvedValue(

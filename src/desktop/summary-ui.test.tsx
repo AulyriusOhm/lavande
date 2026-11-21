@@ -8,7 +8,7 @@ import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { ThemeProvider } from "@/lib/theme";
 import { createMemoryStorage } from "@/lib/sync/storage";
-import type { MailDecision } from "@/lib/decision";
+import type { CustomCategory, MailDecision } from "@/lib/decision";
 import { decisionDb } from "@/lib/decision-db";
 import type { DecisionLookup } from "@/lib/triage";
 import { MAILS } from "@/lib/mail";
@@ -72,11 +72,16 @@ function renderSummary(
   summary: SummaryResult,
   handlers: {
     loading?: boolean;
+    mails?: Mail[];
     decisions?: DecisionLookup;
+    customCategories?: CustomCategory[];
     onOpen?: (id: string) => void;
     onReply?: (mail: Mail) => void;
     onPropose?: (ref: { mailId: string; reason: string; due?: string }) => "added" | "existing";
     onProposeEvent?: (ref: { mailId: string; reason: string; due?: string }) => "added" | "existing";
+    onDelete?: (mail: Mail) => void;
+    onArchive?: (mail: Mail) => void;
+    onMoveToFolder?: (mail: Mail, folderPath: string) => void;
   } = {},
 ) {
   return render(
@@ -87,15 +92,19 @@ function renderSummary(
       encrypted={1}
       demo={false}
       summary={summary}
-      mails={BRIEFING_MAILS}
+      mails={handlers.mails ?? BRIEFING_MAILS}
       loading={Boolean(handlers.loading)}
       decisions={handlers.decisions}
+      customCategories={handlers.customCategories}
       onToggle={() => {}}
       onOpen={handlers.onOpen ?? (() => {})}
       onRefresh={() => {}}
       onReply={handlers.onReply ?? (() => {})}
       onPropose={handlers.onPropose ?? (() => "added")}
       onProposeEvent={handlers.onProposeEvent}
+      onDelete={handlers.onDelete}
+      onArchive={handlers.onArchive}
+      onMoveToFolder={handlers.onMoveToFolder}
     />,
   );
 }
@@ -326,6 +335,194 @@ describe("Résumé du matin · briefing structuré", () => {
     const done = within(card).getByRole("button", { name: "Ajouté" }) as HTMLButtonElement;
     expect(done.disabled).toBe(true);
     expect(within(card).queryByRole("button", { name: "+ Agenda" })).toBeNull();
+  });
+
+  it("affiche le code TOTP avec Copier / Supprimer et masque les doublons visuels en mode Décision", () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const totpMail: Mail = {
+      ...byId("3"),
+      id: "demo-totp-live",
+      name: "GitHub Security",
+      subject: "Votre code de vérification GitHub",
+    };
+    const onDelete = vi.fn();
+    const decisions: Record<string, MailDecision> = {
+      "demo-totp-live": {
+        accountId: "perso",
+        folderPath: "INBOX",
+        uid: 0,
+        contentHash: "h-totp",
+        schemaVersion: 1,
+        model: "mammoth-1",
+        category: "auth_totp",
+        categoryConf: 0.99,
+        categoryProbs: { auth_totp: 0.99 },
+        urgency: 1.5,
+        needsReply: 0.01,
+        hasTask: 0,
+        hasEvent: 0,
+        security: "safe",
+        securityConf: 0.99,
+        cleanupScore: 0.98,
+        totpCode: "482917",
+        totpService: "GitHub",
+        decidedAt: 1_731_000_000,
+        source: "synced",
+      },
+    };
+    renderSummary(
+      briefing({
+        source: "decision",
+        headline: "1 mail : 1 à traiter.",
+        groups: {
+          actions: [{ mailId: "demo-totp-live", reason: "Code GitHub : 482917" }],
+          infos: [],
+          notifications: [],
+        },
+      }),
+      { mails: [totpMail], decisions, onDelete },
+    );
+    const card = screen.getByTestId("morning-summary");
+
+    // Pas de compteur redondant dans l'en-tête ni d'accroche robotique en mode Décision
+    expect(card.textContent).not.toContain("12 non lus");
+    expect(within(card).queryByText("1 mail : 1 à traiter.")).toBeNull();
+
+    expect(within(card).getByText("Code · GitHub")).toBeTruthy();
+    expect(within(card).getByTestId("summary-totp-code").textContent).toBe("482 917");
+    expect(within(card).queryByRole("button", { name: "Planification" })).toBeNull();
+    expect(within(card).queryByRole("button", { name: "Répondre" })).toBeNull();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Copier" }));
+    expect(writeText).toHaveBeenCalledWith("482917");
+    expect(within(card).getByRole("button", { name: "Copié !" })).toBeTruthy();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Supprimer" }));
+    expect(onDelete).toHaveBeenCalledWith(totpMail);
+  });
+
+  it("affiche la carte Phishing avec étiquette Suspect · Phishing et Supprimer uniquement", () => {
+    const phishMail: Mail = {
+      ...byId("1"),
+      id: "demo-phish-1",
+      name: "Service Bancaire Urgent",
+      subject: "Action immédiate : carte bloquée",
+    };
+    const onDelete = vi.fn();
+    const decisions: Record<string, MailDecision> = {
+      "demo-phish-1": {
+        accountId: "perso",
+        folderPath: "INBOX",
+        uid: 0,
+        contentHash: "h-phish",
+        schemaVersion: 1,
+        model: "mammoth-1",
+        category: "important",
+        categoryConf: 0.7,
+        categoryProbs: { important: 0.7 },
+        urgency: 1.2,
+        needsReply: 0.1,
+        hasTask: 0,
+        hasEvent: 0,
+        security: "phishing",
+        securityConf: 0.96,
+        cleanupScore: 0.85,
+        decidedAt: 1_731_000_000,
+        source: "synced",
+      },
+    };
+    renderSummary(
+      briefing({
+        source: "decision",
+        groups: {
+          actions: [{ mailId: "demo-phish-1", reason: "Hameçonnage détecté · Ne cliquez sur aucun lien" }],
+          infos: [],
+          notifications: [],
+        },
+      }),
+      { mails: [phishMail], decisions, onDelete },
+    );
+    const card = screen.getByTestId("morning-summary");
+
+    expect(within(card).getByText("Suspect · Phishing")).toBeTruthy();
+    expect(within(card).getByText("Hameçonnage détecté · Ne cliquez sur aucun lien")).toBeTruthy();
+    expect(within(card).queryByRole("button", { name: "Répondre" })).toBeNull();
+    expect(within(card).queryByRole("button", { name: "Planification" })).toBeNull();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Supprimer" }));
+    expect(onDelete).toHaveBeenCalledWith(phishMail);
+  });
+
+  it("affiche la catégorie custom Factures et les boutons Ranger dans Factures / Archiver / Supprimer", () => {
+    const facturesCategory: CustomCategory = {
+      id: "factures",
+      name: "Factures",
+      description: "Factures et abonnements",
+      color: "emerald",
+      excludeFromPriority: false,
+      allowNotifications: true,
+      cleanupEligible: false,
+    };
+    const onMoveToFolder = vi.fn();
+    const onArchive = vi.fn();
+    const onDelete = vi.fn();
+    const decisions: Record<string, MailDecision> = {
+      "8": {
+        accountId: "pro",
+        folderPath: "INBOX",
+        uid: 110,
+        contentHash: "h-8",
+        schemaVersion: 1,
+        model: "mammoth-1",
+        category: "custom:factures",
+        categoryConf: 0.95,
+        categoryProbs: { "custom:factures": 0.95 },
+        urgency: 0.9,
+        needsReply: 0.05,
+        hasTask: 0.1,
+        hasEvent: 0,
+        security: "safe",
+        securityConf: 0.99,
+        cleanupScore: 0.08,
+        suggestedFolder: "Factures",
+        suggestedFolderConf: 0.94,
+        decidedAt: 1_731_000_000,
+        source: "synced",
+      },
+    };
+
+    renderSummary(
+      briefing({
+        source: "decision",
+        groups: {
+          actions: [],
+          infos: [{ mailId: "8", reason: "" }],
+          notifications: [],
+        },
+      }),
+      {
+        decisions,
+        customCategories: [facturesCategory],
+        onMoveToFolder,
+        onArchive,
+        onDelete,
+      },
+    );
+    const card = screen.getByTestId("morning-summary");
+
+    expect(within(card).getByText("Factures")).toBeTruthy();
+    fireEvent.click(within(card).getByRole("button", { name: "Ranger dans Factures" }));
+    expect(onMoveToFolder).toHaveBeenCalledWith(byId("8"), "Factures");
+
+    fireEvent.click(within(card).getByRole("button", { name: "Archiver" }));
+    expect(onArchive).toHaveBeenCalledWith(byId("8"));
+
+    fireEvent.click(within(card).getByRole("button", { name: "Supprimer" }));
+    expect(onDelete).toHaveBeenCalledWith(byId("8"));
   });
 });
 
