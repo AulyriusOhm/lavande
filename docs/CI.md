@@ -12,7 +12,7 @@ rustfmt + clippy, `cargo-audit`, JDK 21 + SDK + NDK Android) et n'attend de l'im
 | `rust` | formatage, lint, tests unitaires du workspace, vulnérabilités des 3 lockfiles | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo audit` (×3 lockfiles) |
 | `front` | typecheck + build Vite, vitest, vulnérabilités des dépendances livrées | `npm ci`, `npm run build`, `npm test`, `npm audit --omit=dev --audit-level=high` |
 | `vitrine` | typecheck + build du site vitrine, vulnérabilités livrées (pas de tests) | `npm ci`, `npm run build`, `npm audit --omit=dev --audit-level=high` (working-directory `site-vitrine`) |
-| `android` | compilation de l'app Android : Kotlin de l'app + `cargo check` de la coquille Tauri pour `aarch64-linux-android` — aucun APK, aucune signature, aucun émulateur | voir « Job `android` — vérification de compilation » ci-dessous |
+| `android` | build debug complet de l'app Android (codegen + Rust `aarch64-linux-android` + Kotlin + APK debug **non signé**) — aucune signature, aucun émulateur, aucune publication | voir « Job `android` — vérification de compilation » ci-dessous |
 
 Le job `rust` ne compile que le workspace racine (`crates/mail-core`, `crates/mail-api`) : `src-tauri`
 et `server` sont dans `exclude` du `Cargo.toml` et gardent chacun leur `Cargo.lock`, d'où les trois
@@ -48,8 +48,9 @@ après `cargo clean`. Les tests Rust locaux passent par le wrapper `cc` de cette
 
 ## Job `android` — vérification de compilation
 
-Le job `android` vérifie que l'app **compile** des deux côtés, sans jamais produire d'artefact : pas
-d'APK, pas de `.so` construit, pas de keystore, pas d'émulateur, pas de publication. La release
+Le job `android` vérifie que l'app **compile** des deux côtés via un build debug complet : il produit
+un APK debug **non signé** (jamais publié) et les `.so` aarch64, mais pas de keystore, pas de signature,
+pas d'émulateur, pas de publication. La release
 Android reste manuelle (`scripts/build-android-release.sh`, voir [`android.md`](./android.md)) et les
 clés de signature ne sont jamais sur le runner (voir [`SIGNING.md`](./SIGNING.md)).
 
@@ -58,18 +59,21 @@ clés de signature ne sont jamais sur le runner (voir [`SIGNING.md`](./SIGNING.m
 | `actions/setup-java@v4` (temurin 21) | même JDK que la machine de build ; Gradle 9.6.1 et AGP 9.3.1 l'exigent |
 | rustup stable + `rustup target add aarch64-linux-android` | seule ABI livrée (voir « Build mono-ABI arm64 » dans [`android.md`](./android.md)) |
 | SDK Android via cmdline-tools : `platform-tools`, `platforms;android-37.0`, `build-tools;36.0.0`, `ndk;28.2.13676358` | `compileSdk`/`targetSdk` 37 et le NDK réellement utilisés ; `build-tools` 36.0.0 est la version par défaut d'AGP 9.3.1 (constatée sur la machine de build), `37.0.0` existe aussi si AGP monte ; les licences sont acceptées dans le job, donc AGP peut provisionner un autre paquet au besoin |
-| `cargo fetch --manifest-path src-tauri/Cargo.toml` | **obligatoire avant** `tauri android init` : le `src-tauri/gen/android/tauri.settings.gradle` généré contient des chemins **absolus** vers `~/.cargo/registry/src/index.crates.io-…/tauri-<version>/mobile/android` (idem `tauri-plugin-*`) et Gradle fait `include ':tauri-android'` — sans les sources extraites, la configuration Gradle échoue |
+| `cargo fetch --manifest-path src-tauri/Cargo.toml` | **obligatoire avant** le build : `tauri.settings.gradle` (généré par `tauri android build`, **pas** par `init`) contient des chemins **absolus** vers `~/.cargo/registry/src/index.crates.io-…/tauri-<version>/mobile/android` (idem `tauri-plugin-*`) et Gradle fait `include ':tauri-android'` — sans les sources extraites, la configuration Gradle échoue |
 | `npx tauri android init --ci --skip-targets-install` + `node scripts/patch-android.mjs` | régénère `src-tauri/gen/android` (ignoré par git) et applique tous les patchs Kotlin / manifeste / `networkSecurityConfig` ; `--skip-targets-install` évite d'ajouter les trois autres cibles Android, inutiles ici |
 | `source scripts/android-env.sh` + `CC_aarch64_linux_android` / `AR_…` / `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` | la coquille Rust compile pour Android, C cross-compilé inclus (`ring`, `libsqlite3-sys`…) ; `scripts/android-env.sh` honore les `JAVA_HOME` / `ANDROID_HOME` / `NDK_HOME` exportés par le job et ne pose que le `PATH` et le `cc` hôte — un seul chemin de code entre CI et machine locale |
-| `./gradlew :app:compileUniversalDebugKotlin --no-daemon` | le Kotlin de l'app compile (flavor `universal`, build type `debug`) ; cette tâche ne dépend **pas** de `rustBuild*` (`buildSrc/src/main/java/mail/lavande/app/kotlin/RustPlugin.kt` : elles ne sont tirées que par `merge*JniLibFolders`), d'où l'absence de `.so`, de keystore et de signature |
+| `npx tauri android build --ci --debug --apk -t aarch64` | génère `tauri.settings.gradle` (codegen — **absent après `init` seul**, d'où l'échec `settings.gradle` ligne 3 « Could not read script tauri.settings.gradle » si on saute le build), compile la coquille Rust pour aarch64 (`.so`), le Kotlin (flavor `universal` debug) et emballe un APK debug **non signé**. `CARGO_BUILD_JOBS=2` limite la RAM. Pas de keystore ni `apksigner` |
 
 À connaître :
 
-- **Coût ~15–25 min à froid** : SDK + NDK (~1,5 Go), distribution Gradle 9.6.1, compilation Kotlin puis
-  `cargo check` complet. Aucun cache pour l'instant (même service de cache que les autres jobs) ; à
+- **Coût ~15–25 min à froid** : SDK + NDK (~1,5 Go), distribution Gradle 9.6.1, build Rust aarch64
+  complet + Kotlin + APK debug. Aucun cache pour l'instant (même service de cache que les autres jobs) ; à
   réactiver avec `~/.cargo/registry`, `~/.gradle/caches` et `$ANDROID_HOME` une fois l'infra réparée.
-- **Ressources** : disque (NDK + Gradle, ~10 Go) et RAM (`org.gradle.jvmargs=-Xmx2048m`) sont les
-  points à surveiller au premier run.
+- **Ressources** : disque (NDK + target Rust + Gradle, ~15 Go libres nécessaires) et RAM
+  (`org.gradle.jvmargs=-Xmx2048m`, `CARGO_BUILD_JOBS=2`) sont les points sensibles. Le disque du runner
+  (45G) sature si les vieilles images docker s'accumulent (watchtower) : un prune régulier
+  (`docker image prune -af --filter until=168h`) maintient la baseline — sinon « No space left on device »
+  pendant le build.
 - **Paquets SDK** : `platforms;android-37.0`, `build-tools;37.0.0` et `ndk;28.2.13676358` sont publiés
   sur le canal stable (`sdkmanager --list`). Si un paquet venait à disparaître, repli : installer
   `platforms;android-36` et laisser AGP provisionner 37 (licences déjà acceptées), puis documenter ici.
@@ -83,12 +87,11 @@ Reproduire en local :
 ```bash
 npm run android:init                                            # tauri android init + patch
 source scripts/android-env.sh
-cargo check --manifest-path src-tauri/Cargo.toml --target aarch64-linux-android
-(cd src-tauri/gen/android && ./gradlew :app:compileUniversalDebugKotlin)
+npx tauri android build --ci --debug --apk -t aarch64           # codegen + Rust aarch64 + Kotlin + APK non signé
 ```
 
-Le `cargo check` local a besoin des mêmes `CC_` / `AR_` / linker NDK que la CI (la machine de build
-passe par `tauri android build`, qui les pose lui-même).
+Le build local a besoin des mêmes `CC_` / `AR_` / linker NDK que la CI ; `tauri android build` les
+pose aussi lui-même via `android-env.sh`.
 
 ## Politique d'audit
 

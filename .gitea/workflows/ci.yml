@@ -117,7 +117,7 @@ jobs:
           npx tauri android init --ci --skip-targets-install
           node scripts/patch-android.mjs
 
-      - name: cargo check arm64 (NDK clang pour le C cross-compilé)
+      - name: Build Android debug (codegen tauri.settings.gradle + Rust aarch64 + Kotlin, APK non signé)
         run: |
           df -h /
           source scripts/android-env.sh
@@ -125,11 +125,8 @@ jobs:
           export CC_aarch64_linux_android="$CLANG/aarch64-linux-android24-clang"
           export AR_aarch64_linux_android="$CLANG/llvm-ar"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CLANG/aarch64-linux-android24-clang"
-          cargo check --manifest-path src-tauri/Cargo.toml --target aarch64-linux-android
-
-      - name: Compiler le Kotlin (aucun APK, aucune signature)
-        working-directory: src-tauri/gen/android
-        run: ./gradlew :app:compileUniversalDebugKotlin --no-daemon
+          export CARGO_BUILD_JOBS=2
+          npx tauri android build --ci --debug --apk -t aarch64
 
   vitrine:
     name: Site vitrine — build, audit
