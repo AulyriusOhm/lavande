@@ -37,6 +37,7 @@
   --safe-bottom: 0px;
   --ime-bottom: 0px;
   --native-top: 44px;
+  --sheet-shadow: 0 -3px 10px rgba(27, 21, 35, 0.07);
 
   --accent: #8b7cf6;
   --accent-contrast: #1b1523;
@@ -64,6 +65,7 @@
   --ink-muted: #8c8699;
   --line: #2a2438;
   --shadow-color: 265 60% 4%;
+  --sheet-shadow: 0 -3px 12px rgba(0, 0, 0, 0.45);
 
   --accent-soft: color-mix(in oklab, var(--accent) 24%, #16131f);
   --accent-ring: color-mix(in oklab, var(--accent) 45%, #16131f);
@@ -150,8 +152,12 @@
   background-color: var(--canvas);
 }
 
+/* Arrondi discret : liseré + ombre révèlent le coin sans bande colorée (haut uni). */
 .native-sheet {
   background: var(--canvas);
+  border-radius: 18px 18px 0 0;
+  border-top: 1px solid var(--line);
+  box-shadow: var(--sheet-shadow);
 }
 
 @utility no-scrollbar {

@@ -53,15 +53,17 @@ describe("coquille native", () => {
     expect(sheet!.className).toContain("overflow-hidden");
   });
 
-  it("peint le haut en canvas uni, sans bande ni coins", () => {
+  it("peint le haut en canvas uni, arrondi discret sans bande", () => {
     const css = readFileSync(path.join(process.cwd(), "src/index.css"), "utf8");
 
     expect(css).not.toContain("--statusband");
     expect(css).toMatch(/\.native-shell \{[^}]*background-color: var\(--canvas\)/);
     expect(css).not.toContain(".native-shell::before");
-    expect(css).not.toMatch(/\.native-sheet \{[^}]*border-radius/);
     expect(css).not.toContain("linear-gradient");
     expect(css).not.toContain("background-size");
-    expect(css).toMatch(/\.native-sheet \{[^}]*background: var\(--canvas\)/);
+    expect(css.split("--sheet-shadow:").length - 1).toBe(2);
+    expect(css).toMatch(/\.native-sheet \{[^}]*border-radius: 18px 18px 0 0/);
+    expect(css).toMatch(/\.native-sheet \{[^}]*border-top: 1px solid var\(--line\)/);
+    expect(css).toMatch(/\.native-sheet \{[^}]*box-shadow: var\(--sheet-shadow\)/);
   });
 });

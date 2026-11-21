@@ -286,7 +286,7 @@ quand même.
 | --- | --- |
 | `isNativeShell()` (`src/lib/native.ts`) | vrai si l'URL contient `?app`, ou si `__TAURI_INTERNALS__` existe et que l'UA contient `Android` |
 | `NativeShell` (`src/App.tsx`) | `PhoneApp` en plein écran dans une feuille `.native-sheet` opaque `--canvas`, elle-même dans `.native-shell` (haut uni canvas), sans le `Stage` (cadre téléphone + barre de statut factice) |
-| `src/index.css` | tokens `--native-top` (repli `44px`, écrasé par le pont) et `--safe-bottom`/`--ime-bottom` (défaut `0px`) ; `.native-shell` fond `--canvas` sur toute la hauteur (`padding-top: var(--native-top)`, `padding-bottom: max(--safe-bottom, --ime-bottom)`), donc barre d'état, encoche et contenu partagent **une seule couleur** ; `.native-sheet` opaque `--canvas` sans arrondi |
+| `src/index.css` | tokens `--native-top` (repli `44px`, écrasé par le pont) et `--safe-bottom`/`--ime-bottom` (défaut `0px`) ; `.native-shell` fond `--canvas` sur toute la hauteur (`padding-top: var(--native-top)`, `padding-bottom: max(--safe-bottom, --ime-bottom)`), donc barre d'état, encoche et contenu partagent **une seule couleur** ; `.native-sheet` opaque `--canvas`, coins hauts 18 px révélés par un liseré `border-line` + une ombre douce `--sheet-shadow` (arrondi discret, sans bande) |
 | `applySystemBars()` (`src/lib/system-bars.ts`) | appelle `plugin:lavandeuibars\|set_bars_appearance` (`{dark}`) depuis l'effet du thème, en coquille native seulement |
 | Polices | deux `@font-face` locaux (Plus Jakarta Sans, `src/assets/fonts/`, licence OFL) ; `index.html` ne charge plus Google Fonts |
 | Icône | `app-icon.svg` (carré dégradé violet, sans monogramme) + `app-icon-adaptive.svg` (même dégradé, plein cadre, calques de l'icône adaptative) → `./node_modules/.bin/tauri icon icon-manifest.json` → `src-tauri/icons/`, `src-tauri/gen/android/app/src/main/res/mipmap-*`, `bundle.icon` renseigné dans `src-tauri/tauri.conf.json` |
@@ -333,12 +333,12 @@ le dock est visible, c'est le premier suspect.
   **Décision (21/11)** : le thème de l'app — et lui seul — décide de l'apparence des icônes système
   (`WindowInsetsControllerCompat`, `isAppearanceLightStatusBars`/`…NavigationBars`) ; ni
   `AppCompatDelegate.setDefaultNightMode` ni `values-night` global pour les couleurs web, les widgets gardent leur
-  propre mode nuit. **Visuel retenu après retour réel sur téléphone à encoche (21/11) : « haut uni canvas »** —
+  propre mode nuit. **Visuel retenu après retour réel sur téléphone à encoche (21/11) : « haut uni canvas + arrondi discret »** —
   la barre d'état et l'encoche sont peintes par **le canvas de l'app**, une seule couleur de haut en bas :
   `.native-shell` a `background-color: var(--canvas)` et se contente de réserver la hauteur mesurée
-  (`padding-top: var(--native-top)`), `.native-sheet` est une feuille opaque `--canvas` **sans arrondi** (avec une
-  couleur uniforme, un arrondi ne se verrait pas) ; la transition entre la zone système et le contenu est donc
-  invisible. Le cutout reste en `SHORT_EDGES` : le contenu web peint dans l'encoche au lieu de laisser le
+  (`padding-top: var(--native-top)`), `.native-sheet` est une feuille opaque `--canvas` à **coins hauts 18 px**
+  révélés par un liseré `border-top: 1px solid var(--line)` + une ombre douce `--sheet-shadow` (clair
+  `rgba(27,21,35,.07)`, sombre `rgba(0,0,0,.45)`) : l'arrondi se lit comme une arête subtile, **sans bande colorée**. Le cutout reste en `SHORT_EDGES` : le contenu web peint dans l'encoche au lieu de laisser le
   `windowBackground` la repeindre, et `windowBackground` vaut `@color/lavande_canvas` (clair `#fbfaff`, sombre
   `#0e0c13`, `values-night`) pour que l'encoche et le tout premier paint soient déjà du bon ton. Le header `glass`
   des écrans reste `absolute top-0` **dans** la feuille : il commence sous la zone système, c'est voulu.
@@ -346,7 +346,9 @@ le dock est visible, c'est le premier suspect.
   `--statusband-top` → mélange 45 % vers le canvas (trois tons visibles : encoche claire, bande dégradée, canvas),
   puis la **bande plate tonale** `--statusband` (`#eceaf3` / `#1a1724`, couleur `lavande_band` natif) avec feuille à
   coins hauts 18 px — même à deux tons, la bande restait distincte du canvas (`#eceaf3` ≠ `#fbfaff`) et se voyait.
-  Plus de token `--statusband`, plus de couleur `lavande_band`, plus de `.native-shell::before` ni d'arrondi.
+  Plus de token `--statusband`, plus de couleur `lavande_band`, plus de `.native-shell::before` ni de bande ;
+  l'arrondi 18 px est conservé, révélé par le liseré + l'ombre `--sheet-shadow` (décision Roman 21/11 : ravoir
+  l'arrondi tout en gardant une couleur unie).
   `setStatusBarColor` ne peint plus rien depuis l'edge-to-edge imposé (targetSdk 37) : on règle les icônes, jamais
   la couleur native de la barre.
 - **Bas mesuré, non validé sur appareil physique** : le pont renvoie la barre de navigation et le clavier,
