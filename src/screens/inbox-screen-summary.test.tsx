@@ -615,6 +615,8 @@ describe("Boîte de réception mobile · résumé périodique", () => {
     expect(within(body).getByTestId("summary-totp-code-mobile").textContent).toBe("482 917");
     expect(within(body).getByText("Factures")).toBeTruthy();
     expect(within(body).getByRole("button", { name: "Ranger dans Factures" })).toBeTruthy();
+    expect(within(body).getByRole("button", { name: "Pas suspect" })).toBeTruthy();
+    expect(within(body).queryByRole("button", { name: /Faire confiance au domaine|Domaine/ })).toBeNull();
 
     fireEvent.click(within(body).getByRole("button", { name: "Copier" }));
     expect(writeText).toHaveBeenCalledWith("482917");

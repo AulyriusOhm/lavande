@@ -375,7 +375,6 @@ export function MorningSummary({
   onPlanMail,
   onScheduleMail,
   onTrustSender,
-  onTrustDomain,
   onDelete,
   onArchive,
   onMoveToFolder,
@@ -403,7 +402,6 @@ export function MorningSummary({
   onPlanMail?: (ref: SummaryRef, mail: Mail) => void;
   onScheduleMail?: (ref: SummaryRef, mail: Mail) => void;
   onTrustSender?: (mail: Mail) => void;
-  onTrustDomain?: (mail: Mail) => void;
   onDelete?: (mail: Mail) => void;
   onArchive?: (mail: Mail) => void;
   onMoveToFolder?: (mail: Mail, folderPath: string) => void;
@@ -734,7 +732,6 @@ export function MorningSummary({
                           (meta.phishing
                             ? "Hameçonnage détecté · Ne cliquez sur aucun lien"
                             : "Alerte sécurité · injection détectée");
-                        const domain = senderDomain(mail.email);
                         return (
                           <article
                             key={ref.mailId}
@@ -781,7 +778,7 @@ export function MorningSummary({
                                 </div>
                               </div>
                             </div>
-                            {onDelete || onTrustSender || onTrustDomain ? (
+                            {onDelete || onTrustSender ? (
                               <div className="flex shrink-0 flex-wrap items-center gap-1 @[480px]:justify-end">
                                 {onDelete ? (
                                   <button
@@ -801,16 +798,6 @@ export function MorningSummary({
                                   >
                                     <ShieldCheck className="size-3" strokeWidth={2.4} />
                                     Pas suspect
-                                  </button>
-                                ) : null}
-                                {onTrustDomain && domain ? (
-                                  <button
-                                    type="button"
-                                    aria-label="Faire confiance au domaine"
-                                    onClick={() => onTrustDomain(mail)}
-                                    className={SUMMARY_CHIP}
-                                  >
-                                    Domaine
                                   </button>
                                 ) : null}
                               </div>
@@ -2612,7 +2599,6 @@ export function DesktopInbox({
                       : undefined
                   }
                   onTrustSender={readOnly ? undefined : (entry) => trustSender(entry.email)}
-                  onTrustDomain={readOnly ? undefined : (entry) => trustDomain(entry.email)}
                   onDelete={readOnly ? undefined : (entry) => mailAction("delete", entry)}
                   onArchive={readOnly ? undefined : (entry) => mailAction("archive", entry)}
                   onMoveToFolder={

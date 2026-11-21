@@ -13,7 +13,6 @@ import {
   applyTrustRules,
   eventDraftFromMail,
   indexDecisions,
-  senderDomain,
   summaryDecisionMeta,
   taskDraftFromMail,
   triageDecisionFor,
@@ -196,7 +195,6 @@ export function InboxScreen({
     decisions,
     triageMails,
     trustSender,
-    trustDomain,
   } = useMailStore();
 
   const smartActive = decisionReady(decisionPrefs) || Object.keys(decisions).length > 0;
@@ -958,7 +956,6 @@ export function InboxScreen({
                                   (meta.phishing
                                     ? "Hameçonnage détecté · Ne cliquez sur aucun lien"
                                     : "Alerte sécurité · injection détectée");
-                                const domain = senderDomain(mail.email);
                                 return (
                                   <article
                                     key={ref.mailId}
@@ -1032,15 +1029,6 @@ export function InboxScreen({
                                           <ShieldCheck className="size-3" strokeWidth={2.4} />
                                           Pas suspect
                                         </button>
-                                        {domain ? (
-                                          <button
-                                            type="button"
-                                            onClick={() => trustDomain(mail.email)}
-                                            className={SUMMARY_CHIP}
-                                          >
-                                            Faire confiance au domaine
-                                          </button>
-                                        ) : null}
                                       </div>
                                     ) : null}
                                   </article>

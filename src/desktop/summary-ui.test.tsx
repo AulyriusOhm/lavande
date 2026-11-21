@@ -81,6 +81,7 @@ function renderSummary(
     onReply?: (mail: Mail) => void;
     onPropose?: (ref: { mailId: string; reason: string; due?: string }) => "added" | "existing";
     onProposeEvent?: (ref: { mailId: string; reason: string; due?: string }) => "added" | "existing";
+    onTrustSender?: (mail: Mail) => void;
     onDelete?: (mail: Mail) => void;
     onArchive?: (mail: Mail) => void;
     onMoveToFolder?: (mail: Mail, folderPath: string) => void;
@@ -104,6 +105,7 @@ function renderSummary(
       onReply={handlers.onReply ?? (() => {})}
       onPropose={handlers.onPropose ?? (() => "added")}
       onProposeEvent={handlers.onProposeEvent}
+      onTrustSender={handlers.onTrustSender}
       onDelete={handlers.onDelete}
       onArchive={handlers.onArchive}
       onMoveToFolder={handlers.onMoveToFolder}
@@ -409,7 +411,7 @@ describe("Résumé du matin · briefing structuré", () => {
     expect(onDelete).toHaveBeenCalledWith(totpMail);
   });
 
-  it("affiche la carte Phishing avec étiquette Suspect · Phishing et Supprimer uniquement", () => {
+  it("affiche la carte Phishing avec étiquette Suspect · Phishing, Supprimer et Pas suspect sans bouton domaine", () => {
     const phishMail: Mail = {
       ...byId("1"),
       id: "demo-phish-1",
@@ -417,6 +419,7 @@ describe("Résumé du matin · briefing structuré", () => {
       subject: "Action immédiate : carte bloquée",
     };
     const onDelete = vi.fn();
+    const onTrustSender = vi.fn();
     const decisions: Record<string, MailDecision> = {
       "demo-phish-1": {
         accountId: "perso",
@@ -448,7 +451,7 @@ describe("Résumé du matin · briefing structuré", () => {
           notifications: [],
         },
       }),
-      { mails: [phishMail], decisions, onDelete },
+      { mails: [phishMail], decisions, onDelete, onTrustSender },
     );
     const card = screen.getByTestId("morning-summary");
 
@@ -456,6 +459,10 @@ describe("Résumé du matin · briefing structuré", () => {
     expect(within(card).getByText("Hameçonnage détecté · Ne cliquez sur aucun lien")).toBeTruthy();
     expect(within(card).queryByRole("button", { name: "Répondre" })).toBeNull();
     expect(within(card).queryByRole("button", { name: "Planification" })).toBeNull();
+    expect(within(card).queryByRole("button", { name: /Faire confiance au domaine|Domaine/ })).toBeNull();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Pas suspect" }));
+    expect(onTrustSender).toHaveBeenCalledWith(phishMail);
 
     fireEvent.click(within(card).getByRole("button", { name: "Supprimer" }));
     expect(onDelete).toHaveBeenCalledWith(phishMail);
