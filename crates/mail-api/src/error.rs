@@ -101,6 +101,9 @@ impl From<MailError> for ApiError {
             MailError::Smtp(_) => (StatusCode::BAD_GATEWAY, "smtp"),
             MailError::Tls(_) => (StatusCode::BAD_GATEWAY, "tls"),
             MailError::OAuth(_) => (StatusCode::BAD_GATEWAY, "oauth"),
+            // 401 : le jeton est mort côté fournisseur, aucun réessai ne le
+            // ressuscite — seul un nouveau consentement rend le compte utile.
+            MailError::OAuthRevoked(_) => (StatusCode::UNAUTHORIZED, "oauth_revoked"),
             MailError::Mime(_) => (StatusCode::INTERNAL_SERVER_ERROR, "mime"),
             MailError::Store(_) | MailError::Lock(_) | MailError::Io(_) | MailError::Json(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "store")
@@ -140,6 +143,7 @@ fn label(error: &MailError) -> String {
         MailError::Smtp(message) => format!("serveur SMTP : {message}"),
         MailError::Tls(message) => format!("connexion chiffrée : {message}"),
         MailError::OAuth(message) => format!("autorisation OAuth : {message}"),
+        MailError::OAuthRevoked(message) => format!("autorisation OAuth expirée : {message}"),
         MailError::Mime(message) => format!("message illisible : {message}"),
         MailError::Store(message) => format!("base locale : {message}"),
         MailError::Lock(message) => format!("base locale : {message}"),

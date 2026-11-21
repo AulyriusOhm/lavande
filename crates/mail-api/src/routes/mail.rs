@@ -10,6 +10,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use lavande_mail::config::{AccountConfig, FolderMapping};
+use lavande_mail::error::MailError;
 use lavande_mail::imap::{self, ImapSession};
 use lavande_mail::model::{Address, Flags, FolderRole, Message, Thread};
 use lavande_mail::pgp;
@@ -80,6 +81,23 @@ struct MessageQuery {
     fetch_body: bool,
 }
 
+/// Marque le compte quand le fournisseur a révoqué son autorisation, puis rend
+/// l'erreur telle quelle : la route répond son enveloppe 401 habituelle.
+async fn revoked(state: &AppState, account_id: &str, error: MailError) -> ApiError {
+    let marked = match &error {
+        MailError::OAuthRevoked(_) => state.mark_reauth_required(account_id).await,
+        _ => Ok(()),
+    };
+    if let Err(failure) = marked {
+        tracing::warn!(
+            account = %account_id,
+            error = %failure,
+            "reconnexion OAuth2 non enregistrée"
+        );
+    }
+    error.into()
+}
+
 async fn sync(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
@@ -97,7 +115,10 @@ async fn sync(
     let mapping = FolderMapping::default();
     let reports: Vec<FolderReport> = match request.folder_path {
         Some(folder_path) => {
-            let mut session = imap::connect_with(&config, state.tls()).await?;
+            let mut session = match imap::connect_with(&config, state.tls()).await {
+                Ok(session) => session,
+                Err(error) => return Err(revoked(&state, &id, error).await),
+            };
             let report = imap::sync_folder(
                 &mut session,
                 state.store(),
@@ -118,17 +139,24 @@ async fn sync(
             logout(session).await;
             vec![FolderReport::new(folder_path, report)]
         }
-        None => mail_sync::sync_account_selected(
-            state.store(),
-            &config,
-            &mapping,
-            state.tls(),
-            selection.as_deref(),
-        )
-        .await?
-        .into_iter()
-        .map(|(folder_path, report)| FolderReport::new(folder_path, report))
-        .collect(),
+        None => {
+            let synced = match mail_sync::sync_account_selected(
+                state.store(),
+                &config,
+                &mapping,
+                state.tls(),
+                selection.as_deref(),
+            )
+            .await
+            {
+                Ok(synced) => synced,
+                Err(error) => return Err(revoked(&state, &id, error).await),
+            };
+            synced
+                .into_iter()
+                .map(|(folder_path, report)| FolderReport::new(folder_path, report))
+                .collect()
+        }
     };
     tracing::info!(account = %id, folders = reports.len(), "synchro terminée");
     Ok(Json(SyncResponse { reports }))

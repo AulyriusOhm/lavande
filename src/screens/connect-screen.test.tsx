@@ -31,18 +31,26 @@ vi.mock("@/lib/prefs", async (importOriginal) => ({
   usePrefs: () => ({ setAccountPerimeter }),
 }));
 
-vi.mock("@/lib/api", () => ({
-  ApiError: class ApiError extends Error {},
-  errorText: (error: unknown) => (error instanceof Error ? error.message : "erreur inconnue"),
-  mailApi: {
+/**
+ * Le module réel reste en place : c'est lui qui porte `waitForOAuthSession`, qui
+ * interroge alors le `mailApi` ci-dessous, remplacé méthode par méthode.
+ */
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  Object.assign(actual.mailApi, {
     health,
     oauthStart,
     oauthStatus,
     oauthComplete,
     setSyncFolders: vi.fn(),
     previewFolders,
-  },
-}));
+  });
+  return {
+    ...actual,
+    ApiError: class ApiError extends Error {},
+    errorText: (error: unknown) => (error instanceof Error ? error.message : "erreur inconnue"),
+  };
+});
 
 vi.mock("@/lib/open-external", () => ({ openExternal, isTauriShell: () => false }));
 

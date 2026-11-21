@@ -14,6 +14,9 @@ pub const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 
 const EXPIRY_MARGIN: u64 = 60;
 
+/// The single OAuth error code that means the refresh token itself is dead.
+const INVALID_GRANT: &str = "invalid_grant";
+
 /// SASL XOAUTH2 initial response: `user=<email>\x01auth=Bearer <token>\x01\x01`.
 pub fn xoauth2_payload(email: &str, access_token: &str) -> String {
     format!("user={email}\x01auth=Bearer {access_token}\x01\x01")
@@ -119,11 +122,7 @@ impl OAuth2Provider {
             .map_err(|error| MailError::OAuth(format!("token response unreadable: {error}")))?;
 
         if !status.is_success() {
-            return Err(MailError::OAuth(format!(
-                "token endpoint refused the refresh token ({}): {}",
-                status.as_u16(),
-                token_error(&body)
-            )));
+            return Err(refusal(status.as_u16(), &body));
         }
 
         let token: TokenResponse = serde_json::from_str(&body)
@@ -134,6 +133,23 @@ impl OAuth2Provider {
             expires_at: Instant::now() + Duration::from_secs(lifetime),
         });
         Ok(token.access_token)
+    }
+}
+
+/// A refusal only condemns the stored grant when the provider names
+/// `invalid_grant`: a rejected client, a malformed request or a five-hundred
+/// behind a proxy leave the refresh token untouched, so the daemon must not ask
+/// the user for a new consent over them.
+fn refusal(code: u16, body: &str) -> MailError {
+    let readable = || {
+        format!(
+            "token endpoint refused the refresh token ({code}): {}",
+            token_error(body)
+        )
+    };
+    match serde_json::from_str::<TokenError>(body) {
+        Ok(error) if error.error == INVALID_GRANT => MailError::OAuthRevoked(readable()),
+        _ => MailError::OAuth(readable()),
     }
 }
 

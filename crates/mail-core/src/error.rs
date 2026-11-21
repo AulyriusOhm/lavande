@@ -34,6 +34,10 @@ pub enum MailError {
     Smtp(String),
     #[error("oauth error: {0}")]
     OAuth(String),
+    /// The provider revoked the grant itself (`invalid_grant`): no retry can
+    /// succeed, only a new consent produces a refresh token that works.
+    #[error("oauth authorization expired: {0}")]
+    OAuthRevoked(String),
     #[error("tls error: {0}")]
     Tls(String),
 }

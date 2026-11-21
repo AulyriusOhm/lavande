@@ -12,7 +12,7 @@ import {
   Sparkles,
   Users,
 } from "lucide-react";
-import { ApiError, errorText, mailApi } from "@/lib/api";
+import { ApiError, errorText, mailApi, waitForOAuthSession } from "@/lib/api";
 import type { ApiFolder, DiscoverySource, Encryption, NewAccount } from "@/lib/api";
 import { accountSlug } from "@/lib/mail-backend";
 import { descendantPaths } from "@/lib/folder-tree";
@@ -91,20 +91,6 @@ export function resolveClientSecret(
   env: OAuthEnv = import.meta.env,
 ): string {
   return manualSecret.trim() || builtInClientSecret(provider, env);
-}
-
-async function waitForOAuth(session: string) {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    const status = await mailApi.oauthStatus(session);
-    if (status.status === "code_received") {
-      await mailApi.oauthComplete(session).catch(() => undefined);
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      continue;
-    }
-    if (status.status !== "pending") return status;
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-  }
-  return { status: "failed" as const, error: "délai de consentement dépassé" };
 }
 
 const ORIGIN_LABEL: Record<DiscoverySource, string> = {
@@ -268,7 +254,7 @@ export function ConnectScreen({
         openExternal(started.auth_url);
       }
       setPendingUrl(started.auth_url);
-      const outcome = await waitForOAuth(started.session);
+      const outcome = await waitForOAuthSession(started.session);
       if (outcome.status === "done") {
         setPendingUrl(null);
         setConnected(true);

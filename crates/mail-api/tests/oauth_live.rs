@@ -8,9 +8,10 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use lavande_mail::config::{AccountConfig, AuthConfig, Encryption, Endpoint};
 use lavande_mail::tls::TlsOptions;
 use lavande_mail_api::app;
-use lavande_mail_api::secrets::SecretBackend;
+use lavande_mail_api::secrets::{AccountSecrets, SecretBackend};
 use lavande_mail_api::state::AppState;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -171,5 +172,94 @@ async fn the_whole_oauth_flow_creates_a_working_account() {
     assert!(
         report["reports"][0]["inserted"].as_u64().is_some(),
         "{report}"
+    );
+}
+
+/// Reconnexion de bout en bout : consentement, échange, sonde IMAP réelle,
+/// puis remplacement du seul refresh token. Le compte garde son identifiant et
+/// son historique, aucun dossier n'est réimporté.
+#[tokio::test]
+#[ignore = "requires scripts/mail-test-server.sh start"]
+async fn reconnecting_an_account_replaces_its_refresh_token_only() {
+    let (_directory, state) = state().await;
+    let provider = fake_provider().await;
+    let config = AccountConfig {
+        id: "greenmail".to_string(),
+        label: "GreenMail".to_string(),
+        email: "roman@lavande.test".to_string(),
+        username: "roman@lavande.test".to_string(),
+        imap: Endpoint {
+            host: "localhost".to_string(),
+            port: 3993,
+            encryption: Encryption::Tls,
+        },
+        smtp: Endpoint {
+            host: "localhost".to_string(),
+            port: 3465,
+            encryption: Encryption::Tls,
+        },
+        auth: AuthConfig::OAuth2 {
+            client_id: "lavande-live".to_string(),
+            client_secret: "secret-application".to_string(),
+            refresh_token: "refresh-perime".to_string(),
+            token_endpoint: format!("{provider}/googleapis.com/token"),
+        },
+        synced_folders: None,
+    };
+    state.add_account(&config, &[]).await.expect("compte");
+    state
+        .mark_reauth_required("greenmail")
+        .await
+        .expect("marque");
+
+    let (status, started) = post(
+        &state,
+        "/api/oauth/reconnect",
+        json!({ "account_id": "greenmail" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{started}");
+    let auth_url = started["auth_url"].as_str().expect("auth_url").to_string();
+    let session = started["session"].as_str().expect("session").to_string();
+    let oauth_state = auth_url
+        .split("state=")
+        .nth(1)
+        .and_then(|rest| rest.split('&').next())
+        .expect("state")
+        .to_string();
+
+    let (status, page) = get(
+        &state,
+        &format!("/api/oauth/callback?code=code-abc&state={oauth_state}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page.contains("Consentement enregistré"), "{page}");
+
+    let (status, completed) =
+        post(&state, "/api/oauth/complete", json!({ "session": session })).await;
+    assert_eq!(status, StatusCode::OK, "{completed}");
+    assert_eq!(completed["status"], "done", "{completed}");
+    assert_eq!(completed["account_id"], "greenmail", "{completed}");
+
+    match state.secrets().get("greenmail").await.expect("secret") {
+        Some(AccountSecrets::OAuth2 {
+            client_secret,
+            refresh_token,
+        }) => {
+            assert_eq!(refresh_token, "refresh-greenmail", "jeton remplacé");
+            assert_eq!(client_secret, "secret-application", "secret conservé");
+        }
+        other => panic!("secret OAuth2 attendu : {other:?}"),
+    }
+
+    let (_, accounts) = get(&state, "/api/accounts").await;
+    let listed: Value = serde_json::from_str(&accounts).expect("json");
+    let entries = listed.as_array().expect("liste");
+    assert_eq!(entries.len(), 1, "{listed}");
+    assert_eq!(entries[0]["needs_reauth"], false, "{listed}");
+    assert_eq!(
+        entries[0]["folders"], 0,
+        "la reconnexion ne réimporte aucun dossier : {listed}"
     );
 }

@@ -29,6 +29,7 @@ export type ApiErrorKind =
   | "smtp"
   | "tls"
   | "oauth"
+  | "oauth_revoked"
   | "store"
   | "mime"
   | "calendar"
@@ -143,6 +144,9 @@ export type ApiAccount = {
   synced_folders?: string[] | null;
   /** Interrupteur PGP du compte : `false` laisse les corps chiffrés fermés. */
   pgp?: boolean;
+  /** Le refresh token a été refusé : le consentement OAuth est à refaire. */
+  needs_reauth?: boolean;
+  auth_kind?: "password" | "oauth2";
 };
 
 export type ApiHealth = {
@@ -609,6 +613,7 @@ const KINDS: readonly ApiErrorKind[] = [
   "smtp",
   "tls",
   "oauth",
+  "oauth_revoked",
   "store",
   "mime",
   "calendar",
@@ -914,6 +919,10 @@ export const mailApi = {
   oauthStart: (input: OAuthStartInput) =>
     request<ApiOAuthStart>("/oauth/start", { method: "POST", body: input }),
 
+  /** Nouveau consentement pour un compte déjà connecté : le refresh token est remplacé. */
+  oauthReconnect: (accountId: string) =>
+    request<ApiOAuthStart>("/oauth/reconnect", { method: "POST", body: { account_id: accountId } }),
+
   syncDeviceKey: () => request<SyncDeviceKey>("/sync/secrets/device"),
 
   setSyncDeviceKey: (privateKey: string) =>
@@ -1030,6 +1039,24 @@ export const mailApi = {
       timeout: LONG_TIMEOUT,
     }),
 };
+
+/**
+ * Suit le consentement jusqu'à son issue : le code reçu est échangé, puis la
+ * session est réinterrogée. Rend `failed` au bout de cinq minutes sans retour.
+ */
+export async function waitForOAuthSession(session: string): Promise<ApiOAuthStatus> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const status = await mailApi.oauthStatus(session);
+    if (status.status === "code_received") {
+      await mailApi.oauthComplete(session).catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      continue;
+    }
+    if (status.status !== "pending") return status;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  return { status: "failed", error: "délai de consentement dépassé" };
+}
 
 export function errorText(error: unknown): string {
   if (error instanceof ApiError) {

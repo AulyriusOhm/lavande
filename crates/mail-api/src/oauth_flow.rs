@@ -16,7 +16,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::Url;
 
+use crate::config_file::StoredAuth;
 use crate::error::ApiError;
+use crate::secrets::AccountSecrets;
 use crate::state::AppState;
 
 const SESSION_TTL: Duration = Duration::from_secs(600);
@@ -115,6 +117,9 @@ struct Session {
     created: Instant,
     attempts: u32,
     outcome: Outcome,
+    /// `true` quand la session réautorise un compte existant : l'échange
+    /// remplace alors ses secrets au lieu de créer le compte.
+    reauth: bool,
 }
 
 #[derive(Default)]
@@ -172,11 +177,6 @@ impl Sessions {
 
 pub async fn start(state: &AppState, request: StartRequest) -> Result<StartResponse, ApiError> {
     let provider = provider_of(&request)?;
-    let redirect_uri = format!("{}/api/oauth/callback", state.public_url());
-    let verifier = token(32);
-    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-    let oauth_state = token(24);
-
     let config = AccountConfig {
         id: request.id.clone().unwrap_or_else(|| slug(&request.email)),
         label: request.label.clone(),
@@ -193,6 +193,83 @@ pub async fn start(state: &AppState, request: StartRequest) -> Result<StartRespo
         synced_folders: None,
     };
 
+    let response = begin(state, provider, config, false)?;
+    tracing::info!(session = %response.session, "consentement OAuth2 demandé");
+    Ok(response)
+}
+
+/// Réautorise un compte déjà présent : le fournisseur est déduit du point de
+/// jeton enregistré, les serveurs et l'identité sont repris tels quels, et rien
+/// du compte n'est recréé — seul le refresh token du coffre changera.
+pub async fn start_reconnect(
+    state: &AppState,
+    account_id: &str,
+) -> Result<StartResponse, ApiError> {
+    // Un identifiant inconnu est une faute de la demande, pas du stockage : le
+    // front distingue les deux par `kind`.
+    let stored = state
+        .stored_accounts()?
+        .into_iter()
+        .find(|account| account.id == account_id)
+        .ok_or_else(|| {
+            ApiError::new(
+                axum::http::StatusCode::NOT_FOUND,
+                "config",
+                format!("compte « {account_id} » inconnu"),
+            )
+        })?;
+    let StoredAuth::OAuth2 {
+        client_id,
+        token_endpoint,
+        ..
+    } = stored.auth
+    else {
+        return Err(ApiError::bad_request(
+            "config",
+            format!(
+                "le compte « {account_id} » n'utilise pas OAuth2 : sa reconnexion se fait en \
+                 saisissant son mot de passe"
+            ),
+        ));
+    };
+    let client_secret = match state.secrets().get(account_id).await? {
+        Some(AccountSecrets::OAuth2 { client_secret, .. }) => Some(client_secret),
+        _ => None,
+    };
+    let provider = stored_provider(&client_id, &token_endpoint, client_secret)?;
+    let config = AccountConfig {
+        id: stored.id,
+        label: stored.label,
+        email: stored.email,
+        username: stored.username,
+        imap: stored.imap,
+        smtp: stored.smtp,
+        auth: AuthConfig::OAuth2 {
+            client_id: provider.client_id.clone(),
+            client_secret: provider.client_secret.clone().unwrap_or_default(),
+            refresh_token: String::new(),
+            token_endpoint: provider.token_endpoint.clone(),
+        },
+        synced_folders: stored.synced_folders,
+    };
+    let response = begin(state, provider, config, true)?;
+    tracing::info!(session = %response.session, account = %account_id, "reconnexion OAuth2 demandée");
+    Ok(response)
+}
+
+/// Ouvre une session de consentement (PKCE + `state`) pour une configuration
+/// déjà construite : les deux entrées — nouveau compte et reconnexion — ne
+/// diffèrent que par cette configuration et le marqueur de reconnexion.
+fn begin(
+    state: &AppState,
+    provider: Provider,
+    config: AccountConfig,
+    reauth: bool,
+) -> Result<StartResponse, ApiError> {
+    let redirect_uri = format!("{}/api/oauth/callback", state.public_url());
+    let verifier = token(32);
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    let oauth_state = token(24);
     let auth_url = authorize_url(&provider, &redirect_uri, &oauth_state, &challenge)?;
     let session = Session {
         state: oauth_state,
@@ -202,13 +279,51 @@ pub async fn start(state: &AppState, request: StartRequest) -> Result<StartRespo
         created: Instant::now(),
         attempts: 0,
         outcome: Outcome::Pending,
+        reauth,
     };
     let id = state.sessions().insert(session);
-    tracing::info!(session = %id, "consentement OAuth2 demandé");
     Ok(StartResponse {
         session: id,
         auth_url,
         redirect_uri,
+    })
+}
+
+/// Le fournisseur derrière un point de jeton enregistré. Un fournisseur
+/// « custom » reste hors d'atteinte : son URL de consentement et son périmètre
+/// n'ont jamais été gardés, il n'y a rien à rejouer.
+fn stored_provider(
+    client_id: &str,
+    token_endpoint: &str,
+    client_secret: Option<String>,
+) -> Result<Provider, ApiError> {
+    if client_id.trim().is_empty() {
+        return Err(ApiError::bad_request(
+            "config",
+            "reconnexion automatique non disponible : aucun identifiant d'application \
+             enregistré pour ce compte ; retire le compte puis reconnecte-le",
+        ));
+    }
+    let endpoint = token_endpoint.to_ascii_lowercase();
+    let (auth_endpoint, scope) = if endpoint.contains("googleapis.com") {
+        (GOOGLE_AUTH, GOOGLE_SCOPE)
+    } else if endpoint.contains("microsoftonline.com") {
+        (MICROSOFT_AUTH, MICROSOFT_SCOPE)
+    } else {
+        return Err(ApiError::bad_request(
+            "config",
+            "reconnexion automatique non disponible pour ce fournisseur ; retire le compte \
+             puis reconnecte-le",
+        ));
+    };
+    Ok(Provider {
+        auth_endpoint: auth_endpoint.to_string(),
+        token_endpoint: token_endpoint.to_string(),
+        scope: scope.to_string(),
+        client_id: client_id.to_string(),
+        // Un secret vide n'est jamais envoyé au fournisseur : les points de jeton
+        // refusent la clé présente mais vide, comme sur le chemin de création.
+        client_secret: client_secret.filter(|secret| !secret.trim().is_empty()),
     })
 }
 
@@ -274,10 +389,11 @@ pub async fn complete(state: &AppState, session: &str) -> Result<StatusResponse,
         let provider = entry.provider.clone();
         let verifier = entry.verifier.clone();
         let config = entry.config.clone();
+        let reauth = entry.reauth;
         entry.outcome = Outcome::Finishing;
-        Some((provider, verifier, config, code, redirect_uri))
+        Some((provider, verifier, config, code, redirect_uri, reauth))
     });
-    let Some((provider, verifier, config, code, redirect_uri)) = received else {
+    let Some((provider, verifier, config, code, redirect_uri, reauth)) = received else {
         return status(state, session);
     };
 
@@ -288,6 +404,7 @@ pub async fn complete(state: &AppState, session: &str) -> Result<StatusResponse,
         config,
         code.clone(),
         redirect_uri.clone(),
+        reauth,
     )
     .await;
     state.sessions().with(session, |entry| {
@@ -330,6 +447,7 @@ async fn finish(
     mut config: AccountConfig,
     code: String,
     redirect_uri: String,
+    reauth: bool,
 ) -> Result<String, ApiError> {
     let exchange = exchange(&provider, &verifier, &code, &redirect_uri).await?;
     verify_identity(&exchange, &provider.token_endpoint, &config.email).await?;
@@ -341,10 +459,13 @@ async fn finish(
     };
     config.validate()?;
 
-    if state
-        .stored_accounts()?
-        .iter()
-        .any(|known| known.id == config.id)
+    // Une reconnexion vise un compte qui existe déjà : le doublon est l'objet
+    // même de la demande, seuls les secrets changent.
+    if !reauth
+        && state
+            .stored_accounts()?
+            .iter()
+            .any(|known| known.id == config.id)
     {
         return Err(ApiError::conflict(
             "config",
@@ -356,6 +477,11 @@ async fn finish(
         ));
     }
     let mut session = imap::connect_with(&config, state.tls()).await?;
+    if reauth {
+        let _ = session.logout().await;
+        state.complete_reauth(&config).await?;
+        return Ok(config.id);
+    }
     let folders = imap::list_folders(&mut session, &config.id).await?;
     let _ = session.logout().await;
     state.add_account(&config, &folders).await?;

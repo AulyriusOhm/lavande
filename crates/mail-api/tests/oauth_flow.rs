@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use lavande_mail::config::{AccountConfig, AuthConfig, Encryption, Endpoint};
 use lavande_mail::tls::TlsOptions;
 use lavande_mail_api::app;
 use lavande_mail_api::secrets::SecretBackend;
@@ -510,4 +511,231 @@ async fn a_google_consent_without_the_gmail_permission_is_refused() {
     assert_eq!(completed["status"], "failed", "{completed}");
     let error = completed["error"].as_str().unwrap_or_default();
     assert!(error.contains("permission Gmail"), "{completed}");
+}
+
+/// Compte OAuth2 déjà présent, avec un refresh token périmé : l'état d'un compte
+/// Google dont l'autorisation a expiré au bout de sept jours.
+async fn seed_oauth_account(state: &Arc<AppState>, token_endpoint: &str, email: &str) -> String {
+    let config = AccountConfig {
+        id: "roman-lavande-test".to_string(),
+        label: "GreenMail".to_string(),
+        email: email.to_string(),
+        username: email.to_string(),
+        imap: Endpoint {
+            host: "127.0.0.1".to_string(),
+            port: 9999,
+            encryption: Encryption::Tls,
+        },
+        smtp: Endpoint {
+            host: "127.0.0.1".to_string(),
+            port: 9998,
+            encryption: Encryption::Tls,
+        },
+        auth: AuthConfig::OAuth2 {
+            client_id: "lavande-test".to_string(),
+            client_secret: "secret-precedent".to_string(),
+            refresh_token: "refresh-precedent".to_string(),
+            token_endpoint: token_endpoint.to_string(),
+        },
+        synced_folders: None,
+    };
+    state.add_account(&config, &[]).await.expect("compte");
+    config.id
+}
+
+async fn seed_password_account(state: &Arc<AppState>) -> String {
+    let config = AccountConfig {
+        id: "perso".to_string(),
+        label: "Perso".to_string(),
+        email: "roman@lavande.test".to_string(),
+        username: "roman@lavande.test".to_string(),
+        imap: Endpoint {
+            host: "127.0.0.1".to_string(),
+            port: 9999,
+            encryption: Encryption::Tls,
+        },
+        smtp: Endpoint {
+            host: "127.0.0.1".to_string(),
+            port: 9998,
+            encryption: Encryption::Tls,
+        },
+        auth: AuthConfig::Password {
+            password: "secret-en-clair".to_string(),
+        },
+        synced_folders: None,
+    };
+    state.add_account(&config, &[]).await.expect("compte");
+    config.id
+}
+
+async fn refresh_token_of(state: &Arc<AppState>, id: &str) -> String {
+    match state.secrets().get(id).await.expect("secret") {
+        Some(lavande_mail_api::secrets::AccountSecrets::OAuth2 { refresh_token, .. }) => {
+            refresh_token
+        }
+        other => panic!("secret OAuth2 attendu : {other:?}"),
+    }
+}
+
+/// Suite du consentement pour une session déjà ouverte : `code` sur le retour
+/// loopback, puis `complete`. Rend la charge de `complete`.
+async fn consent_and_complete(state: &Arc<AppState>, auth_url: &str, session: &str) -> Value {
+    let state_param = auth_url
+        .split("state=")
+        .nth(1)
+        .and_then(|rest| rest.split('&').next())
+        .expect("state")
+        .to_string();
+    let (status, page) = get(
+        state,
+        &format!("/api/oauth/callback?code=code-abc&state={state_param}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(page.contains("Consentement enregistré"), "{page}");
+    complete(state, session).await
+}
+
+#[tokio::test]
+async fn a_reconnect_replays_the_consent_for_the_existing_account() {
+    let (_directory, state) = state().await;
+    let provider = fake_provider().await;
+    let id = seed_oauth_account(
+        &state,
+        &format!("{provider}/googleapis.com/token"),
+        "roman@lavande.test",
+    )
+    .await;
+    state.mark_reauth_required(&id).await.expect("marque");
+
+    let (status, started) = post(&state, "/api/oauth/reconnect", json!({ "account_id": id })).await;
+    assert_eq!(status, StatusCode::CREATED, "{started}");
+    let auth_url = started["auth_url"].as_str().expect("auth_url");
+    for fragment in [
+        "response_type=code",
+        "code_challenge_method=S256",
+        "client_id=lavande-test",
+        "state=",
+    ] {
+        assert!(
+            auth_url.contains(fragment),
+            "« {fragment} » absent de {auth_url}"
+        );
+    }
+    let session = started["session"].as_str().expect("session").to_string();
+
+    let completed = consent_and_complete(&state, auth_url, &session).await;
+    // Hors GreenMail la sonde IMAP échoue : aucun secret n'est écrit avant elle.
+    assert_eq!(completed["status"], "failed", "{completed}");
+    assert!(
+        completed["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("serveur IMAP"),
+        "{completed}"
+    );
+    assert_eq!(
+        refresh_token_of(&state, &id).await,
+        "refresh-precedent",
+        "un échange non validé par IMAP ne remplace pas le jeton"
+    );
+
+    let (_, listed) = get(&state, "/api/accounts").await;
+    let accounts: Value = serde_json::from_str(&listed).expect("json");
+    let entries = accounts.as_array().expect("liste");
+    assert_eq!(entries.len(), 1, "{accounts}");
+    assert_eq!(entries[0]["auth_kind"], "oauth2", "{accounts}");
+    assert_eq!(entries[0]["needs_reauth"], true, "{accounts}");
+}
+
+#[tokio::test]
+async fn a_reconnect_for_another_account_never_replaces_the_token() {
+    let (_directory, state) = state().await;
+    let provider = serve_provider_with(|_| (200, token_body(ID_TOKEN_OTHER_ACCOUNT))).await;
+    let id = seed_oauth_account(
+        &state,
+        &format!("{provider}/googleapis.com/token"),
+        "roman@lavande.test",
+    )
+    .await;
+    state.mark_reauth_required(&id).await.expect("marque");
+
+    let (status, started) = post(&state, "/api/oauth/reconnect", json!({ "account_id": id })).await;
+    assert_eq!(status, StatusCode::CREATED, "{started}");
+    let auth_url = started["auth_url"].as_str().expect("auth_url").to_string();
+    let session = started["session"].as_str().expect("session").to_string();
+
+    let completed = consent_and_complete(&state, &auth_url, &session).await;
+    assert_eq!(completed["status"], "failed", "{completed}");
+    let error = completed["error"].as_str().unwrap_or_default();
+    assert!(error.contains("autre@gmail.com"), "{completed}");
+    assert_eq!(refresh_token_of(&state, &id).await, "refresh-precedent");
+}
+
+#[tokio::test]
+async fn a_reconnect_without_the_account_is_a_404() {
+    let (_directory, state) = state().await;
+    let (status, payload) = post(
+        &state,
+        "/api/oauth/reconnect",
+        json!({ "account_id": "absent" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{payload}");
+    assert_eq!(payload["kind"], "config", "{payload}");
+}
+
+#[tokio::test]
+async fn a_reconnect_of_a_password_account_is_refused() {
+    let (_directory, state) = state().await;
+    let id = seed_password_account(&state).await;
+    let (status, payload) = post(&state, "/api/oauth/reconnect", json!({ "account_id": id })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{payload}");
+    assert_eq!(payload["kind"], "config", "{payload}");
+    assert!(
+        payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("n'utilise pas OAuth2"),
+        "{payload}"
+    );
+}
+
+#[tokio::test]
+async fn a_reconnect_of_a_custom_provider_explains_what_to_do() {
+    let (_directory, state) = state().await;
+    let id = seed_oauth_account(&state, "https://exemple.test/token", "roman@lavande.test").await;
+    let (status, payload) = post(&state, "/api/oauth/reconnect", json!({ "account_id": id })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{payload}");
+    assert_eq!(payload["kind"], "config", "{payload}");
+    assert_eq!(
+        payload["error"],
+        "reconnexion automatique non disponible pour ce fournisseur ; retire le compte puis \
+         reconnecte-le",
+        "{payload}"
+    );
+}
+
+/// Le fournisseur est déduit du point de jeton : un compte Google doit recevoir
+/// l'URL Google et le périmètre Gmail, pas ceux du dernier compte ajouté.
+#[tokio::test]
+async fn a_google_reconnect_asks_for_the_google_endpoints() {
+    let (_directory, state) = state().await;
+    let provider = fake_provider().await;
+    let id = seed_oauth_account(
+        &state,
+        &format!("{provider}/googleapis.com/token"),
+        "roman@lavande.test",
+    )
+    .await;
+
+    let (status, started) = post(&state, "/api/oauth/reconnect", json!({ "account_id": id })).await;
+    assert_eq!(status, StatusCode::CREATED, "{started}");
+    let auth_url = started["auth_url"].as_str().expect("auth_url");
+    assert!(auth_url.contains("access_type=offline"), "{auth_url}");
+    assert!(auth_url.contains("prompt=consent"), "{auth_url}");
+    assert!(
+        auth_url.contains("mail.google.com"),
+        "périmètre Gmail attendu : {auth_url}"
+    );
 }

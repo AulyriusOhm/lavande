@@ -917,8 +917,18 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     threadView,
     setThreadView,
   } = usePrefs();
-  const { notify, accounts, mails, mode, readOnly, openConnect, askRemoveAccount, renameAccount, triageMails } =
-    useMailStore();
+  const {
+    notify,
+    accounts,
+    mails,
+    mode,
+    readOnly,
+    openConnect,
+    askRemoveAccount,
+    renameAccount,
+    reconnectAccount,
+    triageMails,
+  } = useMailStore();
   const [active, setActive] = useState<SectionId>("comptes");
   const [hex, setHex] = useState(accent);
   const [openServer, setOpenServer] = useState<string | null>(null);
@@ -1290,6 +1300,9 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                             <div className="flex items-center gap-1.5">
                               <p className="truncate text-[12.5px] font-bold text-ink">{item.label}</p>
                               {index === 0 ? <Badge tone="accent">Principal</Badge> : null}
+                              {item.needsReauth ? (
+                                <Badge tone="amber">Connexion expirée</Badge>
+                              ) : null}
                             </div>
                             <p className="truncate text-[11px] font-medium text-ink-muted">{item.email}</p>
                           </div>
@@ -1372,6 +1385,17 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                                 <SlidersHorizontal className="size-3.5" />
                                 Périmètre
                               </DButton>
+                              {item.oauth ? (
+                                <DButton
+                                  variant="ghost"
+                                  size="sm"
+                                  aria-label={`Reconnecter ${item.label}`}
+                                  onClick={() => void reconnectAccount(item)}
+                                >
+                                  <RefreshCw className="size-3.5" />
+                                  Reconnecter
+                                </DButton>
+                              ) : null}
                               {readOnly ? null : (
                                 <DButton variant="danger" size="sm" onClick={() => askRemoveAccount(item)}>
                                   <Trash2 className="size-3.5" />

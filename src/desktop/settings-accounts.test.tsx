@@ -21,6 +21,18 @@ const ACCOUNT: ApiAccount = {
   folders: 2,
 };
 
+const OAUTH_ACCOUNT: ApiAccount = {
+  id: "g1",
+  label: "Gmail",
+  email: "roman.lanro@gmail.com",
+  username: "roman.lanro@gmail.com",
+  imap: { host: "imap.gmail.com", port: 993, encryption: "tls" },
+  smtp: { host: "smtp.gmail.com", port: 465, encryption: "tls" },
+  folders: 1,
+  auth_kind: "oauth2",
+  needs_reauth: true,
+};
+
 const FOLDERS: ApiFolder[] = [
   {
     account_id: "a1",
@@ -83,6 +95,33 @@ function stubFetch() {
   return { fetchMock, state };
 }
 
+/** Deux comptes : un mot de passe, un Google dont la connexion a expiré. */
+function stubOAuthFetch() {
+  const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    if (url.endsWith("/pgp/keys")) return response({ keys: [] });
+    if (url === "/api/accounts") return response([ACCOUNT, OAUTH_ACCOUNT]);
+    if (method === "POST" && url === "/api/oauth/reconnect") {
+      return response(
+        {
+          session: "s1",
+          auth_url: "https://exemple.test/consent",
+          redirect_uri: "http://127.0.0.1:8790/api/oauth/callback",
+        },
+        201,
+      );
+    }
+    if (url.startsWith("/api/oauth/status")) {
+      return response({ status: "failed", error: "consentement refusé" });
+    }
+    if (url.endsWith("/folders")) return response(FOLDERS);
+    return response([]);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return { fetchMock };
+}
+
 function mount() {
   return render(
     <PrefsProvider>
@@ -119,6 +158,30 @@ describe("Réglages · comptes", () => {
     expect(patch?.[1]?.body).toBe(JSON.stringify({ label: "Bureau" }));
     expect((await screen.findAllByText("Bureau")).length).toBeGreaterThan(0);
     expect(screen.queryByLabelText("Renommer Perso")).toBeNull();
+  });
+
+  it("reconnecte un compte OAuth2 sans le retirer", async () => {
+    const { fetchMock } = stubOAuthFetch();
+    vi.spyOn(window, "open").mockReturnValue(null);
+    mount();
+
+    fireEvent.click(await screen.findByLabelText("Reconnecter Gmail"));
+
+    await waitFor(() => {
+      const reconnect = fetchMock.mock.calls.find(
+        ([url, init]) => init?.method === "POST" && String(url) === "/api/oauth/reconnect",
+      );
+      expect(reconnect?.[1]?.body).toBe(JSON.stringify({ account_id: "g1" }));
+    });
+    expect(screen.queryByLabelText("Reconnecter Perso")).toBeNull();
+  });
+
+  it("signale la connexion expirée du compte concerné", async () => {
+    stubOAuthFetch();
+    mount();
+
+    expect(await screen.findByText("Connexion expirée")).toBeTruthy();
+    expect(screen.getAllByText("Connexion expirée")).toHaveLength(1);
   });
 
   it("laisse la rangée d'actions se replier dans la carte étroite", async () => {

@@ -7,6 +7,7 @@ use std::time::Duration;
 use async_imap::extensions::idle::IdleResponse;
 use futures::stream::{self, StreamExt};
 use lavande_mail::config::{AccountConfig, FolderMapping};
+use lavande_mail::error::MailError;
 use lavande_mail::imap::{self, ImapSession, SyncReport};
 use lavande_mail::model::FolderRole;
 use lavande_mail::store::Store;
@@ -244,24 +245,38 @@ pub fn watch_account(state: &Arc<AppState>, config: AccountConfig) {
     });
 }
 
-async fn watch_once(state: &Arc<AppState>, config: &AccountConfig) -> Result<(), String> {
-    let mut session = imap::connect_with(config, state.tls())
-        .await
-        .map_err(|error| error.to_string())?;
+async fn watch_once(state: &Arc<AppState>, config: &AccountConfig) -> Result<(), MailError> {
+    let mut session = match imap::connect_with(config, state.tls()).await {
+        Ok(session) => session,
+        Err(error) => {
+            fail_connect(state, &config.id, &error).await;
+            return Err(error);
+        }
+    };
+    // Une connexion aboutit : le drapeau éventuel était périmé.
+    if let Err(error) = state.clear_reauth(&config.id).await {
+        tracing::warn!(account = %config.id, error = %error, "état de reconnexion non effacé");
+    }
     session
         .select("INBOX")
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| MailError::Imap(error.to_string()))?;
 
     loop {
         let mut handle = session.idle();
-        handle.init().await.map_err(|error| error.to_string())?;
+        handle
+            .init()
+            .await
+            .map_err(|error| MailError::Imap(error.to_string()))?;
         let outcome = {
             let (waiting, _stop) = handle.wait_with_timeout(IDLE_WAIT);
             waiting.await
         };
-        let response = outcome.map_err(|error| error.to_string())?;
-        let session_back = handle.done().await.map_err(|error| error.to_string())?;
+        let response = outcome.map_err(|error| MailError::Imap(error.to_string()))?;
+        let session_back = handle
+            .done()
+            .await
+            .map_err(|error| MailError::Imap(error.to_string()))?;
         session = session_back;
 
         match response {
@@ -327,6 +342,23 @@ async fn sync_and_publish(
         }
         Err(error) => {
             tracing::warn!(account = %config.id, error = %error, "synchro IDLE impossible")
+        }
+    }
+}
+
+/// Signale au front l'autorisation révoquée, et rien d'autre : le veilleur
+/// réessaie toutes les 30 s, c'est ce qui le remet en marche une fois le compte
+/// reconnecté. Un échec d'écriture reste un avertissement — la boîte ne doit
+/// jamais s'arrêter là-dessus.
+async fn fail_connect(state: &Arc<AppState>, account_id: &str, error: &MailError) {
+    if matches!(error, MailError::OAuthRevoked(_)) {
+        let marked = state.mark_reauth_required(account_id).await;
+        if let Err(failure) = marked {
+            tracing::warn!(
+                account = %account_id,
+                error = %failure,
+                "reconnexion OAuth2 non enregistrée"
+            );
         }
     }
 }

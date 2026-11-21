@@ -172,6 +172,7 @@ export function SettingsScreen({
     readOnly,
     openConnect,
     askRemoveAccount,
+    reconnectAccount,
     folderOptions,
     hiddenFolderOptions,
     hideFolder,
@@ -551,6 +552,11 @@ export function SettingsScreen({
                       <span className="block truncate text-[12.5px] font-bold text-ink">{item.label}</span>
                       <span className="block truncate text-[12px] font-medium text-ink-muted">{item.email}</span>
                     </span>
+                    {item.needsReauth ? (
+                      <span className="shrink-0 rounded-full bg-amber-500/14 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300">
+                        Connexion expirée
+                      </span>
+                    ) : null}
                     {unreadFor(item.id) > 0 && (
                       <span className="rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent-ink">
                         {unreadFor(item.id)}
@@ -558,6 +564,16 @@ export function SettingsScreen({
                     )}
                     <ChevronRight className="size-4 shrink-0 text-ink-muted" />
                   </button>
+                  {mode === "api" && !readOnly && item.oauth && (
+                    <button
+                      type="button"
+                      aria-label={`Reconnecter ${item.label}`}
+                      onClick={() => void reconnectAccount(item)}
+                      className="focus-ring grid size-11 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-accent-soft hover:text-accent-ink"
+                    >
+                      <RefreshCw className="size-3.5" />
+                    </button>
+                  )}
                   {mode === "api" && !readOnly && (
                     <button
                       type="button"

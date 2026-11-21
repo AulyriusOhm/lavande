@@ -57,6 +57,8 @@ export function toAccount(account: ApiAccount, index: number): Account {
         ? `${account.folders} dossier${account.folders > 1 ? "s" : ""}`
         : "jamais synchronisé",
     syncedFolders: account.synced_folders ?? null,
+    oauth: account.auth_kind === "oauth2",
+    needsReauth: account.needs_reauth === true,
   };
 }
 

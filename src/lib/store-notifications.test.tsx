@@ -14,7 +14,7 @@ vi.mock("@/lib/notify", () => ({ notifyNewMail, setUnreadBadge: vi.fn() }));
 const ALPHA = "alpha";
 const BETA = "beta";
 
-const apiAccount = (id: string): ApiAccount => ({
+const apiAccount = (id: string, overrides: Partial<ApiAccount> = {}): ApiAccount => ({
   id,
   label: id === ALPHA ? "Perso" : "Travail",
   email: `${id}@test.fr`,
@@ -22,6 +22,7 @@ const apiAccount = (id: string): ApiAccount => ({
   imap: { host: `imap.${id}.test`, port: 993, encryption: "tls" },
   smtp: { host: `smtp.${id}.test`, port: 465, encryption: "tls" },
   folders: 1,
+  ...overrides,
 });
 
 const apiFolder = (accountId: string): ApiFolder => ({
@@ -37,12 +38,15 @@ const apiFolder = (accountId: string): ApiFolder => ({
 const reply = (body: unknown) =>
   ({ ok: true, status: 200, statusText: "", json: async () => body }) as unknown as Response;
 
-function mockBackend() {
+const requested: string[] = [];
+
+function mockBackend(accounts: ApiAccount[] = [apiAccount(ALPHA), apiAccount(BETA)]) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const { pathname } = new URL(String(input), "http://localhost");
     const path = decodeURIComponent(pathname);
+    requested.push(path);
     if (path.endsWith("/sync")) return reply({ reports: [] });
-    if (path.endsWith("/api/accounts")) return reply([apiAccount(ALPHA), apiAccount(BETA)]);
+    if (path.endsWith("/api/accounts")) return reply(accounts);
     if (path.endsWith("/folder-counts")) return reply([]);
     if (/\/api\/accounts\/[^/]+\/folders$/.test(path)) {
       return reply([apiFolder(path.includes(ALPHA) ? ALPHA : BETA)]);
@@ -118,6 +122,7 @@ beforeEach(() => {
   window.localStorage.clear();
   FakeEventSource.current = null;
   notifyNewMail.mockClear();
+  requested.length = 0;
   mockBackend();
   vi.stubGlobal("EventSource", FakeEventSource);
 });
@@ -239,5 +244,71 @@ describe("notifications de nouveaux mails · une par mail", () => {
 
     await waitFor(() => expect(FakeEventSource.current).not.toBeNull());
     expect(notifyNewMail).not.toHaveBeenCalled();
+  });
+});
+
+describe("reconnexion OAuth · popup de reconnexion", () => {
+  const expired = (accountId: string) => ({
+    type: "account-reauth",
+    account_id: accountId,
+    folder_path: "",
+    report: null,
+    new_mails: [],
+  });
+
+  const bulkRequest = (path: string) =>
+    path.endsWith("/threads") || path.endsWith("/folder-counts");
+
+  it("arme le popup avec le libellé du compte et relit la liste des comptes", async () => {
+    const { result } = mount();
+    const source = await arrivalListener();
+    await waitFor(() => expect(result.current.phase).toBe("ready"));
+    const listed = requested.filter((path) => path.endsWith("/api/accounts")).length;
+
+    source.emit("mail", expired(BETA));
+
+    await waitFor(() =>
+      expect(result.current.reauthAlert).toEqual({
+        accountId: BETA,
+        label: "Travail",
+        email: `${BETA}@test.fr`,
+      }),
+    );
+    await waitFor(() =>
+      expect(requested.filter((path) => path.endsWith("/api/accounts")).length).toBeGreaterThan(
+        listed,
+      ),
+    );
+    expect(notifyNewMail).not.toHaveBeenCalled();
+  });
+
+  it("ne relance ni les fils ni les compteurs de la boîte", async () => {
+    const { result } = mount();
+    await waitFor(() => expect(result.current.phase).toBe("ready"));
+    const source = await arrivalListener();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const before = requested.filter(bulkRequest).length;
+
+    source.emit("mail", expired(ALPHA));
+
+    await waitFor(() => expect(result.current.reauthAlert).not.toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(requested.filter(bulkRequest).length).toBe(before);
+    expect(result.current.mails).toEqual([]);
+  });
+
+  it("signale au chargement le compte déjà marqué par le démon", async () => {
+    mockBackend([apiAccount(ALPHA, { needs_reauth: true, auth_kind: "oauth2" }), apiAccount(BETA)]);
+    const { result } = mount();
+
+    await waitFor(() =>
+      expect(result.current.reauthAlert).toEqual({
+        accountId: ALPHA,
+        label: "Perso",
+        email: `${ALPHA}@test.fr`,
+      }),
+    );
+    expect(result.current.accounts.find((entry) => entry.id === ALPHA)?.needsReauth).toBe(true);
+    expect(result.current.accounts.find((entry) => entry.id === ALPHA)?.oauth).toBe(true);
   });
 });

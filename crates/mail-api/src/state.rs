@@ -17,7 +17,7 @@ use crate::copilot::{self, CopilotTokens};
 use crate::decision::{self, DecisionConfig};
 use crate::discovery::{Discovery, DiscoveryEndpoints};
 use crate::error::ApiError;
-use crate::events::Events;
+use crate::events::{Event, Events};
 use crate::oauth_flow::Sessions;
 use crate::pgp_keys::PgpStore;
 use crate::secrets::{AccountSecrets, SecretBackend, Secrets};
@@ -280,6 +280,73 @@ impl AppState {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// Records that the provider revoked the account's authorization, and tells
+    /// the front on the transition only: the IDLE watcher fails on every retry,
+    /// so publishing per failure would flood the stream with the same news.
+    /// The flag is persisted because the daemon may restart before the user
+    /// reads it.
+    pub async fn mark_reauth_required(&self, id: &str) -> Result<(), ApiError> {
+        let mut accounts = self.stored_accounts()?;
+        let account = accounts
+            .iter_mut()
+            .find(|account| account.id == id)
+            .ok_or_else(|| ApiError::not_found(format!("compte « {id} » inconnu")))?;
+        if account.needs_reauth {
+            return Ok(());
+        }
+        account.needs_reauth = true;
+        self.save_accounts(&mut accounts).await?;
+        tracing::info!(account = %id, "autorisation OAuth2 expirée : reconnexion demandée");
+        self.events.publish(Event {
+            kind: "account-reauth",
+            account_id: id.to_string(),
+            folder_path: String::new(),
+            report: None,
+            new_mails: Vec::new(),
+        });
+        Ok(())
+    }
+
+    /// Clears the flag once a connection went through, without an event: the
+    /// front reads it back from the next account listing.
+    pub async fn clear_reauth(&self, id: &str) -> Result<(), ApiError> {
+        let mut accounts = self.stored_accounts()?;
+        let Some(account) = accounts.iter_mut().find(|account| account.id == id) else {
+            return Ok(());
+        };
+        if !account.needs_reauth {
+            return Ok(());
+        }
+        account.needs_reauth = false;
+        self.save_accounts(&mut accounts).await
+    }
+
+    /// Puts the secrets a fresh consent produced into an existing account. The
+    /// store rows are left untouched on purpose: the history is already indexed
+    /// and reimporting it would duplicate folders and messages.
+    pub async fn complete_reauth(&self, config: &AccountConfig) -> Result<(), ApiError> {
+        let mut accounts = self.stored_accounts()?;
+        let Some(account) = accounts.iter_mut().find(|account| account.id == config.id) else {
+            return Err(ApiError::not_found(format!(
+                "compte « {} » inconnu",
+                config.id
+            )));
+        };
+        let mut stored = StoredAccount::from_config(config);
+        let secrets = stored.take_secrets().ok_or_else(|| {
+            ApiError::internal(
+                "config",
+                format!(
+                    "secret du compte « {} » absent de la configuration",
+                    config.id
+                ),
+            )
+        })?;
+        self.secrets.put(&config.id, &secrets).await?;
+        account.needs_reauth = false;
+        self.save_accounts(&mut accounts).await
     }
 
     /// Records the folder selection of one account only: the label, the

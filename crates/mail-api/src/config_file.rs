@@ -29,6 +29,11 @@ pub struct StoredAccount {
     /// syncs no folder automatically, `Some(paths)` only those folders.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub synced_folders: Option<Vec<String>>,
+    /// `true` when the provider revoked the authorization: the account keeps its
+    /// history, but only a fresh consent makes it usable again. Defaulted so the
+    /// files written before this flag existed still load.
+    #[serde(default)]
+    pub needs_reauth: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -75,6 +80,7 @@ impl StoredAccount {
             smtp: config.smtp.clone(),
             auth,
             synced_folders: config.synced_folders.clone(),
+            needs_reauth: false,
         }
     }
 
@@ -202,6 +208,23 @@ mod tests {
             },
             synced_folders: None,
         }
+    }
+
+    /// Un `accounts.json` écrit avant le drapeau de reconnexion doit se relire
+    /// tel quel : sinon chaque compte existant disparaîtrait à la mise à jour.
+    #[test]
+    fn an_account_file_without_the_flag_still_loads() {
+        let legacy = serde_json::json!({
+            "id": "perso",
+            "label": "Perso",
+            "email": "roman@lavande.fr",
+            "username": "roman@lavande.fr",
+            "imap": { "host": "imap.lavande.fr", "port": 993, "encryption": "tls" },
+            "smtp": { "host": "smtp.lavande.fr", "port": 465, "encryption": "tls" },
+            "auth": { "kind": "password" }
+        });
+        let stored: StoredAccount = serde_json::from_value(legacy).expect("compte");
+        assert!(!stored.needs_reauth);
     }
 
     #[test]

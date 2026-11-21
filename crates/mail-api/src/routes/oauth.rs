@@ -20,9 +20,15 @@ pub struct CompleteRequest {
     pub session: String,
 }
 
+#[derive(Deserialize)]
+pub struct ReconnectRequest {
+    pub account_id: String,
+}
+
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/oauth/start", post(start))
+        .route("/api/oauth/reconnect", post(reconnect))
         .route("/api/oauth/callback", get(callback))
         .route("/api/oauth/complete", post(complete))
         .route("/api/oauth/status", get(status))
@@ -33,6 +39,16 @@ async fn start(
     ApiJson(request): ApiJson<StartRequest>,
 ) -> Result<(axum::http::StatusCode, Json<StartResponse>), ApiError> {
     let response = oauth_flow::start(&state, request).await?;
+    Ok((axum::http::StatusCode::CREATED, Json(response)))
+}
+
+/// Réautorisation d'un compte existant : la session rendue se termine par les
+/// routes `complete`/`status` habituelles.
+async fn reconnect(
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<ReconnectRequest>,
+) -> Result<(axum::http::StatusCode, Json<StartResponse>), ApiError> {
+    let response = oauth_flow::start_reconnect(&state, &request.account_id).await?;
     Ok((axum::http::StatusCode::CREATED, Json(response)))
 }
 

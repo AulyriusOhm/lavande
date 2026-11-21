@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use lavande_mail::error::MailError;
 use lavande_mail::oauth::{xoauth2_payload, OAuth2Provider};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -129,9 +130,52 @@ async fn oauth_error_is_readable_and_secret_free() {
     );
 
     let error = provider.access_token().await.expect_err("must fail");
+    assert!(
+        matches!(&error, MailError::OAuthRevoked(_)),
+        "un jeton révoqué a son propre variant : {error}"
+    );
     let message = error.to_string();
     assert!(message.contains("invalid_grant"));
     assert!(message.contains("Token has been expired or revoked."));
     assert!(!message.contains("client-secret-value"));
     assert!(!message.contains("refresh-token-value"));
+}
+
+/// Un refus qui ne vise pas le jeton laisse le compte utilisable : le marquer
+/// comme révoqué enverrait l'utilisateur refaire un consentement pour rien.
+#[tokio::test]
+async fn a_rejected_client_leaves_the_grant_untouched() {
+    let server = mock(
+        "401 Unauthorized",
+        r#"{"error":"invalid_client","error_description":"The provided client secret is invalid."}"#,
+    )
+    .await;
+    let mut provider = OAuth2Provider::new(
+        "client-id",
+        "client-secret-value",
+        "refresh-token-value",
+        server.endpoint.clone(),
+    );
+
+    let error = provider.access_token().await.expect_err("must fail");
+    assert!(
+        matches!(&error, MailError::OAuth(_)),
+        "invalid_client n'est pas une révocation : {error}"
+    );
+    assert!(error.to_string().contains("invalid_client"));
+}
+
+/// Un corps de refus illisible reste un refus ordinaire, jamais une révocation
+/// devinée : le message doit rester celui d'aujourd'hui.
+#[tokio::test]
+async fn an_unreadable_refusal_is_not_a_revocation() {
+    let server = mock("502 Bad Gateway", "<html>proxy</html>").await;
+    let mut provider = OAuth2Provider::new("id", "secret", "refresh", server.endpoint.clone());
+
+    let error = provider.access_token().await.expect_err("must fail");
+    assert!(matches!(&error, MailError::OAuth(_)), "{error}");
+    assert!(
+        error.to_string().contains("unexpected error response"),
+        "{error}"
+    );
 }

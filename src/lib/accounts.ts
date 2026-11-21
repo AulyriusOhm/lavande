@@ -8,6 +8,10 @@ export type Account = {
   synced: string;
   /** Dossiers synchronisés : `null` = tous ceux à rôle connu, `[]` = aucun. */
   syncedFolders?: string[] | null;
+  /** Connexion OAuth2 : le consentement peut être rejoué sans retirer le compte. */
+  oauth?: boolean;
+  /** Le refresh token a été refusé : le compte attend une reconnexion. */
+  needsReauth?: boolean;
 };
 
 export const ACCOUNTS: Account[] = [

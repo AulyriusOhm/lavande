@@ -351,7 +351,7 @@ async fn account_is_added_and_synced() {
         "la liste expose un secret : {listing}"
     );
     assert!(
-        !listing.contains("password"),
+        !listing.contains("\"password\":"),
         "la liste expose un secret : {listing}"
     );
 

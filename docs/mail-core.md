@@ -155,9 +155,15 @@ pub enum MailError {
     Imap(String),                // "imap error: {0}"
     Smtp(String),                // "smtp error: {0}"
     OAuth(String),               // "oauth error: {0}"
+    OAuthRevoked(String),        // "oauth authorization expired: {0}"
     Tls(String),                 // "tls error: {0}"
 }
 ```
+
+`OAuthRevoked` n'est rendu que lorsque le point de jeton répond `invalid_grant` : le refresh token
+est mort côté fournisseur, aucun réessai ne le ressuscite, seul un nouveau consentement rend le
+compte utilisable. Tout autre refus (`invalid_client`, `invalid_request`, panne du proxy) reste
+`OAuth` : le jeton stocké est intact, l'utilisateur n'a rien à refaire.
 
 `Display` produit déjà une phrase préfixée : côté Tauri, `error.to_string()` suffit comme message
 lisible. `Store::set_flags`/`set_body`/`delete_message` renvoient

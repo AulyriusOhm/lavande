@@ -35,6 +35,7 @@ import { ComposeScreen } from "@/screens/compose-screen";
 import { CleanupScreen } from "@/screens/cleanup-screen";
 import { PgpScreen } from "@/screens/pgp-screen";
 import { TotpPopup } from "@/components/totp-popup";
+import { ReauthPopup } from "@/components/reauth-popup";
 import { DotPattern, MeshGlow } from "@/components/ui/backdrops";
 import { Notice } from "@/components/ui/notice";
 import { conflictingIds, type CalendarEvent } from "@/lib/calendar";
@@ -72,6 +73,20 @@ const DesktopShell = lazy(() =>
 );
 
 const OVERLAY_STATE = { lavandeOverlay: true };
+
+function ReauthHost() {
+  const { reauthAlert, dismissReauthAlert, reconnectAccount } = useMailStore();
+  return (
+    <ReauthPopup
+      alert={reauthAlert}
+      onDismiss={dismissReauthAlert}
+      onReconnect={(accountId) => {
+        if (!reauthAlert) return;
+        void reconnectAccount({ id: accountId, label: reauthAlert.label });
+      }}
+    />
+  );
+}
 
 function TotpHost() {
   const { totpAlert, dismissTotpAlert, mails, openMessage, mailAction, inboxActive } = useMailStore();
@@ -112,6 +127,7 @@ export default function App() {
                   <Stage />
                 )}
               </Suspense>
+              <ReauthHost />
               <TotpHost />
               <UpdatePopup />
             </MailStoreProvider>

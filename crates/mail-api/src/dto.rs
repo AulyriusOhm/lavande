@@ -12,7 +12,7 @@ use lavande_mail::smtp::{sanitize_outgoing_html, OutgoingAttachment, OutgoingMes
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::config_file::StoredAccount;
+use crate::config_file::{StoredAccount, StoredAuth};
 use crate::error::ApiError;
 
 /// `Json` with the API error envelope and a 400 instead of axum's 415/422.
@@ -137,6 +137,12 @@ pub struct AccountSummary {
     pub synced_folders: Option<Vec<String>>,
     /// Interrupteur PGP du compte: `false` laisse les corps chiffrés fermés.
     pub pgp: bool,
+    /// Le fournisseur a révoqué l'autorisation : seule une reconnexion rend le
+    /// compte utilisable, l'historique local reste en place.
+    pub needs_reauth: bool,
+    /// `"password"` ou `"oauth2"` : le front n'offre la reconnexion que sur un
+    /// compte OAuth2.
+    pub auth_kind: &'static str,
 }
 
 impl AccountSummary {
@@ -151,6 +157,11 @@ impl AccountSummary {
             folders,
             synced_folders: account.synced_folders.clone(),
             pgp,
+            needs_reauth: account.needs_reauth,
+            auth_kind: match &account.auth {
+                StoredAuth::Password { .. } => "password",
+                StoredAuth::OAuth2 { .. } => "oauth2",
+            },
         }
     }
 }

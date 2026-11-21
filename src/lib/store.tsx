@@ -23,7 +23,7 @@ import {
 } from "@/lib/draft";
 import { buildQuotedHtml, htmlToText, splitQuotedBody, textToHtml } from "@/lib/rich-text";
 import { notifyNewMail, notifyTotpCode, setUnreadBadge } from "@/lib/notify";
-import { NOTICE_EVENT } from "@/lib/open-external";
+import { NOTICE_EVENT, isTauriShell, openExternal } from "@/lib/open-external";
 import type { NoticeData } from "@/components/ui/notice";
 import { ACCOUNTS, ALL_ACCOUNTS } from "@/lib/accounts";
 import type { Account } from "@/lib/accounts";
@@ -91,7 +91,7 @@ import {
   triageDecisionFor,
   triageRecentMails,
 } from "@/lib/triage";
-import { mailApi, errorText } from "@/lib/api";
+import { mailApi, errorText, waitForOAuthSession } from "@/lib/api";
 import type { LiveEvent } from "@/lib/api";
 import type { NewAccount } from "@/lib/api";
 import { haptic } from "@/lib/haptics";
@@ -112,6 +112,7 @@ import {
   syncNotice,
   threadMails,
   threadToMails,
+  toAccount,
 } from "@/lib/mail-backend";
 import type { FolderOption, FolderRecord, MailMode } from "@/lib/mail-backend";
 import {
@@ -129,6 +130,13 @@ export type TotpAlert = {
   service: string;
   mailId: string;
   receivedAt: number;
+};
+
+/** Compte dont le refresh token a été refusé, à reconnecter par consentement. */
+export type ReauthAlert = {
+  accountId: string;
+  label: string;
+  email: string;
 };
 
 /** Analyse à la demande du mail ouvert : un seul mail à la fois, cache par mail. */
@@ -502,6 +510,11 @@ export type MailStoreValue = {
   /** Alerte TOTP instantanée émise à la réception SSE. */
   totpAlert: TotpAlert | null;
   dismissTotpAlert: () => void;
+  /** Compte à reconnecter : émis par le SSE, ou relevé au chargement des comptes. */
+  reauthAlert: ReauthAlert | null;
+  dismissReauthAlert: () => void;
+  /** Rejoue le consentement OAuth2 du compte, sans le retirer. */
+  reconnectAccount: (account: Pick<Account, "id" | "label">) => Promise<void>;
   /** File de triage bornée (au plus 40 mails récents non en cache, ou `limit` jusqu'à 50). */
   triageMails: (mails: Mail[], force?: boolean, limit?: number) => Promise<void>;
 };
@@ -603,6 +616,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     mode === "demo" && DEMO_DECISIONS_ON ? DEMO_TOTP_ALERT : null,
   );
   const dismissTotpAlert = useCallback(() => setTotpAlert(null), []);
+  const [reauthAlert, setReauthAlert] = useState<ReauthAlert | null>(null);
+  const dismissReauthAlert = useCallback(() => setReauthAlert(null), []);
   const decisionIndex = useMemo(() => indexDecisions(decisions), [decisions]);
   const decisionPrefsRef = useRef(prefs.decision);
   decisionPrefsRef.current = prefs.decision;
@@ -704,6 +719,13 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       const { accounts: loaded, folders: records } = await loadMailbox();
       setAccounts(loaded);
       setFolderRecords(records);
+      const expiring = loaded.find((entry) => entry.needsReauth);
+      if (expiring) {
+        setReauthAlert(
+          (current) =>
+            current ?? { accountId: expiring.id, label: expiring.label, email: expiring.email },
+        );
+      }
       if (loaded.length === 0) {
         setMails([]);
         setAccountState("");
@@ -729,6 +751,36 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (mode === "api") void bootstrap();
   }, [bootstrap, mode]);
+
+  /**
+   * Relit les drapeaux des comptes sans toucher aux dossiers ni recharger une
+   * boîte : la liste garde son identité quand rien n'a bougé, sinon elle est
+   * remplacée (libellé, connexion expirée). Un refus laisse l'état en place.
+   */
+  const refreshAccounts = useCallback(async () => {
+    try {
+      const summaries = await mailApi.accounts();
+      setAccounts((current) => {
+        const next = summaries.map(toAccount);
+        const unchanged =
+          next.length === current.length &&
+          next.every((entry, index) => {
+            const known = current[index];
+            return (
+              known.id === entry.id &&
+              known.label === entry.label &&
+              known.email === entry.email &&
+              known.synced === entry.synced &&
+              known.needsReauth === entry.needsReauth &&
+              known.oauth === entry.oauth
+            );
+          });
+        return unchanged ? current : next;
+      });
+    } catch {
+      // Un drapeau non relu ne casse rien : la prochaine liste le corrige.
+    }
+  }, []);
 
   // Un lien confié au navigateur système peut échouer côté coquille : l'erreur
   // remonte en notice au lieu de disparaître dans la console de la webview.
@@ -953,6 +1005,18 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       source.addEventListener("mail", (event) => {
         try {
           const payload = JSON.parse((event as MessageEvent<string>).data) as LiveEvent;
+          if (payload.type === "account-reauth") {
+            const expiring = notifyAccounts.current.find(
+              (entry) => entry.id === payload.account_id,
+            );
+            setReauthAlert({
+              accountId: payload.account_id,
+              label: expiring?.label ?? payload.account_id,
+              email: expiring?.email ?? "",
+            });
+            void refreshAccounts();
+            return;
+          }
           const inserted = payload.report?.inserted ?? 0;
           const notices = payload.new_mails ?? [];
           if (notices.length > 0 && decisionPrefsRef.current.totpPopup) {
@@ -1021,7 +1085,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       closed = true;
       source?.close();
     };
-  }, [account, mailSyncOn, mergeDecisions, mode]);
+  }, [account, mailSyncOn, mergeDecisions, mode, refreshAccounts]);
 
   const retryBackend = useCallback(() => {
     if (mode === "api") void bootstrap();
@@ -2712,6 +2776,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     },
     [readOnlyBlocked],
   );
+
   const cancelRemoveAccount = useCallback(() => setRemoveTarget(null), []);
 
   const confirmRemoveAccount = useCallback(() => {
@@ -2742,6 +2807,38 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         notify(errorText(error));
       });
   }, [account, accounts, bootstrap, mode, notify, readOnlyBlocked, removeTarget]);
+
+  /**
+   * Rejoue le consentement du compte : le démon remplace le refresh token, le
+   * compte et sa copie locale restent en place.
+   */
+  const reconnectAccount = useCallback(
+    async (target: Pick<Account, "id" | "label">) => {
+      if (readOnlyBlocked()) return;
+      const tab = isTauriShell() ? null : window.open("", "_blank");
+      try {
+        const started = await mailApi.oauthReconnect(target.id);
+        if (tab) {
+          tab.location.replace(started.auth_url);
+        } else {
+          openExternal(started.auth_url);
+        }
+        const outcome = await waitForOAuthSession(started.session);
+        if (outcome.status === "done") {
+          dismissReauthAlert();
+          notify(`Compte « ${target.label} » reconnecté`);
+          await bootstrap();
+          return;
+        }
+        tab?.close();
+        notify(outcome.error ?? `Reconnexion de « ${target.label} » interrompue`);
+      } catch (error: unknown) {
+        tab?.close();
+        notify(errorText(error));
+      }
+    },
+    [bootstrap, dismissReauthAlert, notify, readOnlyBlocked],
+  );
 
   /**
    * Supprime un dossier personnalisé : le serveur d'abord, le cache local
@@ -3585,6 +3682,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       trustDomain,
       totpAlert,
       dismissTotpAlert,
+      reauthAlert,
+      dismissReauthAlert,
+      reconnectAccount,
       triageMails,
     }),
     [
@@ -3694,6 +3794,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       trustDomain,
       totpAlert,
       dismissTotpAlert,
+      reauthAlert,
+      dismissReauthAlert,
+      reconnectAccount,
       triageMails,
       bootstrap,
     ],

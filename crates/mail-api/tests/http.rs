@@ -193,11 +193,15 @@ async fn accounts_list_never_returns_a_secret() {
     assert_eq!(status, StatusCode::OK);
     let text = String::from_utf8(body.to_vec()).expect("utf-8");
     assert!(!text.contains("secret-en-clair"), "{text}");
-    assert!(!text.contains("password"), "{text}");
-    assert!(!text.contains("auth"), "{text}");
     let payload = json(&body);
+    // Le résumé ne transporte ni secret ni configuration d'authentification :
+    // seul `auth_kind` en sort, le mot de passe reste au coffre.
+    assert!(payload[0].get("auth").is_none(), "{payload}");
+    assert!(payload[0].get("password").is_none(), "{payload}");
     assert_eq!(payload[0]["id"], "perso");
     assert_eq!(payload[0]["username"], "roman@lavande.mail");
+    assert_eq!(payload[0]["auth_kind"], "password");
+    assert_eq!(payload[0]["needs_reauth"], false);
     assert_eq!(payload[0]["imap"]["host"], "imap.lavande.mail");
     assert_eq!(payload[0]["imap"]["encryption"], "tls");
     assert_eq!(payload[0]["smtp"]["port"], 465);
@@ -917,6 +921,11 @@ fn mail_error_maps_to_status() {
             MailError::OAuth("x".to_string()),
             StatusCode::BAD_GATEWAY,
             "oauth",
+        ),
+        (
+            MailError::OAuthRevoked("x".to_string()),
+            StatusCode::UNAUTHORIZED,
+            "oauth_revoked",
         ),
         (
             MailError::Mime("x".to_string()),
