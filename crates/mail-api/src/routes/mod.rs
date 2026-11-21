@@ -6,6 +6,7 @@ pub mod ai;
 pub mod calendars;
 pub mod contacts;
 pub mod counts;
+pub mod decision;
 pub mod discover;
 pub mod events;
 pub mod mail;

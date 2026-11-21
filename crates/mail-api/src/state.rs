@@ -14,6 +14,7 @@ use lavande_mail::tls::TlsOptions;
 use crate::calendar_sources::{self, CalendarSource};
 use crate::config_file::{self, StoredAccount};
 use crate::copilot::{self, CopilotTokens};
+use crate::decision::{self, DecisionConfig};
 use crate::discovery::{Discovery, DiscoveryEndpoints};
 use crate::error::ApiError;
 use crate::events::Events;
@@ -30,6 +31,7 @@ pub struct AppState {
     store: Store,
     accounts_path: PathBuf,
     calendars_path: PathBuf,
+    decision_path: PathBuf,
     secrets: Secrets,
     token: String,
     tls: TlsOptions,
@@ -74,6 +76,7 @@ impl AppState {
             store,
             accounts_path: data_dir.join(ACCOUNTS_FILE),
             calendars_path: data_dir.join(calendar_sources::SOURCES_FILE),
+            decision_path: data_dir.join(decision::CONFIG_FILE),
             secrets,
             token,
             tls,
@@ -554,6 +557,43 @@ impl AppState {
 
     pub async fn remove_copilot_tokens(&self) -> Result<(), ApiError> {
         self.secrets.delete(copilot::SECRET_ID).await
+    }
+
+    pub fn decision_config(&self) -> Result<DecisionConfig, ApiError> {
+        decision::load_config(&self.decision_path)
+    }
+
+    pub fn save_decision_config(&self, config: &DecisionConfig) -> Result<(), ApiError> {
+        decision::save_config(&self.decision_path, config)
+    }
+
+    pub async fn decision_api_key(&self) -> Result<Option<String>, ApiError> {
+        match self.secrets.get(decision::SECRET_ID).await? {
+            Some(AccountSecrets::AiDecision { api_key }) => {
+                let trimmed = api_key.trim().to_string();
+                Ok((!trimmed.is_empty()).then_some(trimmed))
+            }
+            Some(_) => Err(ApiError::internal(
+                "decision",
+                "secret du modèle de décision incompatible : clé API attendue",
+            )),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn set_decision_api_key(&self, api_key: &str) -> Result<(), ApiError> {
+        self.secrets
+            .put(
+                decision::SECRET_ID,
+                &AccountSecrets::AiDecision {
+                    api_key: api_key.trim().to_string(),
+                },
+            )
+            .await
+    }
+
+    pub async fn remove_decision_api_key(&self) -> Result<(), ApiError> {
+        self.secrets.delete(decision::SECRET_ID).await
     }
 }
 

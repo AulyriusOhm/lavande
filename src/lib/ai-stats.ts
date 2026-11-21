@@ -6,14 +6,36 @@ export const AI_STATS_RETENTION_DAYS = 90;
 
 export type AiUsage = { prompt: number; completion: number; calls: number };
 
+/** Métriques dédiées au modèle de décision (Système 1), séparées du LLM. */
+export type DecisionAiUsage = {
+  prompt: number;
+  completion: number;
+  calls: number;
+  /** Nombre d'appels LLM Système 2 évités grâce au filtrage du modèle de décision. */
+  llmSaved: number;
+  /** Énergie cumulée en joules (renvoyée par NeuralWatt). */
+  energyJoules: number;
+  /** Somme des latences en ms (pour calculer la moyenne). */
+  totalLatencyMs: number;
+};
+
 export type AiStats = {
   total: AiUsage;
   byDay: Record<string, AiUsage>;
   byModel: Record<string, AiUsage>;
   byDomain: Record<string, AiUsage>;
+  decision: DecisionAiUsage;
 };
 
 const EMPTY_USAGE: AiUsage = { prompt: 0, completion: 0, calls: 0 };
+const EMPTY_DECISION_USAGE: DecisionAiUsage = {
+  prompt: 0,
+  completion: 0,
+  calls: 0,
+  llmSaved: 0,
+  energyJoules: 0,
+  totalLatencyMs: 0,
+};
 
 const listeners = new Set<() => void>();
 
@@ -21,8 +43,18 @@ export function emptyUsage(): AiUsage {
   return { ...EMPTY_USAGE };
 }
 
+export function emptyDecisionUsage(): DecisionAiUsage {
+  return { ...EMPTY_DECISION_USAGE };
+}
+
 export function emptyAiStats(): AiStats {
-  return { total: emptyUsage(), byDay: {}, byModel: {}, byDomain: {} };
+  return {
+    total: emptyUsage(),
+    byDay: {},
+    byModel: {},
+    byDomain: {},
+    decision: emptyDecisionUsage(),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -33,9 +65,25 @@ function count(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : 0;
 }
 
+function float(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
 function readUsage(value: unknown): AiUsage {
   if (!isRecord(value)) return emptyUsage();
   return { prompt: count(value.prompt), completion: count(value.completion), calls: count(value.calls) };
+}
+
+function readDecisionUsage(value: unknown): DecisionAiUsage {
+  if (!isRecord(value)) return emptyDecisionUsage();
+  return {
+    prompt: count(value.prompt),
+    completion: count(value.completion),
+    calls: count(value.calls),
+    llmSaved: count(value.llmSaved),
+    energyJoules: float(value.energyJoules),
+    totalLatencyMs: count(value.totalLatencyMs),
+  };
 }
 
 function readBucket(value: unknown): Record<string, AiUsage> {
@@ -55,6 +103,7 @@ function normalize(value: unknown): AiStats {
     byDay: readBucket(value.byDay),
     byModel: readBucket(value.byModel),
     byDomain: readBucket(value.byDomain),
+    decision: readDecisionUsage(value.decision),
   };
 }
 
@@ -132,7 +181,45 @@ export function recordUsage(model: string, domain: string, usage: LlmUsage): voi
   if (model.trim() !== "") add(byModel, model.trim(), delta);
   const byDomain = { ...stats.byDomain };
   if (domain.trim() !== "") add(byDomain, domain.trim(), delta);
-  write({ total, byDay, byModel, byDomain });
+  write({ total, byDay, byModel, byDomain, decision: stats.decision });
+  notify();
+}
+
+export function recordDecisionUsage(
+  model: string,
+  domain: string,
+  usage: LlmUsage,
+  meta: { latencyMs?: number; energyJoules?: number } = {},
+): void {
+  if (demoReadOnly) return;
+  const stats = readAiStats();
+  const delta: AiUsage = { prompt: usage.prompt, completion: usage.completion, calls: 1 };
+  const byDay = purge(stats.byDay);
+  add(byDay, dayKey(), delta);
+  const byModel = { ...stats.byModel };
+  if (model.trim() !== "") add(byModel, `decision:${model.trim()}`, delta);
+  const byDomain = { ...stats.byDomain };
+  if (domain.trim() !== "") add(byDomain, domain.trim(), delta);
+  const decision: DecisionAiUsage = {
+    prompt: stats.decision.prompt + usage.prompt,
+    completion: stats.decision.completion + usage.completion,
+    calls: stats.decision.calls + 1,
+    llmSaved: stats.decision.llmSaved,
+    energyJoules: stats.decision.energyJoules + float(meta.energyJoules),
+    totalLatencyMs: stats.decision.totalLatencyMs + count(meta.latencyMs),
+  };
+  write({ total: stats.total, byDay, byModel, byDomain, decision });
+  notify();
+}
+
+export function recordLlmSaved(savedCount: number): void {
+  if (demoReadOnly || savedCount <= 0) return;
+  const stats = readAiStats();
+  const decision: DecisionAiUsage = {
+    ...stats.decision,
+    llmSaved: stats.decision.llmSaved + Math.round(savedCount),
+  };
+  write({ ...stats, decision });
   notify();
 }
 
@@ -166,16 +253,37 @@ export function mergeAiStats(entries: readonly AiStats[]): AiStats {
       completion: merged.total.completion + entry.total.completion,
       calls: merged.total.calls + entry.total.calls,
     };
+    const dec = entry.decision ?? EMPTY_DECISION_USAGE;
+    merged.decision = {
+      prompt: merged.decision.prompt + dec.prompt,
+      completion: merged.decision.completion + dec.completion,
+      calls: merged.decision.calls + dec.calls,
+      llmSaved: merged.decision.llmSaved + dec.llmSaved,
+      energyJoules: merged.decision.energyJoules + dec.energyJoules,
+      totalLatencyMs: merged.decision.totalLatencyMs + dec.totalLatencyMs,
+    };
     for (const [day, usage] of Object.entries(entry.byDay)) add(merged.byDay, day, usage);
     for (const [model, usage] of Object.entries(entry.byModel)) add(merged.byModel, model, usage);
     for (const [domain, usage] of Object.entries(entry.byDomain)) add(merged.byDomain, domain, usage);
   }
-  return { total: merged.total, byDay: purge(merged.byDay), byModel: merged.byModel, byDomain: merged.byDomain };
+  return {
+    total: merged.total,
+    byDay: purge(merged.byDay),
+    byModel: merged.byModel,
+    byDomain: merged.byDomain,
+    decision: merged.decision,
+  };
 }
 
-/** Stats portées par un doc `ai` (patch `{usage, byDay, byModel, byDomain}`). */
+/** Stats portées par un doc `ai` (patch `{usage, byDay, byModel, byDomain, decision}`). */
 export function statsFromDoc(raw: Record<string, unknown>): AiStats {
-  return normalize({ total: raw.usage, byDay: raw.byDay, byModel: raw.byModel, byDomain: raw.byDomain });
+  return normalize({
+    total: raw.usage,
+    byDay: raw.byDay,
+    byModel: raw.byModel,
+    byDomain: raw.byDomain,
+    decision: raw.decision,
+  });
 }
 
 /** Les `n` derniers jours, du plus ancien au plus récent (jours sans appel à zéro). */

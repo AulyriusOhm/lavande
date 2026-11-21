@@ -17,6 +17,7 @@ pub mod store;
 pub mod sync;
 pub mod threading;
 pub mod tls;
+pub mod totp;
 pub mod utf7;
 
 pub use caldav::{CaldavClient, CalendarCollection};
@@ -35,6 +36,7 @@ pub use model::{
 pub use oauth::{xoauth2_payload, OAuth2Provider, XOAuth2Authenticator};
 pub use pgp::{PgpDetail, PgpKey, PgpKeyInfo, PgpKeyring};
 pub use smtp::{OutgoingAttachment, OutgoingMessage};
-pub use store::Store;
+pub use store::{MailDecision, Store};
 pub use threading::thread_id;
 pub use tls::TlsOptions;
+pub use totp::{extract_totp, TotpMatch};

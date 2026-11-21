@@ -21,8 +21,19 @@ export const THREAD_VIEWS: { id: ThreadView; label: string; hint: string }[] = [
 
 const STORAGE_KEY = "lavande.prefs";
 
-import { recordUsage } from "@/lib/ai-stats";
+import { recordDecisionUsage, recordUsage } from "@/lib/ai-stats";
 import { refreshCopilotSession } from "@/lib/copilot";
+import {
+  DEFAULT_DECISION,
+  clampThresholds,
+  setDecisionUsageSink,
+  type CustomCategory,
+  type DecisionAuthHeader,
+  type DecisionConfig,
+  type DecisionProtocol,
+  type DecisionProvider,
+  type NotifFilterMode,
+} from "@/lib/decision";
 import { EMPTY_LLM, llmDomain, setUsageSink, type LlmConfig } from "@/lib/llm";
 import { demoReadOnly } from "@/lib/mail-backend";
 import { setMcpRights } from "@/lib/mcp";
@@ -103,6 +114,8 @@ export type Prefs = {
   /** « Moi et mon équipe » : identité, rôle et équipe propres à chaque boîte. */
   teamContext: Record<string, AccountTeamContext>;
   llm: LlmConfig;
+  /** Modèle de décision (Système 1) : strictement séparé du LLM conversationnel. */
+  decision: DecisionConfig;
   /** Suggestions de réponse générées par le LLM (sinon repli local). */
   aiReplyEnabled: boolean;
   summary: SummaryConfig;
@@ -139,6 +152,7 @@ const DEFAULTS: Prefs = {
   pgpAccounts: {},
   teamContext: {},
   llm: EMPTY_LLM,
+  decision: DEFAULT_DECISION,
   aiReplyEnabled: true,
   summary: DEFAULT_SUMMARY,
   aiTasks: DEFAULT_AI_TASKS,
@@ -163,6 +177,7 @@ type PrefsContextValue = Prefs & {
   setAccountPgp: (accountId: string, patch: Partial<AccountPgp>) => void;
   setTeamContext: (accountId: string, value: AccountTeamContext) => void;
   setLlm: (patch: Partial<LlmConfig>) => void;
+  setDecision: (patch: Partial<DecisionConfig>) => void;
   setAiReplyEnabled: (value: boolean) => void;
   setSummary: (patch: Partial<SummaryConfig>) => void;
   setAiTasks: (patch: Partial<AiTasksConfig>) => void;
@@ -272,6 +287,75 @@ export const asLlm = (value: unknown): LlmConfig => {
     apiKey: typeof apiKey === "string" ? apiKey : "",
     model: typeof model === "string" ? model : "",
     copilotClientId: typeof copilotClientId === "string" ? copilotClientId : "",
+  };
+};
+
+const asCustomCategory = (value: unknown): CustomCategory | null => {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const id = typeof raw.id === "string" ? raw.id.trim().slice(0, 40) : "";
+  const name = typeof raw.name === "string" ? raw.name.trim().slice(0, 40) : "";
+  const description = typeof raw.description === "string" ? raw.description.trim().slice(0, 200) : "";
+  if (!id || !name || !description) return null;
+  return {
+    id,
+    name,
+    description,
+    color: typeof raw.color === "string" && raw.color.trim() ? raw.color.trim() : "accent",
+    excludeFromPriority: asBoolean(raw.excludeFromPriority, false),
+    allowNotifications: asBoolean(raw.allowNotifications, true),
+    cleanupEligible: asBoolean(raw.cleanupEligible, false),
+  };
+};
+
+export const asDecision = (value: unknown): DecisionConfig => {
+  if (!value || typeof value !== "object") return { ...DEFAULT_DECISION };
+  const raw = value as Record<string, unknown>;
+  const provider: DecisionProvider =
+    raw.provider === "neuralwatt" ||
+    raw.provider === "baseten" ||
+    raw.provider === "jev" ||
+    raw.provider === "custom"
+      ? raw.provider
+      : DEFAULT_DECISION.provider;
+  const protocol: DecisionProtocol =
+    raw.protocol === "jev" || raw.protocol === "systemone" ? raw.protocol : DEFAULT_DECISION.protocol;
+  const authHeader: DecisionAuthHeader =
+    raw.authHeader === "api_key" || raw.authHeader === "none" || raw.authHeader === "bearer"
+      ? raw.authHeader
+      : DEFAULT_DECISION.authHeader;
+  const notifMode: NotifFilterMode =
+    raw.notifMode === "smart" || raw.notifMode === "urgent_only" || raw.notifMode === "all"
+      ? raw.notifMode
+      : DEFAULT_DECISION.notifMode;
+  const thresholds =
+    raw.thresholds && typeof raw.thresholds === "object"
+      ? clampThresholds(raw.thresholds as Record<string, unknown>)
+      : { ...DEFAULT_DECISION.thresholds };
+  const customCategories = (Array.isArray(raw.customCategories) ? raw.customCategories : [])
+    .map(asCustomCategory)
+    .filter((item): item is CustomCategory => item !== null)
+    .slice(0, 8);
+  const defaultInboxFilter =
+    typeof raw.defaultInboxFilter === "string" && raw.defaultInboxFilter.trim()
+      ? raw.defaultInboxFilter.trim()
+      : DEFAULT_DECISION.defaultInboxFilter;
+
+  return {
+    enabled: asBoolean(raw.enabled, DEFAULT_DECISION.enabled),
+    provider,
+    protocol,
+    endpoint: typeof raw.endpoint === "string" ? raw.endpoint : DEFAULT_DECISION.endpoint,
+    model: typeof raw.model === "string" ? raw.model : DEFAULT_DECISION.model,
+    authHeader,
+    apiKey: typeof raw.apiKey === "string" ? raw.apiKey : "",
+    daemonHasKey: asBoolean(raw.daemonHasKey, false),
+    thresholds,
+    customCategories,
+    defaultInboxFilter,
+    notifMode,
+    preSendGuard: asBoolean(raw.preSendGuard, DEFAULT_DECISION.preSendGuard),
+    totpPopup: asBoolean(raw.totpPopup, DEFAULT_DECISION.totpPopup),
   };
 };
 
@@ -472,6 +556,7 @@ function read(): Prefs {
     pgpAccounts: asPgpAccounts(stored.pgpAccounts, { encrypt: pgpEncrypt, sign: pgpSign }),
     teamContext: asTeamContext(stored.teamContext),
     llm: asLlm(stored.llm),
+    decision: asDecision(stored.decision),
     aiReplyEnabled: asBoolean(stored.aiReplyEnabled, DEFAULTS.aiReplyEnabled),
     summary: asSummary(stored.summary),
     aiTasks: asAiTasks(stored.aiTasks),
@@ -515,6 +600,16 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     setUsageSink((usage) => recordUsage(prefs.llm.model, llmDomain(prefs.llm), usage));
     return () => setUsageSink(null);
   }, [prefs.llm.model, prefs.llm.endpoint, prefs.llm.provider]);
+
+  useEffect(() => {
+    setDecisionUsageSink((event) =>
+      recordDecisionUsage(event.model, event.domain, event.usage, {
+        latencyMs: event.latencyMs,
+        energyJoules: event.energyJoules,
+      }),
+    );
+    return () => setDecisionUsageSink(null);
+  }, []);
 
   useEffect(() => {
     if (prefs.llm.provider !== "copilot") return;
@@ -596,6 +691,12 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
   const setLlm = useCallback(
     (patch: Partial<LlmConfig>) =>
       write((current) => ({ ...current, llm: { ...current.llm, ...patch } })),
+    [],
+  );
+
+  const setDecision = useCallback(
+    (patch: Partial<DecisionConfig>) =>
+      write((current) => ({ ...current, decision: { ...current.decision, ...patch } })),
     [],
   );
 
@@ -703,6 +804,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setAccountPgp,
       setTeamContext,
       setLlm,
+      setDecision,
       setAiReplyEnabled,
       setSummary,
       setAiTasks,
@@ -728,6 +830,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setAccountPgp,
       setTeamContext,
       setLlm,
+      setDecision,
       setAiReplyEnabled,
       setSummary,
       setAiTasks,

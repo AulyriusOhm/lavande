@@ -8,14 +8,14 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Row, ToSql};
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::MailError;
 use crate::mime::ParsedMessage;
 use crate::model::{Address, AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState, Thread};
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 /// Rows reindexed per statement when `migrate` fills the FTS index of a
 /// database written before it existed: a big mailbox must not hold the daemon
@@ -64,6 +64,49 @@ pub struct Contact {
     pub received: i64,
     pub sent: i64,
     pub last_seen: Option<String>,
+}
+
+/// Résultat persisté du modèle de décision (Système 1) pour un message.
+/// Stocké localement dans SQLite (calcul local ou hérité via synchro E2EE).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MailDecision {
+    pub account_id: String,
+    pub folder_path: String,
+    pub uid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    pub content_hash: String,
+    pub schema_version: i64,
+    pub model: String,
+    pub category: String,
+    pub category_conf: f64,
+    pub category_probs: HashMap<String, f64>,
+    pub urgency: f64,
+    pub needs_reply: f64,
+    pub has_task: f64,
+    pub has_event: f64,
+    pub security: String,
+    pub security_conf: f64,
+    pub cleanup_score: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee_conf: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totp_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totp_service: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_folder: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_folder_conf: Option<f64>,
+    pub decided_at: i64,
+    #[serde(default = "default_decision_source")]
+    pub source: String,
+}
+
+fn default_decision_source() -> String {
+    "local".to_string()
 }
 
 impl Store {
@@ -1872,6 +1915,242 @@ fn sender_label(message: &Message) -> String {
     }
 }
 
+const DECISION_COLUMNS: &str = "account_id, folder_path, uid, message_id, content_hash, \
+    schema_version, model, category, category_conf, category_probs_json, urgency, needs_reply, \
+    has_task, has_event, security, security_conf, cleanup_score, assignee, assignee_conf, \
+    totp_code, totp_service, suggested_folder, suggested_folder_conf, decided_at, source";
+
+fn decision_from_row(row: &Row<'_>) -> Result<MailDecision, rusqlite::Error> {
+    let probs_raw: String = row.get(9)?;
+    let category_probs: HashMap<String, f64> =
+        serde_json::from_str(&probs_raw).unwrap_or_default();
+    Ok(MailDecision {
+        account_id: row.get(0)?,
+        folder_path: row.get(1)?,
+        uid: row.get(2)?,
+        message_id: row.get(3)?,
+        content_hash: row.get(4)?,
+        schema_version: row.get(5)?,
+        model: row.get(6)?,
+        category: row.get(7)?,
+        category_conf: row.get(8)?,
+        category_probs,
+        urgency: row.get(10)?,
+        needs_reply: row.get(11)?,
+        has_task: row.get(12)?,
+        has_event: row.get(13)?,
+        security: row.get(14)?,
+        security_conf: row.get(15)?,
+        cleanup_score: row.get(16)?,
+        assignee: row.get(17)?,
+        assignee_conf: row.get(18)?,
+        totp_code: row.get(19)?,
+        totp_service: row.get(20)?,
+        suggested_folder: row.get(21)?,
+        suggested_folder_conf: row.get(22)?,
+        decided_at: row.get(23)?,
+        source: row.get(24)?,
+    })
+}
+
+impl Store {
+    pub fn upsert_decision(&self, decision: &MailDecision) -> Result<(), MailError> {
+        let conn = self.conn()?;
+        let probs_json = serde_json::to_string(&decision.category_probs)?;
+        conn.execute(
+            "INSERT INTO mail_decisions ( \
+                 account_id, folder_path, uid, message_id, content_hash, schema_version, model, \
+                 category, category_conf, category_probs_json, urgency, needs_reply, has_task, \
+                 has_event, security, security_conf, cleanup_score, assignee, assignee_conf, \
+                 totp_code, totp_service, suggested_folder, suggested_folder_conf, decided_at, \
+                 source \
+             ) VALUES ( \
+                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, \
+                 ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25 \
+             ) \
+             ON CONFLICT(account_id, folder_path, uid) DO UPDATE SET \
+                 message_id = excluded.message_id, \
+                 content_hash = excluded.content_hash, \
+                 schema_version = excluded.schema_version, \
+                 model = excluded.model, \
+                 category = excluded.category, \
+                 category_conf = excluded.category_conf, \
+                 category_probs_json = excluded.category_probs_json, \
+                 urgency = excluded.urgency, \
+                 needs_reply = excluded.needs_reply, \
+                 has_task = excluded.has_task, \
+                 has_event = excluded.has_event, \
+                 security = excluded.security, \
+                 security_conf = excluded.security_conf, \
+                 cleanup_score = excluded.cleanup_score, \
+                 assignee = excluded.assignee, \
+                 assignee_conf = excluded.assignee_conf, \
+                 totp_code = excluded.totp_code, \
+                 totp_service = excluded.totp_service, \
+                 suggested_folder = COALESCE(excluded.suggested_folder, mail_decisions.suggested_folder), \
+                 suggested_folder_conf = COALESCE(excluded.suggested_folder_conf, mail_decisions.suggested_folder_conf), \
+                 decided_at = excluded.decided_at, \
+                 source = excluded.source",
+            params![
+                decision.account_id,
+                decision.folder_path,
+                decision.uid,
+                decision.message_id,
+                decision.content_hash,
+                decision.schema_version,
+                decision.model,
+                decision.category,
+                decision.category_conf,
+                probs_json,
+                decision.urgency,
+                decision.needs_reply,
+                decision.has_task,
+                decision.has_event,
+                decision.security,
+                decision.security_conf,
+                decision.cleanup_score,
+                decision.assignee,
+                decision.assignee_conf,
+                decision.totp_code,
+                decision.totp_service,
+                decision.suggested_folder,
+                decision.suggested_folder_conf,
+                decision.decided_at,
+                decision.source,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_decision(
+        &self,
+        account_id: &str,
+        folder_path: &str,
+        uid: u32,
+    ) -> Result<Option<MailDecision>, MailError> {
+        let conn = self.conn()?;
+        let sql = format!(
+            "SELECT {DECISION_COLUMNS} FROM mail_decisions \
+             WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3"
+        );
+        conn.query_row(&sql, params![account_id, folder_path, uid], decision_from_row)
+            .optional()
+            .map_err(MailError::from)
+    }
+
+    pub fn get_decision_by_message_id(
+        &self,
+        message_id: &str,
+    ) -> Result<Option<MailDecision>, MailError> {
+        let conn = self.conn()?;
+        let sql = format!(
+            "SELECT {DECISION_COLUMNS} FROM mail_decisions \
+             WHERE message_id = ?1 ORDER BY decided_at DESC LIMIT 1"
+        );
+        conn.query_row(&sql, params![message_id], decision_from_row)
+            .optional()
+            .map_err(MailError::from)
+    }
+
+    /// Retrouve le premier message local correspondant à un `Message-ID` RFC 5322
+    /// (utilisé lors de l'import E2EE des décisions calculées par un autre appareil).
+    pub fn find_message_by_message_id(
+        &self,
+        message_id: &str,
+    ) -> Result<Option<(String, String, u32)>, MailError> {
+        let conn = self.conn()?;
+        conn.query_row(
+            "SELECT account_id, folder_path, uid FROM messages \
+             WHERE message_id = ?1 ORDER BY date DESC LIMIT 1",
+            params![message_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(MailError::from)
+    }
+
+    pub fn list_decisions(
+        &self,
+        account_id: Option<&str>,
+        folder_path: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<MailDecision>, MailError> {
+        let conn = self.conn()?;
+        let bounded = (limit.clamp(1, 2000)) as i64;
+        let mut clauses: Vec<&str> = Vec::new();
+        let mut values: Vec<Box<dyn ToSql>> = Vec::new();
+        if let Some(account) = account_id.filter(|s| !s.trim().is_empty()) {
+            clauses.push("account_id = ?");
+            values.push(Box::new(account.to_string()));
+        }
+        if let Some(folder) = folder_path.filter(|s| !s.trim().is_empty()) {
+            clauses.push("folder_path = ?");
+            values.push(Box::new(folder.to_string()));
+        }
+        let where_sql = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {} ", clauses.join(" AND "))
+        };
+        values.push(Box::new(bounded));
+        let sql = format!(
+            "SELECT {DECISION_COLUMNS} FROM mail_decisions {where_sql}\
+             ORDER BY decided_at DESC LIMIT ?"
+        );
+        let refs: Vec<&dyn ToSql> = values.iter().map(|v| v.as_ref()).collect();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(refs.as_slice(), decision_from_row)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn update_suggested_folder(
+        &self,
+        account_id: &str,
+        folder_path: &str,
+        uid: u32,
+        suggested_folder: &str,
+        confidence: f64,
+    ) -> Result<(), MailError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE mail_decisions SET suggested_folder = ?4, suggested_folder_conf = ?5 \
+             WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
+            params![account_id, folder_path, uid, suggested_folder, confidence],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_decision(
+        &self,
+        account_id: &str,
+        folder_path: &str,
+        uid: u32,
+    ) -> Result<(), MailError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "DELETE FROM mail_decisions WHERE account_id = ?1 AND folder_path = ?2 AND uid = ?3",
+            params![account_id, folder_path, uid],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_decisions(&self, account_id: Option<&str>) -> Result<usize, MailError> {
+        let conn = self.conn()?;
+        let removed = match account_id.filter(|s| !s.trim().is_empty()) {
+            Some(account) => conn.execute(
+                "DELETE FROM mail_decisions WHERE account_id = ?1",
+                params![account],
+            )?,
+            None => conn.execute("DELETE FROM mail_decisions", [])?,
+        };
+        Ok(removed)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2141,5 +2420,69 @@ mod tests {
                 .len(),
             5001
         );
+    }
+
+    #[test]
+    fn mail_decisions_upsert_lookup_and_clear() {
+        let store = Store::open_in_memory().expect("open");
+        store.migrate().expect("migrate");
+        let mut probs = HashMap::new();
+        probs.insert("auth_totp".to_string(), 0.96);
+        probs.insert("info".to_string(), 0.04);
+
+        let decision = MailDecision {
+            account_id: "perso".into(),
+            folder_path: "INBOX".into(),
+            uid: 42,
+            message_id: Some("<otp-42@github.com>".into()),
+            content_hash: "abc12345".into(),
+            schema_version: 1,
+            model: "mammoth-1".into(),
+            category: "auth_totp".into(),
+            category_conf: 0.96,
+            category_probs: probs,
+            urgency: 2.1,
+            needs_reply: 0.02,
+            has_task: 0.01,
+            has_event: 0.0,
+            security: "safe".into(),
+            security_conf: 0.99,
+            cleanup_score: 0.91,
+            assignee: None,
+            assignee_conf: None,
+            totp_code: Some("482917".into()),
+            totp_service: Some("GitHub".into()),
+            suggested_folder: None,
+            suggested_folder_conf: None,
+            decided_at: 1_700_000_000,
+            source: "local".into(),
+        };
+
+        store.upsert_decision(&decision).expect("upsert");
+        let fetched = store
+            .get_decision("perso", "INBOX", 42)
+            .expect("get")
+            .expect("present");
+        assert_eq!(fetched.totp_code.as_deref(), Some("482917"));
+        assert_eq!(fetched.category, "auth_totp");
+
+        let by_mid = store
+            .get_decision_by_message_id("<otp-42@github.com>")
+            .expect("mid")
+            .expect("present");
+        assert_eq!(by_mid.uid, 42);
+
+        store
+            .update_suggested_folder("perso", "INBOX", 42, "Auth", 0.92)
+            .expect("folder");
+        let updated = store
+            .get_decision("perso", "INBOX", 42)
+            .expect("get")
+            .expect("present");
+        assert_eq!(updated.suggested_folder.as_deref(), Some("Auth"));
+
+        assert_eq!(store.list_decisions(Some("perso"), None, 50).expect("list").len(), 1);
+        assert_eq!(store.clear_decisions(Some("perso")).expect("clear"), 1);
+        assert!(store.get_decision("perso", "INBOX", 42).expect("empty").is_none());
     }
 }

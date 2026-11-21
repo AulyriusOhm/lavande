@@ -66,6 +66,10 @@ pub enum AccountSecrets {
         expires_at: Option<i64>,
         login: Option<String>,
     },
+    /// Clé API du modèle de décision (Système 1), rangée sous `ai:decision`.
+    AiDecision {
+        api_key: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

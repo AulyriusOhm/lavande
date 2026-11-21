@@ -7,6 +7,7 @@ pub mod auth;
 pub mod calendar_sources;
 pub mod config_file;
 pub mod copilot;
+pub mod decision;
 pub mod discovery;
 pub mod dto;
 pub mod error;
@@ -82,6 +83,7 @@ pub fn app(state: Arc<AppState>) -> Router {
         .route("/api/health", get(health))
         .merge(routes::accounts::router())
         .merge(routes::ai::router())
+        .merge(routes::decision::router())
         .merge(routes::calendars::router())
         .merge(routes::contacts::router())
         .merge(routes::counts::router())

@@ -310,6 +310,147 @@ export type DeleteBulkInput = {
   uids: number[];
 };
 
+export type ApiDecisionThresholds = {
+  llm_escalate: number;
+  category: number;
+  security: number;
+  folder: number;
+};
+
+export type ApiCustomCategory = {
+  id: string;
+  name: string;
+  description: string;
+  color: string;
+  exclude_from_priority: boolean;
+  allow_notifications: boolean;
+  cleanup_eligible: boolean;
+};
+
+export type ApiDecisionConfig = {
+  enabled: boolean;
+  provider: "neuralwatt" | "baseten" | "jev" | "custom";
+  protocol: "systemone" | "jev";
+  endpoint: string;
+  model: string;
+  auth_header: "bearer" | "api_key" | "none";
+  thresholds: ApiDecisionThresholds;
+  custom_categories: ApiCustomCategory[];
+  default_inbox_filter: string;
+  notif_mode: "all" | "smart" | "urgent_only";
+  pre_send_guard: boolean;
+  totp_popup: boolean;
+};
+
+export type ApiDecisionPublicConfig = ApiDecisionConfig & {
+  has_api_key: boolean;
+  ready: boolean;
+};
+
+export type ApiDecisionConfigUpdate = ApiDecisionConfig & {
+  api_key?: string;
+  clear_api_key?: boolean;
+};
+
+export type ApiDecisionProbeInput = {
+  provider?: ApiDecisionConfig["provider"];
+  protocol?: ApiDecisionConfig["protocol"];
+  endpoint?: string;
+  model?: string;
+  auth_header?: ApiDecisionConfig["auth_header"];
+  api_key?: string;
+};
+
+export type ApiDecisionUsage = {
+  prompt_tokens: number;
+  completion_tokens: number;
+};
+
+export type ApiDecisionEnergy = {
+  energy_joules: number;
+  energy_kwh: number;
+  avg_power_watts: number;
+  duration_seconds: number;
+};
+
+export type ApiDecisionProbeReply = {
+  ok: boolean;
+  model: string;
+  latency_ms: number;
+  answer: number;
+  usage: ApiDecisionUsage;
+  energy?: ApiDecisionEnergy;
+};
+
+export type ApiDecisionDecideInput = {
+  state: unknown;
+  questions: Record<string, unknown>;
+  timeout_ms?: number;
+};
+
+export type ApiDecisionOutput = {
+  model: string;
+  answers: Record<
+    string,
+    {
+      type: string;
+      choice?: string;
+      noul?: number;
+      score?: number;
+      probabilities?: Record<string, number>;
+      confidence?: number;
+    }
+  >;
+  usage: ApiDecisionUsage;
+  energy?: ApiDecisionEnergy;
+  latency_ms: number;
+};
+
+export type ApiMailDecision = {
+  account_id: string;
+  folder_path: string;
+  uid: number;
+  message_id?: string | null;
+  content_hash: string;
+  schema_version: number;
+  model: string;
+  category: string;
+  category_conf: number;
+  category_probs: Record<string, number>;
+  urgency: number;
+  needs_reply: number;
+  has_task: number;
+  has_event: number;
+  security: string;
+  security_conf: number;
+  cleanup_score: number;
+  assignee?: string | null;
+  assignee_conf?: number | null;
+  totp_code?: string | null;
+  totp_service?: string | null;
+  suggested_folder?: string | null;
+  suggested_folder_conf?: number | null;
+  decided_at: number;
+  source: "local" | "synced" | string;
+};
+
+export type ApiTriageBatchInput = {
+  targets: { account_id: string; folder_path: string; uid: number }[];
+  team_members?: string[];
+  force?: boolean;
+};
+
+export type ApiTriageBatchReply = {
+  results: {
+    decision: ApiMailDecision;
+    cached: boolean;
+    usage?: ApiDecisionUsage;
+    energy?: ApiDecisionEnergy;
+    latency_ms?: number;
+  }[];
+  errors: string[];
+};
+
 /** Corps HTML relu à la demande, images distantes comprises (déjà assaini par le service). */
 export type HtmlImages = {
   html: string;
@@ -803,6 +944,55 @@ export const mailApi = {
   /** Réponse au format OpenAI, obtenue par le proxy du démon. */
   aiChat: (input: AiChatInput, signal?: AbortSignal) =>
     request<AiChatReply>("/ai/chat", { method: "POST", body: input, timeout: AI_TIMEOUT, signal }),
+
+  /** Configuration du modèle de décision (Système 1) côté démon : la clé reste au trousseau. */
+  decisionConfig: () => request<ApiDecisionPublicConfig>("/ai/decision/config"),
+
+  saveDecisionConfig: (input: ApiDecisionConfigUpdate) =>
+    request<ApiDecisionPublicConfig>("/ai/decision/config", { method: "PUT", body: input }),
+
+  decisionProbe: (input: ApiDecisionProbeInput = {}) =>
+    request<ApiDecisionProbeReply>("/ai/decision/probe", {
+      method: "POST",
+      body: input,
+      timeout: AI_TIMEOUT,
+    }),
+
+  decisionDecide: (input: ApiDecisionDecideInput, signal?: AbortSignal) =>
+    request<ApiDecisionOutput>("/ai/decision/decide", {
+      method: "POST",
+      body: input,
+      timeout: AI_TIMEOUT,
+      signal,
+    }),
+
+  listDecisions: (params?: { accountId?: string; folderPath?: string; limit?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.accountId) query.set("account_id", params.accountId);
+    if (params?.folderPath) query.set("folder_path", params.folderPath);
+    if (params?.limit) query.set("limit", String(params.limit));
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return request<ApiMailDecision[]>(`/ai/decisions${suffix}`);
+  },
+
+  clearDecisions: (accountId?: string) =>
+    request<{ removed: number }>(
+      accountId ? `/ai/decisions?account_id=${encodeURIComponent(accountId)}` : "/ai/decisions",
+      { method: "DELETE" },
+    ),
+
+  triageDecisions: (input: ApiTriageBatchInput) =>
+    request<ApiTriageBatchReply>("/ai/decisions/triage", {
+      method: "POST",
+      body: input,
+      timeout: LONG_TIMEOUT,
+    }),
+
+  importDecisions: (decisions: ApiMailDecision[]) =>
+    request<{ imported: number; skipped: number }>("/ai/decisions/import", {
+      method: "POST",
+      body: { decisions },
+    }),
 
   oauthComplete: (session: string) =>
     request<ApiOAuthStatus>("/oauth/complete", {

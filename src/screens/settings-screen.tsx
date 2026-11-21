@@ -41,6 +41,21 @@ import {
   providerOf,
   type LlmProvider,
 } from "@/lib/llm";
+import {
+  DECISION_PROVIDERS,
+  THRESHOLD_PRESETS,
+  applyDecisionProvider,
+  decisionProbeDirect,
+  decisionProviderPreset,
+  decisionReady,
+  detectThresholdPreset,
+  type DecisionAuthHeader,
+  type DecisionConfig,
+  type DecisionProtocol,
+  type DecisionProvider,
+  type ThresholdPresetId,
+} from "@/lib/decision";
+import { mailApi } from "@/lib/api";
 import { DEFAULT_COPILOT_CLIENT_ID, copilotModels, useCopilotSession } from "@/lib/copilot";
 import { openExternal } from "@/lib/open-external";
 import { formatTokens, lastDays, resetAiStats, topModels } from "@/lib/ai-stats";
@@ -173,6 +188,8 @@ export function SettingsScreen({
     setAccountNotification,
     llm,
     setLlm,
+    decision,
+    setDecision,
     aiReplyEnabled,
     setAiReplyEnabled,
     summary,
@@ -192,6 +209,9 @@ export function SettingsScreen({
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [probing, setProbing] = useState(false);
   const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(null);
+  const [decisionProbing, setDecisionProbing] = useState(false);
+  const [decisionProbeState, setDecisionProbeState] = useState<{ ok: boolean; text: string } | null>(null);
+  const [thresholdsOpen, setThresholdsOpen] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
@@ -321,6 +341,127 @@ export function SettingsScreen({
       setProbing(false);
     }
   };
+
+  const pushDecisionDaemon = (next: DecisionConfig, apiKeyOverride?: string, clearApiKey = false) => {
+    if (mode !== "api") return;
+    void mailApi
+      .saveDecisionConfig({
+        enabled: next.enabled,
+        provider: next.provider,
+        protocol: next.protocol,
+        endpoint: next.endpoint,
+        model: next.model,
+        auth_header: next.authHeader,
+        thresholds: {
+          llm_escalate: next.thresholds.llmEscalate,
+          category: next.thresholds.category,
+          security: next.thresholds.security,
+          folder: next.thresholds.folder,
+        },
+        custom_categories: next.customCategories.map((cat) => ({
+          id: cat.id,
+          name: cat.name,
+          description: cat.description,
+          color: cat.color,
+          exclude_from_priority: cat.excludeFromPriority,
+          allow_notifications: cat.allowNotifications,
+          cleanup_eligible: cat.cleanupEligible,
+        })),
+        default_inbox_filter: next.defaultInboxFilter,
+        notif_mode: next.notifMode,
+        pre_send_guard: next.preSendGuard,
+        totp_popup: next.totpPopup,
+        ...(apiKeyOverride ? { api_key: apiKeyOverride } : {}),
+        ...(clearApiKey ? { clear_api_key: true } : {}),
+      })
+      .then((saved) => {
+        setDecision({
+          daemonHasKey: saved.has_api_key,
+          ...(saved.has_api_key && apiKeyOverride ? { apiKey: "" } : {}),
+        });
+      })
+      .catch(() => undefined);
+  };
+
+  useEffect(() => {
+    if (mode !== "api" || openGroup !== "ia") return;
+    let alive = true;
+    void mailApi
+      .decisionConfig()
+      .then((remote) => {
+        if (!alive) return;
+        setDecision({ daemonHasKey: remote.has_api_key });
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [mode, openGroup, setDecision]);
+
+  const updateDecision = (patch: Partial<DecisionConfig>) => {
+    setDecisionProbeState(null);
+    const next = { ...decision, ...patch };
+    setDecision(patch);
+    const keyChanged = typeof patch.apiKey === "string" && patch.apiKey.trim() !== "";
+    pushDecisionDaemon(next, keyChanged ? patch.apiKey : undefined);
+  };
+
+  const pickDecisionProvider = (provider: DecisionProvider) => {
+    setDecisionProbeState(null);
+    const next = applyDecisionProvider(decision, provider);
+    setDecision(next);
+    pushDecisionDaemon(next);
+  };
+
+  const applyThresholdPreset = (preset: ThresholdPresetId) => {
+    const next = { ...decision, thresholds: { ...THRESHOLD_PRESETS[preset].values } };
+    setDecision({ thresholds: next.thresholds });
+    pushDecisionDaemon(next);
+  };
+
+  const runDecisionProbe = async () => {
+    setDecisionProbing(true);
+    setDecisionProbeState(null);
+    try {
+      const reply =
+        mode === "api"
+          ? await mailApi.decisionProbe({
+              provider: decision.provider,
+              protocol: decision.protocol,
+              endpoint: decision.endpoint,
+              model: decision.model,
+              auth_header: decision.authHeader,
+              ...(decision.apiKey.trim() ? { api_key: decision.apiKey.trim() } : {}),
+            })
+          : await decisionProbeDirect(decision);
+      const latency = "latency_ms" in reply ? reply.latency_ms : reply.latencyMs;
+      const energy =
+        "energy" in reply && reply.energy
+          ? "energy_joules" in reply.energy
+            ? reply.energy.energy_joules
+            : reply.energy.energyJoules
+          : undefined;
+      const energySuffix = typeof energy === "number" && energy > 0 ? ` · ${energy.toFixed(1)} J` : "";
+      setDecisionProbeState({
+        ok: true,
+        text: `${reply.model} · ${latency} ms${energySuffix}`,
+      });
+    } catch (failure) {
+      setDecisionProbeState({
+        ok: false,
+        text: failure instanceof Error ? failure.message : "échec inconnu",
+      });
+    } finally {
+      setDecisionProbing(false);
+    }
+  };
+
+  const decisionPreset = decisionProviderPreset(decision.provider);
+  const activeThresholdPreset = detectThresholdPreset(decision.thresholds);
+  const decisionAvgLatency =
+    aiUsage.combined.decision.calls > 0
+      ? Math.round(aiUsage.combined.decision.totalLatencyMs / aiUsage.combined.decision.calls)
+      : 0;
 
   const unreadFor = (id: string) =>
     mails.filter(
@@ -1087,6 +1228,284 @@ export function SettingsScreen({
 
       {openGroup === "ia" ? (
         <>
+          <SectionTitle hint={decisionReady(decision) ? "actif · rapide" : "inactif"}>
+            Modèle de décision · Système 1
+          </SectionTitle>
+          <BlurFade delay={0.05}>
+            <Card className="mx-5 space-y-3 p-3.5">
+              <p className="text-[12px] leading-relaxed font-medium text-ink-muted">
+                Triage ultra-rapide, catégories, détection TOTP, sécurité anti-phishing et filtrage avant
+                LLM. Sans modèle de décision, les modes intelligents automatiques sont désactivés ; seules
+                la réécriture, la correction et l'analyse manuelle LLM restent actives.
+              </p>
+              <ToggleRow
+                icon={<Sparkles className="size-4" />}
+                label="Activer le modèle de décision"
+                hint={
+                  decisionReady(decision)
+                    ? `${decision.model} · triage et filtres actifs`
+                    : "Configure un endpoint (ex. NeuralWatt mammoth-1)"
+                }
+                checked={decision.enabled}
+                onChange={(value) => updateDecision({ enabled: value })}
+              />
+              <div role="group" aria-label="Fournisseur du modèle de décision" className="flex flex-wrap gap-1.5">
+                {DECISION_PROVIDERS.map((entry) => (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    aria-pressed={decision.provider === entry.id}
+                    onClick={() => pickDecisionProvider(entry.id)}
+                    className={cn(
+                      "focus-ring min-h-9 rounded-full border px-3 text-[12px] font-bold transition-colors",
+                      decision.provider === entry.id
+                        ? "border-accent bg-accent-soft text-accent-ink"
+                        : "border-line bg-surface text-ink-soft",
+                    )}
+                  >
+                    {entry.label}
+                  </button>
+                ))}
+              </div>
+              <label className="block">
+                <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                  Endpoint décision
+                </span>
+                <input
+                  aria-label="Endpoint du modèle de décision"
+                  type="text"
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  placeholder="https://api.neuralwatt.com/v1/systemone"
+                  value={decision.endpoint}
+                  onChange={(event) => updateDecision({ endpoint: event.target.value })}
+                  className="focus-ring mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                  Modèle décision
+                </span>
+                <input
+                  aria-label="Nom du modèle de décision"
+                  type="text"
+                  list="decision-models"
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  placeholder="mammoth-1"
+                  value={decision.model}
+                  onChange={(event) => updateDecision({ model: event.target.value })}
+                  className="focus-ring mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
+                />
+                <datalist id="decision-models">
+                  {decisionPreset.models.map((model) => (
+                    <option key={model} value={model} />
+                  ))}
+                </datalist>
+              </label>
+              {decision.provider === "custom" ? (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                      Protocole
+                    </span>
+                    <div className="mt-1.5 flex gap-1">
+                      {(["systemone", "jev"] as DecisionProtocol[]).map((proto) => (
+                        <button
+                          key={proto}
+                          type="button"
+                          aria-pressed={decision.protocol === proto}
+                          onClick={() => updateDecision({ protocol: proto })}
+                          className={cn(
+                            "focus-ring min-h-9 flex-1 rounded-xl border px-2 text-[11.5px] font-bold",
+                            decision.protocol === proto
+                              ? "border-accent bg-accent-soft text-accent-ink"
+                              : "border-line bg-surface text-ink-soft",
+                          )}
+                        >
+                          {proto === "systemone" ? "SystemOne" : "Jev"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                      En-tête Auth
+                    </span>
+                    <div className="mt-1.5 flex gap-1">
+                      {(
+                        [
+                          { id: "bearer", label: "Bearer" },
+                          { id: "api_key", label: "Api-Key" },
+                          { id: "none", label: "Aucune" },
+                        ] as { id: DecisionAuthHeader; label: string }[]
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          aria-pressed={decision.authHeader === opt.id}
+                          onClick={() => updateDecision({ authHeader: opt.id })}
+                          className={cn(
+                            "focus-ring min-h-9 flex-1 rounded-xl border px-1.5 text-[11px] font-bold",
+                            decision.authHeader === opt.id
+                              ? "border-accent bg-accent-soft text-accent-ink"
+                              : "border-line bg-surface text-ink-soft",
+                          )}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              {decision.authHeader !== "none" ? (
+                <label className="block">
+                  <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                    {decision.daemonHasKey ? "Clé API décision (enregistrée au trousseau)" : "Clé API décision"}
+                  </span>
+                  <input
+                    aria-label="Clé API du modèle de décision"
+                    type="password"
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    placeholder={decision.daemonHasKey ? "•••••••• (remplacer la clé)" : "nw-…"}
+                    value={decision.apiKey}
+                    onChange={(event) => updateDecision({ apiKey: event.target.value })}
+                    className="focus-ring mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
+                  />
+                </label>
+              ) : null}
+              <button
+                type="button"
+                disabled={!decisionReady({ ...decision, enabled: true }) || decisionProbing}
+                onClick={() => void runDecisionProbe()}
+                className="focus-ring min-h-11 w-full rounded-full bg-accent px-4 text-[12.5px] font-bold text-accent-contrast transition-opacity disabled:opacity-40"
+              >
+                {decisionProbing ? "Test en cours…" : "Tester le modèle de décision"}
+              </button>
+              {decisionProbeState ? (
+                <p
+                  className={cn(
+                    "rounded-2xl px-3 py-2 text-[12px] leading-relaxed font-semibold break-words",
+                    decisionProbeState.ok
+                      ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                      : "bg-rose-500/10 text-rose-600 dark:text-rose-300",
+                  )}
+                >
+                  {decisionProbeState.ok
+                    ? `Modèle de décision · ${decisionProbeState.text}`
+                    : `Échec décision · ${decisionProbeState.text}`}
+                </p>
+              ) : null}
+              <div className="space-y-2 border-t border-line/70 pt-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                    Seuils de confiance
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setThresholdsOpen((open) => !open)}
+                    className="focus-ring rounded-full border border-line px-2.5 py-1 text-[11px] font-bold text-ink-soft"
+                  >
+                    {thresholdsOpen ? "Masquer le détail" : "Ajuster"}
+                  </button>
+                </div>
+                <div role="group" aria-label="Profil de seuils de décision" className="flex flex-wrap gap-1.5">
+                  {(["prudent", "balanced", "strict"] as ThresholdPresetId[]).map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      aria-pressed={activeThresholdPreset === preset}
+                      onClick={() => applyThresholdPreset(preset)}
+                      className={cn(
+                        "focus-ring min-h-9 rounded-full border px-3 text-[12px] font-bold transition-colors",
+                        activeThresholdPreset === preset
+                          ? "border-accent bg-accent-soft text-accent-ink"
+                          : "border-line bg-surface text-ink-soft",
+                      )}
+                    >
+                      {THRESHOLD_PRESETS[preset].label}
+                    </button>
+                  ))}
+                  {activeThresholdPreset === "custom" ? (
+                    <span className="inline-flex min-h-9 items-center rounded-full border border-accent/40 bg-accent-soft/50 px-3 text-[11.5px] font-bold text-accent-ink">
+                      Personnalisé
+                    </span>
+                  ) : null}
+                </div>
+                {thresholdsOpen ? (
+                  <div className="space-y-2.5 rounded-2xl bg-surface-2/60 p-3">
+                    {(
+                      [
+                        { key: "llmEscalate", label: "Escalade vers le LLM", min: 0.2, max: 0.9 },
+                        { key: "category", label: "Catégories & badges", min: 0.3, max: 0.95 },
+                        { key: "security", label: "Bouclier sécurité", min: 0.5, max: 0.98 },
+                        { key: "folder", label: "Suggestion de dossier", min: 0.5, max: 0.98 },
+                      ] as const
+                    ).map((slider) => (
+                      <label key={slider.key} className="block space-y-1">
+                        <div className="flex items-center justify-between text-[11.5px] font-semibold text-ink-soft">
+                          <span>{slider.label}</span>
+                          <span className="font-mono text-ink">
+                            {`${Math.round(decision.thresholds[slider.key] * 100)} %`}
+                          </span>
+                        </div>
+                        <input
+                          aria-label={slider.label}
+                          type="range"
+                          min={slider.min}
+                          max={slider.max}
+                          step={0.05}
+                          value={decision.thresholds[slider.key]}
+                          onChange={(event) =>
+                            updateDecision({
+                              thresholds: {
+                                ...decision.thresholds,
+                                [slider.key]: Number(event.target.value),
+                              },
+                            })
+                          }
+                          className="w-full accent-[var(--accent)]"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <div className="space-y-1.5 border-t border-line/70 pt-3">
+                <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+                  Vue par défaut de la boîte
+                </span>
+                <div role="group" aria-label="Vue par défaut de la boîte" className="flex flex-wrap gap-1.5">
+                  {[
+                    { id: "all", label: "Tous" },
+                    { id: "priority", label: "Prioritaire" },
+                    { id: "needs_reply", label: "À répondre" },
+                  ].map((view) => (
+                    <button
+                      key={view.id}
+                      type="button"
+                      aria-pressed={decision.defaultInboxFilter === view.id}
+                      onClick={() => updateDecision({ defaultInboxFilter: view.id })}
+                      className={cn(
+                        "focus-ring min-h-9 rounded-full border px-3 text-[12px] font-bold transition-colors",
+                        decision.defaultInboxFilter === view.id
+                          ? "border-accent bg-accent-soft text-accent-ink"
+                          : "border-line bg-surface text-ink-soft",
+                      )}
+                    >
+                      {view.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </Card>
+          </BlurFade>
+
           <SectionTitle hint={llmReady(llm) ? "modèle configuré" : "local"}>
             Intelligence artificielle
           </SectionTitle>
@@ -1299,7 +1718,7 @@ export function SettingsScreen({
               </div>
               <dl className="grid grid-cols-3 gap-2 text-center">
                 <div className="rounded-xl bg-surface-2 px-2 py-2">
-                  <dt className="text-[10px] font-bold tracking-[0.1em] text-ink-muted uppercase">Appels</dt>
+                  <dt className="text-[10px] font-bold tracking-[0.1em] text-ink-muted uppercase">Appels LLM</dt>
                   <dd className="text-[15px] font-extrabold text-ink">{formatTokens(aiUsage.combined.total.calls)}</dd>
                 </div>
                 <div className="rounded-xl bg-surface-2 px-2 py-2">
@@ -1310,6 +1729,30 @@ export function SettingsScreen({
                   <dt className="text-[10px] font-bold tracking-[0.1em] text-ink-muted uppercase">Sortie</dt>
                   <dd className="text-[15px] font-extrabold text-ink">
                     {formatTokens(aiUsage.combined.total.completion)}
+                  </dd>
+                </div>
+              </dl>
+              <dl className="grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-xl bg-accent-soft/45 px-2 py-2">
+                  <dt className="text-[10px] font-bold tracking-[0.1em] text-accent-ink uppercase">Décisions</dt>
+                  <dd className="text-[15px] font-extrabold text-ink">
+                    {formatTokens(aiUsage.combined.decision.calls)}
+                  </dd>
+                </div>
+                <div className="rounded-xl bg-accent-soft/45 px-2 py-2">
+                  <dt className="text-[10px] font-bold tracking-[0.1em] text-accent-ink uppercase">LLM évités</dt>
+                  <dd className="text-[15px] font-extrabold text-ink">
+                    {formatTokens(aiUsage.combined.decision.llmSaved)}
+                  </dd>
+                </div>
+                <div className="rounded-xl bg-accent-soft/45 px-2 py-2">
+                  <dt className="text-[10px] font-bold tracking-[0.1em] text-accent-ink uppercase">
+                    {aiUsage.combined.decision.energyJoules > 0 ? "Énergie" : "Latence"}
+                  </dt>
+                  <dd className="text-[15px] font-extrabold text-ink">
+                    {aiUsage.combined.decision.energyJoules > 0
+                      ? `${aiUsage.combined.decision.energyJoules.toFixed(0)} J`
+                      : `${decisionAvgLatency} ms`}
                   </dd>
                 </div>
               </dl>
