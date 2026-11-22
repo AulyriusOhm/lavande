@@ -34,7 +34,9 @@ export type ApiErrorKind =
   | "mime"
   | "calendar"
   | "caldav"
-  | "carddav";
+  | "carddav"
+  | "soap"
+  | "zimbra";
 
 export type ApiEndpoint = {
   host: string;
@@ -148,6 +150,64 @@ export type ApiAccount = {
   /** Le refresh token a été refusé : le consentement OAuth est à refaire. */
   needs_reauth?: boolean;
   auth_kind?: "password" | "oauth2";
+};
+
+export type ZimbraFilterCondition = "anyof" | "allof";
+
+export type ZimbraFilterComparison =
+  | "contains"
+  | "notcontains"
+  | "is"
+  | "notis"
+  | "matches"
+  | "notmatches";
+
+export type ZimbraAddressPart = "all" | "localpart" | "domain";
+
+export type ZimbraFilterTest =
+  | { kind: "header"; header: string; comparison: ZimbraFilterComparison; value: string }
+  | {
+      kind: "address";
+      header: string;
+      part: ZimbraAddressPart;
+      comparison: ZimbraFilterComparison;
+      value: string;
+    }
+  | { kind: "size"; comparison: "over" | "under"; size: string }
+  | { kind: "date"; comparison: "before" | "after"; date: string };
+
+export type ZimbraFilterAction =
+  | { kind: "keep" }
+  | { kind: "discard" }
+  | { kind: "stop" }
+  | { kind: "file_into"; folder_path: string }
+  | { kind: "tag"; tag_name: string }
+  | { kind: "flag"; flag_name: string }
+  | { kind: "redirect"; address: string };
+
+/** Une règle de filtrage du serveur. `read_only` marque celles que le démon ne réécrit pas. */
+export type ZimbraFilter = {
+  name: string;
+  active: boolean;
+  condition: ZimbraFilterCondition;
+  tests: ZimbraFilterTest[];
+  actions: ZimbraFilterAction[];
+  read_only: boolean;
+};
+
+/** Une règle telle que le formulaire l'envoie : `read_only` ne vient que du serveur. */
+export type ZimbraFilterInput = Omit<ZimbraFilter, "read_only">;
+
+export type ZimbraFilterChange =
+  | { action: "add" | "modify"; rule: ZimbraFilterInput }
+  | { action: "delete"; rule: { name: string } };
+
+/** Réponse d'absence : le serveur la garde, le démon l'écrit avec son mot de passe. */
+export type ZimbraVacation = {
+  enabled: boolean;
+  message: string;
+  from?: string | null;
+  until?: string | null;
 };
 
 export type ApiHealth = {
@@ -678,6 +738,9 @@ const KINDS: readonly ApiErrorKind[] = [
   "mime",
   "calendar",
   "caldav",
+  "carddav",
+  "soap",
+  "zimbra",
 ];
 
 type RequestOptions = {
@@ -1099,6 +1162,28 @@ export const mailApi = {
     request<ApiOAuthStatus>("/oauth/complete", {
       method: "POST",
       body: { session },
+      timeout: LONG_TIMEOUT,
+    }),
+
+  /** Filtres du serveur Zimbra du compte : le serveur en est la seule source. */
+  zimbraFilters: (id: string) =>
+    request<ZimbraFilter[]>(`${accountPath(id)}/zimbra/filters`, { timeout: LONG_TIMEOUT }),
+
+  /** Le démon relit la liste, l'amende, puis renvoie la liste entière au serveur. */
+  zimbraModifyFilter: (id: string, change: ZimbraFilterChange) =>
+    request<void>(`${accountPath(id)}/zimbra/filters`, {
+      method: "POST",
+      body: change,
+      timeout: LONG_TIMEOUT,
+    }),
+
+  zimbraVacation: (id: string) =>
+    request<ZimbraVacation>(`${accountPath(id)}/zimbra/vacation`, { timeout: LONG_TIMEOUT }),
+
+  zimbraSetVacation: (id: string, vacation: ZimbraVacation) =>
+    request<void>(`${accountPath(id)}/zimbra/vacation`, {
+      method: "PUT",
+      body: vacation,
       timeout: LONG_TIMEOUT,
     }),
 

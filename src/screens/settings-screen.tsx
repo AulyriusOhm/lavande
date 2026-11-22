@@ -100,6 +100,7 @@ import { cn } from "@/lib/utils";
 import { Avatar, Card, SectionTitle, ToggleRow } from "@/components/ui/primitives";
 import { FolderRow } from "@/components/folder-row";
 import { SyncSettings } from "@/components/sync-settings";
+import { ZimbraFiltersPanel } from "@/components/zimbra-filters";
 import { ShortcutList } from "@/components/shortcut-list";
 import { detectModKey } from "@/lib/shortcuts";
 import { requestNotifications } from "@/lib/notify";
@@ -710,6 +711,13 @@ export function SettingsScreen({
               </BlurFade>
             </>
           ) : null}
+
+          <SectionTitle hint="serveur Zimbra">Filtres & absence</SectionTitle>
+          <BlurFade delay={0.12}>
+            <div className="mx-5">
+              <ZimbraFiltersPanel variant="mobile" />
+            </div>
+          </BlurFade>
         </>
       ) : null}
 

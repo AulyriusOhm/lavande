@@ -21,7 +21,7 @@ const GROUPS = [
 ];
 
 const GROUP_SECTIONS: Record<string, string[]> = {
-  Comptes: ["Comptes", "Signatures"],
+  Comptes: ["Comptes", "Signatures", "Filtres & absence"],
   "Moi et mon équipe": ["Moi et mon équipe"],
   Apparence: ["Apparence", "Modules"],
   Synchronisation: ["Synchronisation", "Calendriers", "Notifications"],
@@ -34,6 +34,7 @@ const GROUP_SECTIONS: Record<string, string[]> = {
 const SECTIONS = [
   { label: "Comptes", anchor: "reglages-comptes" },
   { label: "Signatures", anchor: "reglages-signatures" },
+  { label: "Filtres & absence", anchor: "reglages-messagerie" },
   { label: "Moi et mon équipe", anchor: "reglages-moi-equipe" },
   { label: "Apparence", anchor: "reglages-apparence" },
   { label: "Modules", anchor: "reglages-modules" },
