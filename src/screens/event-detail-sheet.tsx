@@ -5,6 +5,7 @@ import { TONE_DOT, toneOfEvent, useCalendars } from "@/lib/calendars";
 import { externalBadge } from "@/lib/ics";
 import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/primitives";
+import { GuestFreeBusy } from "@/components/guest-free-busy";
 
 export function EventDetailSheet({
   event,
@@ -13,6 +14,7 @@ export function EventDetailSheet({
   onEdit,
   onDelete,
   onOpenMail,
+  freeBusyAccount = null,
 }: {
   event: CalendarEvent;
   conflict: boolean;
@@ -20,6 +22,8 @@ export function EventDetailSheet({
   onEdit?: (event: CalendarEvent) => void;
   onDelete?: (event: CalendarEvent) => Promise<void>;
   onOpenMail?: () => void;
+  /** Compte Zimbra interrogé pour les disponibilités des invités. */
+  freeBusyAccount?: string | null;
 }) {
   const [calendars] = useCalendars();
   const [confirming, setConfirming] = useState(false);
@@ -107,6 +111,14 @@ export function EventDetailSheet({
         {event.description && (
           <p className="mt-4 text-[12.5px] leading-relaxed font-medium text-ink-soft">{event.description}</p>
         )}
+
+        <GuestFreeBusy
+          accountId={freeBusyAccount}
+          attendees={event.attendees ?? []}
+          date={event.date}
+          start={event.start}
+          end={event.end}
+        />
 
         {event.attendees?.length ? (
           <div className="mt-4">

@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use lavande_mail::caldav::{CaldavClient, CalendarCollection};
 use lavande_mail::config::AuthConfig;
@@ -47,7 +47,22 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/calendars/caldav/sources/from-account",
             post(add_source_from_account),
         )
-        .route("/api/calendars/caldav/sources/{id}", delete(remove_source))
+        .route(
+            "/api/calendars/caldav/sources/{id}",
+            patch(update_source).delete(remove_source),
+        )
+        .route(
+            "/api/calendars/caldav/sources/{id}/collections",
+            get(source_collections),
+        )
+        .route(
+            "/api/calendars/caldav/collections",
+            post(caldav_collections),
+        )
+        .route(
+            "/api/accounts/{id}/caldav/collections",
+            get(account_collections),
+        )
         .route(
             "/api/calendars/caldav/sources/{id}/events",
             post(source_events),
@@ -228,18 +243,19 @@ struct AccountSourceRequest {
     /// Serveur CalDAV du compte ; par défaut `https://<hôte IMAP>/dav/`.
     #[serde(default)]
     url: Option<String>,
+    /// Collection voulue (celle d'un collègue, par exemple) ; le calendrier du
+    /// compte est déduit de son adresse quand elle manque.
+    #[serde(default)]
+    calendar_href: Option<String>,
 }
 
-/// Rien n'est rangé tant que le serveur n'a pas répondu ; la source emprunte
-/// ensuite les identifiants du compte, sans copie dans le coffre.
-async fn add_source_from_account(
-    State(state): State<Arc<AppState>>,
-    ApiJson(request): ApiJson<AccountSourceRequest>,
-) -> Result<(StatusCode, Json<CalendarSource>), ApiError> {
-    let account_id = request.account_id.trim();
-    if account_id.is_empty() {
-        return Err(ApiError::bad_request("caldav", "il manque « account_id »"));
-    }
+/// Credentials and base URL of the CalDAV server of a mail account: the account
+/// password only ever travels to the mail server of that account.
+async fn account_caldav(
+    state: &AppState,
+    account_id: &str,
+    url: Option<String>,
+) -> Result<(String, String, reqwest::Url), ApiError> {
     let account = state.account(account_id).await?;
     let password = match &account.auth {
         AuthConfig::Password { password } => password.clone(),
@@ -256,7 +272,7 @@ async fn add_source_from_account(
     } else {
         username
     };
-    let base = match trimmed(request.url) {
+    let base = match trimmed(url) {
         Some(url) => url,
         None => format!("https://{}/dav/", account.imap.host.trim()),
     };
@@ -278,27 +294,50 @@ async fn add_source_from_account(
             "HTTPS requis pour l'agenda du compte",
         ));
     }
-    let client = CaldavClient::new(base.as_str(), username, &password)?;
-    let calendar_href = match client.discover().await {
-        Ok(collections) => {
-            tracing::debug!(
-                account = %account_id,
-                calendars = collections.len(),
-                "agenda du compte découvert"
-            );
-            None
-        }
-        Err(error @ MailError::Auth(_)) => return Err(error.into()),
-        Err(error) => {
-            let href = zimbra_calendar(&base, &account.email)?;
-            tracing::debug!(
-                %error,
-                account = %account_id,
-                "découverte impossible, calendrier Zimbra essayé"
-            );
+    Ok((username.to_string(), password, base))
+}
+
+/// Rien n'est rangé tant que le serveur n'a pas répondu ; la source emprunte
+/// ensuite les identifiants du compte, sans copie dans le coffre.
+async fn add_source_from_account(
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<AccountSourceRequest>,
+) -> Result<(StatusCode, Json<CalendarSource>), ApiError> {
+    let account_id = request.account_id.trim();
+    if account_id.is_empty() {
+        return Err(ApiError::bad_request("caldav", "il manque « account_id »"));
+    }
+    let email = state.account(account_id).await?.email;
+    let (username, password, base) = account_caldav(&state, account_id, request.url).await?;
+    let client = CaldavClient::new(base.as_str(), &username, &password)?;
+    let calendar_href = match request.calendar_href.as_deref() {
+        Some(href) => {
+            let href = collection_href(&base, href)?;
             client.events(Some(href.as_str())).await?;
-            Some(href.to_string())
+            tracing::debug!(account = %account_id, "collection du compte retenue");
+            Some(href)
         }
+        None => match client.discover().await {
+            Ok(collections) => {
+                tracing::debug!(
+                    account = %account_id,
+                    calendars = collections.len(),
+                    "agenda du compte découvert"
+                );
+                None
+            }
+            Err(error @ MailError::Auth(_)) => return Err(error.into()),
+            Err(error) => {
+                let href = zimbra_calendar(&base, &email)?;
+                tracing::debug!(
+                    %error,
+                    account = %account_id,
+                    "découverte impossible, calendrier Zimbra essayé"
+                );
+                client.events(Some(href.as_str())).await?;
+                Some(href.to_string())
+            }
+        },
     };
     let name = host(base.as_str())?;
     let source =
@@ -645,4 +684,123 @@ fn too_large() -> ApiError {
         "calendar",
         format!("calendrier trop volumineux (maximum {MAX_ICS_BYTES} octets)"),
     )
+}
+
+/// `href` of a collection on the server of `base`: an absolute URL is kept as
+/// given, a relative one resolved against the base. A collection of another
+/// host would carry the credentials of this one.
+fn collection_href(base: &reqwest::Url, href: &str) -> Result<String, ApiError> {
+    let href = href.trim();
+    if href.is_empty() {
+        return Err(ApiError::bad_request(
+            "caldav",
+            "il manque le chemin du calendrier",
+        ));
+    }
+    let target = base.join(href).map_err(|error| {
+        ApiError::bad_request("caldav", format!("chemin de calendrier invalide : {error}"))
+    })?;
+    if !target
+        .host_str()
+        .unwrap_or_default()
+        .eq_ignore_ascii_case(base.host_str().unwrap_or_default())
+    {
+        return Err(ApiError::bad_request(
+            "caldav",
+            "le calendrier doit être sur le même serveur que l'agenda",
+        ));
+    }
+    if target.path().trim_matches('/').is_empty() {
+        return Err(ApiError::bad_request(
+            "caldav",
+            "le chemin du calendrier est vide",
+        ));
+    }
+    Ok(target.to_string())
+}
+
+/// Collections a CalDAV account holds, probed with the credentials of the
+/// request: nothing is stored here.
+async fn caldav_collections(
+    ApiJson(request): ApiJson<CaldavRequest>,
+) -> Result<Json<Vec<CalendarCollection>>, ApiError> {
+    let collections = request.client()?.discover().await?;
+    tracing::debug!(
+        collections = collections.len(),
+        "collections CalDAV listées"
+    );
+    Ok(Json(collections))
+}
+
+/// Collections of a stored source, read with its own credentials.
+async fn source_collections(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<CalendarCollection>>, ApiError> {
+    let source = state.calendar_source(&id)?;
+    let (username, password) = state.calendar_credentials(&id).await?;
+    let client = CaldavClient::new(&source.url, &username, &password)?;
+    let collections = client.discover().await?;
+    tracing::debug!(source = %id, collections = collections.len(), "collections CalDAV listées");
+    Ok(Json(collections))
+}
+
+/// Server of the account when it is not `https://<hôte IMAP>/dav/`; the host
+/// check of [`account_caldav`] still applies.
+#[derive(Deserialize)]
+struct CollectionsQuery {
+    #[serde(default)]
+    url: Option<String>,
+}
+
+/// Collections of the CalDAV server of a mail account: the password stays in
+/// the vault, only its use travels.
+async fn account_collections(
+    Path(account_id): Path<String>,
+    Query(query): Query<CollectionsQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<CalendarCollection>>, ApiError> {
+    let (username, password, base) = account_caldav(&state, &account_id, query.url).await?;
+    let client = CaldavClient::new(base.as_str(), &username, &password)?;
+    let collections = client.discover().await?;
+    tracing::debug!(
+        account = %account_id,
+        collections = collections.len(),
+        "collections CalDAV du compte listées"
+    );
+    Ok(Json(collections))
+}
+
+#[derive(Deserialize)]
+struct SourceUpdate {
+    /// Collection to read from now on; absent or null reads every discovered
+    /// calendar.
+    #[serde(default)]
+    calendar_href: Option<String>,
+}
+
+/// Narrows a stored source to another collection of its server. The collection
+/// is read once before it is written: a source never points at nothing.
+async fn update_source(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    ApiJson(change): ApiJson<SourceUpdate>,
+) -> Result<Json<CalendarSource>, ApiError> {
+    let source = state.calendar_source(&id)?;
+    let base = reqwest::Url::parse(source.url.trim()).map_err(|error| {
+        ApiError::bad_request("caldav", format!("URL de la source illisible : {error}"))
+    })?;
+    let href = match change.calendar_href.as_deref() {
+        Some(href) => Some(collection_href(&base, href)?),
+        None => None,
+    };
+    if let Some(href) = href.as_deref() {
+        let (username, password) = state.calendar_credentials(&id).await?;
+        let client = CaldavClient::new(&source.url, &username, &password)?;
+        let events = client.events(Some(href)).await?;
+        tracing::debug!(source = %id, events = events.len(), "collection de la source lue");
+    }
+    let updated = state.set_calendar_href(&id, href)?;
+    tracing::info!(source = %id, "collection de la source CalDAV changée");
+    Ok(Json(updated))
 }

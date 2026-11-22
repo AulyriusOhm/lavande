@@ -65,6 +65,8 @@ import { draftFromSuggestion, type EventDraft, type MailSuggestion } from "@/lib
 import { sourceAccountLabel } from "@/lib/accounts";
 import { guestEmails } from "@/lib/mail";
 import { EventSuggestionCard } from "@/components/event-suggestion-card";
+import { GuestFreeBusy } from "@/components/guest-free-busy";
+import { zimbraAccountOf } from "@/components/zimbra-account";
 import { useEscapeLayer } from "@/desktop/escape";
 import {
   Badge,
@@ -883,6 +885,7 @@ function DayPanel({
   onConfirmDelete,
   onCancelDelete,
   onOpenMail,
+  freeBusyAccount,
 }: {
   selectedDate: string;
   dayEvents: CalendarEvent[];
@@ -900,6 +903,8 @@ function DayPanel({
   onConfirmDelete: () => void;
   onCancelDelete: () => void;
   onOpenMail?: () => void;
+  /** Compte Zimbra interrogé pour les disponibilités des invités. */
+  freeBusyAccount?: string | null;
 }) {
   const tone = detail ? toneOfEvent(detail, calendars) : 0;
   const external = detail?.external ? externalBadge(detail) : null;
@@ -986,6 +991,14 @@ function DayPanel({
                 </div>
               </div>
             ) : null}
+
+            <GuestFreeBusy
+              accountId={freeBusyAccount}
+              attendees={detail.attendees ?? []}
+              date={detail.date}
+              start={detail.start}
+              end={detail.end}
+            />
 
             {overlaps.length > 0 ? (
               <div
@@ -1630,6 +1643,7 @@ export function DesktopCalendar({
             onConfirmDelete={() => void confirmRemove()}
             onCancelDelete={() => setPendingDelete(null)}
             onOpenMail={mail ? () => openMessage(mail) : undefined}
+            freeBusyAccount={zimbraAccountOf(accounts)?.id ?? null}
           />
         </div>
       </aside>

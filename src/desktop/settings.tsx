@@ -114,6 +114,7 @@ import {
 } from "@/lib/decision";
 import { toApiDecisionConfig } from "@/lib/triage";
 import { CategoryManagerSheet, categoryColorStyle } from "@/components/category-manager-sheet";
+import { CaldavCollectionPicker } from "@/components/caldav-collection-picker";
 import { ContactsSyncRow } from "@/components/contacts-sync-row";
 import { ZimbraFiltersPanel } from "@/components/zimbra-filters";
 import { ZimbraTagsPanel } from "@/components/zimbra-tags";
@@ -456,7 +457,10 @@ function CalendarsSection() {
   const [draftTone, setDraftTone] = useState(0);
   const [draftUrl, setDraftUrl] = useState("");
   const [caldav, setCaldav] = useState({ url: "", username: "", password: "" });
+  const [caldavHref, setCaldavHref] = useState("");
   const [caldavAccount, setCaldavAccount] = useState("");
+  const [accountHref, setAccountHref] = useState("");
+  const [collectionEditing, setCollectionEditing] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [removing, setRemoving] = useState<string | null>(null);
@@ -478,18 +482,31 @@ function CalendarsSection() {
   };
 
   const addCaldav = async () => {
-    const added = await sources.addCaldav({ ...caldav, name: draftName, tone: draftTone });
+    const added = await sources.addCaldav({
+      ...caldav,
+      name: draftName,
+      tone: draftTone,
+      calendarHref: caldavHref,
+    });
     if (!added) return;
     setDraftName("");
     setCaldav({ url: "", username: "", password: "" });
+    setCaldavHref("");
   };
 
   const addAccountCalendar = async () => {
     const account = sources.accounts.find((entry) => entry.id === caldavAccount);
     if (!account) return;
-    if (await sources.addCaldavFromAccount(account, { name: draftName, tone: draftTone })) {
+    if (
+      await sources.addCaldavFromAccount(account, {
+        name: draftName,
+        tone: draftTone,
+        calendarHref: accountHref,
+      })
+    ) {
       setDraftName("");
       setCaldavAccount("");
+      setAccountHref("");
     }
   };
 
@@ -628,6 +645,20 @@ function CalendarsSection() {
         </DButton>
       </div>
 
+      <div className="border-b border-line bg-surface-2/40 px-3.5 py-2.5">
+        <CaldavCollectionPicker
+          load={() => sources.discoverCollections(caldav)}
+          href={caldavHref}
+          onChoose={setCaldavHref}
+          disabled={sources.busy}
+          readOnly={readOnly}
+        />
+        <p className="mt-1 text-[10.5px] font-medium text-ink-muted">
+          Facultatif : un calendrier du serveur, ou le chemin de celui d'un collègue. Sans choix, le démon lit
+          tous les calendriers découverts.
+        </p>
+      </div>
+
       {sources.accounts.length > 0 ? (
         <div className="flex flex-wrap items-end gap-3 border-b border-line bg-surface-2/40 px-3.5 py-3">
           <label className="grid min-w-[220px] flex-1 gap-1">
@@ -658,6 +689,19 @@ function CalendarsSection() {
             <PlugZap className="size-3.5" strokeWidth={2.6} />
             Connecter l'agenda
           </DButton>
+          <div className="w-full">
+            <CaldavCollectionPicker
+              load={() =>
+                caldavAccount ? sources.accountCollections(caldavAccount) : Promise.resolve(null)
+              }
+              href={accountHref}
+              onChoose={setAccountHref}
+              label="Choisir le calendrier du compte"
+              pathLabel="Chemin du calendrier du compte"
+              disabled={sources.busy || !caldavAccount}
+              readOnly={readOnly}
+            />
+          </div>
         </div>
       ) : null}
 
@@ -864,6 +908,33 @@ function CalendarsSection() {
                   )}
                 </>
               )}
+              {isCaldavCalendar(entry) ? (
+                <div className="w-full">
+                <button
+                  type="button"
+                  aria-label={`Changer de calendrier pour ${entry.name}`}
+                  aria-expanded={collectionEditing === entry.id}
+                  onClick={() =>
+                    setCollectionEditing((current) => (current === entry.id ? null : entry.id))
+                  }
+                  className="focus-ring inline-flex h-7 items-center gap-1 rounded-lg px-1.5 text-[11px] font-bold text-ink-soft transition-colors hover:bg-surface-2 hover:text-ink"
+                >
+                  <CalendarDays className="size-3.5" strokeWidth={2.4} />
+                  Changer de calendrier
+                </button>
+                  {collectionEditing === entry.id ? (
+                    <CaldavCollectionPicker
+                      load={() => sources.sourceCollections(entry)}
+                      href={sources.collectionOf(entry) ?? ""}
+                      onChoose={(href) => void sources.setCollection(entry, href.trim() || null)}
+                      label={`Calendrier de ${entry.name}`}
+                      pathLabel={`Chemin du calendrier de ${entry.name}`}
+                      disabled={sources.busy}
+                      readOnly={readOnly}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ))}
         </div>

@@ -80,6 +80,11 @@ const GAL_ANSWER: &str = r#"{"Body":{"AutoCompleteGalResponse":{"_jsns":"urn:zim
     {"id":"7f2c","fileAsStr":"Roman FELDEN","email":"roman@exemple.tld","type":"account"},
     {"id":"81aa","fileAsStr":"Équipe support","email":"support@exemple.tld","type":"group"}]}}}"#;
 
+const FREEBUSY_ANSWER: &str = r#"{"Body":{"GetFreeBusyResponse":{"_jsns":"urn:zimbraMail","usr":[
+    {"id":"camille@exemple.tld","b":[{"s":1767225600000,"e":1767229200000}],
+     "t":[{"s":1767232800000,"e":1767236400000}]},
+    {"id":"support@exemple.tld","u":[{"s":1767225600000,"e":1767236400000}]}]}}}"#;
+
 /// Faux Zimbra : une réponse par opération, et les corps reçus dans l'ordre.
 #[derive(Clone)]
 struct Zimbra {
@@ -96,6 +101,7 @@ struct Zimbra {
     message: &'static str,
     msg_action: &'static str,
     gal: &'static str,
+    free_busy: &'static str,
     seen: Arc<Mutex<Vec<Value>>>,
 }
 
@@ -115,6 +121,7 @@ impl Zimbra {
             message: MESSAGE_ANSWER,
             msg_action: MSG_ACTION_DONE,
             gal: GAL_ANSWER,
+            free_busy: FREEBUSY_ANSWER,
             seen: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -154,6 +161,8 @@ async fn soap_answer(State(zimbra): State<Zimbra>, body: String) -> Response {
         zimbra.msg_action
     } else if called.get("AutoCompleteGalRequest").is_some() {
         zimbra.gal
+    } else if called.get("GetFreeBusyRequest").is_some() {
+        zimbra.free_busy
     } else {
         FAILURE_ANSWER
     };
@@ -998,6 +1007,121 @@ async fn an_oauth_account_has_no_tags_nor_gal() {
     assert_eq!(json(&body)["kind"], "zimbra");
 
     let (status, body) = get(&state, "/api/accounts/gmail/zimbra/gal?q=rom").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "corps : {body:?}");
+    assert_eq!(json(&body)["kind"], "zimbra");
+}
+
+async fn link_account_with_host(directory: &TempDir, state: &Arc<AppState>, host: &str) -> String {
+    link_password_account(directory, state, host).await
+}
+
+#[tokio::test]
+async fn the_free_busy_of_the_guests_is_read() {
+    let (directory, state) = state().await;
+    let zimbra = Zimbra::new();
+    let host = serve(zimbra.clone()).await;
+    link_password_account(&directory, &state, &host).await;
+
+    let (status, body) = send(
+        &state,
+        "POST",
+        "/api/accounts/pro/zimbra/freebusy",
+        Some(json!({
+            "emails": ["Camille <camille@exemple.tld>", "CAMILLE@exemple.tld", "pas-une-adresse", "support@exemple.tld"],
+            "from": 1767225600000i64,
+            "to": 1767236400000i64,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "corps : {body:?}");
+    let users = json(&body);
+    assert_eq!(users.as_array().expect("liste").len(), 2);
+    assert_eq!(users[0]["email"], "camille@exemple.tld");
+    assert_eq!(users[0]["slots"][0]["status"], "busy");
+    assert_eq!(users[0]["slots"][1]["status"], "tentative");
+    assert_eq!(users[1]["slots"][0]["status"], "out");
+
+    let requests = zimbra.requests();
+    let asked = requests
+        .iter()
+        .find_map(|request| request["Body"].get("GetFreeBusyRequest"))
+        .expect("GetFreeBusy");
+    assert_eq!(asked["s"], 1767225600000i64);
+    assert_eq!(asked["e"], 1767236400000i64);
+    assert_eq!(
+        asked["usr"],
+        json!([{ "name": "camille@exemple.tld" }, { "name": "support@exemple.tld" }])
+    );
+}
+
+#[tokio::test]
+async fn a_free_busy_window_is_validated() {
+    let (directory, state) = state().await;
+    let zimbra = Zimbra::new();
+    let host = serve(zimbra.clone()).await;
+    link_account_with_host(&directory, &state, &host).await;
+
+    for (payload, expected) in [
+        (json!({ "emails": [], "from": 1, "to": 2 }), "aucun invité"),
+        (
+            json!({ "emails": ["camille@exemple.tld"], "from": 10, "to": 10 }),
+            "précède son début",
+        ),
+        (
+            json!({
+                "emails": ["camille@exemple.tld"],
+                "from": 1767225600000i64,
+                "to": 1767225600000i64 + 32 * 24 * 60 * 60 * 1000,
+            }),
+            "31 jours",
+        ),
+    ] {
+        let (status, body) = send(
+            &state,
+            "POST",
+            "/api/accounts/pro/zimbra/freebusy",
+            Some(payload),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "corps : {body:?}");
+        let error = json(&body);
+        assert_eq!(error["kind"], "zimbra");
+        assert!(
+            error["error"].as_str().expect("message").contains(expected),
+            "{error}"
+        );
+    }
+    assert!(zimbra
+        .requests()
+        .iter()
+        .all(|request| request["Body"].get("GetFreeBusyRequest").is_none()));
+}
+
+#[tokio::test]
+async fn an_oauth_account_has_no_free_busy() {
+    let (directory, state) = state().await;
+    link_account(
+        &directory,
+        &state,
+        oauth_account("gmail", "roman@gmail.com"),
+        AccountSecrets::OAuth2 {
+            client_secret: "secret-client".to_string(),
+            refresh_token: "secret-refresh".to_string(),
+        },
+    )
+    .await;
+
+    let (status, body) = send(
+        &state,
+        "POST",
+        "/api/accounts/gmail/zimbra/freebusy",
+        Some(json!({
+            "emails": ["camille@exemple.tld"],
+            "from": 1767225600000i64,
+            "to": 1767236400000i64,
+        })),
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "corps : {body:?}");
     assert_eq!(json(&body)["kind"], "zimbra");
 }

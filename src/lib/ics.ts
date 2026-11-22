@@ -13,6 +13,7 @@ import {
   errorText,
   mailApi,
   type ApiAccount,
+  type CaldavCollection,
   type CaldavEventInput,
   type CaldavSource,
   type ExternalEvent,
@@ -634,7 +635,24 @@ export type CalendarSourcesManager = {
   loadGoogleCalendars: (accountId: string) => Promise<void>;
   googleAttached: (accountId: string, calendarId: string) => boolean;
   caldavAttached: (accountId: string) => boolean;
-  addCaldavFromAccount: (account: ApiAccount, input: { name: string; tone: number }) => Promise<boolean>;
+  addCaldavFromAccount: (
+    account: ApiAccount,
+    input: { name: string; tone: number; calendarHref?: string },
+  ) => Promise<boolean>;
+  /** Collections d'un serveur CalDAV, avec des identifiants de passage. */
+  discoverCollections: (input: {
+    url: string;
+    username: string;
+    password: string;
+  }) => Promise<CaldavCollection[] | null>;
+  /** Collections du serveur d'un compte mail (mot de passe du coffre). */
+  accountCollections: (accountId: string) => Promise<CaldavCollection[] | null>;
+  /** Collections du serveur d'une source déjà rangée. */
+  sourceCollections: (def: CalendarDef) => Promise<CaldavCollection[] | null>;
+  /** Collection courante d'une source CalDAV, quand le démon la connaît. */
+  collectionOf: (def: CalendarDef) => string | null;
+  /** Change la collection d'une source et relit ses événements. */
+  setCollection: (def: CalendarDef, href: string | null) => Promise<boolean>;
   countOf: (id: string) => number;
   detailOf: (def: CalendarDef) => string | undefined;
   paused: (def: CalendarDef) => boolean;
@@ -645,6 +663,8 @@ export type CalendarSourcesManager = {
     password: string;
     name: string;
     tone: number;
+    /** Collection choisie ; le démon découvre les autres quand elle manque. */
+    calendarHref?: string;
   }) => Promise<boolean>;
   subscribeIcs: (input: { url: string; name: string; tone: number }) => Promise<boolean>;
   importIcsFile: (input: { file: File; name: string; tone: number }) => Promise<boolean>;
@@ -765,6 +785,7 @@ export function useCalendarSources(notify: (message: string) => void): CalendarS
     password: string;
     name: string;
     tone: number;
+    calendarHref?: string;
   }) => {
     const url = input.url.trim();
     const problem = calendarUrlError(url);
@@ -777,7 +798,14 @@ export function useCalendarSources(notify: (message: string) => void): CalendarS
     setBusy(true);
     setError(null);
     try {
-      const source = await mailApi.addCaldavSource({ url, username, password: input.password, name: draft.name });
+      const calendar_href = input.calendarHref?.trim() || undefined;
+      const source = await mailApi.addCaldavSource({
+        url,
+        username,
+        password: input.password,
+        name: draft.name,
+        ...(calendar_href ? { calendar_href } : {}),
+      });
       const def: CalendarDef = { ...draft, source: { kind: "caldav", sourceId: source.id } };
       setCalendars([...loadCalendars(), def]);
       setCaldavSources((current) => ({ ...current, [source.id]: source }));
@@ -800,7 +828,7 @@ export function useCalendarSources(notify: (message: string) => void): CalendarS
   /** L'agenda d'un compte mail (Zimbra) : le démon lit le CalDAV avec le mot de passe du compte. */
   const addCaldavFromAccount = async (
     account: ApiAccount,
-    input: { name: string; tone: number },
+    input: { name: string; tone: number; calendarHref?: string },
   ) => {
     if (accountCalendarAttached(account.id, loadCalendars())) {
       return fail(`Agenda déjà lié · ${account.email}`);
@@ -811,7 +839,8 @@ export function useCalendarSources(notify: (message: string) => void): CalendarS
     setBusy(true);
     setError(null);
     try {
-      const source = await mailApi.addCaldavSourceFromAccount(account.id);
+      const calendar_href = input.calendarHref?.trim() || undefined;
+      const source = await mailApi.addCaldavSourceFromAccount(account.id, calendar_href);
       const def: CalendarDef = {
         ...draft,
         source: { kind: "caldav", sourceId: source.id, accountId: account.id },
@@ -828,6 +857,73 @@ export function useCalendarSources(notify: (message: string) => void): CalendarS
     } catch (failure) {
       const message = errorText(failure);
       notify(`Ajout de l'agenda impossible · ${message}`);
+      return fail(message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const loadCollections = async (
+    call: () => Promise<CaldavCollection[]>,
+  ): Promise<CaldavCollection[] | null> => {
+    setError(null);
+    try {
+      const collections = await call();
+      return Array.isArray(collections) ? collections : null;
+    } catch (failure) {
+      setError(`Calendriers non lus · ${errorText(failure)}`);
+      return null;
+    }
+  };
+
+  const discoverCollections = (input: { url: string; username: string; password: string }) => {
+    const url = input.url.trim();
+    const problem = calendarUrlError(url);
+    const username = input.username.trim();
+    if (problem || !username || !input.password) {
+      setError(
+        problem ?? "Identifiant et mot de passe requis pour lire les calendriers",
+      );
+      return Promise.resolve(null);
+    }
+    return loadCollections(() =>
+      mailApi.caldavCollections({ url, username, password: input.password }),
+    );
+  };
+
+  const accountCollections = (accountId: string) =>
+    loadCollections(() => mailApi.accountCaldavCollections(accountId));
+
+  const sourceCollections = (def: CalendarDef) => {
+    const sourceId = def.source?.kind === "caldav" ? def.source.sourceId : null;
+    if (!sourceId) return Promise.resolve(null);
+    return loadCollections(() => mailApi.sourceCaldavCollections(sourceId));
+  };
+
+  const collectionOf = (def: CalendarDef): string | null => {
+    const sourceId = def.source?.kind === "caldav" ? def.source.sourceId : null;
+    if (!sourceId) return null;
+    return caldavSources[sourceId]?.calendar_href ?? null;
+  };
+
+  const setCollection = async (def: CalendarDef, href: string | null) => {
+    const sourceId = def.source?.kind === "caldav" ? def.source.sourceId : null;
+    if (!sourceId) return fail("Cette source n'a pas de collection à changer");
+    setBusy(true);
+    setError(null);
+    try {
+      const source = await mailApi.updateCaldavSource(sourceId, { calendar_href: href });
+      setCaldavSources((current) => ({ ...current, [source.id]: source }));
+      try {
+        setIcs(setIcsCalendarEvents(loadIcsState(), def.id, await fetchCaldavCalendar(def)));
+      } catch (failure) {
+        setError(`Collection changée, événements non lus · ${errorText(failure)}`);
+      }
+      notify(href ? `Collection de ${def.name} changée` : `${def.name} relit tous ses calendriers`);
+      return true;
+    } catch (failure) {
+      const message = errorText(failure);
+      notify(`Changement de collection impossible · ${message}`);
       return fail(message);
     } finally {
       setBusy(false);
@@ -1010,6 +1106,11 @@ export function useCalendarSources(notify: (message: string) => void): CalendarS
     addLocal,
     addCaldav,
     addCaldavFromAccount,
+    discoverCollections,
+    accountCollections,
+    sourceCollections,
+    collectionOf,
+    setCollection,
     subscribeIcs,
     importIcsFile,
     addGoogle,

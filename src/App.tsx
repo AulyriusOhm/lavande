@@ -62,6 +62,7 @@ import { useShortcuts } from "@/lib/shortcuts";
 import { appShortcuts, type MailNavigation } from "@/lib/app-shortcuts";
 import { ShortcutsOverlay } from "@/components/shortcuts-overlay";
 import { UpdatePopup } from "@/components/update-popup";
+import { zimbraAccountOf } from "@/components/zimbra-account";
 import { useExternalLinks } from "@/lib/open-external";
 import { closeTopBackLayer, onAndroidBack } from "@/lib/back";
 
@@ -251,6 +252,7 @@ function PhoneApp({ native }: { native?: boolean }) {
     trustDomain,
     mode,
     readOnly,
+    accounts,
     phase,
     connectOpen,
     closeConnect,
@@ -1151,6 +1153,7 @@ function PhoneApp({ native }: { native?: boolean }) {
                   onOpenMail={
                     eventDetail.mailId && availableMailIds.has(eventDetail.mailId) ? openEventMail : undefined
                   }
+                  freeBusyAccount={zimbraAccountOf(accounts)?.id ?? null}
                 />
               </motion.div>
             </motion.div>

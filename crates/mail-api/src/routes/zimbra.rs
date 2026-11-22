@@ -16,12 +16,13 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{get, patch};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use lavande_mail::config::AuthConfig;
+use lavande_mail::ics::address_of;
 use lavande_mail::soap::{
-    account_endpoint, zimbra_date, AccountInfo, FilterRule, GalEntry, ServerFilterRule, SoapClient,
-    Tag, Vacation,
+    account_endpoint, zimbra_date, AccountInfo, FilterRule, FreeBusyUser, GalEntry,
+    ServerFilterRule, SoapClient, Tag, Vacation,
 };
 use serde::Deserialize;
 
@@ -34,6 +35,11 @@ const MAX_TAG_COLOR: u8 = 127;
 /// Nombre de suggestions GAL demandées quand le front n'en dit pas plus.
 const GAL_LIMIT: u32 = 8;
 const GAL_MAX: u32 = 50;
+
+/// Plage de disponibilités la plus large demandée au serveur, et nombre
+/// d'invités d'une seule interrogation.
+const FREE_BUSY_MAX_SPAN_MS: i64 = 31 * 24 * 60 * 60 * 1000;
+const FREE_BUSY_MAX_GUESTS: usize = 20;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -56,6 +62,7 @@ pub fn router() -> Router<Arc<AppState>> {
             get(message_tags).post(tag_message),
         )
         .route("/api/accounts/{id}/zimbra/gal", get(gal))
+        .route("/api/accounts/{id}/zimbra/freebusy", post(free_busy))
 }
 
 /// Client SOAP du compte : mot de passe au coffre, hôte IMAP pour endpoint.
@@ -447,4 +454,73 @@ fn message_id_of(
         ));
     }
     Ok(message_id.to_string())
+}
+
+#[derive(Deserialize)]
+struct FreeBusyRequest {
+    /// Guest addresses; a display name around the address is ignored.
+    emails: Vec<String>,
+    /// Bounds of the window, in milliseconds since the epoch as Zimbra counts.
+    from: i64,
+    to: i64,
+}
+
+/// Disponibilités des invités sur la plage demandée : le serveur Zimbra du
+/// compte répond pour les agendas qu'il connaît.
+async fn free_busy(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<FreeBusyRequest>,
+) -> Result<Json<Vec<FreeBusyUser>>, ApiError> {
+    let mut emails: Vec<String> = Vec::new();
+    for email in &request.emails {
+        let Some(address) = guest_address(email) else {
+            continue;
+        };
+        if !emails
+            .iter()
+            .any(|seen| seen.eq_ignore_ascii_case(&address))
+        {
+            emails.push(address);
+        }
+    }
+    if emails.is_empty() {
+        return Err(ApiError::bad_request("zimbra", "aucun invité à interroger"));
+    }
+    if emails.len() > FREE_BUSY_MAX_GUESTS {
+        return Err(ApiError::bad_request(
+            "zimbra",
+            format!("trop d'invités pour une seule interrogation ({FREE_BUSY_MAX_GUESTS} au plus)"),
+        ));
+    }
+    if request.to <= request.from {
+        return Err(ApiError::bad_request(
+            "zimbra",
+            "la fin de la plage précède son début",
+        ));
+    }
+    if request.to - request.from > FREE_BUSY_MAX_SPAN_MS {
+        return Err(ApiError::bad_request(
+            "zimbra",
+            "plage de disponibilités trop large (31 jours au plus)",
+        ));
+    }
+    let client = soap_client(&state, &id).await?;
+    let uids: Vec<&str> = emails.iter().map(String::as_str).collect();
+    let users = client
+        .get_free_busy(&uids, request.from, request.to)
+        .await?;
+    tracing::debug!(account = %id, guests = users.len(), "SOAP Zimbra : GetFreeBusy");
+    Ok(Json(users))
+}
+
+/// L'adresse d'un invité, qu'il soit donné nu ou sous la forme `Nom <adresse>`.
+fn guest_address(value: &str) -> Option<String> {
+    let value = value.trim();
+    let address = match (value.rfind('<'), value.rfind('>')) {
+        (Some(open), Some(close)) if close > open => &value[open + 1..close],
+        _ => value,
+    };
+    let address = address_of(address)?;
+    Some(address)
 }

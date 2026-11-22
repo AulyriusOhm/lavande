@@ -449,6 +449,25 @@ impl AppState {
         Ok(source)
     }
 
+    /// Narrows a stored source to one collection, or widens it back to every
+    /// discovered calendar when `href` is `None`. The file is written whole, as
+    /// for every other change.
+    pub fn set_calendar_href(
+        &self,
+        id: &str,
+        href: Option<String>,
+    ) -> Result<CalendarSource, ApiError> {
+        let mut sources = self.calendar_sources()?;
+        let source = sources
+            .iter_mut()
+            .find(|source| source.id == id)
+            .ok_or_else(|| ApiError::not_found(format!("source CalDAV « {id} » inconnue")))?;
+        source.calendar_href = href;
+        let updated = source.clone();
+        calendar_sources::save(&self.calendars_path, &sources)?;
+        Ok(updated)
+    }
+
     /// `true` when the source was listed in `calendars.json`.
     pub async fn remove_calendar_source(&self, id: &str) -> Result<bool, ApiError> {
         let sources = self.calendar_sources()?;

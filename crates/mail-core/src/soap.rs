@@ -311,6 +311,22 @@ pub struct Tag {
     pub count: Option<i64>,
 }
 
+/// One free/busy slot of a guest, in milliseconds since the epoch.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FreeBusySlot {
+    pub start: i64,
+    pub end: i64,
+    /// `busy`, `tentative`, `free`, `out` or `unknown` (the server has no data).
+    pub status: String,
+}
+
+/// One guest and the slots the server knows about, in order.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FreeBusyUser {
+    pub email: String,
+    pub slots: Vec<FreeBusySlot>,
+}
+
 /// One entry of the company address book: a contact, a distribution list or a
 /// resource. `kind` is `group` when Zimbra answers a group or a list.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -590,6 +606,29 @@ impl SoapClient {
         }}))
         .await?;
         self.tags_of(&id).await
+    }
+
+    /// Free/busy of the guests between two instants, in milliseconds since the
+    /// epoch.
+    pub async fn get_free_busy(
+        &self,
+        uids: &[&str],
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<FreeBusyUser>, MailError> {
+        let usr: Vec<Value> = uids.iter().map(|uid| json!({"name": uid})).collect();
+        let answer: Value = self
+            .request(json!({"GetFreeBusyRequest": {
+                "_jsns": MAIL_NS,
+                "s": start,
+                "e": end,
+                "usr": usr,
+            }}))
+            .await?;
+        Ok(as_list(answer.get("usr"))
+            .into_iter()
+            .filter_map(free_busy_user)
+            .collect())
     }
 
     /// The company address book, through `AutoCompleteGal`.
@@ -1016,6 +1055,36 @@ impl FilterRule {
 }
 
 /// One `tag` element of a `GetTagResponse` or of a `CreateTagResponse`.
+/// Element names of a `GetFreeBusyResponse` and the status each one carries.
+const FREEBUSY_STATUSES: [(&str, &str); 5] = [
+    ("b", "busy"),
+    ("t", "tentative"),
+    ("f", "free"),
+    ("u", "out"),
+    ("n", "unknown"),
+];
+
+/// One `usr` element of a `GetFreeBusyResponse`.
+fn free_busy_user(value: &Value) -> Option<FreeBusyUser> {
+    let email = first_text([text(value.get("id")), text(value.get("name"))])?;
+    let mut slots = Vec::new();
+    for (element, status) in FREEBUSY_STATUSES {
+        for slot in as_list(value.get(element)) {
+            let start = number(slot.get("s")).unwrap_or_default();
+            let end = number(slot.get("e")).unwrap_or_default();
+            if end > start {
+                slots.push(FreeBusySlot {
+                    start,
+                    end,
+                    status: status.to_string(),
+                });
+            }
+        }
+    }
+    slots.sort_by_key(|slot| slot.start);
+    Some(FreeBusyUser { email, slots })
+}
+
 fn tag_of(value: &Value) -> Tag {
     Tag {
         id: text(value.get("id")),
@@ -1963,6 +2032,58 @@ mod tests {
         assert_eq!(request["name"], "sup");
         assert_eq!(request["type"], "all");
         assert_eq!(request["limit"], 8);
+    }
+
+    const FREEBUSY_ANSWER: &str = r#"{"Body":{"GetFreeBusyResponse":{"_jsns":"urn:zimbraMail","usr":[
+        {"id":"camille@exemple.tld",
+         "b":[{"s":1767225600000,"e":1767229200000},{"s":1767232800000,"e":1767236400000}],
+         "f":[{"s":1767229200000,"e":1767232800000}]},
+        {"id":"support@exemple.tld","n":[{"s":1767225600000,"e":1767236400000}]}]}}}"#;
+
+    #[tokio::test]
+    async fn the_free_busy_of_the_guests_is_read() {
+        let (url, received) = serve(vec![AUTH_ANSWER, FREEBUSY_ANSWER]).await;
+        let client = SoapClient::new(&url, "roman@exemple.tld", "secret").expect("client");
+        let users = client
+            .get_free_busy(
+                &["camille@exemple.tld", "support@exemple.tld"],
+                1767225600000,
+                1767236400000,
+            )
+            .await
+            .expect("GetFreeBusy");
+        assert_eq!(users.len(), 2);
+        assert_eq!(users[0].email, "camille@exemple.tld");
+        assert_eq!(
+            users[0].slots,
+            vec![
+                FreeBusySlot {
+                    start: 1767225600000,
+                    end: 1767229200000,
+                    status: "busy".to_string(),
+                },
+                FreeBusySlot {
+                    start: 1767229200000,
+                    end: 1767232800000,
+                    status: "free".to_string(),
+                },
+                FreeBusySlot {
+                    start: 1767232800000,
+                    end: 1767236400000,
+                    status: "busy".to_string(),
+                },
+            ]
+        );
+        assert_eq!(users[1].slots.len(), 1);
+        assert_eq!(users[1].slots[0].status, "unknown");
+
+        let requests = received.lock().expect("journal");
+        let asked = &requests[1]["Body"]["GetFreeBusyRequest"];
+        assert_eq!(asked["_jsns"], "urn:zimbraMail");
+        assert_eq!(asked["s"], 1767225600000i64);
+        assert_eq!(asked["e"], 1767236400000i64);
+        assert_eq!(asked["usr"][0]["name"], "camille@exemple.tld");
+        assert_eq!(asked["usr"][1]["name"], "support@exemple.tld");
     }
 
     #[test]

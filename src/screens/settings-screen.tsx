@@ -79,6 +79,7 @@ import {
   TONE_DOT,
   calendarSourceKind,
   icsUrlOf,
+  isCaldavCalendar,
   isExternalCalendar,
   isIcsCalendar,
   type CalendarDef,
@@ -98,6 +99,7 @@ import { MCP_SERVERS, mcpCounts } from "@/lib/mcp";
 import type { Mail } from "@/lib/mail";
 import { cn } from "@/lib/utils";
 import { Avatar, Card, SectionTitle, ToggleRow } from "@/components/ui/primitives";
+import { CaldavCollectionPicker } from "@/components/caldav-collection-picker";
 import { FolderRow } from "@/components/folder-row";
 import { SyncSettings } from "@/components/sync-settings";
 import { ZimbraFiltersPanel } from "@/components/zimbra-filters";
@@ -2247,7 +2249,10 @@ function CalendarsSettings() {
   const [draftTone, setDraftTone] = useState(0);
   const [draftUrl, setDraftUrl] = useState("");
   const [caldav, setCaldav] = useState({ url: "", username: "", password: "" });
+  const [caldavHref, setCaldavHref] = useState("");
   const [caldavAccount, setCaldavAccount] = useState("");
+  const [accountHref, setAccountHref] = useState("");
+  const [collectionEditing, setCollectionEditing] = useState<string | null>(null);
   const [tab, setTab] = useState<AddTab>("ics");
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -2271,18 +2276,31 @@ function CalendarsSettings() {
   };
 
   const connectCaldav = async () => {
-    const added = await sources.addCaldav({ ...caldav, name: draftName, tone: draftTone });
+    const added = await sources.addCaldav({
+      ...caldav,
+      name: draftName,
+      tone: draftTone,
+      calendarHref: caldavHref,
+    });
     if (!added) return;
     setDraftName("");
     setCaldav({ url: "", username: "", password: "" });
+    setCaldavHref("");
   };
 
   const addAccountCalendar = async () => {
     const account = sources.accounts.find((entry) => entry.id === caldavAccount);
     if (!account) return;
-    if (await sources.addCaldavFromAccount(account, { name: draftName, tone: draftTone })) {
+    if (
+      await sources.addCaldavFromAccount(account, {
+        name: draftName,
+        tone: draftTone,
+        calendarHref: accountHref,
+      })
+    ) {
       setDraftName("");
       setCaldavAccount("");
+      setAccountHref("");
     }
   };
 
@@ -2427,6 +2445,17 @@ function CalendarsSettings() {
                       <PlugZap className="size-4" />
                       Connecter l'agenda
                     </button>
+                    <CaldavCollectionPicker
+                      load={() =>
+                        caldavAccount ? sources.accountCollections(caldavAccount) : Promise.resolve(null)
+                      }
+                      href={accountHref}
+                      onChoose={setAccountHref}
+                      label="Choisir le calendrier du compte"
+                      pathLabel="Chemin du calendrier du compte"
+                      disabled={sources.busy || !caldavAccount}
+                      readOnly={readOnly}
+                    />
                   </div>
                 ) : null}
                 <label className="block">
@@ -2473,6 +2502,17 @@ function CalendarsSettings() {
                   <PlugZap className="size-4" />
                   Connecter
                 </button>
+                <CaldavCollectionPicker
+                  load={() => sources.discoverCollections(caldav)}
+                  href={caldavHref}
+                  onChoose={setCaldavHref}
+                  disabled={sources.busy}
+                  readOnly={readOnly}
+                />
+                <p className="text-[11px] leading-relaxed font-medium text-ink-muted">
+                  Facultatif : un calendrier du serveur, ou le chemin de celui d'un collègue. Sans choix, le démon lit
+                  tous les calendriers découverts.
+                </p>
               </div>
             ) : null}
 
@@ -2597,6 +2637,26 @@ function CalendarsSettings() {
               onAskRemove={() => setRemoving(entry.id)}
               onCancelRemove={() => setRemoving(null)}
               onRemove={() => void removeSource(entry.id)}
+              collectionsOpen={collectionEditing === entry.id}
+              onToggleCollections={
+                isCaldavCalendar(entry)
+                  ? () =>
+                      setCollectionEditing((current) => (current === entry.id ? null : entry.id))
+                  : undefined
+              }
+              picker={
+                collectionEditing === entry.id ? (
+                  <CaldavCollectionPicker
+                    load={() => sources.sourceCollections(entry)}
+                    href={sources.collectionOf(entry) ?? ""}
+                    onChoose={(href) => void sources.setCollection(entry, href.trim() || null)}
+                    label={`Calendrier de ${entry.name}`}
+                    pathLabel={`Chemin du calendrier de ${entry.name}`}
+                    disabled={sources.busy}
+                    readOnly={readOnly}
+                  />
+                ) : null
+              }
             />
           ))}
           {count === 0 ? (
@@ -2632,6 +2692,9 @@ function CalendarRow({
   onAskRemove,
   onCancelRemove,
   onRemove,
+  collectionsOpen = false,
+  onToggleCollections,
+  picker,
 }: {
   entry: CalendarDef;
   count: number;
@@ -2650,6 +2713,9 @@ function CalendarRow({
   onAskRemove: () => void;
   onCancelRemove: () => void;
   onRemove: () => void;
+  collectionsOpen?: boolean;
+  onToggleCollections?: () => void;
+  picker?: React.ReactNode;
 }) {
   const external = isExternalCalendar(entry);
   const reloadable = external && (!isIcsCalendar(entry) || Boolean(icsUrlOf(entry)));
@@ -2713,6 +2779,18 @@ function CalendarRow({
               Actualiser
             </button>
           ) : null}
+          {onToggleCollections ? (
+            <button
+              type="button"
+              aria-label={`Changer de calendrier pour ${entry.name}`}
+              aria-expanded={collectionsOpen}
+              onClick={onToggleCollections}
+              className={SOURCE_ACTION}
+            >
+              <CalendarDays className="size-3.5" />
+              Calendrier
+            </button>
+          ) : null}
           <button
             type="button"
             aria-label={`Renommer le calendrier ${entry.name}`}
@@ -2751,6 +2829,7 @@ function CalendarRow({
           )}
         </div>
       )}
+      {picker}
     </div>
   );
 }

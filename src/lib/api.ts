@@ -202,6 +202,26 @@ export type ZimbraFilterChange =
   | { action: "add" | "modify"; rule: ZimbraFilterInput }
   | { action: "delete"; rule: { name: string } };
 
+/** Une collection CalDAV d'un compte ou d'une source : `href` est son URL. */
+export type CaldavCollection = {
+  href: string;
+  name: string;
+  description?: string;
+  color?: string;
+};
+
+/** Un créneau de disponibilité d'un invité, en millisecondes depuis l'époque. */
+export type ZimbraFreeBusySlot = {
+  start: number;
+  end: number;
+  status: "busy" | "tentative" | "free" | "out" | "unknown";
+};
+
+export type ZimbraFreeBusyUser = {
+  email: string;
+  slots: ZimbraFreeBusySlot[];
+};
+
 /** Une étiquette du compte Zimbra : `color` est le numéro du serveur (0 = aucune). */
 export type ZimbraTag = {
   id: string;
@@ -1023,10 +1043,38 @@ export const mailApi = {
     }),
 
   /** Agenda d'un compte mail connecté (Zimbra) : le démon lit son CalDAV avec le mot de passe du compte. */
-  addCaldavSourceFromAccount: (accountId: string) =>
+  addCaldavSourceFromAccount: (accountId: string, calendarHref?: string) =>
     request<CaldavSource>("/calendars/caldav/sources/from-account", {
       method: "POST",
-      body: { account_id: accountId },
+      body: calendarHref ? { account_id: accountId, calendar_href: calendarHref } : { account_id: accountId },
+      timeout: LONG_TIMEOUT,
+    }),
+
+  /** Collections d'un serveur CalDAV : les identifiants passent dans le corps. */
+  caldavCollections: (input: { url: string; username: string; password: string }) =>
+    request<CaldavCollection[]>("/calendars/caldav/collections", {
+      method: "POST",
+      body: input,
+      timeout: LONG_TIMEOUT,
+    }),
+
+  /** Collections du serveur CalDAV d'un compte : le mot de passe reste au coffre. */
+  accountCaldavCollections: (id: string) =>
+    request<CaldavCollection[]>(`/accounts/${encodeURIComponent(id)}/caldav/collections`, {
+      timeout: LONG_TIMEOUT,
+    }),
+
+  /** Collections du serveur d'une source déjà rangée, relues avec ses identifiants. */
+  sourceCaldavCollections: (id: string) =>
+    request<CaldavCollection[]>(`/calendars/caldav/sources/${encodeURIComponent(id)}/collections`, {
+      timeout: LONG_TIMEOUT,
+    }),
+
+  /** Change la collection d'une source ; `null` relit tous les calendriers découverts. */
+  updateCaldavSource: (id: string, input: { calendar_href: string | null }) =>
+    request<CaldavSource>(`/calendars/caldav/sources/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: input,
       timeout: LONG_TIMEOUT,
     }),
 
@@ -1247,6 +1295,14 @@ export const mailApi = {
       `${accountPath(id)}/zimbra/gal?q=${encodeURIComponent(query)}&limit=${limit}`,
       { timeout: LONG_TIMEOUT },
     ),
+
+  /** Disponibilités des invités : le serveur Zimbra du compte répond pour ses agendas. */
+  zimbraFreeBusy: (id: string, input: { emails: string[]; from: number; to: number }) =>
+    request<ZimbraFreeBusyUser[]>(`${accountPath(id)}/zimbra/freebusy`, {
+      method: "POST",
+      body: input,
+      timeout: LONG_TIMEOUT,
+    }),
 
   /** `EventSource` ne porte pas d'en-tête : dans la coquille, le jeton passe en query. */
   eventsUrl: async () => {
