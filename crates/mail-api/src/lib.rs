@@ -94,6 +94,7 @@ pub fn app(state: Arc<AppState>) -> Router {
         .merge(routes::search::router())
         .merge(routes::sync::router())
         .merge(routes::events::router())
+        .merge(routes::zimbra::router())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_token,
