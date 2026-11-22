@@ -22,6 +22,8 @@ pub enum MailError {
     Calendar(String),
     #[error("caldav error: {0}")]
     Caldav(String),
+    #[error("carddav error: {0}")]
+    Carddav(String),
     #[error("conflict: {0}")]
     Conflict(String),
     #[error("soap error: {0}")]

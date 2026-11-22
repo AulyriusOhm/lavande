@@ -2037,3 +2037,82 @@ fn the_migration_fills_the_contact_list_once() {
     let _ = std::fs::remove_file(path.with_extension("db-wal"));
     let _ = std::fs::remove_file(path.with_extension("db-shm"));
 }
+
+#[test]
+fn a_directory_sync_mirrors_the_address_book() {
+    let store = open();
+    let contacts = [
+        lavande_mail::DirectoryContact {
+            name: Some("Jean Dupont".to_string()),
+            email: "jean.dupont@exemple.tld".to_string(),
+        },
+        lavande_mail::DirectoryContact {
+            name: None,
+            email: "Sans-Nom@Exemple.TLD".to_string(),
+        },
+    ];
+    store
+        .sync_directory_contacts("perso", &contacts, "2026-11-22T10:00:00Z")
+        .expect("première synchronisation");
+
+    let listed = store.contacts("", 10).expect("carnet");
+    assert_eq!(listed.len(), 2);
+    let jean = listed
+        .iter()
+        .find(|contact| contact.email == "jean.dupont@exemple.tld")
+        .expect("Jean");
+    assert_eq!(jean.name.as_deref(), Some("Jean Dupont"));
+    // Les adresses du carnet sont rangées en minuscules, sans doublon de casse.
+    assert!(listed
+        .iter()
+        .any(|contact| contact.email == "sans-nom@exemple.tld"));
+    assert_eq!(jean.received + jean.sent, 0);
+
+    // Une carte retirée du serveur disparaît du carnet.
+    store
+        .sync_directory_contacts("perso", &contacts[..1], "2026-11-23T10:00:00Z")
+        .expect("seconde synchronisation");
+    let listed = store.contacts("", 10).expect("carnet");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].email, "jean.dupont@exemple.tld");
+}
+
+#[test]
+fn a_directory_sync_leaves_the_mail_contacts_alone() {
+    let store = open();
+    let headers = message(1, "t1", "Jean", "Planning", 20);
+    store
+        .upsert_message_with_attachment(&headers, true)
+        .expect("message");
+    let parsed = lavande_mail::mime::parse_message(
+        b"From: Jean <jean@mail.fr>\r\nSubject: x\r\n\r\ncorps\r\n",
+    )
+    .expect("corps");
+    store
+        .set_body("perso", "INBOX", 1, &parsed)
+        .expect("corps rangé");
+    let before = store.contacts("jean@mail.fr", 5).expect("carnet");
+    assert_eq!(before.len(), 1);
+    assert!(before[0].received + before[0].sent > 0);
+    let name_before = before[0].name.clone();
+
+    // Le carnet annonce la même adresse sous un autre nom : la ligne du mail ne bouge pas.
+    let contacts = [lavande_mail::DirectoryContact {
+        name: Some("Annuaire".to_string()),
+        email: "jean@mail.fr".to_string(),
+    }];
+    store
+        .sync_directory_contacts("perso", &contacts, "2026-11-22T10:00:00Z")
+        .expect("synchronisation");
+    let after = store.contacts("jean@mail.fr", 5).expect("carnet");
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].name, name_before);
+    assert_eq!(after[0].received, before[0].received);
+    assert_eq!(after[0].sent, before[0].sent);
+
+    // Une synchronisation sans cette carte ne touche pas non plus la ligne du mail.
+    store
+        .sync_directory_contacts("perso", &[], "2026-11-23T10:00:00Z")
+        .expect("synchronisation vide");
+    assert_eq!(store.contacts("jean@mail.fr", 5).expect("carnet").len(), 1);
+}

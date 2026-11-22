@@ -33,7 +33,8 @@ export type ApiErrorKind =
   | "store"
   | "mime"
   | "calendar"
-  | "caldav";
+  | "caldav"
+  | "carddav";
 
 export type ApiEndpoint = {
   host: string;
@@ -465,6 +466,14 @@ export type ApiTriageBatchReply = {
   errors: string[];
 };
 
+/** Ce qu'une synchronisation du carnet CardDAV a rapporté. */
+export type CarddavSyncReport = {
+  /** Adresses retenues du carnet. */
+  count: number;
+  /** Cartes illisibles, ignorées. */
+  skipped: number;
+};
+
 /** Corps HTML relu à la demande, images distantes comprises (déjà assaini par le service). */
 export type HtmlImages = {
   html: string;
@@ -839,6 +848,14 @@ export const mailApi = {
       `${accountPath(id)}/folders/${encodeURIComponent(folderPath)}/messages/${uid}?fetch_body=true`,
       { timeout: LONG_TIMEOUT },
     ),
+
+  /** Lit le carnet CardDAV du compte (annuaire Zimbra) dans la liste des contacts. */
+  syncCarddav: (id: string) =>
+    request<CarddavSyncReport>(`${accountPath(id)}/carddav/sync`, {
+      method: "POST",
+      body: {},
+      timeout: LONG_TIMEOUT,
+    }),
 
   /** L'invitation iTIP du message (`null` quand il n'en porte pas). */
   invitation: (id: string, folderPath: string, uid: number) =>

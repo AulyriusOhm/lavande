@@ -59,6 +59,7 @@ import {
 } from "@/lib/decision";
 import { toApiDecisionConfig } from "@/lib/triage";
 import { CategoryManagerSheet, categoryColorStyle } from "@/components/category-manager-sheet";
+import { ContactsSyncRow } from "@/components/contacts-sync-row";
 import { TrustedWhitelistSection } from "@/components/trusted-whitelist";
 import { mailApi } from "@/lib/api";
 import { DEFAULT_COPILOT_CLIENT_ID, copilotModels, useCopilotSession } from "@/lib/copilot";
@@ -68,7 +69,7 @@ import { useAiUsage } from "@/lib/ai-sync";
 import {
   SWIPE_ACTIONS,
   CALENDAR_LEAD_MINUTES,
-  CONTACTS_PENDING,
+
   THREAD_VIEWS,
   mergeFlags,
   perimeterOf,
@@ -96,7 +97,7 @@ import { useMailStore } from "@/lib/store";
 import { MCP_SERVERS, mcpCounts } from "@/lib/mcp";
 import type { Mail } from "@/lib/mail";
 import { cn } from "@/lib/utils";
-import { Avatar, Card, SectionTitle, SwitchTrack, ToggleRow } from "@/components/ui/primitives";
+import { Avatar, Card, SectionTitle, ToggleRow } from "@/components/ui/primitives";
 import { FolderRow } from "@/components/folder-row";
 import { SyncSettings } from "@/components/sync-settings";
 import { ShortcutList } from "@/components/shortcut-list";
@@ -643,16 +644,7 @@ export function SettingsScreen({
                       checked={perimeterOf(perimeters, item.id).calendar}
                       onChange={(value) => setAccountPerimeter(item.id, { calendar: value })}
                     />
-                    <div aria-disabled="true" className="flex w-full items-center gap-3 px-3.5 py-3 opacity-60">
-                      <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-surface-2 text-ink-soft">
-                        <Users className="size-4" />
-                      </span>
-                      <span className="min-w-0 flex-1 leading-tight">
-                        <span className="block text-[12.5px] font-bold text-ink">Contacts</span>
-                        <span className="block text-[11px] font-medium text-ink-muted">{CONTACTS_PENDING}</span>
-                      </span>
-                      <SwitchTrack checked={false} />
-                    </div>
+                    <ContactsSyncRow accountId={item.id} variant="mobile" />
                   </div>
                 </Card>
               ))}

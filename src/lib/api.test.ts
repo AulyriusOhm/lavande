@@ -238,3 +238,26 @@ describe("mailApi · invitations agenda", () => {
     await expect(mailApi.rsvp("perso", "INBOX", 7, "DECLINED")).rejects.toThrow("parmi ses invités");
   });
 });
+
+describe("mailApi · carnet CardDAV", () => {
+  it("synchronise le carnet du compte et lit le rapport", async () => {
+    const fetchMock = vi.fn(async () => response({ count: 12, skipped: 1 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const report = await mailApi.syncCarddav("perso");
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/accounts/perso/carddav/sync");
+    expect(init.method).toBe("POST");
+    expect(report).toEqual({ count: 12, skipped: 1 });
+  });
+
+  it("remonte le refus du serveur de contacts", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response({ error: "serveur de contacts : refusé", kind: "carddav" }, 502)),
+    );
+
+    await expect(mailApi.syncCarddav("perso")).rejects.toThrow("refusé");
+  });
+});

@@ -39,11 +39,18 @@ const reply = (payload: unknown, status = 200) =>
     text: async () => JSON.stringify(payload),
   }) as unknown as Response;
 
+let synced: string[] = [];
+
 function stubDaemon() {
+  synced = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.endsWith("/carddav/sync")) {
+        synced.push(url);
+        return reply({ count: 2, skipped: 0 });
+      }
       if (url.endsWith("/pgp/keys")) return reply({ keys: [] });
       if (url.endsWith("/accounts")) return reply([GMAIL, OVH]);
       if (url.endsWith("/calendars/caldav/sources")) return reply([]);
@@ -120,14 +127,40 @@ describe("Réglages PC · périmètre par compte", () => {
     expect(screen.queryByRole("group", { name: "Périmètre de synchronisation de Studio" })).toBeNull();
   });
 
-  it("montre les contacts en attente, sans interrupteur mort", async () => {
+  it("synchronise le carnet du compte à la demande", async () => {
     stubDaemon();
     renderSettings();
 
     await openPerimeter("Gmail");
-
-    expect(within(panel("Gmail")).getByText("Contacts : bientôt disponible")).toBeTruthy();
     expect(within(panel("Gmail")).queryByRole("switch", { name: /^Contacts/ })).toBeNull();
+
+    fireEvent.click(within(panel("Gmail")).getByRole("button", { name: "Synchroniser les contacts" }));
+
+    await waitFor(() =>
+      expect(within(panel("Gmail")).getByText("Carnet synchronisé · 2 contacts")).toBeTruthy(),
+    );
+    expect(synced).toEqual(["/api/accounts/gmail/carddav/sync"]);
+  });
+
+  it("dit honnêtement qu'une synchronisation de carnet a échoué", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/carddav/sync")) return reply({ error: "serveur de contacts : refusé", kind: "carddav" }, 502);
+        if (url.endsWith("/pgp/keys")) return reply({ keys: [] });
+        if (url.endsWith("/accounts")) return reply([GMAIL, OVH]);
+        return reply([]);
+      }),
+    );
+    renderSettings();
+
+    await openPerimeter("Gmail");
+    fireEvent.click(within(panel("Gmail")).getByRole("button", { name: "Synchroniser les contacts" }));
+
+    await waitFor(() =>
+      expect(within(panel("Gmail")).getByRole("alert").textContent).toContain("Synchronisation impossible"),
+    );
   });
 
   it("met en pause les calendriers Google du compte dont l'agenda est coupé", async () => {

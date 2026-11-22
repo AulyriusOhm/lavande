@@ -840,6 +840,40 @@ impl Store {
         Ok(contacts)
     }
 
+    /// Replaces the address book entries of one account with `contacts`, the
+    /// addresses a CardDAV sync just read, stamped `seen_at`.
+    ///
+    /// A row the mailbox wrote (`source = 'mail'`) is never touched. A directory
+    /// row keeps its counters when the mailbox wrote to it, and keeps its name
+    /// when the card carries none. The directory rows no message ever wrote are
+    /// dropped first and rewritten from `contacts`, which is what makes the sync
+    /// a mirror: a card the server no longer lists is gone. `seen_at` dates the
+    /// entries and sorts the list.
+    pub fn sync_directory_contacts(
+        &self,
+        account_id: &str,
+        contacts: &[crate::carddav::Contact],
+        seen_at: &str,
+    ) -> Result<(), MailError> {
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(SWEEP_DIRECTORY_CONTACTS, params![account_id])?;
+        for contact in contacts {
+            let email = contact.email.trim().to_ascii_lowercase();
+            if email.is_empty() || !email.contains('@') {
+                continue;
+            }
+            let name = contact
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty());
+            tx.execute(DIRECTORY_CONTACT, params![account_id, email, name, seen_at])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Search over the subjects, correspondents and bodies of one account,
     /// newest first.
     pub fn search_messages(
@@ -1643,6 +1677,25 @@ const CONTACTS_SQL: &str = "\
      ORDER BY SUM(contacts.received) + SUM(contacts.sent) DESC, \
      MAX(contacts.last_seen) DESC, contacts.email \
      LIMIT ?2";
+
+/// One address book entry: no counter, the sync instant as `last_seen` so the
+/// list sorts by recency. A row the mailbox already owns is left alone, name
+/// included.
+const DIRECTORY_CONTACT: &str = "\
+     INSERT INTO contacts (account_id, email, name, received, sent, first_seen, last_seen, source) \
+     VALUES (?1, ?2, ?3, 0, 0, ?4, ?4, 'carddav') \
+     ON CONFLICT(account_id, email) DO UPDATE SET \
+     name = COALESCE(NULLIF(excluded.name, ''), contacts.name), \
+     last_seen = excluded.last_seen \
+     WHERE contacts.source = 'carddav'";
+
+/// Drops the directory rows the mailbox never wrote to: the sync rewrites them
+/// from the cards the server holds now, so a card the server dropped is gone.
+/// Rows the mailbox has traded mail with keep their counters and stay.
+const SWEEP_DIRECTORY_CONTACTS: &str = "\
+     DELETE FROM contacts \
+     WHERE account_id = ?1 AND source = 'carddav' \
+     AND received = 0 AND sent = 0";
 
 /// One message's contribution to a contact: a counter, the name it carried and
 /// the instant it was sent. The name only moves forward with `last_seen`, so an

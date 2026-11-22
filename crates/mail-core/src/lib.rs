@@ -2,6 +2,7 @@
 //! and CalDAV), threading, local store and the IMAP/SMTP transport layer.
 
 pub mod caldav;
+pub mod carddav;
 pub mod config;
 pub mod error;
 pub mod gcal;
@@ -23,6 +24,7 @@ pub mod totp;
 pub mod utf7;
 
 pub use caldav::{CaldavClient, CalendarCollection};
+pub use carddav::{CarddavClient, Contact as DirectoryContact};
 pub use config::{AccountConfig, AuthConfig, Encryption, Endpoint, FolderMapping};
 pub use error::MailError;
 pub use gcal::{GcalClient, GoogleCalendar};

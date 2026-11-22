@@ -39,6 +39,7 @@ function stubDaemon() {
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.endsWith("/carddav/sync")) return reply({ count: 3, skipped: 1 });
       if (url.endsWith("/accounts")) return reply([GMAIL]);
       if (url.endsWith("/calendars/caldav/sources")) return reply([]);
       if (url.endsWith("/calendars/google/gmail/calendars")) return reply([{ id: "primary", summary: "Privé" }]);
@@ -89,13 +90,21 @@ describe("Réglages mobile · périmètre par compte", () => {
     expect(screen.getByRole("switch", { name: /^Agenda/ }).getAttribute("aria-checked")).toBe("false");
   });
 
-  it("montre les contacts en attente, sans interrupteur mort", async () => {
+  it("synchronise le carnet du compte à la demande", async () => {
     stubDaemon();
     mount();
     fireEvent.click(screen.getByRole("button", { name: /^Comptes/ }));
 
-    await waitFor(() => expect(screen.getByText("Contacts : bientôt disponible")).toBeTruthy());
+    const button = await screen.findByRole("button", { name: "Synchroniser les contacts" });
     expect(screen.queryByRole("switch", { name: /^Contacts/ })).toBeNull();
+
+    fireEvent.click(button);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("Carnet synchronisé · 3 contacts · 1 carte illisible ignorée"),
+      ).toBeTruthy(),
+    );
   });
 
   it("met en pause les calendriers Google du compte dont l'agenda est coupé", async () => {

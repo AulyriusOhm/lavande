@@ -21,7 +21,7 @@ import { OAuthGuide } from "@/components/oauth-guide";
 import { useFolderTree, type FolderTreeRow } from "@/components/folder-tree";
 import { useMailStore } from "@/lib/store";
 import {
-  CONTACTS_PENDING,
+  CONTACTS_HINT,
   DEFAULT_PERIMETER,
   perimeterOf,
   usePrefs,
@@ -483,7 +483,7 @@ export function ConnectScreen({
                 </span>
                 <span className="min-w-0 flex-1 leading-tight">
                   <span className="block text-[12.5px] font-bold text-ink">Contacts</span>
-                  <span className="block text-[11px] font-medium text-ink-muted">{CONTACTS_PENDING}</span>
+                  <span className="block text-[11px] font-medium text-ink-muted">{CONTACTS_HINT}</span>
                 </span>
                 <SwitchTrack checked={false} />
               </div>

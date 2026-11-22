@@ -51,6 +51,7 @@ import {
   useGoogleCalendarAutoAttach,
   useZimbraCalendarAutoAttach,
 } from "@/lib/ics";
+import { useZimbraContactsAutoSync } from "@/lib/zimbra";
 import { useWidgetAgendaSync } from "@/lib/background-sync";
 import { useAiSync } from "@/lib/ai-sync";
 import { haptic } from "@/lib/haptics";
@@ -609,6 +610,7 @@ function PhoneApp({ native }: { native?: boolean }) {
   useWidgetAgendaSync(widgetEvents, calendars);
   useGoogleCalendarAutoAttach(notify);
   useZimbraCalendarAutoAttach(notify);
+  useZimbraContactsAutoSync();
   useAiSync();
 
   const shortcutActions = useMemo(

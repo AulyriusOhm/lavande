@@ -66,8 +66,8 @@ export type AccountPerimeter = { mails: boolean; calendar: boolean; contacts: bo
 
 export const DEFAULT_PERIMETER: AccountPerimeter = { mails: true, calendar: true, contacts: false };
 
-/** Les contacts n'ont pas encore de synchronisation : l'interrupteur est rangé, jamais ouvert. */
-export const CONTACTS_PENDING = "Contacts : bientôt disponible";
+/** Ce que le carnet d'un compte apporte à la saisie : rien à régler, une synchro à lancer. */
+export const CONTACTS_HINT = "Carnet CardDAV du compte : synchronisé à l'ouverture, ou à la demande";
 
 /** Le périmètre a changé : les calendriers relisent la liste sans passer par le contexte. */
 export const PERIMETER_EVENT = "lavande:perimeter-changed";

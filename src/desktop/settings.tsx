@@ -31,7 +31,6 @@ import {
   Terminal,
   Trash2,
   Upload,
-  Users,
 } from "lucide-react";
 import { errorText, mailApi } from "@/lib/api";
 import type { ApiAccount, ApiFolder, GoogleCalendar } from "@/lib/api";
@@ -73,7 +72,7 @@ import {
   accountPgp,
   activeSignature,
   CALENDAR_LEAD_MINUTES,
-  CONTACTS_PENDING,
+
   isFolderHidden,
   mergeFlags,
   perimeterOf,
@@ -115,6 +114,7 @@ import {
 } from "@/lib/decision";
 import { toApiDecisionConfig } from "@/lib/triage";
 import { CategoryManagerSheet, categoryColorStyle } from "@/components/category-manager-sheet";
+import { ContactsSyncRow } from "@/components/contacts-sync-row";
 import { TrustedWhitelistSection } from "@/components/trusted-whitelist";
 import { DEFAULT_COPILOT_CLIENT_ID, copilotModels, useCopilotSession } from "@/lib/copilot";
 import { openExternal } from "@/lib/open-external";
@@ -126,7 +126,7 @@ import { useMailStore } from "@/lib/store";
 import { detectModKey } from "@/lib/shortcuts";
 import { shortcutCatalog } from "@/lib/app-shortcuts";
 import { cn } from "@/lib/utils";
-import { Avatar, Switch, SwitchTrack, ToggleRow } from "@/components/ui/primitives";
+import { Avatar, Switch, ToggleRow } from "@/components/ui/primitives";
 import { FolderRow } from "@/components/folder-row";
 import { SignatureEditor } from "@/components/signature-editor";
 import { SyncSettings } from "@/components/sync-settings";
@@ -1437,16 +1437,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                               checked={perimeterOf(perimeters, item.id).calendar}
                               onChange={(value) => setAccountPerimeter(item.id, { calendar: value })}
                             />
-                            <div aria-disabled="true" className="flex w-full items-center gap-3 px-3.5 py-3 opacity-60">
-                              <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-surface-2 text-ink-soft">
-                                <Users className="size-4" />
-                              </span>
-                              <span className="min-w-0 flex-1 leading-tight">
-                                <span className="block text-[12.5px] font-bold text-ink">Contacts</span>
-                                <span className="block text-[10.5px] font-medium text-ink-muted">{CONTACTS_PENDING}</span>
-                              </span>
-                              <SwitchTrack checked={false} />
-                            </div>
+                            <ContactsSyncRow accountId={item.id} />
                           </div>
                         ) : null}
                       </Surface>

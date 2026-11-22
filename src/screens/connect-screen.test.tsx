@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { CONTACTS_HINT } from "@/lib/prefs";
 
 const MICROSOFT_ID = "291c5ae6-2601-4cb5-8ae9-c6edbe9c3c1d";
 const GOOGLE_ID = "1234567890-lavande.apps.googleusercontent.com";
@@ -426,7 +427,7 @@ describe("Écran de connexion · sélection des dossiers", () => {
     expect(mails.getAttribute("aria-checked")).toBe("true");
     expect(calendar.getAttribute("aria-checked")).toBe("true");
     expect(screen.queryByRole("switch", { name: /^Contacts/ })).toBeNull();
-    expect(screen.getByText("Contacts : bientôt disponible")).toBeTruthy();
+    expect(screen.getByText(CONTACTS_HINT)).toBeTruthy();
 
     fireEvent.click(calendar);
     fireEvent.click(screen.getByRole("button", { name: /Connecter le compte/ }));
