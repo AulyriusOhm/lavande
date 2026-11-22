@@ -42,6 +42,8 @@ describe("Réglages · filtres Zimbra en démo", () => {
     );
     expect(within(section()).queryByRole("button", { name: "Nouveau filtre" })).toBeNull();
     expect(within(section()).queryByRole("button", { name: "Enregistrer l'absence" })).toBeNull();
+    expect(within(section()).getByText(/Démo : les étiquettes/)).toBeTruthy();
+    expect(within(section()).queryByRole("button", { name: "Créer l'étiquette" })).toBeNull();
     expect(
       fetchMock.mock.calls.filter(([input]) => String(input).includes("/zimbra/")),
     ).toHaveLength(0);

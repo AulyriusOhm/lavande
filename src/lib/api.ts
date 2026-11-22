@@ -202,6 +202,21 @@ export type ZimbraFilterChange =
   | { action: "add" | "modify"; rule: ZimbraFilterInput }
   | { action: "delete"; rule: { name: string } };
 
+/** Une étiquette du compte Zimbra : `color` est le numéro du serveur (0 = aucune). */
+export type ZimbraTag = {
+  id: string;
+  name: string;
+  color: number;
+  count?: number;
+};
+
+/** Une entrée de l'annuaire d'entreprise : un contact, une liste de diffusion ou une ressource. */
+export type ZimbraGalEntry = {
+  email: string;
+  name: string;
+  kind: "contact" | "group";
+};
+
 /** Réponse d'absence : le serveur la garde, le démon l'écrit avec son mot de passe. */
 export type ZimbraVacation = {
   enabled: boolean;
@@ -1186,6 +1201,52 @@ export const mailApi = {
       body: vacation,
       timeout: LONG_TIMEOUT,
     }),
+
+  /** Étiquettes du compte, telles que le serveur les garde. */
+  zimbraTags: (id: string) =>
+    request<ZimbraTag[]>(`${accountPath(id)}/zimbra/tags`, { timeout: LONG_TIMEOUT }),
+
+  zimbraCreateTag: (id: string, input: { name: string; color: number }) =>
+    request<ZimbraTag>(`${accountPath(id)}/zimbra/tags`, {
+      method: "POST",
+      body: input,
+      timeout: LONG_TIMEOUT,
+    }),
+
+  zimbraModifyTag: (id: string, tagId: string, input: { name?: string; color?: number }) =>
+    request<void>(`${accountPath(id)}/zimbra/tags/${encodeURIComponent(tagId)}`, {
+      method: "PATCH",
+      body: input,
+      timeout: LONG_TIMEOUT,
+    }),
+
+  zimbraDeleteTag: (id: string, tagId: string) =>
+    request<void>(`${accountPath(id)}/zimbra/tags/${encodeURIComponent(tagId)}`, {
+      method: "DELETE",
+      timeout: LONG_TIMEOUT,
+    }),
+
+  /** Étiquettes d'un message : le démon le retrouve par son `Message-ID`. */
+  zimbraMessageTags: (id: string, folder: string, uid: number) =>
+    request<ZimbraTag[]>(
+      `${accountPath(id)}/zimbra/message-tags?folder=${encodeURIComponent(folder)}&uid=${uid}`,
+      { timeout: LONG_TIMEOUT },
+    ),
+
+  /** Pose ou retire une étiquette, et rend les étiquettes du message après coup. */
+  zimbraTagMessage: (id: string, input: { folder: string; uid: number; tag_id: string; add: boolean }) =>
+    request<ZimbraTag[]>(`${accountPath(id)}/zimbra/message-tags`, {
+      method: "POST",
+      body: input,
+      timeout: LONG_TIMEOUT,
+    }),
+
+  /** Annuaire de l'entreprise (GAL) : contacts, listes de diffusion, ressources. */
+  zimbraGal: (id: string, query: string, limit = 8) =>
+    request<ZimbraGalEntry[]>(
+      `${accountPath(id)}/zimbra/gal?q=${encodeURIComponent(query)}&limit=${limit}`,
+      { timeout: LONG_TIMEOUT },
+    ),
 
   /** `EventSource` ne porte pas d'en-tête : dans la coquille, le jeton passe en query. */
   eventsUrl: async () => {

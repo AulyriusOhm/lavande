@@ -138,7 +138,14 @@ export function RecipientSuggestions({
             index === active ? "bg-accent-soft text-accent-ink" : "text-ink-soft hover:bg-surface-2",
           )}
         >
-          <span className="truncate text-[12.5px] font-bold">{contact.name ?? contact.email}</span>
+          <span className="flex items-center gap-1.5">
+            <span className="truncate text-[12.5px] font-bold">{contact.name ?? contact.email}</span>
+            {contact.kind === "group" ? (
+              <span className="shrink-0 rounded bg-surface-2 px-1 py-0.5 text-[9.5px] font-bold tracking-wide text-ink-muted uppercase">
+                liste
+              </span>
+            ) : null}
+          </span>
           {contact.name ? (
             <span className="truncate text-[11px] font-medium text-ink-muted">{contact.email}</span>
           ) : null}

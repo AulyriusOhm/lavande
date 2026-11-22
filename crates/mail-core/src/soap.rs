@@ -298,6 +298,29 @@ pub struct ServerFilterRule {
     pub raw: Value,
 }
 
+/// One tag of the account. `color` is the number the server keeps (0 = none,
+/// 1-9 = the palette clients show, up to 127); `count` is how many items carry
+/// it, when the server reports it.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Tag {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub color: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<i64>,
+}
+
+/// One entry of the company address book: a contact, a distribution list or a
+/// resource. `kind` is `group` when Zimbra answers a group or a list.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct GalEntry {
+    pub email: String,
+    pub name: String,
+    /// `contact` or `group`.
+    pub kind: String,
+}
+
 /// Out-of-office answer of the account, in the terms of the Zimbra prefs.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct Vacation {
@@ -478,6 +501,158 @@ impl SoapClient {
             ),
         ];
         self.modify_prefs(&prefs).await
+    }
+
+    /// Every tag of the account, with the colour and the item count it carries.
+    pub async fn get_tags(&self) -> Result<Vec<Tag>, MailError> {
+        let answer: Value = self
+            .request(json!({"GetTagRequest": {"_jsns": MAIL_NS}}))
+            .await?;
+        Ok(as_list(answer.get("tag"))
+            .into_iter()
+            .map(tag_of)
+            .filter(|tag| !tag.id.is_empty())
+            .collect())
+    }
+
+    /// Creates a tag and returns it as the server stored it.
+    pub async fn create_tag(&self, name: &str, color: u8) -> Result<Tag, MailError> {
+        let answer: Value = self
+            .request(json!({"CreateTagRequest": {
+                "_jsns": MAIL_NS,
+                "tag": {"name": name, "color": color},
+            }}))
+            .await?;
+        let tag = as_list(answer.get("tag"))
+            .into_iter()
+            .next()
+            .map(tag_of)
+            .unwrap_or_default();
+        if tag.id.is_empty() {
+            return Err(MailError::Soap(
+                "le serveur Zimbra n'a pas renvoyé le tag créé".to_string(),
+            ));
+        }
+        Ok(tag)
+    }
+
+    /// Renames a tag, recolours it, or both: `TagAction` carries one `update`.
+    pub async fn modify_tag(
+        &self,
+        id: &str,
+        name: Option<&str>,
+        color: Option<u8>,
+    ) -> Result<(), MailError> {
+        let mut action = Map::new();
+        action.insert("op".to_string(), json!("update"));
+        action.insert("id".to_string(), json!(id));
+        if let Some(name) = name {
+            action.insert("name".to_string(), json!(name));
+        }
+        if let Some(color) = color {
+            action.insert("color".to_string(), json!(color));
+        }
+        self.request_empty(json!({"TagActionRequest": {
+            "_jsns": MAIL_NS,
+            "action": Value::Object(action),
+        }}))
+        .await
+    }
+
+    /// Deletes a tag: the server drops it from the items that carried it.
+    pub async fn delete_tag(&self, id: &str) -> Result<(), MailError> {
+        self.request_empty(json!({"TagActionRequest": {
+            "_jsns": MAIL_NS,
+            "action": {"op": "delete", "id": id},
+        }}))
+        .await
+    }
+
+    /// Tags of one message, found by its RFC 5322 `Message-ID`.
+    pub async fn message_tags(&self, message_id: &str) -> Result<Vec<Tag>, MailError> {
+        let id = self.message_of(message_id).await?;
+        let tags = self.tags_of(&id).await?;
+        Ok(tags)
+    }
+
+    /// Adds or removes a tag on one message, and answers its tags afterwards.
+    pub async fn tag_message(
+        &self,
+        message_id: &str,
+        tag_id: &str,
+        add: bool,
+    ) -> Result<Vec<Tag>, MailError> {
+        let id = self.message_of(message_id).await?;
+        let operation = if add { "tag" } else { "!tag" };
+        self.request_empty(json!({"MsgActionRequest": {
+            "_jsns": MAIL_NS,
+            "action": {"op": operation, "id": id, "tag": tag_id},
+        }}))
+        .await?;
+        self.tags_of(&id).await
+    }
+
+    /// The company address book, through `AutoCompleteGal`.
+    pub async fn gal(&self, query: &str, limit: u32) -> Result<Vec<GalEntry>, MailError> {
+        let answer: Value = self
+            .request(json!({"AutoCompleteGalRequest": {
+                "_jsns": ACCOUNT_NS,
+                "name": query,
+                "type": "all",
+                "limit": limit,
+            }}))
+            .await?;
+        Ok(as_list(answer.get("cn"))
+            .into_iter()
+            .filter_map(gal_entry)
+            .collect())
+    }
+
+    /// Zimbra id of a message, from its RFC 5322 `Message-ID` header.
+    async fn message_of(&self, message_id: &str) -> Result<String, MailError> {
+        let search: Value = self
+            .request(json!({"SearchRequest": {
+                "_jsns": MAIL_NS,
+                "query": format!("msgid:{}", search_term(message_id)),
+                "types": "message",
+                "limit": 1,
+            }}))
+            .await?;
+        as_list(search.get("m"))
+            .into_iter()
+            .map(|message| text(message.get("id")))
+            .find(|id| !id.is_empty())
+            .ok_or_else(|| {
+                MailError::Soap(format!(
+                    "message introuvable sur le serveur Zimbra ({})",
+                    message_id.trim()
+                ))
+            })
+    }
+
+    /// Tags of a message, from the ids it carries and the account catalog.
+    async fn tags_of(&self, id: &str) -> Result<Vec<Tag>, MailError> {
+        let message: Value = self
+            .request(json!({"GetMsgRequest": {"_jsns": MAIL_NS, "m": {"id": id, "html": 0}}}))
+            .await?;
+        let mut carried: Vec<String> = Vec::new();
+        for message in as_list(message.get("m")) {
+            for tag in text(message.get("t")).split(',') {
+                let tag = tag.trim();
+                if !tag.is_empty() && !carried.iter().any(|seen| seen == tag) {
+                    carried.push(tag.to_string());
+                }
+            }
+        }
+        if carried.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .get_tags()
+            .await?
+            .into_iter()
+            .filter(|tag| carried.contains(&tag.id))
+            .collect())
     }
 
     /// One POST. `token` is `None` for the `AuthRequest` itself.
@@ -837,6 +1012,78 @@ impl FilterRule {
             return Err("une action est incomplète");
         }
         Ok(())
+    }
+}
+
+/// One `tag` element of a `GetTagResponse` or of a `CreateTagResponse`.
+fn tag_of(value: &Value) -> Tag {
+    Tag {
+        id: text(value.get("id")),
+        name: text(value.get("name")),
+        color: number(value.get("color")).unwrap_or(0).clamp(0, 127) as u8,
+        count: number(value.get("n")),
+    }
+}
+
+/// One `cn` element of an `AutoCompleteGalResponse`: a contact, a distribution
+/// list or a resource, whose address is the one a mail is sent to.
+fn gal_entry(value: &Value) -> Option<GalEntry> {
+    let attrs = value.get("_attrs");
+    let attr = |name: &str| {
+        attrs
+            .and_then(|attrs| attrs.get(name))
+            .map(|field| text(Some(field)))
+            .unwrap_or_default()
+    };
+    let email = first_text([
+        text(value.get("email")),
+        text(value.get("dlist")),
+        attr("email"),
+        attr("dlist"),
+    ])?;
+    let name = first_text([
+        text(value.get("fileAsStr")),
+        attr("fullName"),
+        attr("displayName"),
+        email.clone(),
+    ])
+    .unwrap_or_else(|| email.clone());
+    let group = text(value.get("type")).eq_ignore_ascii_case("group")
+        || !text(value.get("dlist")).trim().is_empty()
+        || attr("type").eq_ignore_ascii_case("group");
+    Some(GalEntry {
+        email,
+        name,
+        kind: if group { "group" } else { "contact" }.to_string(),
+    })
+}
+
+fn first_text<const N: usize>(values: [String; N]) -> Option<String> {
+    values
+        .into_iter()
+        .find(|value| !value.trim().is_empty())
+        .map(|value| value.trim().to_string())
+}
+
+fn number(value: Option<&Value>) -> Option<i64> {
+    match value? {
+        Value::Number(number) => number.as_i64(),
+        Value::String(text) => text.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+/// The `msgid:` term of a search: the `Message-ID` without its angle brackets,
+/// quoted when the value holds a character the query would cut on.
+fn search_term(message_id: &str) -> String {
+    let value = message_id
+        .trim()
+        .trim_matches(|letter| letter == '<' || letter == '>')
+        .trim();
+    if value.contains([' ', '"', '\\', '(', ')']) {
+        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        value.to_string()
     }
 }
 
@@ -1513,6 +1760,219 @@ mod tests {
                 ],
             })
         );
+    }
+
+    const TAGS_ANSWER: &str = r#"{"Body":{"GetTagResponse":{"_jsns":"urn:zimbraMail","tag":[
+        {"id":"1","name":"Travail","color":5,"u":0,"n":3},
+        {"id":"2","name":"À lire","color":0}]}}}"#;
+
+    const CREATED_ANSWER: &str = r#"{"Body":{"CreateTagResponse":{"_jsns":"urn:zimbraMail",
+        "tag":{"id":"9","name":"Projet","color":3,"n":0}}}}"#;
+
+    const ACTION_DONE: &str = r#"{"Body":{"TagActionResponse":{"_jsns":"urn:zimbraMail","action":{"op":"update","id":"9"}}}}"#;
+
+    const MSG_ACTION_DONE: &str = r#"{"Body":{"MsgActionResponse":{"_jsns":"urn:zimbraMail"}}}"#;
+
+    const SEARCH_ANSWER: &str = r#"{"Body":{"SearchResponse":{"_jsns":"urn:zimbraMail",
+        "sortBy":"dateDesc","more":false,"m":[{"id":"258","su":"Facture"}]}}}"#;
+
+    const EMPTY_SEARCH: &str = r#"{"Body":{"SearchResponse":{"_jsns":"urn:zimbraMail",
+        "more":false,"m":[]}}}"#;
+
+    const MESSAGE_ANSWER: &str = r#"{"Body":{"GetMsgResponse":{"_jsns":"urn:zimbraMail",
+        "m":[{"id":"258","t":"1,2","tn":"Travail,À lire"}]}}}"#;
+
+    const GAL_ANSWER: &str = r#"{"Body":{"AutoCompleteGalResponse":{"_jsns":"urn:zimbraAccount",
+        "more":false,"cn":[
+        {"id":"7f2c","fileAsStr":"Roman FELDEN","email":"roman@exemple.tld","type":"account"},
+        {"id":"81aa","fileAsStr":"Équipe support","email":"support@exemple.tld","type":"group"},
+        {"id":"9b31","fileAsStr":"Salle Mozart","email":"mozart@exemple.tld"}]}}}"#;
+
+    #[tokio::test]
+    async fn the_tags_of_the_account_are_read() {
+        let (url, received) = serve(vec![AUTH_ANSWER, TAGS_ANSWER]).await;
+        let client = SoapClient::new(&url, "roman@exemple.tld", "secret").expect("client");
+        let tags = client.get_tags().await.expect("GetTag");
+        assert_eq!(
+            tags,
+            vec![
+                Tag {
+                    id: "1".to_string(),
+                    name: "Travail".to_string(),
+                    color: 5,
+                    count: Some(3),
+                },
+                Tag {
+                    id: "2".to_string(),
+                    name: "À lire".to_string(),
+                    color: 0,
+                    count: None,
+                },
+            ]
+        );
+        let requests = received.lock().expect("journal");
+        assert_eq!(
+            requests[1]["Body"]["GetTagRequest"]["_jsns"],
+            "urn:zimbraMail"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tag_is_created_renamed_and_deleted() {
+        let (url, received) =
+            serve(vec![AUTH_ANSWER, CREATED_ANSWER, ACTION_DONE, ACTION_DONE]).await;
+        let client = SoapClient::new(&url, "roman@exemple.tld", "secret").expect("client");
+        let tag = client.create_tag("Projet", 3).await.expect("CreateTag");
+        assert_eq!(
+            tag,
+            Tag {
+                id: "9".to_string(),
+                name: "Projet".to_string(),
+                color: 3,
+                count: Some(0),
+            }
+        );
+        client
+            .modify_tag("9", Some("Projet 2026"), Some(6))
+            .await
+            .expect("TagAction update");
+        client.delete_tag("9").await.expect("TagAction delete");
+
+        let requests = received.lock().expect("journal");
+        assert_eq!(
+            requests[1]["Body"]["CreateTagRequest"]["tag"],
+            json!({"name": "Projet", "color": 3})
+        );
+        assert_eq!(
+            requests[2]["Body"]["TagActionRequest"]["action"],
+            json!({"op": "update", "id": "9", "name": "Projet 2026", "color": 6})
+        );
+        assert_eq!(
+            requests[3]["Body"]["TagActionRequest"]["action"],
+            json!({"op": "delete", "id": "9"})
+        );
+    }
+
+    #[tokio::test]
+    async fn the_tags_of_a_message_follow_its_message_id() {
+        let (url, received) = serve(vec![
+            AUTH_ANSWER,
+            SEARCH_ANSWER,
+            MESSAGE_ANSWER,
+            TAGS_ANSWER,
+        ])
+        .await;
+        let client = SoapClient::new(&url, "roman@exemple.tld", "secret").expect("client");
+        let tags = client
+            .message_tags("<abc.123@exemple.tld>")
+            .await
+            .expect("tags du message");
+        assert_eq!(
+            tags.iter().map(|tag| tag.name.as_str()).collect::<Vec<_>>(),
+            vec!["Travail", "À lire"]
+        );
+
+        let requests = received.lock().expect("journal");
+        let search = &requests[1]["Body"]["SearchRequest"];
+        assert_eq!(search["query"], "msgid:abc.123@exemple.tld");
+        assert_eq!(search["types"], "message");
+        assert_eq!(search["limit"], 1);
+        assert_eq!(
+            requests[2]["Body"]["GetMsgRequest"]["m"],
+            json!({"id": "258", "html": 0})
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tag_is_posed_and_removed_on_a_message() {
+        let (url, received) = serve(vec![
+            AUTH_ANSWER,
+            SEARCH_ANSWER,
+            MSG_ACTION_DONE,
+            MESSAGE_ANSWER,
+            TAGS_ANSWER,
+            SEARCH_ANSWER,
+            MSG_ACTION_DONE,
+            MESSAGE_ANSWER,
+            TAGS_ANSWER,
+        ])
+        .await;
+        let client = SoapClient::new(&url, "roman@exemple.tld", "secret").expect("client");
+        let after_add = client
+            .tag_message("abc.123@exemple.tld", "2", true)
+            .await
+            .expect("pose");
+        assert_eq!(after_add.len(), 2);
+        client
+            .tag_message("abc.123@exemple.tld", "2", false)
+            .await
+            .expect("retrait");
+
+        let requests = received.lock().expect("journal");
+        assert_eq!(
+            requests[2]["Body"]["MsgActionRequest"]["action"],
+            json!({"op": "tag", "id": "258", "tag": "2"})
+        );
+        assert_eq!(
+            requests[6]["Body"]["MsgActionRequest"]["action"],
+            json!({"op": "!tag", "id": "258", "tag": "2"})
+        );
+    }
+
+    #[tokio::test]
+    async fn a_message_the_server_does_not_know_is_an_honest_error() {
+        let (url, _) = serve(vec![AUTH_ANSWER, EMPTY_SEARCH]).await;
+        let client = SoapClient::new(&url, "roman@exemple.tld", "secret").expect("client");
+        let error = client
+            .message_tags("inconnu@exemple.tld")
+            .await
+            .expect_err("message absent");
+        assert!(matches!(error, MailError::Soap(_)), "{error}");
+        assert!(error.to_string().contains("inconnu@exemple.tld"), "{error}");
+        assert!(!error.to_string().contains("secret"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn the_company_address_book_is_read() {
+        let (url, received) = serve(vec![AUTH_ANSWER, GAL_ANSWER]).await;
+        let client = SoapClient::new(&url, "roman@exemple.tld", "secret").expect("client");
+        let entries = client.gal("sup", 8).await.expect("AutoCompleteGal");
+        assert_eq!(
+            entries,
+            vec![
+                GalEntry {
+                    email: "roman@exemple.tld".to_string(),
+                    name: "Roman FELDEN".to_string(),
+                    kind: "contact".to_string(),
+                },
+                GalEntry {
+                    email: "support@exemple.tld".to_string(),
+                    name: "Équipe support".to_string(),
+                    kind: "group".to_string(),
+                },
+                GalEntry {
+                    email: "mozart@exemple.tld".to_string(),
+                    name: "Salle Mozart".to_string(),
+                    kind: "contact".to_string(),
+                },
+            ]
+        );
+        let requests = received.lock().expect("journal");
+        let request = &requests[1]["Body"]["AutoCompleteGalRequest"];
+        assert_eq!(request["_jsns"], "urn:zimbraAccount");
+        assert_eq!(request["name"], "sup");
+        assert_eq!(request["type"], "all");
+        assert_eq!(request["limit"], 8);
+    }
+
+    #[test]
+    fn the_search_term_of_a_message_id_loses_its_brackets() {
+        assert_eq!(
+            search_term(" <abc.123@exemple.tld> "),
+            "abc.123@exemple.tld"
+        );
+        assert_eq!(search_term("abc@exemple.tld"), "abc@exemple.tld");
+        assert_eq!(search_term("<a b@exemple.tld>"), "\"a b@exemple.tld\"");
     }
 
     #[test]

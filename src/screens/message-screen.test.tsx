@@ -11,7 +11,7 @@ const { attachment, saveBlob } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/api", () => ({
-  mailApi: { attachment },
+  mailApi: { attachment, zimbraMessageTags: async () => [] },
   errorText: (error: unknown) => (error instanceof Error ? error.message : "erreur inconnue"),
 }));
 

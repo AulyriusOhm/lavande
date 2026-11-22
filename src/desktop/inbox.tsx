@@ -93,6 +93,7 @@ import { NumberTicker } from "@/components/ui/number-ticker";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { MailBody, MailBodyLoading } from "@/components/mail-body";
 import { MailRecipients } from "@/components/mail-recipients";
+import { MessageTags } from "@/components/message-tags";
 import { MailContextMenu } from "@/components/mail-context-menu";
 import { AnalysePanel } from "@/components/analyse-panel";
 import { CategoryManagerSheet, categoryColorStyle } from "@/components/category-manager-sheet";
@@ -2919,6 +2920,7 @@ export function DesktopInbox({
                   </div>
 
                   <MailRecipients mail={mail} className="mt-2" />
+                  <MessageTags source={mail.source} />
 
                   {mail.pgp !== "none" ? (
                     <div className="mt-3.5 flex items-center gap-2.5 rounded-[14px] border border-emerald-500/25 bg-emerald-500/10 px-3.5 py-2.5 text-emerald-700 dark:text-emerald-300">

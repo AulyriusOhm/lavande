@@ -7,21 +7,33 @@
 //! Les filtres et le message d'absence vivent sur le serveur : le démon les lit,
 //! applique une modification et renvoie la liste entière, pour qu'une règle
 //! qu'il ne comprend pas revienne telle quelle.
+//!
+//! Les étiquettes et l'annuaire d'entreprise viennent du même serveur : le
+//! message d'un compte local n'a pas d'identifiant Zimbra, il est retrouvé par
+//! son `Message-ID` (voir [`message_id_of`]).
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::routing::{get, patch};
 use axum::{Json, Router};
 use lavande_mail::config::AuthConfig;
 use lavande_mail::soap::{
-    account_endpoint, zimbra_date, AccountInfo, FilterRule, ServerFilterRule, SoapClient, Vacation,
+    account_endpoint, zimbra_date, AccountInfo, FilterRule, GalEntry, ServerFilterRule, SoapClient,
+    Tag, Vacation,
 };
 use serde::Deserialize;
 
 use crate::error::ApiError;
 use crate::state::AppState;
+
+/// Plus longue couleur Zimbra acceptée (l'affichage client s'arrête à 9).
+const MAX_TAG_COLOR: u8 = 127;
+
+/// Nombre de suggestions GAL demandées quand le front n'en dit pas plus.
+const GAL_LIMIT: u32 = 8;
+const GAL_MAX: u32 = 50;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -34,6 +46,16 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/accounts/{id}/zimbra/vacation",
             get(vacation).put(save_vacation),
         )
+        .route("/api/accounts/{id}/zimbra/tags", get(tags).post(create_tag))
+        .route(
+            "/api/accounts/{id}/zimbra/tags/{tag_id}",
+            patch(change_tag).delete(delete_tag),
+        )
+        .route(
+            "/api/accounts/{id}/zimbra/message-tags",
+            get(message_tags).post(tag_message),
+        )
+        .route("/api/accounts/{id}/zimbra/gal", get(gal))
 }
 
 /// Client SOAP du compte : mot de passe au coffre, hôte IMAP pour endpoint.
@@ -227,4 +249,202 @@ fn check_date(date: Option<&str>, end_of_day: bool) -> Result<Option<String>, Ap
             .map(|_| Some(date.to_string()))
             .ok_or_else(|| ApiError::bad_request("zimbra", "date attendue au format AAAA-MM-JJ")),
     }
+}
+
+/// Toutes les étiquettes du compte, avec leur couleur et leur compte d'items.
+async fn tags(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<Tag>>, ApiError> {
+    let client = soap_client(&state, &id).await?;
+    let tags = client.get_tags().await?;
+    tracing::debug!(account = %id, count = tags.len(), "SOAP Zimbra : GetTag");
+    Ok(Json(tags))
+}
+
+#[derive(Deserialize)]
+struct NewTag {
+    name: String,
+    #[serde(default)]
+    color: u8,
+}
+
+async fn create_tag(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<NewTag>,
+) -> Result<(StatusCode, Json<Tag>), ApiError> {
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::bad_request(
+            "zimbra",
+            "le nom de l'étiquette est vide",
+        ));
+    }
+    if request.color > MAX_TAG_COLOR {
+        return Err(ApiError::bad_request(
+            "zimbra",
+            format!("couleur Zimbra attendue entre 0 et {MAX_TAG_COLOR}"),
+        ));
+    }
+    let client = soap_client(&state, &id).await?;
+    let tag = client.create_tag(name, request.color).await?;
+    tracing::debug!(account = %id, name, "SOAP Zimbra : CreateTag");
+    Ok((StatusCode::CREATED, Json(tag)))
+}
+
+#[derive(Deserialize)]
+struct TagChange {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    color: Option<u8>,
+}
+
+/// Renomme et/ou recolore une étiquette : un seul `TagAction op="update"`.
+async fn change_tag(
+    Path((id, tag_id)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+    Json(change): Json<TagChange>,
+) -> Result<StatusCode, ApiError> {
+    let name = change.name.as_deref().map(str::trim);
+    if name.is_some_and(str::is_empty) {
+        return Err(ApiError::bad_request(
+            "zimbra",
+            "le nom de l'étiquette est vide",
+        ));
+    }
+    if name.is_none() && change.color.is_none() {
+        return Err(ApiError::bad_request(
+            "zimbra",
+            "rien à changer : ni nom ni couleur",
+        ));
+    }
+    if change.color.is_some_and(|color| color > MAX_TAG_COLOR) {
+        return Err(ApiError::bad_request(
+            "zimbra",
+            format!("couleur Zimbra attendue entre 0 et {MAX_TAG_COLOR}"),
+        ));
+    }
+    let client = soap_client(&state, &id).await?;
+    client.modify_tag(&tag_id, name, change.color).await?;
+    tracing::debug!(account = %id, "SOAP Zimbra : TagAction update");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_tag(
+    Path((id, tag_id)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+) -> Result<StatusCode, ApiError> {
+    let client = soap_client(&state, &id).await?;
+    client.delete_tag(&tag_id).await?;
+    tracing::debug!(account = %id, "SOAP Zimbra : TagAction delete");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct MessageRef {
+    folder: String,
+    uid: u32,
+}
+
+#[derive(Deserialize)]
+struct TagMessage {
+    folder: String,
+    uid: u32,
+    tag_id: String,
+    #[serde(default)]
+    add: bool,
+}
+
+/// Étiquettes du message ouvert, retrouvé sur le serveur par son `Message-ID`.
+async fn message_tags(
+    Path(id): Path<String>,
+    Query(reference): Query<MessageRef>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<Tag>>, ApiError> {
+    let message_id = message_id_of(&state, &id, &reference.folder, reference.uid)?;
+    let client = soap_client(&state, &id).await?;
+    let tags = client.message_tags(&message_id).await?;
+    tracing::debug!(account = %id, uid = reference.uid, "SOAP Zimbra : étiquettes du message");
+    Ok(Json(tags))
+}
+
+/// Pose ou retire une étiquette, et rend les étiquettes du message après coup.
+async fn tag_message(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<TagMessage>,
+) -> Result<Json<Vec<Tag>>, ApiError> {
+    let tag_id = request.tag_id.trim();
+    if tag_id.is_empty() {
+        return Err(ApiError::bad_request(
+            "zimbra",
+            "l'étiquette visée est vide",
+        ));
+    }
+    let message_id = message_id_of(&state, &id, &request.folder, request.uid)?;
+    let client = soap_client(&state, &id).await?;
+    let tags = client.tag_message(&message_id, tag_id, request.add).await?;
+    tracing::debug!(
+        account = %id,
+        uid = request.uid,
+        add = request.add,
+        "SOAP Zimbra : MsgAction"
+    );
+    Ok(Json(tags))
+}
+
+#[derive(Deserialize)]
+struct GalQuery {
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+/// Annuaire de l'entreprise : contacts, listes de diffusion et ressources.
+async fn gal(
+    Path(id): Path<String>,
+    Query(query): Query<GalQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<GalEntry>>, ApiError> {
+    let term = query.q.trim();
+    if term.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+    let limit = query.limit.unwrap_or(GAL_LIMIT).clamp(1, GAL_MAX);
+    let client = soap_client(&state, &id).await?;
+    let entries = client.gal(term, limit).await?;
+    tracing::debug!(account = %id, count = entries.len(), "SOAP Zimbra : AutoCompleteGal");
+    Ok(Json(entries))
+}
+
+/// `Message-ID` du message stocké : Zimbra ne connaît que celui-là, et un
+/// message qui n'en porte pas ne peut pas être retrouvé sur le serveur.
+fn message_id_of(
+    state: &AppState,
+    account: &str,
+    folder: &str,
+    uid: u32,
+) -> Result<String, ApiError> {
+    let stored = state
+        .store()
+        .get_message(account, folder, uid)?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "zimbra",
+                format!("message {uid} introuvable dans « {folder} »"),
+            )
+        })?;
+    let message_id = stored.message_id.unwrap_or_default();
+    let message_id = message_id.trim();
+    if message_id.is_empty() {
+        return Err(ApiError::bad_request(
+            "zimbra",
+            "ce message n'a pas de Message-ID : Zimbra ne peut pas le retrouver",
+        ));
+    }
+    Ok(message_id.to_string())
 }

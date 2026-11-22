@@ -73,6 +73,7 @@ function stubDaemon(options: { filters?: ZimbraFilter[]; filterStatus?: number; 
     const method = init?.method ?? "GET";
     if (url === "/api/accounts") return reply(ACCOUNTS);
     if (url.endsWith("/folders") || url.endsWith("/folder-counts")) return reply([]);
+    if (url.endsWith("/zimbra/tags")) return reply([]);
     if (url.endsWith("/zimbra/filters")) {
       if (method === "POST") {
         const status = options.writeStatus ?? 204;
@@ -119,6 +120,8 @@ function renderSettings() {
 }
 
 const section = () => document.getElementById("reglages-messagerie") as HTMLElement;
+/** Le panneau des filtres : la section porte aussi les étiquettes. */
+const panel = () => document.querySelector('[data-testid="zimbra-filters"]') as HTMLElement;
 
 beforeEach(() => {
   vi.unstubAllEnvs();
@@ -171,8 +174,8 @@ describe("Réglages · filtres et absence Zimbra", () => {
         },
       }),
     );
-    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("créé sur le serveur"));
-    expect(screen.getByRole("status").textContent).toContain("dossier");
+    await waitFor(() => expect(within(panel()).getByRole("status").textContent).toContain("créé sur le serveur"));
+    expect(within(panel()).getByRole("status").textContent).toContain("dossier");
   });
 
   it("supprime un filtre après confirmation", async () => {
@@ -190,7 +193,7 @@ describe("Réglages · filtres et absence Zimbra", () => {
       RequestInit,
     ];
     expect(JSON.parse(String(init.body))).toEqual({ action: "delete", rule: { name: "facture" } });
-    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("supprimé du serveur"));
+    await waitFor(() => expect(within(panel()).getByRole("status").textContent).toContain("supprimé du serveur"));
   });
 
   it("enregistre le message d'absence et ses dates sur le serveur", async () => {
@@ -216,15 +219,15 @@ describe("Réglages · filtres et absence Zimbra", () => {
       from: "2026-01-01",
       until: "2026-01-15",
     });
-    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Message d'absence enregistré"));
+    await waitFor(() => expect(within(panel()).getByRole("status").textContent).toContain("Message d'absence enregistré"));
   });
 
   it("remonte un serveur muet sans rien inventer", async () => {
     stubDaemon({ filterStatus: 502 });
     renderSettings();
 
-    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("serveur Zimbra injoignable"));
-    expect(screen.getByRole("status").textContent).toContain("soap");
+    await waitFor(() => expect(within(panel()).getByRole("status").textContent).toContain("serveur Zimbra injoignable"));
+    expect(within(panel()).getByRole("status").textContent).toContain("soap");
     expect(within(section()).getByText(/Filtres illisibles/)).toBeTruthy();
   });
 
@@ -239,8 +242,8 @@ describe("Réglages · filtres et absence Zimbra", () => {
     fireEvent.change(screen.getByLabelText("Dossier de l'action 1"), { target: { value: "Archive" } });
     fireEvent.click(screen.getByRole("button", { name: "Enregistrer le filtre" }));
 
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Écriture refusée"));
-    expect(screen.getByRole("alert").textContent).toContain("service.FAILURE");
+    await waitFor(() => expect(within(panel()).getByRole("alert").textContent).toContain("Écriture refusée"));
+    expect(within(panel()).getByRole("alert").textContent).toContain("service.FAILURE");
     expect(within(section()).queryByText(/créé sur le serveur/)).toBeNull();
   });
 

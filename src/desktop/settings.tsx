@@ -116,6 +116,7 @@ import { toApiDecisionConfig } from "@/lib/triage";
 import { CategoryManagerSheet, categoryColorStyle } from "@/components/category-manager-sheet";
 import { ContactsSyncRow } from "@/components/contacts-sync-row";
 import { ZimbraFiltersPanel } from "@/components/zimbra-filters";
+import { ZimbraTagsPanel } from "@/components/zimbra-tags";
 import { TrustedWhitelistSection } from "@/components/trusted-whitelist";
 import { DEFAULT_COPILOT_CLIENT_ID, copilotModels, useCopilotSession } from "@/lib/copilot";
 import { openExternal } from "@/lib/open-external";
@@ -1492,6 +1493,9 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
 
               <Block id="messagerie" label="Filtres & absence" hint="sur le serveur Zimbra">
                 <ZimbraFiltersPanel />
+                <div className="mt-3">
+                  <ZimbraTagsPanel />
+                </div>
               </Block>
 
               <Block id="moi-equipe" label="Moi et mon équipe" hint="identité, rôle, équipe par boîte">

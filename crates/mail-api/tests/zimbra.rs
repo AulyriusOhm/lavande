@@ -10,6 +10,7 @@ use axum::http::{header, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::Router;
+use lavande_mail::model::{Address, Flags, Message, PgpState};
 use lavande_mail::tls::TlsOptions;
 use lavande_mail_api::app;
 use lavande_mail_api::secrets::{AccountSecrets, SecretBackend};
@@ -54,6 +55,31 @@ const WRITTEN_ANSWER: &str = r#"{"Body":{"ModifyFilterRulesResponse":{"_jsns":"u
 
 const PREFS_WRITTEN: &str = r#"{"Body":{"ModifyPrefsResponse":{"_jsns":"urn:zimbraAccount"}}}"#;
 
+const TAGS_ANSWER: &str = r#"{"Body":{"GetTagResponse":{"_jsns":"urn:zimbraMail","tag":[
+    {"id":"1","name":"Travail","color":5,"u":0,"n":3},
+    {"id":"2","name":"À lire","color":0}]}}}"#;
+
+const CREATED_ANSWER: &str = r#"{"Body":{"CreateTagResponse":{"_jsns":"urn:zimbraMail",
+    "tag":{"id":"9","name":"Projet","color":3,"n":0}}}}"#;
+
+const TAG_ACTION_DONE: &str = r#"{"Body":{"TagActionResponse":{"_jsns":"urn:zimbraMail","action":{"op":"update","id":"9"}}}}"#;
+
+const MSG_ACTION_DONE: &str = r#"{"Body":{"MsgActionResponse":{"_jsns":"urn:zimbraMail"}}}"#;
+
+const SEARCH_ANSWER: &str = r#"{"Body":{"SearchResponse":{"_jsns":"urn:zimbraMail",
+    "sortBy":"dateDesc","more":false,"m":[{"id":"258","su":"Planning"}]}}}"#;
+
+const EMPTY_SEARCH: &str = r#"{"Body":{"SearchResponse":{"_jsns":"urn:zimbraMail",
+    "more":false,"m":[]}}}"#;
+
+const MESSAGE_ANSWER: &str = r#"{"Body":{"GetMsgResponse":{"_jsns":"urn:zimbraMail",
+    "m":[{"id":"258","t":"1","tn":"Travail"}]}}}"#;
+
+const GAL_ANSWER: &str = r#"{"Body":{"AutoCompleteGalResponse":{"_jsns":"urn:zimbraAccount",
+    "more":false,"cn":[
+    {"id":"7f2c","fileAsStr":"Roman FELDEN","email":"roman@exemple.tld","type":"account"},
+    {"id":"81aa","fileAsStr":"Équipe support","email":"support@exemple.tld","type":"group"}]}}}"#;
+
 /// Faux Zimbra : une réponse par opération, et les corps reçus dans l'ordre.
 #[derive(Clone)]
 struct Zimbra {
@@ -63,6 +89,13 @@ struct Zimbra {
     written: &'static str,
     prefs: &'static str,
     prefs_written: &'static str,
+    tags: &'static str,
+    created: &'static str,
+    tag_action: &'static str,
+    search: &'static str,
+    message: &'static str,
+    msg_action: &'static str,
+    gal: &'static str,
     seen: Arc<Mutex<Vec<Value>>>,
 }
 
@@ -75,6 +108,13 @@ impl Zimbra {
             written: WRITTEN_ANSWER,
             prefs: VACATION_ANSWER,
             prefs_written: PREFS_WRITTEN,
+            tags: TAGS_ANSWER,
+            created: CREATED_ANSWER,
+            tag_action: TAG_ACTION_DONE,
+            search: SEARCH_ANSWER,
+            message: MESSAGE_ANSWER,
+            msg_action: MSG_ACTION_DONE,
+            gal: GAL_ANSWER,
             seen: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -100,6 +140,20 @@ async fn soap_answer(State(zimbra): State<Zimbra>, body: String) -> Response {
         zimbra.prefs
     } else if called.get("ModifyPrefsRequest").is_some() {
         zimbra.prefs_written
+    } else if called.get("GetTagRequest").is_some() {
+        zimbra.tags
+    } else if called.get("CreateTagRequest").is_some() {
+        zimbra.created
+    } else if called.get("TagActionRequest").is_some() {
+        zimbra.tag_action
+    } else if called.get("SearchRequest").is_some() {
+        zimbra.search
+    } else if called.get("GetMsgRequest").is_some() {
+        zimbra.message
+    } else if called.get("MsgActionRequest").is_some() {
+        zimbra.msg_action
+    } else if called.get("AutoCompleteGalRequest").is_some() {
+        zimbra.gal
     } else {
         FAILURE_ANSWER
     };
@@ -601,6 +655,349 @@ async fn an_oauth_account_has_no_filters() {
     .await;
 
     let (status, body) = get(&state, "/api/accounts/gmail/zimbra/filters").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "corps : {body:?}");
+    assert_eq!(json(&body)["kind"], "zimbra");
+}
+
+/// Un message du store : Zimbra ne le retrouve que par son `Message-ID`.
+fn stored_message(account: &str, uid: u32, message_id: Option<&str>) -> Message {
+    Message {
+        account_id: account.to_string(),
+        folder_path: "INBOX".to_string(),
+        uid,
+        uidvalidity: 1,
+        thread_id: format!("t{uid}"),
+        message_id: message_id.map(str::to_string),
+        in_reply_to: None,
+        references: Vec::new(),
+        from: Address {
+            name: Some("Camille".to_string()),
+            email: "camille@exemple.tld".to_string(),
+        },
+        to: vec![Address {
+            name: Some("Roman".to_string()),
+            email: "roman@exemple.tld".to_string(),
+        }],
+        cc: Vec::new(),
+        subject: "Planning".to_string(),
+        date: chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 11, 20, 10, 0, 0).single(),
+        flags: Flags::default(),
+        size: 10,
+        pgp: PgpState::None,
+        pgp_detail: None,
+        preview: "aperçu".to_string(),
+        body_text: None,
+        body_html: None,
+        attachments: Vec::new(),
+    }
+}
+
+async fn link_account_with_message(
+    directory: &TempDir,
+    state: &Arc<AppState>,
+    host: &str,
+    uid: u32,
+    message_id: Option<&str>,
+) {
+    link_password_account(directory, state, host).await;
+    state
+        .store()
+        .upsert_account("pro", "Pro", "roman@exemple.tld")
+        .expect("compte indexé");
+    state
+        .store()
+        .upsert_message(&stored_message("pro", uid, message_id))
+        .expect("message indexé");
+}
+
+#[tokio::test]
+async fn the_tags_of_the_account_are_listed() {
+    let (directory, state) = state().await;
+    let zimbra = Zimbra::new();
+    let host = serve(zimbra).await;
+    link_password_account(&directory, &state, &host).await;
+
+    let (status, body) = get(&state, "/api/accounts/pro/zimbra/tags").await;
+    assert_eq!(status, StatusCode::OK, "corps : {body:?}");
+    let tags = json(&body);
+    assert_eq!(tags[0]["id"], "1");
+    assert_eq!(tags[0]["name"], "Travail");
+    assert_eq!(tags[0]["color"], 5);
+    assert_eq!(tags[0]["count"], 3);
+    assert_eq!(tags[1]["color"], 0);
+    assert!(tags[1].get("count").is_none(), "{tags}");
+}
+
+#[tokio::test]
+async fn a_tag_is_created_renamed_and_deleted_on_the_server() {
+    let (directory, state) = state().await;
+    let zimbra = Zimbra::new();
+    let host = serve(zimbra.clone()).await;
+    link_password_account(&directory, &state, &host).await;
+
+    let (status, body) = send(
+        &state,
+        "POST",
+        "/api/accounts/pro/zimbra/tags",
+        Some(json!({ "name": " Projet ", "color": 3 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "corps : {body:?}");
+    assert_eq!(json(&body)["id"], "9");
+
+    let (status, _) = send(
+        &state,
+        "PATCH",
+        "/api/accounts/pro/zimbra/tags/9",
+        Some(json!({ "name": "Projet 2026", "color": 6 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _) = send(&state, "DELETE", "/api/accounts/pro/zimbra/tags/9", None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let requests = zimbra.requests();
+    let created = requests
+        .iter()
+        .find_map(|request| request["Body"].get("CreateTagRequest"))
+        .expect("CreateTag");
+    assert_eq!(created["tag"], json!({ "name": "Projet", "color": 3 }));
+    let actions: Vec<&Value> = requests
+        .iter()
+        .filter_map(|request| request["Body"].get("TagActionRequest"))
+        .map(|request| &request["action"])
+        .collect();
+    assert_eq!(
+        actions,
+        vec![
+            &json!({ "op": "update", "id": "9", "name": "Projet 2026", "color": 6 }),
+            &json!({ "op": "delete", "id": "9" }),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_tag_without_name_or_with_a_wrong_colour_is_refused() {
+    let (directory, state) = state().await;
+    let zimbra = Zimbra::new();
+    let host = serve(zimbra.clone()).await;
+    link_password_account(&directory, &state, &host).await;
+
+    let (status, body) = send(
+        &state,
+        "POST",
+        "/api/accounts/pro/zimbra/tags",
+        Some(json!({ "name": " ", "color": 2 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "corps : {body:?}");
+    assert_eq!(json(&body)["kind"], "zimbra");
+
+    let (status, body) = send(
+        &state,
+        "POST",
+        "/api/accounts/pro/zimbra/tags",
+        Some(json!({ "name": "Trop", "color": 200 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "corps : {body:?}");
+    assert!(json(&body)["error"]
+        .as_str()
+        .expect("message")
+        .contains("entre 0 et 127"));
+
+    let (status, body) = send(
+        &state,
+        "PATCH",
+        "/api/accounts/pro/zimbra/tags/9",
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "corps : {body:?}");
+    assert!(zimbra
+        .requests()
+        .iter()
+        .all(|request| request["Body"].get("TagActionRequest").is_none()));
+}
+
+#[tokio::test]
+async fn the_tags_of_a_message_are_read_through_its_message_id() {
+    let (directory, state) = state().await;
+    let zimbra = Zimbra::new();
+    let host = serve(zimbra.clone()).await;
+    link_account_with_message(&directory, &state, &host, 7, Some("<m7@exemple.tld>")).await;
+
+    let (status, body) = get(
+        &state,
+        "/api/accounts/pro/zimbra/message-tags?folder=INBOX&uid=7",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "corps : {body:?}");
+    let tags = json(&body);
+    assert_eq!(tags[0]["name"], "Travail");
+    assert_eq!(tags[0]["color"], 5);
+
+    let requests = zimbra.requests();
+    let search = requests
+        .iter()
+        .find_map(|request| request["Body"].get("SearchRequest"))
+        .expect("Search");
+    assert_eq!(search["query"], "msgid:m7@exemple.tld", "{search}");
+    assert_eq!(search["limit"], 1);
+    let fetched = requests
+        .iter()
+        .find_map(|request| request["Body"].get("GetMsgRequest"))
+        .expect("GetMsg");
+    assert_eq!(fetched["m"], json!({ "id": "258", "html": 0 }));
+}
+
+#[tokio::test]
+async fn a_message_without_message_id_is_an_honest_error() {
+    let (directory, state) = state().await;
+    let zimbra = Zimbra::new();
+    let host = serve(zimbra.clone()).await;
+    link_account_with_message(&directory, &state, &host, 7, None).await;
+
+    let (status, body) = get(
+        &state,
+        "/api/accounts/pro/zimbra/message-tags?folder=INBOX&uid=7",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "corps : {body:?}");
+    let error = json(&body);
+    assert_eq!(error["kind"], "zimbra");
+    assert!(error["error"]
+        .as_str()
+        .expect("message")
+        .contains("Message-ID"));
+    assert!(zimbra
+        .requests()
+        .iter()
+        .all(|request| request["Body"].get("SearchRequest").is_none()));
+}
+
+#[tokio::test]
+async fn a_message_the_server_does_not_know_is_a_gateway_error() {
+    let (directory, state) = state().await;
+    let zimbra = Zimbra {
+        search: EMPTY_SEARCH,
+        ..Zimbra::new()
+    };
+    let host = serve(zimbra).await;
+    link_account_with_message(&directory, &state, &host, 7, Some("<m7@exemple.tld>")).await;
+
+    let (status, body) = get(
+        &state,
+        "/api/accounts/pro/zimbra/message-tags?folder=INBOX&uid=7",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "corps : {body:?}");
+    assert_eq!(json(&body)["kind"], "soap");
+}
+
+#[tokio::test]
+async fn a_tag_is_posed_then_removed_on_the_message() {
+    let (directory, state) = state().await;
+    let zimbra = Zimbra::new();
+    let host = serve(zimbra.clone()).await;
+    link_account_with_message(&directory, &state, &host, 7, Some("<m7@exemple.tld>")).await;
+
+    let (status, body) = send(
+        &state,
+        "POST",
+        "/api/accounts/pro/zimbra/message-tags",
+        Some(json!({ "folder": "INBOX", "uid": 7, "tag_id": "1", "add": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "corps : {body:?}");
+    assert_eq!(json(&body)[0]["name"], "Travail");
+
+    let (status, _) = send(
+        &state,
+        "POST",
+        "/api/accounts/pro/zimbra/message-tags",
+        Some(json!({ "folder": "INBOX", "uid": 7, "tag_id": "1", "add": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let requests = zimbra.requests();
+    let actions: Vec<Value> = requests
+        .iter()
+        .filter_map(|request| request["Body"].get("MsgActionRequest"))
+        .map(|request| request["action"].clone())
+        .collect();
+    assert_eq!(
+        actions,
+        vec![
+            json!({ "op": "tag", "id": "258", "tag": "1" }),
+            json!({ "op": "!tag", "id": "258", "tag": "1" }),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn the_company_address_book_answers_a_search() {
+    let (directory, state) = state().await;
+    let zimbra = Zimbra::new();
+    let host = serve(zimbra.clone()).await;
+    link_password_account(&directory, &state, &host).await;
+
+    let (status, body) = get(&state, "/api/accounts/pro/zimbra/gal?q=sup&limit=5").await;
+    assert_eq!(status, StatusCode::OK, "corps : {body:?}");
+    let entries = json(&body);
+    assert_eq!(entries[0]["email"], "roman@exemple.tld");
+    assert_eq!(entries[0]["name"], "Roman FELDEN");
+    assert_eq!(entries[0]["kind"], "contact");
+    assert_eq!(entries[1]["kind"], "group");
+    assert_eq!(entries[1]["email"], "support@exemple.tld");
+
+    let requests = zimbra.requests();
+    let asked = requests
+        .iter()
+        .find_map(|request| request["Body"].get("AutoCompleteGalRequest"))
+        .expect("AutoCompleteGal");
+    assert_eq!(asked["name"], "sup");
+    assert_eq!(asked["type"], "all");
+    assert_eq!(asked["limit"], 5);
+}
+
+#[tokio::test]
+async fn the_company_address_book_skips_an_empty_search() {
+    let (directory, state) = state().await;
+    let zimbra = Zimbra::new();
+    let host = serve(zimbra.clone()).await;
+    link_password_account(&directory, &state, &host).await;
+
+    let (status, body) = get(&state, "/api/accounts/pro/zimbra/gal?q=%20&limit=5").await;
+    assert_eq!(status, StatusCode::OK, "corps : {body:?}");
+    assert_eq!(json(&body), json!([]));
+    assert!(zimbra
+        .requests()
+        .iter()
+        .all(|request| request["Body"].get("AutoCompleteGalRequest").is_none()));
+}
+
+#[tokio::test]
+async fn an_oauth_account_has_no_tags_nor_gal() {
+    let (directory, state) = state().await;
+    link_account(
+        &directory,
+        &state,
+        oauth_account("gmail", "roman@gmail.com"),
+        AccountSecrets::OAuth2 {
+            client_secret: "secret-client".to_string(),
+            refresh_token: "secret-refresh".to_string(),
+        },
+    )
+    .await;
+
+    let (status, body) = get(&state, "/api/accounts/gmail/zimbra/tags").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "corps : {body:?}");
+    assert_eq!(json(&body)["kind"], "zimbra");
+
+    let (status, body) = get(&state, "/api/accounts/gmail/zimbra/gal?q=rom").await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "corps : {body:?}");
     assert_eq!(json(&body)["kind"], "zimbra");
 }

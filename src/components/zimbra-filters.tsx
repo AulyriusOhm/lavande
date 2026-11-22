@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Mail, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { ToggleRow } from "@/components/ui/primitives";
+import { useZimbraAccount } from "@/components/zimbra-account";
 import { Badge, DButton, DChip, SectionLabel, Surface, TextArea, TextInput } from "@/desktop/ui";
 import {
   errorText,
@@ -21,7 +22,6 @@ import {
   type ZimbraVacation,
 } from "@/lib/api";
 import { demoReadOnly, mailMode } from "@/lib/demo-mode";
-import { useMailStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 const COMPARISONS: { value: ZimbraFilterComparison; label: string }[] = [
@@ -133,10 +133,7 @@ export function ZimbraFiltersPanel({
   variant?: "desktop" | "mobile";
   readOnly?: boolean;
 }) {
-  const { accounts } = useMailStore();
-  const zimbraAccounts = accounts.filter((account) => !account.oauth);
-  const [selected, setSelected] = useState<string | null>(null);
-  const account = zimbraAccounts.find((entry) => entry.id === selected) ?? zimbraAccounts[0] ?? null;
+  const { accounts, zimbra: zimbraAccounts, account, select: setSelected } = useZimbraAccount();
 
   const [rules, setRules] = useState<ZimbraFilter[] | null>(null);
   const [vacation, setVacation] = useState<ZimbraVacation | null>(null);

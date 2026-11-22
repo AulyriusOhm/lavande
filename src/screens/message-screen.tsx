@@ -40,6 +40,7 @@ import { Avatar, IconButton } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { MailBody, MailBodyLoading } from "@/components/mail-body";
 import { MailRecipients } from "@/components/mail-recipients";
+import { MessageTags } from "@/components/message-tags";
 import { PgpNotice, PgpStatusBadge } from "@/components/ui/pgp-badge";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { InvitationBanner } from "@/components/invitation-banner";
@@ -685,6 +686,7 @@ export function MessageScreen({
           </div>
 
           <MailRecipients mail={mail} className="mt-2" />
+          <MessageTags source={mail.source} />
 
           {detailsOpen && (
             <dl className="mt-2 space-y-1 rounded-2xl bg-surface-2/70 px-3 py-2 text-[11.5px] font-medium text-ink-soft">
