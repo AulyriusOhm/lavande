@@ -487,7 +487,51 @@ export type ExternalEvent = {
   recurring: boolean;
   /** Instant UTC du créneau de l'occurrence (`AAAAMMJJTHHMMSSZ`) ; absent hors série. */
   recurrence_id?: string | null;
+  /** Adresse de l'organisateur, `mailto:` retiré. */
+  organizer?: string | null;
+  /** Adresses des invités, `mailto:` retiré. */
+  attendees?: string[] | null;
   source: string | null;
+};
+
+/** Qui convie un événement reçu (`ORGANIZER` du VEVENT iTIP). */
+export type InvitationParty = {
+  name: string | null;
+  email: string;
+};
+
+/** Un invité d'une invitation, avec la réponse qu'il a donnée. */
+export type InvitationGuest = {
+  email: string;
+  name: string | null;
+  /** `NEEDS-ACTION`, `ACCEPTED`, `TENTATIVE`, `DECLINED`… */
+  partstat: string;
+  role: string | null;
+};
+
+/** La pièce `text/calendar` d'un message, telle que le démon la projette. */
+export type Invitation = {
+  /** `REQUEST`, `CANCEL`, `REPLY`… : `REQUEST` quand le producteur l'a omis. */
+  method: string | null;
+  uid: string | null;
+  summary: string;
+  date: string;
+  start: string | null;
+  end: string | null;
+  all_day: boolean;
+  timezone: string | null;
+  organizer: InvitationParty | null;
+  attendees: InvitationGuest[];
+  sequence: number | null;
+};
+
+/** Les trois réponses qu'un lecteur peut donner, en `PARTSTAT`. */
+export type RsvpStatus = "ACCEPTED" | "TENTATIVE" | "DECLINED";
+
+/** Comment la réponse est partie : serveur CalDAV, ou mail à l'organisateur. */
+export type RsvpOutcome = {
+  via: "caldav" | "mail";
+  invitation: Invitation;
 };
 
 /** Un événement que le démon vient d'écrire : ses champs et l'etag de la ressource. */
@@ -501,6 +545,8 @@ export type CaldavEventInput = {
   end?: string;
   location?: string;
   description?: string;
+  /** Invités : le démon écrit `ORGANIZER`/`ATTENDEE`, le serveur envoie les invitations. */
+  attendees?: string[];
   /** ETag détenu par l'appelant : un etag périmé est refusé par le serveur (412). */
   etag?: string;
 };
@@ -792,6 +838,20 @@ export const mailApi = {
     request<ApiMessage>(
       `${accountPath(id)}/folders/${encodeURIComponent(folderPath)}/messages/${uid}?fetch_body=true`,
       { timeout: LONG_TIMEOUT },
+    ),
+
+  /** L'invitation iTIP du message (`null` quand il n'en porte pas). */
+  invitation: (id: string, folderPath: string, uid: number) =>
+    request<Invitation | null>(
+      `${accountPath(id)}/folders/${encodeURIComponent(folderPath)}/messages/${uid}/invitation`,
+      { timeout: LONG_TIMEOUT },
+    ),
+
+  /** Répond à une invitation : CalDAV d'abord, mail à l'organisateur en repli. */
+  rsvp: (id: string, folderPath: string, uid: number, status: RsvpStatus) =>
+    request<RsvpOutcome>(
+      `${accountPath(id)}/folders/${encodeURIComponent(folderPath)}/messages/${uid}/invitation/rsvp`,
+      { method: "POST", body: { status }, timeout: LONG_TIMEOUT },
     ),
 
   /** Les octets d'une pièce jointe : le démon les relit sur le serveur IMAP. */

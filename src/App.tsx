@@ -565,6 +565,7 @@ function PhoneApp({ native }: { native?: boolean }) {
               ...(next.start && next.end ? { start: next.start, end: next.end } : {}),
               location: next.location,
               description: next.description,
+              ...(next.attendees?.length ? { attendees: next.attendees } : {}),
             }),
           );
           notify("Rendez-vous mis à jour");

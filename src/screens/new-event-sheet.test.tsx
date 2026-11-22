@@ -240,3 +240,39 @@ describe("Nouvelle tâche mobile · préremplissage par NewTaskDraft", () => {
     });
   });
 });
+
+describe("Nouveau rendez-vous mobile · invités", () => {
+  it("transmet les adresses saisies, sans doublon", () => {
+    const onCreate = vi.fn<(event: CalendarEvent) => void>();
+    render(<NewEventSheet onClose={() => {}} onCreate={onCreate} draft={DRAFT} />);
+
+    fireEvent.change(screen.getByLabelText("Invités"), {
+      target: { value: "camille@studio-lilas.fr, Marc <marc@mail.fr>, camille@studio-lilas.fr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Créer le rendez-vous" }));
+
+    expect(onCreate.mock.calls[0][0].attendees).toEqual([
+      "camille@studio-lilas.fr",
+      "marc@mail.fr",
+    ]);
+  });
+
+  it("préremplit les invités d'un rendez-vous existant", () => {
+    render(
+      <NewEventSheet
+        onClose={() => {}}
+        onCreate={() => {}}
+        event={{
+          id: "e-1",
+          date: "2026-11-20",
+          start: "10:00",
+          end: "11:00",
+          title: "Revue",
+          attendees: ["camille@studio-lilas.fr"],
+        }}
+      />,
+    );
+
+    expect((screen.getByLabelText("Invités") as HTMLInputElement).value).toBe("camille@studio-lilas.fr");
+  });
+});

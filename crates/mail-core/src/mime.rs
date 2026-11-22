@@ -217,6 +217,46 @@ pub fn attachment_body(
     }
 }
 
+/// The `text/calendar` part of a raw message, decoded: the invitation iTIP a
+/// message may carry. `application/ics` is read too, the type some producers
+/// write. `None` when the message carries no such part. A PGP/MIME message is
+/// opened first, like [`attachment_body`].
+pub fn calendar_body(
+    raw: &[u8],
+    keyring: &PgpKeyring,
+) -> Result<Option<AttachmentBody>, MailError> {
+    let message = parse(raw)?;
+    match pgp_state(&message) {
+        PgpState::Encrypted => match pgp::mime::open(raw, keyring).entity {
+            Some(entity) => Ok(calendar_of_message(&parse(&entity)?)),
+            None => Ok(None),
+        },
+        PgpState::None | PgpState::Signed => Ok(calendar_of_message(&message)),
+    }
+}
+
+fn calendar_of_message(message: &mail_parser::Message<'_>) -> Option<AttachmentBody> {
+    message
+        .attachments()
+        .find(|part| is_calendar(&mime_of(part)))
+        .map(|part| AttachmentBody {
+            filename: part
+                .attachment_name()
+                .unwrap_or("invitation.ics")
+                .to_string(),
+            mime: mime_of(part),
+            data: part.contents().to_vec(),
+        })
+}
+
+/// Media type of an iTIP part, parameters (`; method=REQUEST`) ignored.
+fn is_calendar(mime: &str) -> bool {
+    matches!(
+        mime.split(';').next().unwrap_or_default().trim(),
+        "text/calendar" | "application/ics"
+    )
+}
+
 fn attachment_of_message(
     message: &mail_parser::Message<'_>,
     index: usize,

@@ -42,6 +42,7 @@ import { MailBody, MailBodyLoading } from "@/components/mail-body";
 import { MailRecipients } from "@/components/mail-recipients";
 import { PgpNotice, PgpStatusBadge } from "@/components/ui/pgp-badge";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
+import { InvitationBanner } from "@/components/invitation-banner";
 import { MeshGlow } from "@/components/ui/backdrops";
 
 export function MessageScreen({
@@ -743,6 +744,20 @@ export function MessageScreen({
                 ) : null}
               </div>
             </div>
+          </BlurFade>
+        ) : null}
+
+        {mail.source ? (
+          <BlurFade delay={0.08}>
+            <InvitationBanner
+              variant="mobile"
+              accountId={mail.source.accountId}
+              folderPath={mail.source.folderPath}
+              uid={mail.source.uid}
+              attachments={mail.attachments}
+              selfEmail={selfEmail}
+              readOnly={readOnly}
+            />
           </BlurFade>
         ) : null}
 

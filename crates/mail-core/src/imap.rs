@@ -990,6 +990,18 @@ pub async fn fetch_attachment(
     mime::attachment_body(&raw, index, keys)
 }
 
+/// Re-reads one message and hands back its `text/calendar` part, when it carries
+/// one: the invitation the reader can answer. Nothing is stored.
+pub async fn fetch_calendar_part(
+    session: &mut ImapSession,
+    folder_path: &str,
+    uid: u32,
+    keys: &PgpKeyring,
+) -> Result<Option<mime::AttachmentBody>, MailError> {
+    let raw = raw_message(session, folder_path, uid).await?;
+    mime::calendar_body(&raw, keys)
+}
+
 /// Re-reads one message and hands back its HTML with the remote images kept,
 /// sanitized by `mime::sanitize_html_with_images`. The markup is never stored:
 /// it only exists for a reader who asked for the images of this message.

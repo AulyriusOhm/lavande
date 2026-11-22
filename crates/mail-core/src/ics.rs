@@ -82,9 +82,37 @@ pub struct ExternalEvent {
     /// slot, `YYYYMMDDTHHMMSSZ`. Absent on a series the daemon could not expand.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recurrence_id: Option<String>,
+    /// Address that convenes the event, `mailto:` removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organizer: Option<String>,
+    /// Guest addresses, `mailto:` removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attendees: Option<Vec<String>>,
     /// Calendar the event came from: the fetched URL, or the label the caller
     /// gave.
     pub source: Option<String>,
+}
+
+/// Parses a calendar resource, with the guards every caller shares: an empty
+/// payload, one past [`MAX_ICS_BYTES`], a byte-order mark and names written in
+/// any case.
+pub(crate) fn calendar_of(content: &str) -> Result<Calendar, MailError> {
+    if content.trim().is_empty() {
+        return Err(MailError::Calendar("calendrier vide".to_string()));
+    }
+    if content.len() > MAX_ICS_BYTES {
+        return Err(MailError::Calendar(format!(
+            "calendrier trop volumineux : {} octets (maximum {MAX_ICS_BYTES})",
+            content.len()
+        )));
+    }
+    let content = content.trim_start_matches('\u{feff}');
+    Calendar::from_str(&normalized_names(content)).map_err(reason)
+}
+
+/// One `VEVENT` as written, the series entry and not its occurrences.
+pub(crate) fn written(event: &Event) -> Option<ExternalEvent> {
+    Some(project(event, slot(event)?, None, None))
 }
 
 /// Reads every `VEVENT` of `content`. `source` is copied onto each event.
@@ -116,17 +144,7 @@ fn parse_events_within(
     source: Option<&str>,
     window: Window,
 ) -> Result<Vec<ExternalEvent>, MailError> {
-    if content.trim().is_empty() {
-        return Err(MailError::Calendar("calendrier vide".to_string()));
-    }
-    if content.len() > MAX_ICS_BYTES {
-        return Err(MailError::Calendar(format!(
-            "calendrier trop volumineux : {} octets (maximum {MAX_ICS_BYTES})",
-            content.len()
-        )));
-    }
-    let content = content.trim_start_matches('\u{feff}');
-    let calendar = Calendar::from_str(&normalized_names(content)).map_err(reason)?;
+    let calendar = calendar_of(content)?;
     let entries: Vec<&Event> = calendar.events().collect();
     if entries.len() > MAX_ICS_EVENTS {
         return Err(MailError::Calendar(format!(
@@ -164,8 +182,68 @@ pub fn event_uid(existing: Option<&str>) -> String {
 /// URL. An event without `start` is written whole-day (`VALUE=DATE`, `DTEND`
 /// on the next day); a timed event is written as a floating local clock, the
 /// daemon having no timezone of its own. A timed event without `end` lasts one
-/// hour.
+/// hour. `attendees` turns the resource into an invitation: the `ORGANIZER` and
+/// the guests are written, and the CalDAV server schedules the mail itself
+/// (RFC 6638).
 pub fn event_ics(event: &ExternalEvent) -> Result<String, MailError> {
+    let mut entry = vevent(event)?;
+    if let Some(attendees) = guests(event) {
+        let organizer = event
+            .organizer
+            .as_deref()
+            .map(str::trim)
+            .filter(|organizer| !organizer.is_empty())
+            .ok_or_else(|| {
+                MailError::Calendar(
+                    "invitation sans organisateur : l'adresse du compte est inconnue".to_string(),
+                )
+            })?;
+        entry.append_property(Property::new("ORGANIZER", format!("mailto:{organizer}")));
+        for attendee in attendees {
+            entry.append_multi_property(attendee_property(&attendee, "NEEDS-ACTION", true));
+        }
+    }
+    let mut calendar = Calendar::empty();
+    calendar
+        .append_property(Property::new("VERSION", "2.0"))
+        .append_property(Property::new("PRODID", "-//Lavande//Agenda//FR"));
+    calendar.push(entry);
+    let ics = calendar.to_string();
+    if ics.len() > MAX_ICS_BYTES {
+        return Err(MailError::Calendar(format!(
+            "événement trop volumineux : {} octets (maximum {MAX_ICS_BYTES})",
+            ics.len()
+        )));
+    }
+    Ok(ics)
+}
+
+/// Guest addresses of an event, `None` when it convenes nobody: the entries that
+/// are not addresses are dropped.
+fn guests(event: &ExternalEvent) -> Option<Vec<String>> {
+    let attendees: Vec<String> = event
+        .attendees
+        .iter()
+        .flatten()
+        .filter_map(|attendee| address_of(attendee))
+        .collect();
+    (!attendees.is_empty()).then_some(attendees)
+}
+
+/// One `ATTENDEE` of a written invitation, `PARTSTAT` answering for the reader.
+pub(crate) fn attendee_property(email: &str, partstat: &str, rsvp: bool) -> Property {
+    let mut property = Property::new("ATTENDEE", format!("mailto:{email}"));
+    property
+        .add_parameter("CUTYPE", "INDIVIDUAL")
+        .add_parameter("ROLE", "REQ-PARTICIPANT")
+        .add_parameter("PARTSTAT", partstat)
+        .add_parameter("RSVP", if rsvp { "TRUE" } else { "FALSE" });
+    property
+}
+
+/// The `VEVENT` of one event: `UID`, summary, `DTSTAMP`, dates, location and
+/// description. Recurrence and parties are the caller's business.
+pub(crate) fn vevent(event: &ExternalEvent) -> Result<Event, MailError> {
     let uid = event
         .uid
         .as_deref()
@@ -209,19 +287,7 @@ pub fn event_ics(event: &ExternalEvent) -> Result<String, MailError> {
     if let Some(description) = text(event.description.as_deref()) {
         entry.description(&description);
     }
-    let mut calendar = Calendar::empty();
-    calendar
-        .append_property(Property::new("VERSION", "2.0"))
-        .append_property(Property::new("PRODID", "-//Lavande//Agenda//FR"));
-    calendar.push(entry);
-    let ics = calendar.to_string();
-    if ics.len() > MAX_ICS_BYTES {
-        return Err(MailError::Calendar(format!(
-            "événement trop volumineux : {} octets (maximum {MAX_ICS_BYTES})",
-            ics.len()
-        )));
-    }
-    Ok(ics)
+    Ok(entry)
 }
 
 /// One `UID` of the calendar: the entry of the series, and the occurrences a
@@ -310,6 +376,41 @@ fn series<'a>(events: impl Iterator<Item = &'a Event>) -> Vec<Series<'a>> {
 /// Property of a component, whether the file wrote it once or several times.
 fn carries(event: &Event, key: &str) -> bool {
     event.properties().contains_key(key) || event.multi_properties().contains_key(key)
+}
+
+/// Every occurrence of a property, written once or repeated.
+pub(crate) fn repeated<'a>(event: &'a Event, key: &str) -> Vec<&'a Property> {
+    event
+        .properties()
+        .get(key)
+        .into_iter()
+        .chain(event.multi_properties().get(key).into_iter().flatten())
+        .collect()
+}
+
+/// Address of an `ORGANIZER` or `ATTENDEE` value: `mailto:` and the surrounding
+/// blanks removed, `None` when it is not an address.
+pub fn address_of(value: &str) -> Option<String> {
+    let value = value.trim();
+    let address = match value.to_ascii_lowercase().strip_prefix("mailto:").is_some() {
+        true => value[7..].trim(),
+        false => value,
+    };
+    // `mailto:a@b?subject=x` carries parameters past the address.
+    let address = address.split('?').next().unwrap_or_default().trim();
+    (address.contains('@') && !address.contains(char::is_whitespace)).then(|| address.to_string())
+}
+
+fn organizer_of(event: &Event) -> Option<String> {
+    event.property_value("ORGANIZER").and_then(address_of)
+}
+
+fn attendees_of(event: &Event) -> Option<Vec<String>> {
+    let attendees: Vec<String> = repeated(event, "ATTENDEE")
+        .into_iter()
+        .filter_map(|property| address_of(property.value()))
+        .collect();
+    (!attendees.is_empty()).then_some(attendees)
 }
 
 /// Rule or irregular dates: the series is written once for several occurrences.
@@ -467,6 +568,8 @@ fn project(
         description: text(event.get_description()),
         recurring: recurring(event) || carries(event, "RECURRENCE-ID"),
         recurrence_id,
+        organizer: organizer_of(event),
+        attendees: attendees_of(event),
         source: source.map(str::to_string),
     }
 }
@@ -1428,6 +1531,52 @@ mod tests {
         assert!(first < today + Duration::days(8));
         assert!(last > today + Duration::days(RECURRENCE_FUTURE_DAYS - 8));
         assert!(last <= today + Duration::days(RECURRENCE_FUTURE_DAYS));
+    }
+
+    #[test]
+    fn an_invitation_lists_the_organizer_and_the_guests() {
+        let mut event = draft("Revue de design", "2024-03-15");
+        event.start = Some("14:00".to_string());
+        event.end = Some("15:00".to_string());
+        event.organizer = Some("roman@lavande.mail".to_string());
+        event.attendees = Some(vec![
+            "camille@studio-lilas.fr".to_string(),
+            "marc@mail.fr".to_string(),
+        ]);
+        let (ics, reread) = written(event);
+        // Une ligne longue est repliée : la valeur se lit dépliée.
+        let flat = ics.replace("\r\n ", "");
+        assert!(
+            flat.contains("ORGANIZER:mailto:roman@lavande.mail\r\n"),
+            "{ics}"
+        );
+        for guest in ["camille@studio-lilas.fr", "marc@mail.fr"] {
+            assert!(
+                flat.contains(&format!(
+                    "ATTENDEE;CUTYPE=INDIVIDUAL;PARTSTAT=NEEDS-ACTION;ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:{guest}"
+                )),
+                "{guest} absent de {ics}"
+            );
+        }
+        // Ce que le serveur CalDAV relaie à l'organisateur : les invités se relisent.
+        assert_eq!(reread.organizer.as_deref(), Some("roman@lavande.mail"));
+        assert_eq!(
+            reread.attendees,
+            Some(vec![
+                "camille@studio-lilas.fr".to_string(),
+                "marc@mail.fr".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn an_invitation_without_an_organizer_is_refused() {
+        let mut event = draft("Revue", "2024-03-15");
+        event.attendees = Some(vec!["camille@studio-lilas.fr".to_string()]);
+        assert!(matches!(
+            event_ics(&event),
+            Err(MailError::Calendar(message)) if message.contains("organisateur")
+        ));
     }
 
     #[test]

@@ -197,3 +197,44 @@ describe("mailApi · prévisualisation des dossiers", () => {
     expect(JSON.parse(init.body as string).synced_folders).toEqual(["INBOX"]);
   });
 });
+
+describe("mailApi · invitations agenda", () => {
+  it("lit l'invitation d'un message par son dossier et son uid", async () => {
+    const fetchMock = vi.fn(async () => response({ method: "REQUEST", uid: "reunion-42" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await mailApi.invitation("perso", "Boîte/INBOX", 7);
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/accounts/perso/folders/Bo%C3%AEte%2FINBOX/messages/7/invitation");
+    expect(init.method).toBe("GET");
+  });
+
+  it("accepte un message sans invitation", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => response(null)));
+
+    await expect(mailApi.invitation("perso", "INBOX", 7)).resolves.toBeNull();
+  });
+
+  it("répond avec le PARTSTAT choisi", async () => {
+    const fetchMock = vi.fn(async () => response({ via: "caldav", invitation: { uid: "reunion-42" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const outcome = await mailApi.rsvp("perso", "INBOX", 7, "TENTATIVE");
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/accounts/perso/folders/INBOX/messages/7/invitation/rsvp");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(JSON.stringify({ status: "TENTATIVE" }));
+    expect(outcome.via).toBe("caldav");
+  });
+
+  it("remonte le refus du démon", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response({ error: "l'invitation ne liste pas « moi » parmi ses invités", kind: "calendar" }, 400)),
+    );
+
+    await expect(mailApi.rsvp("perso", "INBOX", 7, "DECLINED")).rejects.toThrow("parmi ses invités");
+  });
+});

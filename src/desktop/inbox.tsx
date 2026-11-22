@@ -75,6 +75,7 @@ import type { NewEventInit } from "@/desktop/calendar";
 import type { NewTaskDraft } from "@/desktop/planning";
 import { suggestFolderForMail } from "@/lib/guards";
 import { formatTotpCode } from "@/components/totp-popup";
+import { InvitationBanner } from "@/components/invitation-banner";
 import { PGP_STATE, formatKeyDate, keyLabel, keyState, shortFingerprint, type PgpKey } from "@/lib/pgp";
 import { listKeys } from "@/lib/pgp-api";
 import { useMailStore, type BulkKind } from "@/lib/store";
@@ -3000,6 +3001,17 @@ export function DesktopInbox({
                         </DButton>
                       ) : null}
                     </div>
+                  ) : null}
+
+                  {mail.source ? (
+                    <InvitationBanner
+                      accountId={mail.source.accountId}
+                      folderPath={mail.source.folderPath}
+                      uid={mail.source.uid}
+                      attachments={mail.attachments}
+                      selfEmail={accountById(mail.account)?.email}
+                      readOnly={readOnly}
+                    />
                   ) : null}
 
                   {phishingAlert ? (

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AlertTriangle, CalendarPlus, Mail } from "lucide-react";
 import type { CalendarEvent } from "@/lib/calendar";
 import { TODAY_ISO, isoInDays, overlappingEvents } from "@/lib/calendar";
+import { guestEmails } from "@/lib/mail";
 import { useCalendars } from "@/lib/calendars";
 import type { EventDraft } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
@@ -84,6 +85,7 @@ export function NewEventSheet({
       (initialMinutes ? { label: `${initialMinutes} min`, minutes: initialMinutes } : DURATIONS[1]),
   );
   const [location, setLocation] = useState(event?.location ?? draft?.location ?? "");
+  const [people, setPeople] = useState((event?.attendees ?? []).join(", "));
   const [calendar, setCalendar] = useState<string | undefined>(event?.calendar ?? calendars[0]?.name);
   const [confirmed, setConfirmed] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -112,6 +114,8 @@ export function NewEventSheet({
       setConfirmed(true);
       return;
     }
+    const guests = guestEmails(people);
+    const attendees = guests.length > 0 ? guests : undefined;
     const next: CalendarEvent = event
       ? {
           ...event,
@@ -120,6 +124,7 @@ export function NewEventSheet({
           end,
           title: title.trim(),
           location: location.trim() || undefined,
+          attendees,
           calendar,
         }
       : {
@@ -129,6 +134,7 @@ export function NewEventSheet({
           end,
           title: title.trim(),
           location: location.trim() || undefined,
+          attendees,
           tone: undefined,
           calendar,
           ...(draft?.mailId ? { mailId: draft.mailId, fromMail: true } : {}),
@@ -204,6 +210,17 @@ export function NewEventSheet({
           value={location}
           onChange={(event) => setLocation(event.target.value)}
           placeholder="Lieu ou lien visio"
+          className="mt-1.5 w-full rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-[12.5px] font-medium text-ink outline-none placeholder:text-ink-soft focus:border-accent-ring"
+        />
+
+        <label className="mt-2 block text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase" htmlFor="event-attendees">
+          Invités
+        </label>
+        <input
+          id="event-attendees"
+          value={people}
+          onChange={(inputEvent) => setPeople(inputEvent.target.value)}
+          placeholder="Adresses e-mail, séparées par une virgule"
           className="mt-1.5 w-full rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-[12.5px] font-medium text-ink outline-none placeholder:text-ink-soft focus:border-accent-ring"
         />
 

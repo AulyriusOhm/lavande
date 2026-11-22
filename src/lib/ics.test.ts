@@ -130,6 +130,15 @@ describe("ics · mapping ExternalEvent → CalendarEvent", () => {
     expect(events[1].recurring).toBeUndefined();
   });
 
+  it("garde les invités d'un événement relu à sa source", () => {
+    const [event] = toCalendarEvents(
+      [external({ attendees: ["camille@studio-lilas.fr", "marc@mail.fr"] })],
+      google,
+    );
+
+    expect(event.attendees).toEqual(["camille@studio-lilas.fr", "marc@mail.fr"]);
+  });
+
   it("n'invente ni lieu ni description absents", () => {
     const [event] = toCalendarEvents([external({ location: null, description: null })], google);
 

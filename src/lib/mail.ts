@@ -54,6 +54,17 @@ export function splitAddresses(value: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Adresses d'une liste d'invités saisie à la main : `mailto:` et chevrons
+ * retirés, doublons fondus, tout ce qui n'est pas une adresse ignoré.
+ */
+export function guestEmails(value: string): string[] {
+  const emails = splitAddresses(value)
+    .map((token) => token.replace(/^mailto:/i, "").replace(/^</, "").replace(/>$/, "").trim())
+    .filter((token) => /^[^@\s]+@[^@\s]+$/.test(token));
+  return [...new Set(emails)];
+}
+
 /** Les destinataires d'un message autres que soi-même, « À » et « Cc » confondus. */
 function otherRecipients(mail: Mail, self?: string): string[] {
   const own = self?.toLowerCase();

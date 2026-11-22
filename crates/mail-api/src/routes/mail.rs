@@ -1,5 +1,5 @@
 //! `/api/accounts/{id}/…`: sync, threads, messages, flags, move, delete, purge,
-//! send.
+//! send, and the iTIP invitation a message carries.
 
 use std::sync::Arc;
 
@@ -12,13 +12,15 @@ use axum::{Json, Router};
 use lavande_mail::config::{AccountConfig, FolderMapping};
 use lavande_mail::error::MailError;
 use lavande_mail::imap::{self, ImapSession};
+use lavande_mail::itip::{self, Invitation};
 use lavande_mail::model::{Address, Flags, FolderRole, Message, Thread};
 use lavande_mail::pgp;
 use lavande_mail::smtp::{self, OutgoingMessage};
 use lavande_mail::sync as mail_sync;
 use lavande_mail::HTML_POLICY_MARKER;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
+use crate::calendar_sources::CalendarSource;
 use crate::dto::{
     ApiJson, DeleteBulkRequest, DeleteRequest, FlagsBulkRequest, FlagsRequest, FolderReport,
     HtmlImagesResponse, MoveBulkRequest, MoveRequest, PreviewEntry, PreviewRequest, PurgeRequest,
@@ -56,6 +58,14 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/accounts/{id}/folders/{path}/messages/{uid}/html-images",
             get(html_images),
+        )
+        .route(
+            "/api/accounts/{id}/folders/{path}/messages/{uid}/invitation",
+            get(invitation),
+        )
+        .route(
+            "/api/accounts/{id}/folders/{path}/messages/{uid}/invitation/rsvp",
+            post(rsvp),
         )
         .route("/api/accounts/{id}/flags", post(set_flags))
         .route("/api/accounts/{id}/move", post(move_message))
@@ -332,6 +342,257 @@ async fn html_images(
     logout(session).await;
     let html = fetched?.ok_or_else(|| no_html(&folder_path, uid))?;
     Ok(Json(HtmlImagesResponse { html }))
+}
+
+/// The iTIP invitation of one message (`text/calendar` attachment), read on the
+/// server like an attachment: `null` when the message carries none.
+async fn invitation(
+    Path((id, folder_path, uid)): Path<(String, String, u32)>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Option<Invitation>>, ApiError> {
+    Ok(Json(read_invitation(&state, &id, &folder_path, uid).await?))
+}
+
+#[derive(Deserialize)]
+struct RsvpRequest {
+    /// `ACCEPTED`, `TENTATIVE` or `DECLINED`.
+    #[serde(default)]
+    status: String,
+}
+
+/// How the answer reached the organizer: the CalDAV server relayed it, or the
+/// daemon mailed a `METHOD:REPLY` itself.
+#[derive(Serialize)]
+struct RsvpResponse {
+    via: &'static str,
+    invitation: Invitation,
+}
+
+/// Answers an invitation: the reader's `PARTSTAT` is written into the CalDAV
+/// resource (whose server mails the REPLY, RFC 6638), or mailed to the organizer
+/// when the account has no calendar to write into. Nothing is answered silently:
+/// a refused write or a refused mail is raised.
+async fn rsvp(
+    Path((id, folder_path, uid)): Path<(String, String, u32)>,
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<RsvpRequest>,
+) -> Result<Json<RsvpResponse>, ApiError> {
+    let status = request.status.trim().to_ascii_uppercase();
+    if !itip::PARTSTATS.contains(&status.as_str()) {
+        return Err(ApiError::bad_request(
+            "calendar",
+            format!("réponse « {status} » inconnue : ACCEPTED, TENTATIVE ou DECLINED"),
+        ));
+    }
+    let config = state.account(&id).await?;
+    let invitation = read_invitation(&state, &id, &folder_path, uid)
+        .await?
+        .ok_or_else(|| ApiError::not_found("ce message ne porte pas d'invitation"))?;
+    if invitation.organizer.is_none() {
+        return Err(ApiError::bad_request(
+            "calendar",
+            "l'invitation ne nomme pas d'organisateur : impossible d'y répondre",
+        ));
+    }
+    match invitation.method.as_deref() {
+        Some("REQUEST") => {}
+        Some("CANCEL") => {
+            return Err(ApiError::bad_request(
+                "calendar",
+                "l'organisateur a annulé cet événement : il n'y a plus rien à accepter",
+            ))
+        }
+        Some(method) => {
+            return Err(ApiError::bad_request(
+                "calendar",
+                format!("une pièce « {method} » n'est pas une invitation à laquelle répondre"),
+            ))
+        }
+        None => {
+            return Err(ApiError::bad_request(
+                "calendar",
+                "cette pièce de calendrier ne nomme aucune méthode",
+            ))
+        }
+    }
+
+    if let Some(source) = account_source(&state, &id)? {
+        if answer_in_calendar(&state, &source, &invitation, &config.email, &status).await? {
+            tracing::info!(
+                account = %id,
+                source = %source.id,
+                uid = %invitation.uid.as_deref().unwrap_or_default(),
+                "invitation répondue dans le calendrier"
+            );
+            return Ok(Json(RsvpResponse {
+                via: "caldav",
+                invitation: itip::answered(&invitation, &config.email, &status),
+            }));
+        }
+    }
+
+    let me = Address {
+        name: None,
+        email: config.email.clone(),
+    };
+    mail_reply(&state, &config, &invitation, &me, &status).await?;
+    tracing::info!(
+        account = %id,
+        uid = %invitation.uid.as_deref().unwrap_or_default(),
+        "invitation répondue par mail"
+    );
+    Ok(Json(RsvpResponse {
+        via: "mail",
+        invitation: itip::answered(&invitation, &config.email, &status),
+    }))
+}
+
+/// The invitation a message carries, re-read on the server: nothing is stored.
+async fn read_invitation(
+    state: &AppState,
+    id: &str,
+    folder_path: &str,
+    uid: u32,
+) -> Result<Option<Invitation>, ApiError> {
+    let config = state.account(id).await?;
+    state
+        .store()
+        .get_message(id, folder_path, uid)?
+        .ok_or_else(|| unknown(id, folder_path, uid))?;
+    let keys = state.keyring_for(id).await?;
+    let mut session = imap::connect_with(&config, state.tls()).await?;
+    let part = imap::fetch_calendar_part(&mut session, folder_path, uid, &keys).await;
+    logout(session).await;
+    let Some(part) = part? else {
+        return Ok(None);
+    };
+    let content = String::from_utf8(part.data).map_err(|_| {
+        ApiError::bad_request(
+            "calendar",
+            "la pièce jointe de calendrier du message n'est pas de l'UTF-8",
+        )
+    })?;
+    Ok(itip::parse(&content)?)
+}
+
+/// CalDAV source of a mail account: the one the settings tied to it, if any.
+fn account_source(state: &AppState, account_id: &str) -> Result<Option<CalendarSource>, ApiError> {
+    Ok(state
+        .calendar_sources()?
+        .into_iter()
+        .find(|source| source.account_id.as_deref() == Some(account_id)))
+}
+
+/// Writes the reader's answer into the resource the source holds. `false` when
+/// the server does not hold it: the invitation is not in the calendar yet, and
+/// the answer goes by mail.
+async fn answer_in_calendar(
+    state: &AppState,
+    source: &CalendarSource,
+    invitation: &Invitation,
+    email: &str,
+    status: &str,
+) -> Result<bool, ApiError> {
+    let Some(uid) = invitation
+        .uid
+        .as_deref()
+        .map(str::trim)
+        .filter(|uid| !uid.is_empty())
+    else {
+        return Ok(false);
+    };
+    let (known, client, collection) =
+        crate::routes::calendars::source_collection(state, &source.id).await?;
+    let Some((ics, etag)) = client.get_raw(&collection, uid).await? else {
+        tracing::debug!(
+            source = %known.id,
+            uid = %uid,
+            "ressource absente du calendrier, réponse par mail"
+        );
+        return Ok(false);
+    };
+    // Le calendrier peut avoir bougé depuis le mail (invités réécrits par
+    // l'organisateur) : sans nous dans la ressource, la réponse part par mail, et
+    // la route dit par où elle est passée.
+    let Some(answered) = itip::set_partstat(&ics, email, status)? else {
+        tracing::debug!(
+            source = %known.id,
+            uid = %uid,
+            email = %email,
+            "invité absent de la ressource, réponse par mail"
+        );
+        return Ok(false);
+    };
+    let etag = match etag {
+        Some(etag) => Some(etag),
+        None => client.get_etag(&collection, uid).await?,
+    };
+    let etag = etag.ok_or_else(|| {
+        ApiError::gateway(
+            "caldav",
+            format!(
+                "le serveur ne donne pas d'ETag pour « {uid} » : réponse conditionnelle impossible"
+            ),
+        )
+    })?;
+    client
+        .put_raw(&collection, uid, &answered, Some(&etag))
+        .await?;
+    Ok(true)
+}
+
+/// Reply mailed to the organizer when no calendar can carry the answer: a
+/// `METHOD:REPLY` resource attached to a short notice.
+async fn mail_reply(
+    state: &AppState,
+    config: &AccountConfig,
+    invitation: &Invitation,
+    attendee: &Address,
+    status: &str,
+) -> Result<(), ApiError> {
+    let organizer = invitation.organizer.as_ref().ok_or_else(|| {
+        ApiError::bad_request("calendar", "l'invitation ne nomme pas d'organisateur")
+    })?;
+    let answer = match status {
+        "ACCEPTED" => "Accepté",
+        "TENTATIVE" => "Provisoire",
+        "DECLINED" => "Refusé",
+        other => {
+            return Err(ApiError::bad_request(
+                "calendar",
+                format!("réponse « {other} » inconnue"),
+            ))
+        }
+    };
+    let ics = itip::reply_ics(invitation, attendee, status)?;
+    let when = match (invitation.start.as_deref(), invitation.end.as_deref()) {
+        (Some(start), Some(end)) => format!("le {} de {start} à {end}", invitation.date),
+        (Some(start), None) => format!("le {} à {start}", invitation.date),
+        _ => format!("le {}", invitation.date),
+    };
+    let outgoing = OutgoingMessage {
+        from: attendee.clone(),
+        to: vec![Address {
+            name: organizer.name.clone(),
+            email: organizer.email.clone(),
+        }],
+        cc: Vec::new(),
+        bcc: Vec::new(),
+        subject: format!("{answer} : {}", invitation.summary),
+        text: format!("{answer} : {}\n\n{when}\n", invitation.summary),
+        html: None,
+        in_reply_to: None,
+        references: Vec::new(),
+        attachments: vec![smtp::OutgoingAttachment {
+            filename: "invitation.ics".to_string(),
+            mime: "text/calendar; charset=utf-8; method=REPLY".to_string(),
+            data: ics.into_bytes(),
+        }],
+        pgp_sign: false,
+        pgp_encrypt: false,
+    };
+    submit(state, config, &outgoing).await?;
+    Ok(())
 }
 
 fn header_value(value: &str) -> Result<HeaderValue, ApiError> {
@@ -642,7 +903,7 @@ async fn save_draft(
 /// Signs and/or encrypts when asked, then submits. Returns the exact bytes
 /// that went out and the `Message-ID` the Sent copy must be matched with.
 async fn submit(
-    state: &Arc<AppState>,
+    state: &AppState,
     config: &AccountConfig,
     outgoing: &OutgoingMessage,
 ) -> Result<(Vec<u8>, Option<String>), ApiError> {

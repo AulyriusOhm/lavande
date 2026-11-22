@@ -143,6 +143,12 @@ impl CaldavClient {
         })
     }
 
+    /// User the client authenticates as: a CalDAV login is often the address
+    /// itself, which is what invitations are signed with.
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+
     /// Calendars of the account, or the single collection the URL points at.
     ///
     /// A URL that is not the CalDAV tree (a Zimbra web root, say) is retried on
@@ -278,6 +284,60 @@ impl CaldavClient {
                 "{} refuse l'écriture : le calendrier n'existe pas (409)",
                 address(&url)
             ))),
+            StatusCode::NOT_FOUND => Err(missing(&url)),
+            status => Err(refused(&url, status)),
+        }
+    }
+
+    /// Raw resource of `<collection>/<uid>.ics` and its ETag, `None` when the
+    /// server holds no such resource.
+    ///
+    /// An invitation is answered on the resource the server keeps: what the
+    /// agenda contract does not model (`RRULE`, `VALARM`, `X-` properties) must
+    /// survive the write, so the caller edits the text and hands it back.
+    pub async fn get_raw(
+        &self,
+        collection_href: &str,
+        uid: &str,
+    ) -> Result<Option<(String, Option<String>)>, MailError> {
+        let url = self.event_url(collection_href, uid)?;
+        let answer = self
+            .send(Call::new(method("GET"), url.clone()).limit(MAX_ICS_BYTES))
+            .await?;
+        ensure_authorized(&answer, &url)?;
+        match answer.status {
+            status if status.is_success() => Ok(Some((answer.body, answer.etag))),
+            StatusCode::NOT_FOUND => Ok(None),
+            status => Err(refused(&url, status)),
+        }
+    }
+
+    /// Writes `ics` as `<collection>/<uid>.ics`, conditional on `etag` when given
+    /// (`If-None-Match: *` without one), the way [`CaldavClient::put_event`] does.
+    pub async fn put_raw(
+        &self,
+        collection_href: &str,
+        uid: &str,
+        ics: &str,
+        etag: Option<&str>,
+    ) -> Result<Option<String>, MailError> {
+        if ics.len() > MAX_ICS_BYTES {
+            return Err(MailError::Calendar(format!(
+                "calendrier trop volumineux : {} octets (maximum {MAX_ICS_BYTES})",
+                ics.len()
+            )));
+        }
+        let url = self.event_url(collection_href, uid)?;
+        let put = Call::new(method("PUT"), url.clone()).payload(ICS_TYPE, ics.to_string());
+        let put = match condition(etag) {
+            Some(etag) => put.header("If-Match", etag),
+            None => put.header("If-None-Match", "*"),
+        };
+        let answer = self.send(put).await?;
+        ensure_authorized(&answer, &url)?;
+        match answer.status {
+            status if status.is_success() => Ok(answer.etag),
+            StatusCode::PRECONDITION_FAILED => Err(changed(&url)),
             StatusCode::NOT_FOUND => Err(missing(&url)),
             status => Err(refused(&url, status)),
         }
@@ -1167,6 +1227,157 @@ mod tests {
             .iter()
             .all(|event| event.uid.as_deref() == Some("serie")));
         assert!(events.iter().all(|event| event.recurrence_id.is_some()));
+    }
+
+    /// Faux serveur d'une ressource unique : `status` pour le PUT, l'ETag de la
+    /// ressource sur le GET, et la trace des requêtes reçues.
+    async fn serve_resource(
+        ics: &'static str,
+        etag: &'static str,
+        status: &'static str,
+    ) -> (Url, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let trace = seen.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("écoute");
+        let address = listener.local_addr().expect("adresse locale");
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut buffer = Vec::new();
+                let mut chunk = [0u8; 4096];
+                let mut length = 0usize;
+                let mut head = None;
+                while let Ok(read) = socket.read(&mut chunk).await {
+                    if read == 0 {
+                        break;
+                    }
+                    buffer.extend_from_slice(&chunk[..read]);
+                    let text = String::from_utf8_lossy(&buffer).to_string();
+                    if head.is_none() {
+                        if let Some(end) = text.find("\r\n\r\n") {
+                            length = text[..end]
+                                .lines()
+                                .find_map(|line| {
+                                    let (name, value) = line.split_once(':')?;
+                                    name.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse::<usize>().ok())?
+                                })
+                                .unwrap_or(0);
+                            head = Some(end + 4);
+                        }
+                    }
+                    if let Some(start) = head {
+                        if buffer.len() >= start + length {
+                            break;
+                        }
+                    }
+                }
+                let request = String::from_utf8_lossy(&buffer).to_string();
+                let method = request
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                trace.lock().expect("trace").push(request);
+                let response = match method.as_str() {
+                    "PUT" => format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\n\r\n"),
+                    _ => format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/calendar\r\nETag: {etag}\r\n\
+                         Content-Length: {}\r\n\r\n{ics}",
+                        ics.len()
+                    ),
+                };
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+        let url = Url::parse(&format!("http://{address}/")).expect("URL");
+        (url, seen)
+    }
+
+    const INVITATION_ICS: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Zimbra//FR\r\n\
+         BEGIN:VEVENT\r\nUID:reunion-42\r\nSUMMARY:Revue\r\n\
+         DTSTART;TZID=Europe/Paris:20261125T140000\r\n\
+         ORGANIZER:mailto:camille@studio-lilas.fr\r\n\
+         ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:roman@lavande.mail\r\n\
+         END:VEVENT\r\nEND:VCALENDAR\r\n";
+
+    #[tokio::test]
+    async fn a_raw_resource_is_read_with_its_etag() {
+        let (root, _) = serve_resource(INVITATION_ICS, "\"7\"", "204 No Content").await;
+        let client = CaldavClient::new(root.as_str(), "roman", "secret").expect("client");
+        let (body, etag) = client
+            .get_raw("/dav/roman/travail/", "reunion-42")
+            .await
+            .expect("ressource")
+            .expect("lue");
+        assert_eq!(body, INVITATION_ICS);
+        assert_eq!(etag.as_deref(), Some("\"7\""));
+    }
+
+    #[tokio::test]
+    async fn a_missing_raw_resource_reads_as_none() {
+        let root = serve(Vec::new()).await;
+        let client = CaldavClient::new(root.as_str(), "roman", "secret").expect("client");
+        assert_eq!(
+            client
+                .get_raw("/dav/roman/travail/", "absente")
+                .await
+                .expect("réponse"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_raw_write_carries_the_etag_and_the_whole_resource() {
+        let (root, seen) = serve_resource(INVITATION_ICS, "\"7\"", "204 No Content").await;
+        let client = CaldavClient::new(root.as_str(), "roman", "secret").expect("client");
+        let answered = INVITATION_ICS.replace("PARTSTAT=NEEDS-ACTION", "PARTSTAT=ACCEPTED");
+        client
+            .put_raw(
+                "/dav/roman/travail/",
+                "reunion-42",
+                &answered,
+                Some("\"7\""),
+            )
+            .await
+            .expect("écriture");
+        let requests = seen.lock().expect("trace").clone();
+        let put = requests
+            .iter()
+            .find(|request| request.starts_with("PUT "))
+            .expect("PUT reçu");
+        let headers = put.to_ascii_lowercase();
+        assert!(headers.contains("if-match: \"7\""), "{put}");
+        assert!(headers.contains("content-type: text/calendar"), "{put}");
+        assert!(put.contains("PARTSTAT=ACCEPTED"), "{put}");
+        assert!(
+            put.contains("ORGANIZER:mailto:camille@studio-lilas.fr"),
+            "{put}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stale_raw_write_is_refused() {
+        let (root, _) = serve_resource(INVITATION_ICS, "\"7\"", "412 Precondition Failed").await;
+        let client = CaldavClient::new(root.as_str(), "roman", "secret").expect("client");
+        let error = client
+            .put_raw(
+                "/dav/roman/travail/",
+                "reunion-42",
+                INVITATION_ICS,
+                Some("\"3\""),
+            )
+            .await
+            .expect_err("ETag périmé");
+        assert!(matches!(error, MailError::Conflict(_)));
+        assert!(!error.to_string().contains("secret"), "{error}");
     }
 
     #[tokio::test]

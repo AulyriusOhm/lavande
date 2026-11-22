@@ -116,6 +116,7 @@ export function toCalendarEvents(
     };
     if (entry.location) event.location = entry.location;
     if (entry.description) event.description = entry.description;
+    if (entry.attendees?.length) event.attendees = entry.attendees;
     if (entry.recurring) event.recurring = true;
     if (sourceId && entry.uid) {
       event.caldav = { sourceId, uid: entry.uid, ...(entry.etag ? { etag: entry.etag } : {}) };

@@ -189,6 +189,59 @@ fn reads_attachment_metadata() {
     assert_eq!(parsed.body_text.as_deref(), Some("Ci-joint le planning."));
 }
 
+const INVITATION: &[u8] = b"From: camille@studio-lilas.fr\r\n\
+To: roman@lavande.mail\r\n\
+Subject: Revue de design\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"sep\"\r\n\
+\r\n\
+--sep\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+Tu viens ?\r\n\
+--sep\r\n\
+Content-Type: text/calendar; charset=utf-8; method=REQUEST\r\n\
+Content-Disposition: attachment; filename=\"invitation.ics\"\r\n\
+\r\n\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+METHOD:REQUEST\r\n\
+BEGIN:VEVENT\r\n\
+UID:reunion-42\r\n\
+SUMMARY:Revue de design\r\n\
+DTSTART:20261125T140000Z\r\n\
+ORGANIZER:mailto:camille@studio-lilas.fr\r\n\
+ATTENDEE:mailto:roman@lavande.mail\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n\
+--sep--\r\n";
+
+#[test]
+fn reads_the_invitation_of_a_message() {
+    let keyring = PgpKeyring::default();
+    let part = mime::calendar_body(INVITATION, &keyring)
+        .expect("lecture")
+        .expect("part text/calendar");
+    assert_eq!(part.mime, "text/calendar");
+    assert_eq!(part.filename, "invitation.ics");
+    let text = String::from_utf8(part.data).expect("UTF-8");
+    assert!(text.contains("METHOD:REQUEST"), "{text}");
+    assert!(text.contains("UID:reunion-42"), "{text}");
+}
+
+#[test]
+fn a_message_without_an_invitation_has_no_calendar_part() {
+    let keyring = PgpKeyring::default();
+    assert_eq!(
+        mime::calendar_body(ATTACHMENT, &keyring).expect("lecture"),
+        None
+    );
+    assert_eq!(
+        mime::calendar_body(SIMPLE, &keyring).expect("lecture"),
+        None
+    );
+}
+
 #[test]
 fn detects_pgp_states() {
     assert_eq!(parse_message(SIGNED).expect("parse").pgp, PgpState::Signed);

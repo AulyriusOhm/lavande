@@ -7,6 +7,7 @@ pub mod error;
 pub mod gcal;
 pub mod ics;
 pub mod imap;
+pub mod itip;
 
 pub mod mime;
 pub mod model;
@@ -27,6 +28,7 @@ pub use error::MailError;
 pub use gcal::{GcalClient, GoogleCalendar};
 pub use ics::{parse_events, ExternalEvent};
 pub use imap::SyncReport;
+pub use itip::{Guest, Invitation, Party};
 pub use mime::{
     parse_message, parse_message_with_keys, sanitize_html, sanitize_html_with_images,
     ParsedMessage, HTML_POLICY_MARKER,

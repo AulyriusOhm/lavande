@@ -438,6 +438,38 @@ describe("Agenda · écriture d'une source CalDAV", () => {
     ]);
   });
 
+  it("envoie les invités saisis avec l'événement CalDAV", async () => {
+    seedCalendars();
+    const fetchMock = stubRoutes(() => jsonResponse(writtenPayload, 201));
+    const { onClose } = mountDialog(null);
+
+    fireEvent.change(screen.getByTestId("event-title-input"), { target: { value: "Revue serveur" } });
+    fireEvent.change(screen.getByTestId("event-calendar-input"), { target: { value: "Travail" } });
+    fireEvent.change(screen.getByTestId("event-attendees-input"), {
+      target: { value: "camille@studio-lilas.fr, Marc <marc@mail.fr>, camille@studio-lilas.fr" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Créer le rendez-vous" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    const { body } = requestOf(fetchMock);
+    expect(body.attendees).toEqual(["camille@studio-lilas.fr", "marc@mail.fr"]);
+  });
+
+  it("n'envoie pas d'invités quand le champ est vide", async () => {
+    seedCalendars();
+    const fetchMock = stubRoutes(() => jsonResponse(writtenPayload, 201));
+    const { onClose } = mountDialog(null);
+
+    fireEvent.change(screen.getByTestId("event-title-input"), { target: { value: "Revue serveur" } });
+    fireEvent.change(screen.getByTestId("event-calendar-input"), { target: { value: "Travail" } });
+    fireEvent.change(screen.getByTestId("event-attendees-input"), { target: { value: "  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Créer le rendez-vous" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    const { body } = requestOf(fetchMock);
+    expect("attendees" in body).toBe(false);
+  });
+
   it("met à jour l'événement avec l'etag détenu", async () => {
     seedCalendars();
     seedCaldavCache();

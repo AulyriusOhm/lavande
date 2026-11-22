@@ -63,6 +63,7 @@ import {
 import { useMailStore } from "@/lib/store";
 import { draftFromSuggestion, type EventDraft, type MailSuggestion } from "@/lib/tasks";
 import { sourceAccountLabel } from "@/lib/accounts";
+import { guestEmails } from "@/lib/mail";
 import { EventSuggestionCard } from "@/components/event-suggestion-card";
 import { useEscapeLayer } from "@/desktop/escape";
 import {
@@ -1716,6 +1717,7 @@ function NewEventForm({
     ? calendars.find((def) => caldavSourceIdOf(def) === event.caldav?.sourceId)
     : calendars.find((def) => def.name === calendar && isCaldavCalendar(def));
 
+  const guests = guestEmails(people);
   const caldavInput = () => ({
     title: title.trim(),
     date,
@@ -1723,6 +1725,7 @@ function NewEventForm({
     end,
     location: location.trim() || undefined,
     description: description.trim() || undefined,
+    ...(guests.length > 0 ? { attendees: guests } : {}),
   });
 
   const saveCaldav = async (def: CalendarDef) => {

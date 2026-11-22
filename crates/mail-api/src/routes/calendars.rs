@@ -21,7 +21,7 @@ use lavande_mail::caldav::{CaldavClient, CalendarCollection};
 use lavande_mail::config::AuthConfig;
 use lavande_mail::error::MailError;
 use lavande_mail::gcal::{GcalClient, GoogleCalendar};
-use lavande_mail::ics::{event_uid, parse_events, ExternalEvent, MAX_ICS_BYTES};
+use lavande_mail::ics::{address_of, event_uid, parse_events, ExternalEvent, MAX_ICS_BYTES};
 use serde::{Deserialize, Serialize};
 
 use crate::calendar_sources::CalendarSource;
@@ -381,6 +381,10 @@ struct EventRequest {
     /// ETag the caller holds: a stale one is refused by the server (412).
     #[serde(default)]
     etag: Option<String>,
+    /// Guest addresses; with at least one, the write is an invitation the
+    /// CalDAV server schedules itself (RFC 6638).
+    #[serde(default)]
+    attendees: Vec<String>,
 }
 
 impl EventRequest {
@@ -395,6 +399,11 @@ impl EventRequest {
             return Err(ApiError::bad_request("calendar", "il manque « date »"));
         }
         let start = trimmed(self.start.clone());
+        let attendees: Vec<String> = self
+            .attendees
+            .iter()
+            .filter_map(|attendee| address_of(attendee))
+            .collect();
         Ok(ExternalEvent {
             uid: Some(uid),
             title: title.to_string(),
@@ -407,6 +416,8 @@ impl EventRequest {
             description: trimmed(self.description.clone()),
             recurring: false,
             recurrence_id: None,
+            organizer: None,
+            attendees: (!attendees.is_empty()).then_some(attendees),
             source: None,
         })
     }
@@ -425,6 +436,7 @@ async fn source_event_create(
 ) -> Result<(StatusCode, Json<WrittenEvent>), ApiError> {
     let (source, client, collection) = source_collection(&state, &id).await?;
     let mut event = request.event(event_uid(None))?;
+    event.organizer = organizer(&state, &source, &client).await;
     event.source = Some(source.name.clone());
     let etag = client.put_event(&collection, &event, None).await?;
     tracing::debug!(source = %id, uid = event.uid.as_deref().unwrap_or_default(), "événement CalDAV créé");
@@ -449,6 +461,7 @@ async fn source_event_update(
         })?,
     };
     let mut event = request.event(uid)?;
+    event.organizer = organizer(&state, &source, &client).await;
     event.source = Some(source.name.clone());
     let etag = client.put_event(&collection, &event, Some(&etag)).await?;
     tracing::debug!(source = %id, uid = event.uid.as_deref().unwrap_or_default(), "événement CalDAV mis à jour");
@@ -468,8 +481,25 @@ async fn source_event_delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Address that signs the invitations of a source: the one of the mail account
+/// it borrows its credentials from, else the CalDAV user when that is an address.
+/// `None` for a standalone source naming a plain login: the write then carries
+/// no `ORGANIZER`, and the server schedules nothing.
+async fn organizer(
+    state: &AppState,
+    source: &CalendarSource,
+    client: &CaldavClient,
+) -> Option<String> {
+    if let Some(account_id) = source.account_id.as_deref() {
+        if let Ok(account) = state.account(account_id).await {
+            return address_of(&account.email);
+        }
+    }
+    address_of(client.username())
+}
+
 /// Source, client and collection a write goes to.
-async fn source_collection(
+pub(crate) async fn source_collection(
     state: &AppState,
     id: &str,
 ) -> Result<(CalendarSource, CaldavClient, String), ApiError> {

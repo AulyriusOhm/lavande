@@ -367,6 +367,10 @@ fn project(event: &GoogleEvent, calendar_id: &str) -> Option<ExternalEvent> {
         // Google lists the occurrences itself (`singleEvents`): no expansion here,
         // and the identifier of the instance is already its own `id`.
         recurrence_id: None,
+        // L'organisateur et les invités d'un événement Google ne sont pas
+        // projetés : l'agenda n'en affiche aucun et la réponse passe par Google.
+        organizer: None,
+        attendees: None,
         source: Some(calendar_id.to_string()),
     })
 }
