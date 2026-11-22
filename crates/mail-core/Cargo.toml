@@ -16,7 +16,7 @@ thiserror = "1"
 tracing = "0.1"
 rusqlite = { version = "0.42", features = ["bundled", "fallible_uint"] }
 mail-parser = "0.9"
-icalendar = "0.17"
+icalendar = { version = "0.17", features = ["recurrence"] }
 ammonia = "4"
 cssparser = { version = "0.38", default-features = false }
 base64 = "0.22"

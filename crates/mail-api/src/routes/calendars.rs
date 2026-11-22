@@ -406,6 +406,7 @@ impl EventRequest {
             location: trimmed(self.location.clone()),
             description: trimmed(self.description.clone()),
             recurring: false,
+            recurrence_id: None,
             source: None,
         })
     }

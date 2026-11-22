@@ -470,7 +470,10 @@ export type HtmlImages = {
   html: string;
 };
 
-/** Un `VEVENT` tel que le démon le projette : jour et heures murales, sans récurrence développée. */
+/**
+ * Un `VEVENT` tel que le démon le projette : jour et heures murales, une entrée
+ * par occurrence. `recurrence_id` distingue les occurrences d'une même série.
+ */
 export type ExternalEvent = {
   uid: string | null;
   title: string;
@@ -482,6 +485,8 @@ export type ExternalEvent = {
   location: string | null;
   description: string | null;
   recurring: boolean;
+  /** Instant UTC du créneau de l'occurrence (`AAAAMMJJTHHMMSSZ`) ; absent hors série. */
+  recurrence_id?: string | null;
   source: string | null;
 };
 

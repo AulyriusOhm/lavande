@@ -364,6 +364,9 @@ fn project(event: &GoogleEvent, calendar_id: &str) -> Option<ExternalEvent> {
         description: text(event.description.as_deref()),
         recurring: event.recurrence.is_some()
             || text(event.recurring_event_id.as_deref()).is_some(),
+        // Google lists the occurrences itself (`singleEvents`): no expansion here,
+        // and the identifier of the instance is already its own `id`.
+        recurrence_id: None,
         source: Some(calendar_id.to_string()),
     })
 }
@@ -649,6 +652,11 @@ mod tests {
         .expect("occurrence projetée");
         assert!(occurrence.recurring);
         assert_eq!(occurrence.date, "2024-03-22");
+        // Google liste déjà les occurrences, chacune avec son propre identifiant :
+        // le démon les reprend telles quelles, sans en ajouter une seconde fois.
+        assert_eq!(series.recurrence_id, None);
+        assert_eq!(occurrence.recurrence_id, None);
+        assert_eq!(occurrence.uid.as_deref(), Some("serie_20240322T170000Z"));
     }
 
     #[test]

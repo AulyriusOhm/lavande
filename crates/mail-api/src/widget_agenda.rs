@@ -134,6 +134,33 @@ mod tests {
     }
 
     #[test]
+    fn occurrences_of_one_series_are_all_kept() {
+        let occurrences = vec![
+            event(
+                "serie@20260304",
+                "Point hebdo",
+                DAY + 36_000,
+                DAY + 37_800,
+                "Pro",
+                0,
+            ),
+            event(
+                "serie@20260311",
+                "Point hebdo",
+                DAY + 54_000,
+                DAY + 57_600,
+                "Pro",
+                0,
+            ),
+        ];
+        let summary = summarize_agenda(&occurrences, NOW, DAY, DAY_END);
+        assert_eq!(summary.today.len(), 2);
+        assert_eq!(summary.today[0].id, "serie@20260304");
+        assert_eq!(summary.today[1].id, "serie@20260311");
+        assert_eq!(summary.next.expect("prochain").id, "serie@20260311");
+    }
+
+    #[test]
     fn empty_agenda_is_free_with_no_next() {
         let summary = summarize_agenda(&[], NOW, DAY, DAY_END);
         assert!(summary.free_today);

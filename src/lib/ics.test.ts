@@ -42,6 +42,7 @@ const external = (over: Partial<ExternalEvent> = {}): ExternalEvent => ({
 
 const google: CalendarDef = { id: "google", name: "Google", tone: 1, source: { kind: "ics", url: "https://exemple.tld/c.ics" } };
 const file: CalendarDef = { id: "vacances", name: "Vacances", tone: 2, source: { kind: "ics" } };
+const travail: CalendarDef = { id: "travail", name: "Travail", tone: 1, source: { kind: "caldav", sourceId: "travail" } };
 
 const response = (payload: unknown, status = 200): Response =>
   ({
@@ -74,6 +75,43 @@ describe("ics · mapping ExternalEvent → CalendarEvent", () => {
 
   it("retombe sur l'index quand le VEVENT n'a pas d'UID", () => {
     expect(icsEventId("google", external({ uid: null }), 3)).toBe("ics:google:#3");
+  });
+
+  it("donne un identifiant distinct à chaque occurrence d'une série", () => {
+    const events = toCalendarEvents(
+      [
+        external({ recurring: true, recurrence_id: "20260304T080000Z" }),
+        external({ recurring: true, recurrence_id: "20260311T080000Z" }),
+        external({ recurring: true, recurrence_id: "20260318T080000Z" }),
+      ],
+      google,
+    );
+
+    expect(events.map((entry) => entry.id)).toEqual([
+      "ics:google:abc-123@20260304T080000Z",
+      "ics:google:abc-123@20260311T080000Z",
+      "ics:google:abc-123@20260318T080000Z",
+    ]);
+    expect(events.every((entry) => entry.recurring)).toBe(true);
+  });
+
+  it("garde l'identifiant historique d'une entrée sans occurrence", () => {
+    expect(icsEventId("google", external({ recurrence_id: null }), 0)).toBe("ics:google:abc-123");
+  });
+
+  it("rattache chaque occurrence d'une série CalDAV à la série", () => {
+    const [first, second] = toCalendarEvents(
+      [
+        external({ recurring: true, recurrence_id: "20260304T080000Z", etag: '"1"' }),
+        external({ recurring: true, recurrence_id: "20260311T080000Z", etag: '"1"' }),
+      ],
+      travail,
+      "caldav",
+    );
+
+    expect(first.caldav).toEqual({ sourceId: "travail", uid: "abc-123", etag: '"1"' });
+    expect(second.caldav).toEqual({ sourceId: "travail", uid: "abc-123", etag: '"1"' });
+    expect(first.id).not.toBe(second.id);
   });
 
   it("laisse les heures vides pour une journée entière", () => {

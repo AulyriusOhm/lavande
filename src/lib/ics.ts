@@ -66,13 +66,19 @@ export type IcsState = {
 
 export const EMPTY_ICS_STATE: IcsState = { events: {}, synced: {} };
 
+/**
+ * Identifiant d'une entrée externe : le `uid` de la série et, pour une occurrence
+ * développée, son créneau — sans quoi toutes les occurrences se confondraient.
+ */
 export function externalEventId(
   kind: ExternalKind,
   calendarId: string,
   event: ExternalEvent,
   index: number,
 ): string {
-  return `${kind}:${calendarId}:${event.uid ?? `#${index}`}`;
+  const uid = event.uid ?? `#${index}`;
+  const occurrence = event.recurrence_id ? `@${event.recurrence_id}` : "";
+  return `${kind}:${calendarId}:${uid}${occurrence}`;
 }
 
 export function icsEventId(calendarId: string, event: ExternalEvent, index: number): string {
@@ -154,20 +160,31 @@ export function dropIcsCalendar(state: IcsState, id: string): IcsState {
   return { events, synced };
 }
 
-/** Le démon a écrit l'événement : le cache de la source prend sa version serveur. */
+/**
+ * Le démon a écrit l'événement : le cache de la source prend sa version serveur.
+ * Une écriture vise la SÉRIE : ses occurrences en cache sont périmées.
+ */
 export function upsertIcsCalendarEvent(state: IcsState, id: string, event: CalendarEvent): IcsState {
-  const list = state.events[id] ?? [];
-  const known = list.some((entry) => entry.id === event.id);
-  const events = known
-    ? list.map((entry) => (entry.id === event.id ? event : entry))
-    : [...list, event];
+  const series = event.caldav?.uid;
+  const list = (state.events[id] ?? []).filter(
+    (entry) => entry.id !== event.id && !(series && entry.caldav?.uid === series),
+  );
+  const events = [...list, event];
   return { ...state, events: { ...state.events, [id]: events.slice(0, ICS_MAX_EVENTS) } };
 }
 
+/**
+ * Retire un événement du cache ; une écriture CalDAV vise la série, dont toutes
+ * les occurrences partent en même temps.
+ */
 export function removeIcsCalendarEvent(state: IcsState, id: string, eventId: string): IcsState {
   const list = state.events[id];
   if (!list) return state;
-  return { ...state, events: { ...state.events, [id]: list.filter((entry) => entry.id !== eventId) } };
+  const series = list.find((entry) => entry.id === eventId)?.caldav?.uid;
+  const events = list.filter(
+    (entry) => entry.id !== eventId && !(series && entry.caldav?.uid === series),
+  );
+  return { ...state, events: { ...state.events, [id]: events } };
 }
 
 /** Les sources relues à leur serveur dont le cache a expiré (ou qui n'ont jamais été lues). */

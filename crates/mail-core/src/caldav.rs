@@ -1120,6 +1120,55 @@ mod tests {
         assert!(collections[0].href.ends_with("/dav/roman/travail/"));
     }
 
+    const SERIES_ANSWER: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response>
+    <D:href>/dav/roman/travail/serie.ics</D:href>
+    <D:propstat>
+      <D:prop><D:getetag>"1"</D:getetag></D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+</D:multistatus>"#;
+
+    #[tokio::test]
+    async fn a_series_fetched_from_the_server_is_expanded() {
+        let today = chrono::Utc::now().date_naive();
+        let ics: &'static str = Box::leak(
+            format!(
+                "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Zimbra//FR\r\n\
+                 BEGIN:VEVENT\r\nUID:serie\r\nSUMMARY:Point hebdo\r\n\
+                 DTSTART;TZID=Europe/Paris:{}T090000\r\n\
+                 RRULE:FREQ=DAILY;COUNT=2\r\n\
+                 END:VEVENT\r\nEND:VCALENDAR\r\n",
+                today.format("%Y%m%d")
+            )
+            .into_boxed_str(),
+        );
+        let root = serve(vec![
+            ("REPORT /dav/roman/travail/", SERIES_ANSWER),
+            ("GET /dav/roman/travail/serie.ics", ics),
+        ])
+        .await;
+        let client = CaldavClient::new(root.as_str(), "roman", "secret").expect("client");
+        let events = client
+            .events(Some("/dav/roman/travail/"))
+            .await
+            .expect("agenda");
+        let tomorrow = (today + chrono::Duration::days(1)).to_string();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.date.as_str())
+                .collect::<Vec<_>>(),
+            [today.to_string(), tomorrow]
+        );
+        assert!(events
+            .iter()
+            .all(|event| event.uid.as_deref() == Some("serie")));
+        assert!(events.iter().all(|event| event.recurrence_id.is_some()));
+    }
+
     #[tokio::test]
     async fn a_silent_server_has_no_calendar() {
         let root = serve(Vec::new()).await;

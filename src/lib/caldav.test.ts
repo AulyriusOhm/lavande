@@ -358,6 +358,40 @@ describe("caldav · écriture des événements", () => {
     expect(state.events.travail?.[0]?.caldav?.etag).toBe('"v2"');
   });
 
+  it("remplace les occurrences en cache quand la série est réécrite", async () => {
+    const mock = fetchMock(written);
+    const occurrences = toCalendarEvents(
+      [
+        external({ recurring: true, recurrence_id: "20260304T080000Z", etag: '"v1"' }),
+        external({ recurring: true, recurrence_id: "20260311T080000Z", etag: '"v1"' }),
+      ],
+      travail,
+      "caldav",
+    );
+    saveIcsState(setIcsCalendarEvents(EMPTY_ICS_STATE, "travail", occurrences));
+
+    const state = await updateCaldavEvent(travail, occurrences[0]!, {
+      title: "Réunion écrite",
+      date: "2026-03-15",
+    });
+
+    expect(state.events.travail).toEqual([
+      {
+        id: "caldav:travail:abc-123",
+        date: "2026-03-15",
+        start: "09:00",
+        end: "10:00",
+        title: "Réunion écrite",
+        location: "Bureau",
+        description: "Point hebdo",
+        calendar: "Travail",
+        external: true,
+        caldav: { sourceId: "travail", uid: "abc-123", etag: '"v2"' },
+      },
+    ]);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
   it("supprime l'événement avec son etag, puis le retire du cache", async () => {
     const mock = vi.fn(
       async () => ({ ok: true, status: 204, json: async () => ({}), text: async () => "" }) as unknown as Response,
@@ -374,6 +408,26 @@ describe("caldav · écriture des événements", () => {
     expect(init.body).toBeUndefined();
     expect(state.events.travail).toEqual([]);
     expect(loadIcsState().events.travail).toEqual([cached]);
+  });
+
+  it("retire toutes les occurrences en cache quand la série est supprimée", async () => {
+    const mock = vi.fn(
+      async () => ({ ok: true, status: 204, json: async () => ({}), text: async () => "" }) as unknown as Response,
+    );
+    vi.stubGlobal("fetch", mock);
+    const occurrences = toCalendarEvents(
+      [
+        external({ recurring: true, recurrence_id: "20260304T080000Z", etag: '"v1"' }),
+        external({ recurring: true, recurrence_id: "20260311T080000Z", etag: '"v1"' }),
+      ],
+      travail,
+      "caldav",
+    );
+    saveIcsState(setIcsCalendarEvents(EMPTY_ICS_STATE, "travail", occurrences));
+
+    const state = await deleteCaldavEvent(travail, occurrences[1]!);
+
+    expect(state.events.travail).toEqual([]);
   });
 
   it("reconnaît un conflit de version et relit la source", async () => {
