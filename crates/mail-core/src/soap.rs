@@ -61,7 +61,7 @@ const AUTH_CODES: [&str; 3] = ["AUTH_FAILED", "AUTH_EXPIRED", "AUTH_REQUIRED"];
 /// server announced, when it did. Its `Debug` masks the token.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct AuthToken {
-    #[serde(rename = "authToken")]
+    #[serde(rename = "authToken", deserialize_with = "token_of_answer")]
     pub token: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifetime: Option<i64>,
@@ -73,6 +73,28 @@ impl std::fmt::Debug for AuthToken {
             .field("token", &"<masqué>")
             .field("lifetime", &self.lifetime)
             .finish()
+    }
+}
+
+/// `authToken` as the server renders it: a string, a `{"_content"}` object, or
+/// a list of either — the token is then the first element. Answers the token
+/// itself, or a serde error naming the property.
+fn token_of_answer<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    token_value(&value).ok_or_else(|| {
+        serde::de::Error::custom("authToken : jeton absent de la réponse".to_string())
+    })
+}
+
+fn token_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(token) => Some(token.clone()),
+        Value::Object(_) => token_value(value.get("_content")?),
+        Value::Array(items) => items.first().and_then(token_value),
+        _ => None,
     }
 }
 
@@ -465,6 +487,9 @@ impl SoapClient {
     }
 
     /// Prefs the caller names, as the server spells them.
+    ///
+    /// The server answers the requested list (`pref`) or the account map
+    /// (`_attrs`), whatever it was asked: both are read.
     pub async fn get_prefs(&self, names: &[&str]) -> Result<HashMap<String, String>, MailError> {
         let pref: Vec<Value> = names.iter().map(|name| json!({"name": name})).collect();
         let answer: Value = self
@@ -475,6 +500,11 @@ impl SoapClient {
             let name = text(entry.get("name"));
             if !name.is_empty() {
                 prefs.insert(name, text(entry.get("_content")));
+            }
+        }
+        if let Some(Value::Object(attrs)) = answer.get("_attrs") {
+            for (name, value) in attrs {
+                prefs.insert(name.clone(), text(Some(value)));
             }
         }
         Ok(prefs)
@@ -1184,6 +1214,7 @@ fn text(value: Option<&Value>) -> String {
         Some(Value::String(text)) => text.clone(),
         Some(Value::Number(number)) => number.to_string(),
         Some(Value::Bool(flag)) => flag.to_string(),
+        Some(container @ Value::Object(_)) => text(container.get("_content")),
         _ => String::new(),
     }
 }
@@ -1384,6 +1415,11 @@ mod tests {
     const AUTH_ANSWER: &str = r#"{"Header":{"context":{"_jsns":"urn:zimbra"}},
         "Body":{"AuthResponse":{"_jsns":"urn:zimbraAccount","authToken":"jeton-1","lifetime":43199999}}}"#;
 
+    /// Le jeton tel que mailserver.grenoble.archi.fr le rend : un tableau.
+    const AUTH_ANSWER_ARRAY: &str = r#"{"Header":{"context":{"_jsns":"urn:zimbra"}},
+        "Body":{"AuthResponse":{"_jsns":"urn:zimbraAccount","lifetime":43199999,
+        "authToken":[{"_content":"jeton-1"}],"skin":[{"_content":"partage"}]}}}"#;
+
     const EXPIRED_ANSWER: &str = r#"{"Body":{"Fault":{"Reason":{"Text":"auth credentials have expired"},
         "Detail":{"Error":{"Code":"service.AUTH_EXPIRED"}}}}}"#;
 
@@ -1493,6 +1529,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_login_reads_the_token_the_live_server_renders() {
+        let (url, received) = serve(vec![AUTH_ANSWER_ARRAY, INFO_ANSWER]).await;
+        let client = SoapClient::new(&url, "roman@exemple.tld", "secret").expect("client");
+        let info = client.get_info().await.expect("GetInfo");
+        assert_eq!(info.name.as_deref(), Some("roman@exemple.tld"));
+        // Le jeton reste une chaîne simple dans le contexte des appels suivants.
+        let requests = received.lock().expect("journal");
+        assert_eq!(requests[1]["Header"]["context"]["authToken"], "jeton-1");
+    }
+
+    #[test]
+    fn the_token_is_read_in_every_shape_the_server_renders() {
+        for rendered in [
+            r#""jeton-1""#,
+            r#"{"_content":"jeton-1"}"#,
+            r#"["jeton-1"]"#,
+            r#"[{"_content":"jeton-1"}]"#,
+        ] {
+            let body = format!(r#"{{"authToken":{rendered},"lifetime":43199999}}"#);
+            let token: AuthToken = serde_json::from_str(&body).expect(rendered);
+            assert_eq!(token.token, "jeton-1", "{rendered}");
+            assert_eq!(token.lifetime, Some(43199999), "{rendered}");
+        }
+        let error = serde_json::from_str::<AuthToken>(r#"{"authToken":[]}"#).expect_err("vide");
+        assert!(error.to_string().contains("authToken"), "{error}");
+        let error = serde_json::from_str::<AuthToken>(r#"{"authToken":42}"#).expect_err("nombre");
+        assert!(error.to_string().contains("authToken"), "{error}");
+    }
+
+    #[tokio::test]
     async fn the_token_stays_out_of_debug() {
         let (url, _) = serve(vec![AUTH_ANSWER]).await;
         let client = SoapClient::new(&url, "roman@exemple.tld", "secret").expect("client");
@@ -1598,6 +1664,19 @@ mod tests {
 
     const PREFS_WRITTEN: &str = r#"{"Body":{"ModifyPrefsResponse":{"_jsns":"urn:zimbraAccount"}}}"#;
 
+    /// Les prefs telles que mailserver.grenoble.archi.fr les rend : une map
+    /// `_attrs`, sans membre `pref`, plus large que la demande.
+    const PREFS_ATTRS_ANSWER: &str = r#"{"Body":{"GetPrefsResponse":{"_jsns":"urn:zimbraAccount",
+        "_attrs":{
+        "zimbraPrefOutOfOfficeReply":"Absent jusqu'à lundi.",
+        "zimbraPrefOutOfOfficeFromDate":"20260101000000Z",
+        "zimbraPrefOutOfOfficeReplyEnabled":"TRUE",
+        "zimbraPrefOutOfOfficeUntilDate":"20261020215959Z",
+        "zimbraPrefCalenderScaling":"30"}}}}"#;
+
+    const PREFS_EMPTY_ANSWER: &str =
+        r#"{"Body":{"GetPrefsResponse":{"_jsns":"urn:zimbraAccount"}}}"#;
+
     #[tokio::test]
     async fn the_filter_rules_of_the_server_are_read() {
         let (url, received) = serve(vec![AUTH_ANSWER, FILTERS_ANSWER]).await;
@@ -1702,6 +1781,82 @@ mod tests {
             "Archive"
         );
         assert_eq!(sent["filterRules"][0]["filterRule"][0]["name"], "facture");
+    }
+
+    #[test]
+    fn a_content_object_is_unwrapped_by_text() {
+        assert_eq!(text(Some(&json!({"_content": "valeur"}))), "valeur");
+        assert_eq!(text(Some(&json!({"_content": 30}))), "30");
+        assert_eq!(text(Some(&json!({"name": "sans contenu"}))), "");
+        assert_eq!(text(None), "");
+    }
+
+    #[tokio::test]
+    async fn the_prefs_of_the_live_server_are_read_from_the_attrs_map() {
+        let (url, _) = serve(vec![AUTH_ANSWER, PREFS_ATTRS_ANSWER]).await;
+        let client = SoapClient::new(&url, "roman@exemple.tld", "secret").expect("client");
+        let prefs = client
+            .get_prefs(&[
+                "zimbraPrefOutOfOfficeReply",
+                "zimbraPrefOutOfOfficeReplyEnabled",
+                "zimbraPrefOutOfOfficeFromDate",
+                "zimbraPrefOutOfOfficeUntilDate",
+            ])
+            .await
+            .expect("GetPrefs");
+        assert_eq!(
+            prefs
+                .get("zimbraPrefOutOfOfficeReplyEnabled")
+                .map(String::as_str),
+            Some("TRUE")
+        );
+        assert_eq!(
+            prefs.get("zimbraPrefOutOfOfficeReply").map(String::as_str),
+            Some("Absent jusqu'à lundi.")
+        );
+        assert_eq!(
+            prefs
+                .get("zimbraPrefOutOfOfficeFromDate")
+                .map(String::as_str),
+            Some("20260101000000Z")
+        );
+        assert_eq!(
+            prefs
+                .get("zimbraPrefOutOfOfficeUntilDate")
+                .map(String::as_str),
+            Some("20261020215959Z")
+        );
+        // Le serveur en rend plus que demandé : les extras restent lisibles.
+        assert_eq!(
+            prefs.get("zimbraPrefCalenderScaling").map(String::as_str),
+            Some("30")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_vacation_answer_of_the_live_server_is_read() {
+        let (url, _) = serve(vec![AUTH_ANSWER, PREFS_ATTRS_ANSWER]).await;
+        let client = SoapClient::new(&url, "roman@exemple.tld", "secret").expect("client");
+        assert_eq!(
+            client.get_vacation().await.expect("GetPrefs"),
+            Vacation {
+                enabled: true,
+                message: "Absent jusqu'à lundi.".to_string(),
+                from: Some("2026-01-01".to_string()),
+                until: Some("2026-10-20".to_string()),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn an_answer_without_a_pref_hands_back_an_empty_map() {
+        let (url, _) = serve(vec![AUTH_ANSWER, PREFS_EMPTY_ANSWER]).await;
+        let client = SoapClient::new(&url, "roman@exemple.tld", "secret").expect("client");
+        let prefs = client
+            .get_prefs(&["zimbraPrefOutOfOfficeReply"])
+            .await
+            .expect("GetPrefs");
+        assert!(prefs.is_empty(), "{prefs:?}");
     }
 
     #[tokio::test]
