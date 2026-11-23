@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
+use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -58,6 +59,11 @@ const SNIPPET_BATCH: usize = 50;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Une coupure réseau passagère vaut une seule seconde tentative : une opération
+/// demandée par l'utilisateur (suppression, déplacement) ne doit pas échouer sur
+/// un incident d'une seconde.
+const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(1500);
+
 /// SASL PLAIN responder: empty authzid, authcid then password.
 struct PlainAuthenticator {
     username: String,
@@ -86,28 +92,77 @@ pub async fn connect(cfg: &AccountConfig) -> Result<ImapSession, MailError> {
     connect_with(cfg, &TlsOptions::default()).await
 }
 
+/// Échec d'établissement d'une session : `transport` dit si c'est un incident
+/// de réseau passager, le seul cas qui vaut une seconde tentative. Un certificat
+/// refusé, un protocole non négociable ou une authentification rejetée donnent
+/// exactement le même échec au coup suivant.
+struct ConnectFailure {
+    error: MailError,
+    transport: bool,
+}
+
+impl ConnectFailure {
+    fn permanent(error: MailError) -> Self {
+        Self {
+            error,
+            transport: false,
+        }
+    }
+}
+
+impl From<MailError> for ConnectFailure {
+    fn from(error: MailError) -> Self {
+        Self::permanent(error)
+    }
+}
+
 /// Opens a TLS connection and authenticates. Implicit TLS and STARTTLS both
-/// end up as a `TlsStream<TcpStream>` session.
+/// end up as a `TlsStream<TcpStream>` session. Un incident de transport est
+/// retenté une fois, après un court délai.
 pub async fn connect_with(
     cfg: &AccountConfig,
     tls_options: &TlsOptions,
 ) -> Result<ImapSession, MailError> {
+    let failure = match connect_once(cfg, tls_options).await {
+        Ok(session) => return Ok(session),
+        Err(failure) => failure,
+    };
+    if !failure.transport {
+        return Err(failure.error);
+    }
+    tracing::warn!(
+        host = %cfg.imap.host,
+        error = %failure.error,
+        "connexion imap interrompue par le réseau, nouvelle tentative"
+    );
+    tokio::time::sleep(CONNECT_RETRY_DELAY).await;
+    connect_once(cfg, tls_options)
+        .await
+        .map_err(|failure| failure.error)
+}
+
+async fn connect_once(
+    cfg: &AccountConfig,
+    tls_options: &TlsOptions,
+) -> Result<ImapSession, ConnectFailure> {
     let tcp = timeout(
         CONNECT_TIMEOUT,
         TcpStream::connect((cfg.imap.host.as_str(), cfg.imap.port)),
     )
     .await
-    .map_err(|_| {
-        MailError::Imap(format!(
+    .map_err(|_| ConnectFailure {
+        error: MailError::Imap(format!(
             "délai dépassé en contactant {}:{}",
             cfg.imap.host, cfg.imap.port
-        ))
+        )),
+        transport: true,
     })?
-    .map_err(|error| {
-        MailError::Imap(format!(
+    .map_err(|error| ConnectFailure {
+        error: MailError::Imap(format!(
             "cannot reach {}:{}: {error}",
             cfg.imap.host, cfg.imap.port
-        ))
+        )),
+        transport: is_transport_io(&error),
     })?;
 
     let client = match cfg.imap.encryption {
@@ -122,13 +177,13 @@ pub async fn connect_with(
             client
                 .run_command_and_check_ok("STARTTLS", None)
                 .await
-                .map_err(imap_error)?;
+                .map_err(imap_connect_failure)?;
             Client::new(tls_handshake(&cfg.imap.host, client.into_inner(), tls_options).await?)
         }
         Encryption::Plain => {
-            return Err(MailError::Config(
+            return Err(ConnectFailure::permanent(MailError::Config(
                 "plaintext imap connection is forbidden with stored credentials".to_string(),
-            ))
+            )))
         }
     };
 
@@ -140,12 +195,16 @@ pub async fn connect_with(
             let client = match plain {
                 Ok(session) => return Ok(session),
                 Err((Error::Bad(_) | Error::No(_), client)) => client,
-                Err((error, _)) => return Err(MailError::Auth(error.to_string())),
+                Err((error, _)) => {
+                    return Err(ConnectFailure::permanent(MailError::Auth(
+                        error.to_string(),
+                    )))
+                }
             };
             client
                 .login(&cfg.username, password)
                 .await
-                .map_err(|(error, _)| MailError::Auth(error.to_string()))
+                .map_err(|(error, _)| ConnectFailure::permanent(MailError::Auth(error.to_string())))
         }
         AuthConfig::OAuth2 {
             client_id,
@@ -173,7 +232,11 @@ pub async fn connect_with(
             let client = match inline {
                 Ok(session) => return Ok(session),
                 Err((Error::Bad(_), client)) => client,
-                Err((error, _)) => return Err(MailError::Auth(error.to_string())),
+                Err((error, _)) => {
+                    return Err(ConnectFailure::permanent(MailError::Auth(
+                        error.to_string(),
+                    )))
+                }
             };
             client
                 .authenticate(
@@ -181,7 +244,7 @@ pub async fn connect_with(
                     XOAuth2Authenticator::new(&cfg.email, access_token),
                 )
                 .await
-                .map_err(|(error, _)| MailError::Auth(error.to_string()))
+                .map_err(|(error, _)| ConnectFailure::permanent(MailError::Auth(error.to_string())))
         }
     }
 }
@@ -1469,7 +1532,7 @@ async fn tls_handshake(
     host: &str,
     tcp: TcpStream,
     options: &TlsOptions,
-) -> Result<TlsStream<TcpStream>, MailError> {
+) -> Result<TlsStream<TcpStream>, ConnectFailure> {
     let mut roots = RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
     };
@@ -1492,19 +1555,68 @@ async fn tls_handshake(
         TlsConnector::from(Arc::new(config)).connect(server_name, tcp),
     )
     .await
-    .map_err(|_| MailError::Tls(format!("{host} ({peer}) : délai dépassé")))?
-    .map_err(|error| MailError::Tls(format!("{host} ({peer}) : {error}")))
+    .map_err(|_| ConnectFailure {
+        error: MailError::Tls(format!("{host} ({peer}) : délai dépassé")),
+        transport: true,
+    })?
+    .map_err(|error| ConnectFailure {
+        error: MailError::Tls(format!("{host} ({peer}) : {error}")),
+        transport: handshake_is_transport(&error),
+    })
 }
 
 async fn read_greeting<T: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
     client: &mut Client<T>,
-) -> Result<(), MailError> {
+) -> Result<(), ConnectFailure> {
     match client.read_response().await {
         Some(Ok(_)) => Ok(()),
-        Some(Err(error)) => Err(MailError::Imap(error.to_string())),
-        None => Err(MailError::Imap(
-            "server closed the connection before greeting".to_string(),
-        )),
+        Some(Err(error)) => Err(ConnectFailure {
+            error: MailError::Imap(error.to_string()),
+            transport: is_transport_io(&error),
+        }),
+        None => Err(ConnectFailure {
+            error: MailError::Imap("server closed the connection before greeting".to_string()),
+            transport: true,
+        }),
+    }
+}
+
+/// Un incident réseau passager : délai, fin de flux, coupure, tube rompu ou
+/// connexion réinitialisée. Un refus de connexion n'en est pas un.
+fn is_transport_io(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::TimedOut
+            | io::ErrorKind::UnexpectedEof
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::BrokenPipe
+    )
+}
+
+/// Une erreur rustls est un refus définitif (certificat, version de protocole) :
+/// la réessayer redonne exactement le même refus après un aller-retour de plus.
+fn is_tls_refusal(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|source| source.downcast_ref::<rustls::Error>().is_some())
+}
+
+fn handshake_is_transport(error: &io::Error) -> bool {
+    is_transport_io(error) && !is_tls_refusal(error)
+}
+
+/// Une erreur IMAP levée pendant l'établissement n'est un incident de transport
+/// que si elle vient d'une lecture ou d'une écriture coupée.
+fn imap_connect_failure(error: Error) -> ConnectFailure {
+    let transport = match &error {
+        Error::Io(error) => is_transport_io(error),
+        Error::ConnectionLost => true,
+        _ => false,
+    };
+    ConnectFailure {
+        error: MailError::Imap(error.to_string()),
+        transport,
     }
 }
 
@@ -1615,6 +1727,45 @@ mod tests {
     fn plain_payload_is_authzid_authcid_password() {
         let mut auth = PlainAuthenticator::new("user@example.org", "p^ss");
         assert_eq!(auth.process(&[]), b"\0user@example.org\0p^ss".to_vec());
+    }
+
+    /// Un incident réseau passager est retenté, un refus de certificat ou une
+    /// authentification rejetée ne l'est jamais.
+    #[test]
+    fn only_a_transport_failure_is_retried() {
+        for kind in [
+            io::ErrorKind::TimedOut,
+            io::ErrorKind::UnexpectedEof,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::ConnectionAborted,
+            io::ErrorKind::BrokenPipe,
+        ] {
+            assert!(handshake_is_transport(&io::Error::from(kind)), "{kind:?}");
+        }
+        assert!(!handshake_is_transport(&io::Error::from(
+            io::ErrorKind::ConnectionRefused
+        )));
+
+        let certificate = io::Error::new(
+            io::ErrorKind::InvalidData,
+            rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer),
+        );
+        assert!(!handshake_is_transport(&certificate));
+
+        for error in [
+            MailError::Auth("invalid credentials".to_string()),
+            MailError::OAuth("invalid_grant".to_string()),
+            MailError::OAuthRevoked("consent withdrawn".to_string()),
+            MailError::Config("plaintext imap connection is forbidden".to_string()),
+        ] {
+            assert!(!ConnectFailure::from(error).transport);
+        }
+        assert!(!imap_connect_failure(Error::Bad("STARTTLS not supported".to_string())).transport);
+        assert!(
+            imap_connect_failure(Error::Io(io::Error::from(io::ErrorKind::ConnectionReset)))
+                .transport
+        );
+        assert!(imap_connect_failure(Error::ConnectionLost).transport);
     }
 
     #[test]

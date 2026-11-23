@@ -21,6 +21,15 @@ use crate::widget::WidgetMail;
 
 const IDLE_WAIT: Duration = Duration::from_secs(540);
 const RECONNECT_DELAY: Duration = Duration::from_secs(30);
+const RECONNECT_DELAY_MAX: Duration = Duration::from_secs(900);
+
+/// Progression du délai de reconnexion : doublement à chaque échec consécutif,
+/// plafonné à 15 min. Une panne serveur ne doit pas se transformer en tempête de
+/// reconnexions — chacune rouvre un TLS et redemande un jeton OAuth, ce que les
+/// serveurs Microsoft finissent par limiter.
+fn next_reconnect_delay(current: Duration) -> Duration {
+    (current * 2).min(RECONNECT_DELAY_MAX)
+}
 
 /// Combien de mails un événement porte au plus : le front en fait une
 /// notification chacun, au-delà d'une poignée de mails c'est du bruit.
@@ -236,16 +245,30 @@ pub fn watch_account(state: &Arc<AppState>, config: AccountConfig) {
     let state = Arc::clone(state);
     tokio::spawn(async move {
         tracing::info!(account = %config.id, "veille IDLE démarrée");
+        let mut reconnect_delay = RECONNECT_DELAY;
         loop {
-            if let Err(error) = watch_once(&state, &config).await {
-                tracing::debug!(account = %config.id, error = %error, "veille interrompue");
-                tokio::time::sleep(RECONNECT_DELAY).await;
+            match watch_once(&state, &config, &mut reconnect_delay).await {
+                Ok(()) => reconnect_delay = RECONNECT_DELAY,
+                Err(error) => {
+                    tracing::debug!(
+                        account = %config.id,
+                        error = %error,
+                        delay_s = reconnect_delay.as_secs(),
+                        "veille interrompue"
+                    );
+                    tokio::time::sleep(reconnect_delay).await;
+                    reconnect_delay = next_reconnect_delay(reconnect_delay);
+                }
             }
         }
     });
 }
 
-async fn watch_once(state: &Arc<AppState>, config: &AccountConfig) -> Result<(), MailError> {
+async fn watch_once(
+    state: &Arc<AppState>,
+    config: &AccountConfig,
+    reconnect_delay: &mut Duration,
+) -> Result<(), MailError> {
     let mut session = match imap::connect_with(config, state.tls()).await {
         Ok(session) => session,
         Err(error) => {
@@ -253,7 +276,9 @@ async fn watch_once(state: &Arc<AppState>, config: &AccountConfig) -> Result<(),
             return Err(error);
         }
     };
-    // Une connexion aboutit : le drapeau éventuel était périmé.
+    // Une connexion aboutit : le délai de reconnexion repart de sa base, et le
+    // drapeau de reconnexion éventuel était périmé.
+    *reconnect_delay = RECONNECT_DELAY;
     if let Err(error) = state.clear_reauth(&config.id).await {
         tracing::warn!(account = %config.id, error = %error, "état de reconnexion non effacé");
     }
@@ -347,9 +372,9 @@ async fn sync_and_publish(
 }
 
 /// Signale au front l'autorisation révoquée, et rien d'autre : le veilleur
-/// réessaie toutes les 30 s, c'est ce qui le remet en marche une fois le compte
-/// reconnecté. Un échec d'écriture reste un avertissement — la boîte ne doit
-/// jamais s'arrêter là-dessus.
+/// réessaie avec un délai croissant, c'est ce qui le remet en marche une fois le
+/// compte reconnecté. Un échec d'écriture reste un avertissement — la boîte ne
+/// doit jamais s'arrêter là-dessus.
 async fn fail_connect(state: &Arc<AppState>, account_id: &str, error: &MailError) {
     if matches!(error, MailError::OAuthRevoked(_)) {
         let marked = state.mark_reauth_required(account_id).await;
@@ -439,6 +464,17 @@ mod tests {
             body_html: None,
             attachments: Vec::new(),
         }
+    }
+
+    #[test]
+    fn the_reconnect_delay_doubles_then_caps() {
+        let mut delay = RECONNECT_DELAY;
+        let mut steps = Vec::new();
+        for _ in 0..8 {
+            steps.push(delay.as_secs());
+            delay = next_reconnect_delay(delay);
+        }
+        assert_eq!(steps, vec![30, 60, 120, 240, 480, 900, 900, 900]);
     }
 
     #[test]
