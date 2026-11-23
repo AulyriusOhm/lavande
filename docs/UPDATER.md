@@ -186,10 +186,30 @@ Exemple de manifeste :
   `installAndRelaunch`, backend Tauri réel et hook `useUpdater`.
   Hors coquille de bureau (`isTauriShell()` faux, Android, tests) : aucun plugin
   n'est chargé, tout répond « non pris en charge ».
-- Réglages → **Mise à jour** : version installée, « Vérifier les mises à jour »,
-  état, barre de progression, « Installer et redémarrer ».
-- Une vérification silencieuse a lieu à l'ouverture des réglages, une fois par
-  session (`sessionStorage`), sans afficher d'erreur réseau.
+- **État partagé** : la phase, la version installée et la mise à jour en attente
+  vivent dans un store de module (`useSyncExternalStore`), pas dans chaque
+  composant. Une seule vérification et une seule installation à la fois pour
+  tous les consommateurs ; une vérification lancée depuis les réglages s'affiche
+  donc dans la popup, et réciproquement.
+- **Planification** : au premier abonné, une vérification silencieuse part si
+  aucune n'a encore eu lieu ou si l'intervalle est écoulé. La date de la dernière
+  vérification terminée (succès **ou** erreur) est conservée dans
+  `localStorage` sous `lavande:updater-last-check` (ms). La boucle replanifie
+  ensuite un `setTimeout` jusqu'à l'échéance suivante ; elle tourne une seule
+  fois quel que soit le nombre de `useUpdater()` montés, et s'arrête au dernier
+  démontage. Les erreurs réseau d'une vérification de fond sont silencieuses.
+- **Réglages → Mise à jour** (PC et mobile) : version installée, « Vérifier les
+  mises à jour », état, barre de progression, « Installer et redémarrer », plus
+  l'interrupteur **Vérification automatique** et la fréquence (1 h, 6 h, 12 h,
+  24 h, 48 h, 7 j). Ces deux réglages sont dans la préférence `updates`
+  (`{ autoCheck, intervalHours }`, défauts `true` / `24`) du document
+  `lavande.prefs` ; un changement s'applique sans redémarrer : `autoCheck` faux
+  annule la planification, une fréquence plus courte déclenche la vérification
+  si l'échéance est déjà passée. Une vérification manuelle rafraîchit toujours
+  l'horodatage.
+- **Popup** : montée au démarrage (`src/App.tsx`), elle affiche la version
+  disponible et son patchnote groupé, avec « Installer la mise à jour » et
+  « Plus tard » (renvoi mémorisé pour la session, par version).
 - Permissions Tauri : `updater:default` + `process:default` dans
   `src-tauri/capabilities/default.json` ; plugins initialisés dans
   `src-tauri/src/lib.rs`.
@@ -269,6 +289,7 @@ tant que les points ci-dessous ne sont pas faits :
 6. **Prérequis d'installation RPM.** Le poste cible doit avoir polkit (`pkexec`) ou
    `sudo` pour `rpm -U`. À confirmer sur la machine de l'utilisateur ; sinon
    privilégier l'AppImage.
-7. **(Optionnel) Vérification au démarrage.** Aujourd'hui la vérification silencieuse
-   n'a lieu qu'à l'ouverture des Réglages (1×/session). On peut ajouter une
-   vérification au lancement + notification si une mise à jour est disponible.
+7. **(Optionnel) Notification système.** La vérification part désormais au
+   lancement puis à la fréquence réglée (voir « Côté application »), mais une
+   mise à jour trouvée ne s'annonce que par la popup : on peut ajouter une
+   notification système en complément.

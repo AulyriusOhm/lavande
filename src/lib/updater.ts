@@ -7,10 +7,11 @@
  * jamais charger un plugin. Les états et les transitions vivent dans des
  * fonctions pures, pilotées par un `UpdaterBackend` qu'un test peut remplacer.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useSyncExternalStore } from "react";
 import packageJson from "../../package.json";
 import { isNativeShell, shellLayout } from "@/lib/native";
 import { isTauriShell } from "@/lib/open-external";
+import type { UpdatesPrefs } from "@/lib/prefs";
 
 /** Version du front, affichée quand la coquille ne peut pas la donner. */
 export const APP_VERSION: string = packageJson.version;
@@ -249,68 +250,176 @@ function pendingAndroidUpdate(apk: AndroidApk, notes: string): PendingUpdate {
   };
 }
 
-const AUTO_CHECK_KEY = "lavande:updater-auto-check";
+const LAST_CHECK_KEY = "lavande:updater-last-check";
+const HOUR = 3_600_000;
+const DEFAULT_SCHEDULE: UpdatesPrefs = { autoCheck: true, intervalHours: 24 };
+
+type UpdaterSnapshot = { phase: UpdatePhase; current: string | null };
+
+let snapshot: UpdaterSnapshot = { phase: { kind: "idle" }, current: null };
+const listeners = new Set<() => void>();
+let pending: PendingUpdate | null = null;
+let checking: Promise<PendingUpdate | null> | null = null;
+let installing: Promise<void> | null = null;
+let readingVersion: Promise<void> | null = null;
+let schedule: UpdatesPrefs = DEFAULT_SCHEDULE;
+let timer: ReturnType<typeof setTimeout> | null = null;
+let subscribers = 0;
+
+const resolveBackend = () => (isNativeShell() ? androidUpdater() : tauriUpdater());
+
+function publish(patch: Partial<UpdaterSnapshot>) {
+  snapshot = { ...snapshot, ...patch };
+  for (const listener of listeners) listener();
+}
+
+const report = (phase: UpdatePhase) => publish({ phase });
+
+/** Horodatage de la dernière vérification terminée : 0 si aucune. */
+export function lastCheckAt(): number {
+  try {
+    const value = Number(window.localStorage.getItem(LAST_CHECK_KEY) ?? 0);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function stampCheck() {
+  try {
+    window.localStorage.setItem(LAST_CHECK_KEY, String(Date.now()));
+  } catch {
+    // stockage indisponible : la prochaine vérification repart de zéro
+  }
+}
+
+function clearTimer() {
+  if (timer === null) return;
+  clearTimeout(timer);
+  timer = null;
+}
+
+function isDue() {
+  const last = lastCheckAt();
+  return last === 0 || Date.now() - last >= schedule.intervalHours * HOUR;
+}
+
+/** Une seule vérification à la fois, partagée par tous les consommateurs. */
+function check(options: { silent?: boolean } = {}) {
+  if (!updaterSupported()) return Promise.resolve<PendingUpdate | null>(null);
+  if (checking) return checking;
+  checking = (async () => {
+    try {
+      const found = await checkForUpdate(resolveBackend(), report, options);
+      pending = found;
+      return found;
+    } finally {
+      checking = null;
+      stampCheck();
+    }
+  })();
+  return checking;
+}
+
+function install() {
+  if (!updaterSupported() || !pending) return Promise.resolve();
+  if (installing) return installing;
+  const update = pending;
+  installing = installAndRelaunch(resolveBackend(), update, report).finally(() => {
+    installing = null;
+  });
+  return installing;
+}
+
+function readVersion() {
+  if (!updaterSupported() || readingVersion) return;
+  readingVersion = resolveBackend()
+    .version()
+    .then((value) => {
+      if (value !== snapshot.current) publish({ current: value });
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      readingVersion = null;
+    });
+}
+
+function plan() {
+  clearTimer();
+  if (subscribers === 0 || !schedule.autoCheck || !updaterSupported()) return;
+  const wait = Math.max(0, lastCheckAt() + schedule.intervalHours * HOUR - Date.now());
+  timer = setTimeout(() => {
+    timer = null;
+    void tick();
+  }, wait);
+}
+
+async function tick() {
+  if (subscribers === 0 || !updaterSupported()) return;
+  if (!schedule.autoCheck) {
+    clearTimer();
+    return;
+  }
+  if (isDue()) await check({ silent: true });
+  plan();
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  subscribers += 1;
+  if (subscribers === 1) {
+    readVersion();
+    void tick();
+  }
+  return () => {
+    listeners.delete(listener);
+    subscribers -= 1;
+    if (subscribers === 0) clearTimer();
+  };
+}
+
+const getSnapshot = () => snapshot;
+
+/** Applique la préférence des réglages sans redémarrage : coupe ou replanifie. */
+export function configureUpdaterSchedule(next: UpdatesPrefs) {
+  if (next.autoCheck === schedule.autoCheck && next.intervalHours === schedule.intervalHours) return;
+  schedule = { ...next };
+  void tick();
+}
+
+const unsupportedCheck = () => Promise.resolve<PendingUpdate | null>(null);
+const unsupportedInstall = () => Promise.resolve();
 
 /**
- * État de la mise à jour pour l'UI. La vérification de fond n'a lieu qu'une
- * fois par session et n'affiche jamais d'erreur.
+ * État de la mise à jour pour l'UI, partagé par tous les consommateurs : une
+ * vérification lancée depuis les réglages se voit dans la popup, et
+ * réciproquement. La vérification de fond suit la fréquence des réglages et
+ * n'affiche jamais d'erreur réseau.
  */
 export function useUpdater() {
-  const supported = updaterSupported();
-  const [phase, setPhase] = useState<UpdatePhase>(supported ? { kind: "idle" } : { kind: "unsupported" });
-  const [current, setCurrent] = useState<string | null>(null);
-  const pending = useRef<PendingUpdate | null>(null);
-  const backend = useRef<UpdaterBackend | null>(null);
+  const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
-  const resolveBackend = useCallback(
-    () => (backend.current ??= isNativeShell() ? androidUpdater() : tauriUpdater()),
-    [],
-  );
-
-  useEffect(() => {
-    if (!supported) return;
-    let alive = true;
-    void resolveBackend()
-      .version()
-      .then((value) => {
-        if (alive) setCurrent(value);
-      })
-      .catch(() => undefined);
-    return () => {
-      alive = false;
+  if (!updaterSupported()) {
+    return {
+      supported: false,
+      phase: { kind: "unsupported" } as UpdatePhase,
+      current: null,
+      busy: false,
+      canInstall: false,
+      check: unsupportedCheck,
+      install: unsupportedInstall,
     };
-  }, [supported, resolveBackend]);
+  }
 
-  const check = useCallback(
-    async (options: { silent?: boolean } = {}) => {
-      if (!supported) return null;
-      const found = await checkForUpdate(resolveBackend(), setPhase, options);
-      pending.current = found;
-      return found;
-    },
-    [supported, resolveBackend],
-  );
-
-  const install = useCallback(async () => {
-    const update = pending.current;
-    if (!supported || !update) return;
-    await installAndRelaunch(resolveBackend(), update, setPhase);
-  }, [supported, resolveBackend]);
-
-  useEffect(() => {
-    if (!supported) return;
-    try {
-      if (window.sessionStorage.getItem(AUTO_CHECK_KEY)) return;
-      window.sessionStorage.setItem(AUTO_CHECK_KEY, "done");
-    } catch {
-      return;
-    }
-    void check({ silent: true });
-  }, [supported, check]);
-
-  const busy = phase.kind === "checking" || phase.kind === "downloading" || phase.kind === "installing";
-  const canInstall =
-    phase.kind === "available" || phase.kind === "downloading" || phase.kind === "installing";
-
-  return { supported, phase, current, busy, canInstall, check, install };
+  const phase = state.phase;
+  return {
+    supported: true,
+    phase,
+    current: state.current,
+    busy: phase.kind === "checking" || phase.kind === "downloading" || phase.kind === "installing",
+    canInstall:
+      phase.kind === "available" || phase.kind === "downloading" || phase.kind === "installing",
+    check,
+    install,
+  };
 }

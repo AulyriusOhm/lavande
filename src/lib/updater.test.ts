@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { renderHook, waitFor } from "@testing-library/react";
 import {
   APP_VERSION,
   OSTREE_RPM,
   androidUpdater,
   checkForUpdate,
+  configureUpdaterSchedule,
+  lastCheckAt,
   compareVersions,
   installAndRelaunch,
   messageOf,
@@ -461,5 +463,136 @@ describe("useUpdater sur la coquille Android", () => {
     expect(result.current.supported).toBe(true);
     await vi.waitFor(() => expect(result.current.current).toBe("0.2.4"));
     await vi.waitFor(() => expect(result.current.phase.kind).toBe("current"));
+  });
+});
+
+const LAST_CHECK_KEY = "lavande:updater-last-check";
+const HOUR = 3_600_000;
+
+function seedCheck(agoMs: number) {
+  window.localStorage.setItem(LAST_CHECK_KEY, String(Date.now() - agoMs));
+}
+
+describe("vérification automatique planifiée", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    configureUpdaterSchedule({ autoCheck: true, intervalHours: 24 });
+    shellOn("desktop");
+    pluginCheckMock.mockReset();
+    pluginCheckMock.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    configureUpdaterSchedule({ autoCheck: true, intervalHours: 24 });
+  });
+
+  it("vérifie au premier abonné quand aucune vérification n'a eu lieu", async () => {
+    renderHook(() => useUpdater());
+
+    await waitFor(() => expect(pluginCheckMock).toHaveBeenCalledTimes(1));
+    expect(lastCheckAt()).toBeGreaterThan(0);
+  });
+
+  it("ne relance rien tant que l'intervalle n'est pas écoulé", async () => {
+    seedCheck(HOUR);
+
+    renderHook(() => useUpdater());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(pluginCheckMock).not.toHaveBeenCalled();
+    expect(Date.now() - lastCheckAt()).toBeGreaterThanOrEqual(HOUR);
+  });
+
+  it("vérifie à nouveau une fois l'intervalle écoulé", async () => {
+    vi.useFakeTimers();
+    try {
+      seedCheck(0);
+      configureUpdaterSchedule({ autoCheck: true, intervalHours: 1 });
+      renderHook(() => useUpdater());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pluginCheckMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(HOUR + 1);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(pluginCheckMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ne vérifie rien quand la préférence est coupée", async () => {
+    vi.useFakeTimers();
+    try {
+      configureUpdaterSchedule({ autoCheck: false, intervalHours: 1 });
+      renderHook(() => useUpdater());
+      await vi.advanceTimersByTimeAsync(3 * HOUR);
+
+      expect(pluginCheckMock).not.toHaveBeenCalled();
+      expect(lastCheckAt()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("applique un changement de préférence sans redémarrer", async () => {
+    vi.useFakeTimers();
+    try {
+      seedCheck(0);
+      renderHook(() => useUpdater());
+      await vi.advanceTimersByTimeAsync(HOUR);
+      expect(pluginCheckMock).not.toHaveBeenCalled();
+
+      configureUpdaterSchedule({ autoCheck: true, intervalHours: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(pluginCheckMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coupe la planification quand l'interrupteur passe à faux", async () => {
+    vi.useFakeTimers();
+    try {
+      seedCheck(0);
+      renderHook(() => useUpdater());
+      configureUpdaterSchedule({ autoCheck: false, intervalHours: 1 });
+      await vi.advanceTimersByTimeAsync(5 * HOUR);
+
+      expect(pluginCheckMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rafraîchit l'horodatage sur une vérification manuelle", async () => {
+    seedCheck(3 * HOUR);
+    const { result } = renderHook(() => useUpdater());
+    const before = lastCheckAt();
+
+    await result.current.check();
+
+    expect(pluginCheckMock).toHaveBeenCalledTimes(1);
+    expect(lastCheckAt()).toBeGreaterThan(before);
+    expect(Date.now() - lastCheckAt()).toBeLessThan(HOUR);
+  });
+
+  it("partage une seule vérification et le même état entre deux consommateurs", async () => {
+    pluginCheckMock.mockResolvedValue({
+      version: "0.3.0",
+      body: "Correctifs",
+      downloadAndInstall: vi.fn(),
+      close: vi.fn(),
+    });
+    const first = renderHook(() => useUpdater());
+    const second = renderHook(() => useUpdater());
+
+    await first.result.current.check();
+
+    await waitFor(() => expect(second.result.current.phase.kind).toBe("available"));
+    expect(second.result.current.phase).toEqual(first.result.current.phase);
+    expect(pluginCheckMock).toHaveBeenCalledTimes(1);
+    expect(second.result.current.canInstall).toBe(true);
   });
 });

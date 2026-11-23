@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { UpdatePopup, parseReleaseNotes } from "@/components/update-popup";
+import { PrefsProvider } from "@/lib/prefs";
 import type { UpdatePhase } from "@/lib/updater";
 
 const state = vi.hoisted(() => ({
@@ -37,14 +38,20 @@ const NOTES = [
 const AVAILABLE: UpdatePhase = { kind: "available", version: "0.2.14", notes: NOTES };
 const DISMISS_KEY = "lavande:updater-popup-dismissed:0.2.14";
 
+const popup = () => (
+  <PrefsProvider>
+    <UpdatePopup />
+  </PrefsProvider>
+);
+
 const installButton = () => screen.getByRole("button", { name: /Installer la mise à jour/ });
 const dialog = () => screen.queryByRole("alertdialog");
 
 function installThen(phase: UpdatePhase) {
-  const view = render(<UpdatePopup />);
+  const view = render(popup());
   fireEvent.click(installButton());
   state.phase = phase;
-  view.rerender(<UpdatePopup />);
+  view.rerender(popup());
   return view;
 }
 
@@ -59,7 +66,7 @@ beforeEach(() => {
 
 describe("UpdatePopup", () => {
   it("annonce la version disponible avec son patchnote groupé", () => {
-    render(<UpdatePopup />);
+    render(popup());
 
     expect(screen.getByRole("alertdialog", { name: "Mise à jour Lavande 0.2.14" })).toBeTruthy();
     expect(screen.getByText("Lavande 0.2.14 est disponible")).toBeTruthy();
@@ -74,26 +81,26 @@ describe("UpdatePopup", () => {
 
   it("n'affiche que la nouvelle version quand la version installée est inconnue", () => {
     state.current = null;
-    render(<UpdatePopup />);
+    render(popup());
 
     expect(screen.getByText("0.2.14")).toBeTruthy();
     expect(screen.queryByText(/→/)).toBeNull();
   });
 
   it("renvoie la mise à jour avec « Plus tard » et ne la repropose pas dans la session", () => {
-    const view = render(<UpdatePopup />);
+    const view = render(popup());
     fireEvent.click(screen.getByRole("button", { name: "Plus tard" }));
 
     expect(dialog()).toBeNull();
     expect(window.sessionStorage.getItem(DISMISS_KEY)).toBe("1");
 
     view.unmount();
-    render(<UpdatePopup />);
+    render(popup());
     expect(dialog()).toBeNull();
   });
 
   it("renvoie avec Échap", () => {
-    render(<UpdatePopup />);
+    render(popup());
     fireEvent.keyDown(window, { key: "Escape" });
 
     expect(dialog()).toBeNull();
@@ -101,7 +108,7 @@ describe("UpdatePopup", () => {
   });
 
   it("renvoie au clic sur le voile", () => {
-    render(<UpdatePopup />);
+    render(popup());
     fireEvent.click(screen.getByTestId("update-popup-backdrop"));
 
     expect(dialog()).toBeNull();
@@ -150,21 +157,21 @@ describe("UpdatePopup", () => {
 
   it("ne montre rien quand les mises à jour ne sont pas prises en charge", () => {
     state.supported = false;
-    render(<UpdatePopup />);
+    render(popup());
 
     expect(dialog()).toBeNull();
   });
 
   it("ne montre rien sans mise à jour disponible", () => {
     state.phase = { kind: "current" };
-    render(<UpdatePopup />);
+    render(popup());
 
     expect(dialog()).toBeNull();
   });
 
   it("saute la section patchnote quand les notes sont vides", () => {
     state.phase = { kind: "available", version: "0.2.14", notes: "   " };
-    render(<UpdatePopup />);
+    render(popup());
 
     expect(screen.getByText("Lavande 0.2.14 est disponible")).toBeTruthy();
     expect(screen.queryByText("Correctifs")).toBeNull();

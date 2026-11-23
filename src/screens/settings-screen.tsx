@@ -71,6 +71,8 @@ import { SUMMARY_MODES } from "@/lib/summary";
 import {
   SWIPE_ACTIONS,
   CALENDAR_LEAD_MINUTES,
+  UPDATE_INTERVALS,
+  updateIntervalLabel,
 
   THREAD_VIEWS,
   MAIL_DENSITIES,
@@ -219,6 +221,8 @@ export function SettingsScreen({
     setThreadView,
     mailDensity,
     setMailDensity,
+    updates,
+    setUpdates,
   } = usePrefs();
   const [openGroup, setOpenGroup] = useState<GroupId | null>(null);
   const [teamAccount, setTeamAccount] = useState<string | null>(null);
@@ -2251,6 +2255,42 @@ export function SettingsScreen({
                   </p>
                 </>
               ) : null}
+
+              <div className="border-t border-line/70 pt-1">
+                <ToggleRow
+                  icon={<RefreshCw className="size-4" />}
+                  label="Vérification automatique"
+                  hint="Fréquence de vérification ci-dessous"
+                  checked={updates.autoCheck}
+                  onChange={(value) => setUpdates({ autoCheck: value })}
+                />
+                {updates.autoCheck ? (
+                  <div className="px-3.5 pt-1">
+                    <p className={MOBILE_LABEL}>Fréquence de vérification</p>
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {UPDATE_INTERVALS.map((hours) => {
+                        const selected = updates.intervalHours === hours;
+                        return (
+                          <button
+                            key={hours}
+                            type="button"
+                            aria-pressed={selected}
+                            onClick={() => setUpdates({ intervalHours: hours })}
+                            className={cn(
+                              "focus-ring min-h-10 rounded-full px-3 text-[11.5px] font-bold transition-colors",
+                              selected
+                                ? "bg-accent-soft text-accent-ink ring-1 ring-accent-ring/60"
+                                : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
+                            )}
+                          >
+                            {updateIntervalLabel(hours)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             </Card>
           </BlurFade>
 

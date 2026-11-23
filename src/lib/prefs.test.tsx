@@ -18,6 +18,8 @@ import {
   asTeamContext,
   asMailDensity,
   asThreadView,
+  asUpdates,
+  DEFAULT_UPDATES,
   perimeterOf,
   storedPerimeters,
   isFolderHidden,
@@ -764,6 +766,52 @@ describe("préférences · images autorisées par expéditeur", () => {
 
     expect(result.current.decision.trustedSenders).toEqual([]);
     expect((stored().decision as { trustedSenders: string[] }).trustedSenders).toEqual([]);
+  });
+});
+
+describe("préférences · vérification des mises à jour", () => {
+  it("active la vérification quotidienne par défaut", () => {
+    expect(mount().result.current.updates).toEqual(DEFAULT_UPDATES);
+    expect(DEFAULT_UPDATES).toEqual({ autoCheck: true, intervalHours: 24 });
+  });
+
+  it("relit une préférence complète", () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({ updates: { autoCheck: false, intervalHours: 6 } }),
+    );
+
+    expect(mount().result.current.updates).toEqual({ autoCheck: false, intervalHours: 6 });
+  });
+
+  it("retombe sur les défauts pour une valeur inconnue", () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({ updates: { autoCheck: "oui", intervalHours: "souvent" } }),
+    );
+
+    expect(mount().result.current.updates).toEqual(DEFAULT_UPDATES);
+    expect(asUpdates(undefined)).toEqual(DEFAULT_UPDATES);
+    expect(asUpdates(42)).toEqual(DEFAULT_UPDATES);
+  });
+
+  it("borne la fréquence entre 1 et 168 heures", () => {
+    expect(asUpdates({ intervalHours: 0 }).intervalHours).toBe(1);
+    expect(asUpdates({ intervalHours: 500 }).intervalHours).toBe(168);
+    expect(asUpdates({ intervalHours: 6.4 }).intervalHours).toBe(6);
+  });
+
+  it("met à jour partiellement et persiste le résultat", () => {
+    const { result } = mount();
+
+    act(() => result.current.setUpdates({ intervalHours: 48 }));
+
+    expect(result.current.updates).toEqual({ autoCheck: true, intervalHours: 48 });
+    expect(stored().updates).toMatchObject({ autoCheck: true, intervalHours: 48 });
+
+    act(() => result.current.setUpdates({ autoCheck: false }));
+
+    expect(result.current.updates).toEqual({ autoCheck: false, intervalHours: 48 });
   });
 });
 

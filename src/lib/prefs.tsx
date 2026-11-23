@@ -97,6 +97,16 @@ export const DEFAULT_NOTIFICATIONS: NotificationPrefs = {
   calendarMinutes: 10,
 };
 
+/** Vérification automatique des mises à jour : interrupteur et période, en heures. */
+export type UpdatesPrefs = { autoCheck: boolean; intervalHours: number };
+
+export const DEFAULT_UPDATES: UpdatesPrefs = { autoCheck: true, intervalHours: 24 };
+
+/** Fréquences proposées dans les réglages, en heures. */
+export const UPDATE_INTERVALS = [1, 6, 12, 24, 48, 168] as const;
+
+export const updateIntervalLabel = (hours: number): string => (hours === 168 ? "7 j" : `${hours} h`);
+
 /** Délais de rappel proposés avant un rendez-vous, en minutes. */
 export const CALENDAR_LEAD_MINUTES = [0, 5, 10, 15, 30] as const;
 
@@ -140,6 +150,8 @@ export type Prefs = {
   perimeters: Record<string, AccountPerimeter>;
   /** Notifications système : nouveaux mails et rappels d'agenda. */
   notifications: NotificationPrefs;
+  /** Mises à jour : vérification automatique et sa fréquence. */
+  updates: UpdatesPrefs;
   /** Conversation dans la rédaction : panneau repliable ou citation dans le mail. */
   threadView: ThreadView;
   /** Densité de la liste des mails. */
@@ -176,6 +188,7 @@ const DEFAULTS: Prefs = {
   folderOrder: {},
   perimeters: {},
   notifications: DEFAULT_NOTIFICATIONS,
+  updates: DEFAULT_UPDATES,
   threadView: "tidy",
   mailDensity: "cozy",
   imagesAllowedSenders: [],
@@ -203,6 +216,7 @@ type PrefsContextValue = Prefs & {
   setFolderOrder: (accountId: string, paths: string[]) => void;
   setAccountPerimeter: (accountId: string, patch: Partial<AccountPerimeter>) => void;
   setNotifications: (patch: Partial<NotificationPrefs>) => void;
+  setUpdates: (patch: Partial<UpdatesPrefs>) => void;
   setAccountNotification: (accountId: string, value: boolean) => void;
   setThreadView: (value: ThreadView) => void;
   setMailDensity: (value: MailDensity) => void;
@@ -484,6 +498,18 @@ export const asNotifications = (value: unknown): NotificationPrefs => {
   };
 };
 
+export const asUpdates = (value: unknown): UpdatesPrefs => {
+  if (!value || typeof value !== "object") return { ...DEFAULT_UPDATES };
+  const { autoCheck, intervalHours } = value as Record<string, unknown>;
+  return {
+    autoCheck: asBoolean(autoCheck, DEFAULT_UPDATES.autoCheck),
+    intervalHours:
+      typeof intervalHours === "number" && Number.isFinite(intervalHours)
+        ? Math.min(168, Math.max(1, Math.round(intervalHours)))
+        : DEFAULT_UPDATES.intervalHours,
+  };
+};
+
 /** Un compte ne reçoit de notification que si le maître et son propre interrupteur sont ouverts. */
 export function notificationsForAccount(
   notifications: NotificationPrefs,
@@ -615,6 +641,7 @@ function read(): Prefs {
     folderOrder: asFolderOrder(stored.folderOrder),
     perimeters: asPerimeters(stored.perimeters),
     notifications: asNotifications(stored.notifications),
+    updates: asUpdates(stored.updates),
     threadView: asThreadView(stored.threadView),
     mailDensity: asMailDensity(stored.mailDensity),
     imagesAllowedSenders: asTrustedList(stored.imagesAllowedSenders, false),
@@ -822,6 +849,12 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const setUpdates = useCallback(
+    (patch: Partial<UpdatesPrefs>) =>
+      write((current) => ({ ...current, updates: { ...current.updates, ...patch } })),
+    [],
+  );
+
   const setAccountNotification = useCallback(
     (accountId: string, value: boolean) =>
       write((current) => ({
@@ -872,6 +905,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setFolderOrder,
       setAccountPerimeter,
       setNotifications,
+      setUpdates,
       setAccountNotification,
       setThreadView,
       setMailDensity,
@@ -900,6 +934,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setFolderOrder,
       setAccountPerimeter,
       setNotifications,
+      setUpdates,
       setAccountNotification,
       setThreadView,
       setMailDensity,

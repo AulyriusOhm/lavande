@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Download, Mail, RotateCw, Sparkles, TrendingUp, Wrench, type LucideIcon } from "lucide-react";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { useEscapeLayer } from "@/desktop/escape";
 import { useBackLayer } from "@/lib/back";
-import { useUpdater } from "@/lib/updater";
+import { usePrefs } from "@/lib/prefs";
+import { configureUpdaterSchedule, useUpdater } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 
 const DEFAULT_GROUP = "Nouveautés";
@@ -57,8 +58,11 @@ function rememberDismissed(version: string) {
 
 export function UpdatePopup() {
   const { supported, phase, current, install } = useUpdater();
+  const { updates } = usePrefs();
   const [closed, setClosed] = useState<string | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
+
+  useEffect(() => configureUpdaterSchedule(updates), [updates]);
 
   const available = phase.kind === "available" ? phase : null;
   const running = phase.kind === "downloading" || phase.kind === "installing" ? phase : null;

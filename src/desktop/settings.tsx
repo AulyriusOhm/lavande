@@ -76,6 +76,8 @@ import {
   isFolderHidden,
   MAIL_DENSITIES,
   mergeFlags,
+  UPDATE_INTERVALS,
+  updateIntervalLabel,
   perimeterOf,
   THREAD_VIEWS,
   usePrefs,
@@ -1000,6 +1002,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     setThreadView,
     mailDensity,
     setMailDensity,
+    updates,
+    setUpdates,
   } = usePrefs();
   const {
     notify,
@@ -3487,6 +3491,32 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                       {updater.phase.message}
                     </p>
                   ) : null}
+
+                  <div className="mt-3 border-t border-line/70 pt-2">
+                    <ToggleRow
+                      icon={<RefreshCw className="size-4" />}
+                      label="Vérification automatique"
+                      hint="Fréquence de vérification ci-dessous"
+                      checked={updates.autoCheck}
+                      onChange={(value) => setUpdates({ autoCheck: value })}
+                    />
+                    {updates.autoCheck ? (
+                      <div className="px-3.5 pt-2">
+                        <SectionLabel>Fréquence de vérification</SectionLabel>
+                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                          {UPDATE_INTERVALS.map((hours) => (
+                            <DChip
+                              key={hours}
+                              active={updates.intervalHours === hours}
+                              onClick={() => setUpdates({ intervalHours: hours })}
+                            >
+                              {updateIntervalLabel(hours)}
+                            </DChip>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
 
                   <p className="mt-3 text-[10.5px] leading-relaxed font-semibold text-ink-muted">
                     {updater.supported
