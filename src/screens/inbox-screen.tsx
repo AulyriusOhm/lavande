@@ -3,7 +3,7 @@ import { animate, motion, useMotionValue, useSpring, useTransform } from "motion
 import { Archive, Check, ChevronDown, ChevronUp, Copy, CornerUpLeft, ExternalLink, FolderInput, Inbox, KeyRound, Layers, Loader2, PenLine, Plus, RotateCcw, Rows3, Search, RefreshCw, Send, ShieldAlert, ShieldCheck, Sparkles, Trash2, type LucideIcon } from "lucide-react";
 import type { FolderId, Mail } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
-import { summarySourceLabel, type SummaryRef } from "@/lib/summary";
+import { currentPeriod, summarySourceLabel, type SummaryRef } from "@/lib/summary";
 import { dueToneFor, formatDueDate } from "@/lib/tasks";
 import { threadsInFolder, type Thread } from "@/lib/threads";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
@@ -169,7 +169,13 @@ export function InboxScreen({
   onPlanMail?: (draft: NewTaskDraft) => void;
   onScheduleMail?: (draft: NewEventDraft) => void;
 }) {
-  const { decision: decisionPrefs, mailDensity, setMailDensity } = usePrefs();
+  const {
+    summary: summaryConfig,
+    decision: decisionPrefs,
+    mailDensity,
+    setMailDensity,
+  } = usePrefs();
+  const summaryLabel = currentPeriod(summaryConfig).label;
   const {
     mode,
     readOnly,
@@ -821,7 +827,7 @@ export function InboxScreen({
                     />
                   </span>
                   <p className="text-[10.5px] font-bold tracking-[0.14em] text-accent-ink uppercase">
-                    {summary?.period.label ?? "Résumé du matin"}
+                    {summary?.period.label ?? summaryLabel}
                   </p>
                   {summaryLoading ? (
                     <span
@@ -1344,7 +1350,7 @@ export function InboxScreen({
                 onClick={expand}
                 aria-hidden={!compact}
                 tabIndex={compact ? 0 : -1}
-                aria-label={`Réafficher le ${(summary?.period.label ?? "Résumé du matin").toLowerCase()}`}
+                aria-label={`Réafficher le ${(summary?.period.label ?? summaryLabel).toLowerCase()}`}
                 style={{ opacity: cardCompact }}
                 className={cn(
                   "absolute inset-0 flex w-full items-center gap-2 px-4 text-left",
@@ -1353,7 +1359,7 @@ export function InboxScreen({
               >
                 <Sparkles className="size-3.5 shrink-0 text-accent-ink" strokeWidth={2.4} />
                 <p className="truncate text-[11px] font-bold text-accent-ink">
-                  {summary?.period.label ?? "Résumé du matin"}
+                  {summary?.period.label ?? summaryLabel}
                 </p>
                 <span className="shrink-0 rounded-full bg-surface px-2 py-0.5 text-[10px] font-bold text-accent-ink">
                   {summary ? `${summary.mailCount} mail${summary.mailCount > 1 ? "s" : ""}` : `${unreadCount} non lus`}

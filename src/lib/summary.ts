@@ -32,12 +32,18 @@ import {
  * humaine (les tâches passent par le circuit de suggestions de la planification).
  */
 
-export type SummaryPeriodId = "morning" | "midday" | "evening";
+export type SummaryPeriodId = "morning" | "midday" | "evening" | "rolling";
+
+/** Fenêtre du résumé : plages de la journée, ou mails non lus des N derniers jours. */
+export type SummaryMode = "period" | "rolling";
 
 export type SummaryConfig = {
   enabled: boolean;
   /** Consentement explicite : analyser le contenu des mails avec le LLM. */
   llmConsent: boolean;
+  mode: SummaryMode;
+  /** Fenêtre du mode glissant, en jours. */
+  rollingDays: number;
   morningStart: number;
   middayStart: number;
   eveningStart: number;
@@ -45,9 +51,16 @@ export type SummaryConfig = {
   lookbackHours: number;
 };
 
+export const SUMMARY_MODES: { id: SummaryMode; label: string; hint: string }[] = [
+  { id: "period", label: "Périodique", hint: "Matin, midi et soir · la fenêtre suit l'heure" },
+  { id: "rolling", label: "Jours glissants", hint: "Uniquement les mails non lus des N derniers jours" },
+];
+
 export const DEFAULT_SUMMARY: SummaryConfig = {
   enabled: true,
   llmConsent: false,
+  mode: "period",
+  rollingDays: 15,
   morningStart: 6,
   middayStart: 12,
   eveningStart: 18,
@@ -60,6 +73,10 @@ export type SummaryPeriod = {
 };
 
 export function currentPeriod(config: SummaryConfig, now = new Date()): SummaryPeriod {
+  if (config.mode === "rolling") {
+    const days = config.rollingDays;
+    return { id: "rolling", label: `Non lus · ${days} jour${days > 1 ? "s" : ""}` };
+  }
   const hour = now.getHours();
   if (hour >= config.morningStart && hour < config.middayStart) {
     return { id: "morning", label: "Résumé du matin" };
@@ -72,6 +89,9 @@ export function currentPeriod(config: SummaryConfig, now = new Date()): SummaryP
 
 /** Début de la fenêtre analysée : lookback pour le matin, sinon depuis la plage précédente. */
 export function periodSince(config: SummaryConfig, now = new Date()): Date {
+  if (config.mode === "rolling") {
+    return new Date(now.getTime() - config.rollingDays * 86_400_000);
+  }
   const period = currentPeriod(config, now);
   if (period.id === "morning") {
     return new Date(now.getTime() - config.lookbackHours * 3_600_000);
@@ -94,6 +114,8 @@ export type SummaryMailInput = {
   messageId?: string;
   source?: MailSource;
   hasAuthLink?: boolean;
+  /** Non lu à l'entrée : le mode glissant ne résume que ces mails. */
+  unread: boolean;
 };
 
 export type SummaryHybridOptions = {
@@ -679,7 +701,7 @@ export function parseEventOutput(raw: string): SummaryEvent[] {
   return events;
 }
 
-const PERIOD_IDS: SummaryPeriodId[] = ["morning", "midday", "evening"];
+const PERIOD_IDS: SummaryPeriodId[] = ["morning", "midday", "evening", "rolling"];
 
 export const SUMMARY_CACHE_KEY = "lavande.summary.cache.v2";
 
@@ -697,10 +719,19 @@ export function fingerprint(value: string): string {
   return hash.toString(16).padStart(8, "0");
 }
 
-/** Empreinte du jeu de mails analysé : ids et horodatages, ordre indifférent. */
-export function summarySignature(mails: SummaryMailInput[]): string {
-  const items = mails.map((mail) => `${mail.id}@${mail.timestamp ?? 0}`).sort();
-  return `${items.length}-${fingerprint(items.join("|"))}`;
+/** Empreinte du jeu de mails analysé : ids, horodatages et état non lu en glissant, ordre indifférent. */
+export function summarySignature(
+  mails: SummaryMailInput[],
+  config?: Pick<SummaryConfig, "mode" | "rollingDays">,
+): string {
+  const items = mails
+    .map(
+      (mail) =>
+        `${mail.id}@${mail.timestamp ?? 0}${config?.mode === "rolling" && mail.unread ? ":u" : ""}`,
+    )
+    .sort();
+  const window = config?.mode === "rolling" ? `:r${config.rollingDays}` : "";
+  return `${items.length}-${fingerprint(items.join("|"))}${window}`;
 }
 
 const MAX_CACHE_ENTRIES = 8;
@@ -944,6 +975,7 @@ export async function generateSummary(
   const since = periodSince(config, now).getTime();
   const recent = mails
     .filter((mail) => mail.timestamp >= since)
+    .filter((mail) => config.mode !== "rolling" || mail.unread)
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, MAX_MAILS);
 

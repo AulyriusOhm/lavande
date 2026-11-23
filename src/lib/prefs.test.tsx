@@ -59,6 +59,8 @@ describe("préférences · résumés", () => {
         summary: {
           enabled: false,
           llmConsent: true,
+          mode: "rolling",
+          rollingDays: 30,
           morningStart: 7,
           middayStart: 13,
           eveningStart: 19,
@@ -71,6 +73,8 @@ describe("préférences · résumés", () => {
     expect(result.current.summary).toEqual({
       enabled: false,
       llmConsent: true,
+      mode: "rolling",
+      rollingDays: 30,
       morningStart: 7,
       middayStart: 13,
       eveningStart: 19,
@@ -107,6 +111,38 @@ describe("préférences · résumés", () => {
     expect(result.current.summary.middayStart).toBe(13);
     expect(result.current.summary.morningStart).toBe(DEFAULT_SUMMARY.morningStart);
     expect(result.current.summary.lookbackHours).toBe(72);
+  });
+
+  it("retombe sur le mode périodique et 15 jours pour une valeur inconnue", () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({ summary: { mode: "hebdo", rollingDays: "beaucoup" } }),
+    );
+
+    const { result } = mount();
+    expect(result.current.summary.mode).toBe("period");
+    expect(result.current.summary.rollingDays).toBe(15);
+  });
+
+  it("borne la fenêtre glissante relue entre 1 et 90 jours", () => {
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ summary: { rollingDays: 0 } }));
+    expect(mount().result.current.summary.rollingDays).toBe(1);
+
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ summary: { rollingDays: 400 } }));
+    expect(mount().result.current.summary.rollingDays).toBe(90);
+
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ summary: { rollingDays: 7.6 } }));
+    expect(mount().result.current.summary.rollingDays).toBe(8);
+  });
+
+  it("bascule en mode glissant et le persiste", () => {
+    const { result } = mount();
+
+    act(() => result.current.setSummary({ mode: "rolling", rollingDays: 30 }));
+
+    expect(result.current.summary.mode).toBe("rolling");
+    expect(stored().summary).toMatchObject({ mode: "rolling", rollingDays: 30 });
+    expect(result.current.summary.morningStart).toBe(DEFAULT_SUMMARY.morningStart);
   });
 
   it("met à jour partiellement et persiste le résultat", () => {

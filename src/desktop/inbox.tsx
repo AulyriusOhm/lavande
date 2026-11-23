@@ -43,7 +43,7 @@ import {
 } from "lucide-react";
 import type { FolderId, Mail, MailAttachment } from "@/lib/mail";
 import { canReplyAll, folderLabel } from "@/lib/mail";
-import { ISO_DAY, summarySourceLabel, type SummaryRef, type SummaryResult } from "@/lib/summary";
+import { ISO_DAY, currentPeriod, summarySourceLabel, type SummaryRef, type SummaryResult } from "@/lib/summary";
 import { dueToneFor, formatDueDate } from "@/lib/tasks";
 import { downloadAttachment } from "@/lib/attachments";
 import type { Thread } from "@/lib/threads";
@@ -409,6 +409,7 @@ export function MorningSummary({
   onArchive?: (mail: Mail) => void;
   onMoveToFolder?: (mail: Mail, folderPath: string) => void;
 }) {
+  const { summary: summaryConfig } = usePrefs();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [proposed, setProposed] = useState<Record<string, "added" | "existing">>({});
   const [proposedEvents, setProposedEvents] = useState<Record<string, "added" | "existing">>({});
@@ -437,7 +438,7 @@ export function MorningSummary({
       delete copyTimers.current[mailId];
     }, 2000);
   };
-  const label = summary?.period.label ?? "Résumé du matin";
+  const label = summary?.period.label ?? currentPeriod(summaryConfig).label;
   const source = summary ? summarySourceLabel(summary.source) : null;
   const decisionLookup = useMemo(() => (decisions ? asDecisionIndex(decisions) : null), [decisions]);
   const byId = useMemo(() => new Map(mails.map((mail) => [mail.id, mail])), [mails]);

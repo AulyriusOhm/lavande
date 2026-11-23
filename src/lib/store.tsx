@@ -2974,6 +2974,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
                 subject: mail.subject,
                 snippet: mail.preview,
                 timestamp: mail.timestamp,
+                unread: mail.unread,
                 ...(mail.messageId ? { messageId: mail.messageId } : {}),
                 ...(mail.source ? { source: mail.source } : {}),
                 ...(extractAuthLink(mail) ? { hasAuthLink: true } : {}),
@@ -3079,7 +3080,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         scope === ALL_ACCOUNTS ? inboxMails : inboxMails.filter((mail) => mail.account === scope);
       const inputs = summaryInputs(scoped);
       const decisionCount = Object.keys(decisions).length;
-      const baseSig = summarySignature(inputs);
+      const baseSig = summarySignature(inputs, prefs.summary);
       const signature = hasDecisionLayer ? `${baseSig}:d${decisionCount}` : `${baseSig}:no-dec`;
       const runKey = `${scope}:${period.id}:${signature}`;
       if (!force && summaryRun.current === runKey) return;

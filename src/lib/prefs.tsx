@@ -409,11 +409,16 @@ const hour = (value: unknown, fallback: number): number =>
 
 const asSummary = (value: unknown): SummaryConfig => {
   if (!value || typeof value !== "object") return { ...DEFAULT_SUMMARY };
-  const { enabled, llmConsent, morningStart, middayStart, eveningStart, lookbackHours } =
+  const { enabled, llmConsent, mode, rollingDays, morningStart, middayStart, eveningStart, lookbackHours } =
     value as Record<string, unknown>;
   return {
     enabled: asBoolean(enabled, DEFAULT_SUMMARY.enabled),
     llmConsent: asBoolean(llmConsent, DEFAULT_SUMMARY.llmConsent),
+    mode: mode === "rolling" ? "rolling" : "period",
+    rollingDays:
+      typeof rollingDays === "number" && Number.isFinite(rollingDays)
+        ? Math.min(90, Math.max(1, Math.round(rollingDays)))
+        : DEFAULT_SUMMARY.rollingDays,
     morningStart: hour(morningStart, DEFAULT_SUMMARY.morningStart),
     middayStart: hour(middayStart, DEFAULT_SUMMARY.middayStart),
     eveningStart: hour(eveningStart, DEFAULT_SUMMARY.eveningStart),

@@ -43,6 +43,7 @@ function seedSummary(
             subject: mail.subject,
             snippet: mail.preview,
             timestamp: mail.timestamp,
+            unread: mail.unread,
           },
         ]
       : [],

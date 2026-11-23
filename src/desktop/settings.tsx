@@ -125,7 +125,7 @@ import { DEFAULT_COPILOT_CLIENT_ID, copilotModels, useCopilotSession } from "@/l
 import { openExternal } from "@/lib/open-external";
 import { formatTokens, lastDays, resetAiStats, topModels } from "@/lib/ai-stats";
 import { useAiUsage } from "@/lib/ai-sync";
-import type { SummaryConfig } from "@/lib/summary";
+import { SUMMARY_MODES, type SummaryConfig } from "@/lib/summary";
 import { ACCENT_PRESETS, accentContrast, useTheme, type ThemeMode } from "@/lib/theme";
 import { useMailStore } from "@/lib/store";
 import { detectModKey } from "@/lib/shortcuts";
@@ -231,6 +231,12 @@ const clampHours = (value: string, max: number): number => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 0;
   return Math.min(max, Math.max(0, Math.round(parsed)));
+};
+
+const clampDays = (value: string): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.min(90, Math.max(1, Math.round(parsed)));
 };
 
 const clampWindowHours = (value: string): number => {
@@ -3018,13 +3024,23 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
               <Block
                 id="resumes"
                 label="Résumés"
-                hint={summaryConfig.enabled ? "matin · midi · soir" : "désactivés"}
+                hint={
+                  summaryConfig.enabled
+                    ? summaryConfig.mode === "rolling"
+                      ? `non lus · ${summaryConfig.rollingDays} j`
+                      : "matin · midi · soir"
+                    : "désactivés"
+                }
               >
                 <Surface className="divide-y divide-line overflow-hidden">
                   <ToggleRow
                     icon={<Sparkles className="size-4" />}
-                    label="Résumés périodiques"
-                    hint="Un résumé de la boîte de réception matin, midi et soir"
+                    label={summaryConfig.mode === "rolling" ? "Résumé des non lus" : "Résumés périodiques"}
+                    hint={
+                      summaryConfig.mode === "rolling"
+                        ? "Les mails non lus des N derniers jours"
+                        : "Un résumé de la boîte de réception matin, midi et soir"
+                    }
                     checked={summaryConfig.enabled}
                     onChange={(value) => setSummary({ enabled: value })}
                   />
@@ -3038,48 +3054,92 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                 </Surface>
 
                 <Surface className="mt-3 p-4">
+                  <SectionLabel>Fenêtre du résumé</SectionLabel>
+                  <div className="mt-2 grid grid-cols-2 gap-1.5">
+                    {SUMMARY_MODES.map((option) => {
+                      const selected = summaryConfig.mode === option.id;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => setSummary({ mode: option.id })}
+                          className={cn(
+                            "focus-ring flex h-10 items-center justify-center rounded-[14px] text-[12px] font-bold transition-colors duration-200",
+                            selected
+                              ? "bg-accent-soft text-accent-ink ring-1 ring-accent-ring/60"
+                              : "border border-line bg-surface text-ink-soft hover:text-ink",
+                          )}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1.5 text-[12.5px] leading-snug font-medium text-ink-muted">
+                    {SUMMARY_MODES.find((option) => option.id === summaryConfig.mode)?.hint}
+                  </p>
+                </Surface>
+
+                <Surface className="mt-3 p-4">
                   <p className="text-[12px] leading-relaxed font-semibold text-ink-soft">
                     Avec votre accord, seuls l'expéditeur, l'objet et les premières lignes des messages de
                     la période sont envoyés au modèle configuré, sans pièce jointe ni action possible. Le
                     texte renvoyé est affiché tel quel, et les tâches qu'il propose restent des suggestions
                     à valider.
                   </p>
-                  <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-                    {([
-                      { key: "morningStart", label: "Matin" },
-                      { key: "middayStart", label: "Midi" },
-                      { key: "eveningStart", label: "Soir" },
-                    ] as const).map((field) => (
-                      <label key={field.key} className="grid gap-1">
-                        <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
-                          {field.label} · début (h)
-                        </span>
-                        <TextInput
-                          aria-label={`Heure de début du résumé ${field.label.toLowerCase()}`}
-                          type="number"
-                          min={0}
-                          max={23}
-                          value={summaryConfig[field.key]}
-                          onChange={(event) => setSummary(hourPatch(field.key, event.target.value))}
-                        />
-                      </label>
-                    ))}
-                    <label className="grid gap-1">
+                  {summaryConfig.mode === "rolling" ? (
+                    <label className="mt-3 grid gap-1">
                       <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
-                        Fenêtre (h)
+                        Mails non lus depuis
                       </span>
                       <TextInput
-                        aria-label="Fenêtre du résumé du matin en heures"
+                        aria-label="Nombre de jours de mails non lus"
                         type="number"
                         min={1}
-                        max={72}
-                        value={summaryConfig.lookbackHours}
-                        onChange={(event) =>
-                          setSummary({ lookbackHours: clampHours(event.target.value, 72) })
-                        }
+                        max={90}
+                        value={summaryConfig.rollingDays}
+                        onChange={(event) => setSummary({ rollingDays: clampDays(event.target.value) })}
                       />
                     </label>
-                  </div>
+                  ) : (
+                    <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                      {([
+                        { key: "morningStart", label: "Matin" },
+                        { key: "middayStart", label: "Midi" },
+                        { key: "eveningStart", label: "Soir" },
+                      ] as const).map((field) => (
+                        <label key={field.key} className="grid gap-1">
+                          <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                            {field.label} · début (h)
+                          </span>
+                          <TextInput
+                            aria-label={`Heure de début du résumé ${field.label.toLowerCase()}`}
+                            type="number"
+                            min={0}
+                            max={23}
+                            value={summaryConfig[field.key]}
+                            onChange={(event) => setSummary(hourPatch(field.key, event.target.value))}
+                          />
+                        </label>
+                      ))}
+                      <label className="grid gap-1">
+                        <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                          Fenêtre (h)
+                        </span>
+                        <TextInput
+                          aria-label="Fenêtre du résumé du matin en heures"
+                          type="number"
+                          min={1}
+                          max={72}
+                          value={summaryConfig.lookbackHours}
+                          onChange={(event) =>
+                            setSummary({ lookbackHours: clampHours(event.target.value, 72) })
+                          }
+                        />
+                      </label>
+                    </div>
+                  )}
                   <p className="mt-3 text-[10.5px] font-semibold text-ink-muted">
                     {llmReady(llm)
                       ? summaryConfig.llmConsent

@@ -31,6 +31,7 @@ const mail = (id: string, timestamp = 1_700_000_000_000): SummaryMailInput => ({
   subject: `Objet ${id}`,
   snippet: `Aperçu ${id}`,
   timestamp,
+  unread: false,
 });
 
 const RESULT: SummaryResult = {

@@ -67,6 +67,7 @@ import { DEFAULT_COPILOT_CLIENT_ID, copilotModels, useCopilotSession } from "@/l
 import { openExternal } from "@/lib/open-external";
 import { formatTokens, lastDays, resetAiStats, topModels } from "@/lib/ai-stats";
 import { useAiUsage } from "@/lib/ai-sync";
+import { SUMMARY_MODES } from "@/lib/summary";
 import {
   SWIPE_ACTIONS,
   CALENDAR_LEAD_MINUTES,
@@ -1951,8 +1952,12 @@ export function SettingsScreen({
               />
               <ToggleRow
                 icon={<Sparkles className="size-4" />}
-                label="Résumés périodiques"
-                hint="Un résumé de la boîte de réception matin, midi et soir"
+                label={summary.mode === "rolling" ? "Résumé des non lus" : "Résumés périodiques"}
+                hint={
+                  summary.mode === "rolling"
+                    ? "Les mails non lus des N derniers jours"
+                    : "Un résumé de la boîte de réception matin, midi et soir"
+                }
                 checked={summary.enabled}
                 onChange={(value) => setSummary({ enabled: value })}
               />
@@ -1982,6 +1987,52 @@ export function SettingsScreen({
               Le modèle reçoit uniquement les expéditeurs, objets et premières lignes des mails ; aucune tâche
               n'est créée sans validation.
             </p>
+          </BlurFade>
+
+          <SectionTitle hint={summary.mode === "rolling" ? `non lus · ${summary.rollingDays} j` : "matin · midi · soir"}>
+            Fenêtre du résumé
+          </SectionTitle>
+          <BlurFade delay={0.14}>
+            <Card className="mx-5 space-y-3 p-3.5">
+              <div className="flex gap-1.5">
+                {SUMMARY_MODES.map((option) => {
+                  const selected = summary.mode === option.id;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => setSummary({ mode: option.id })}
+                      className={cn(
+                        "focus-ring min-h-11 flex-1 rounded-xl px-1 text-[11.5px] font-bold transition-colors",
+                        selected
+                          ? "bg-accent text-accent-contrast"
+                          : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
+                      )}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[12px] leading-relaxed font-medium text-ink-muted">
+                {SUMMARY_MODES.find((option) => option.id === summary.mode)?.hint}
+              </p>
+              {summary.mode === "rolling" ? (
+                <label className="grid gap-1">
+                  <span className={MOBILE_LABEL}>Mails non lus depuis</span>
+                  <input
+                    aria-label="Nombre de jours de mails non lus"
+                    type="number"
+                    min={1}
+                    max={90}
+                    value={summary.rollingDays}
+                    onChange={(event) => setSummary({ rollingDays: clampRollingDays(event.target.value) })}
+                    className={MOBILE_FIELD}
+                  />
+                </label>
+              ) : null}
+            </Card>
           </BlurFade>
 
           <SectionTitle
@@ -2238,6 +2289,12 @@ const failureText = (failure: unknown): string =>
   failure instanceof Error ? failure.message : typeof failure === "string" ? failure : "échec inconnu";
 
 const MOBILE_LABEL = "text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase";
+
+const clampRollingDays = (value: string): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.min(90, Math.max(1, Math.round(parsed)));
+};
 
 const UPDATE_TONES: Record<UpdateTone, string> = {
   neutral: "bg-surface-2 text-ink-muted",

@@ -20,6 +20,7 @@ const mail = (
   subject: `Sujet ${id}`,
   snippet,
   timestamp,
+  unread: false,
 });
 
 const at = (hour: number) => new Date(2026, 0, 5, hour, 30, 0);

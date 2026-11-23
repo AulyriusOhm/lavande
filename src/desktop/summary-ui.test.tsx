@@ -13,7 +13,7 @@ import { decisionDb } from "@/lib/decision-db";
 import type { DecisionLookup } from "@/lib/triage";
 import { MAILS } from "@/lib/mail";
 import type { Mail } from "@/lib/mail";
-import type { SummaryResult } from "@/lib/summary";
+import { DEFAULT_SUMMARY, currentPeriod, type SummaryResult } from "@/lib/summary";
 import { isoToday } from "@/lib/tasks";
 
 vi.stubEnv("VITE_MAIL_BACKEND", "demo");
@@ -25,16 +25,20 @@ function stubBackend() {
   );
 }
 
-function mount(children: ReactNode) {
-  return render(
+function providers(children: ReactNode) {
+  return (
     <PrefsProvider>
       <ThemeProvider>
         <PlanningProvider storage={createMemoryStorage()}>
           <MailStoreProvider>{children}</MailStoreProvider>
         </PlanningProvider>
       </ThemeProvider>
-    </PrefsProvider>,
+    </PrefsProvider>
   );
+}
+
+function mount(children: ReactNode) {
+  return render(providers(children));
 }
 
 const byId = (id: string): Mail => {
@@ -87,7 +91,7 @@ function renderSummary(
     onMoveToFolder?: (mail: Mail, folderPath: string) => void;
   } = {},
 ) {
-  return render(
+  return mount(
     <MorningSummary
       open
       unread={12}
@@ -262,7 +266,7 @@ describe("Résumé du matin · briefing structuré", () => {
     mount(<DesktopInbox onOpenSearch={() => {}} />);
 
     const card = await screen.findByTestId("morning-summary");
-    expect(within(card).getByText("Résumé du matin")).toBeTruthy();
+    expect(within(card).getByText(currentPeriod(DEFAULT_SUMMARY).label)).toBeTruthy();
     expect(within(card).queryByTestId("summary-source")).toBeNull();
     expect(within(card).getByText(/conversations non lues/)).toBeTruthy();
   });
@@ -278,6 +282,7 @@ describe("Résumé du matin · briefing structuré", () => {
     expect(within(card).getByText("Renvoyer l'avenant signé")).toBeTruthy();
 
     rerender(
+      providers(
       <MorningSummary
         open
         unread={12}
@@ -293,6 +298,7 @@ describe("Résumé du matin · briefing structuré", () => {
         onReply={() => {}}
         onPropose={() => "added"}
       />,
+      ),
     );
     expect(within(card).getByTestId("summary-source").textContent).toBe("Hybride");
     expect(within(card).queryByTestId("summary-loading")).toBeNull();
@@ -595,6 +601,7 @@ describe("Résumé du matin · briefing structuré", () => {
 
     // Si tous les mails du Résumé passent à unread: false, le message zen apparaît
     rerender(
+      providers(
       <MorningSummary
         open
         unread={0}
@@ -617,6 +624,7 @@ describe("Résumé du matin · briefing structuré", () => {
         onReply={() => {}}
         onPropose={() => "added"}
       />,
+      ),
     );
     expect(screen.getByText("Tout a été lu sur la période.")).toBeTruthy();
   });
