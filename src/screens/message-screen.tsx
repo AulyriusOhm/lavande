@@ -433,6 +433,7 @@ export function MessageScreen({
                     html={message.html}
                     paragraphs={message.body}
                     source={message.source}
+                    senderEmail={message.email}
                     encrypted={message.pgp === "encrypted"}
                   />
                 ) : message.pgp === "encrypted" && !resolvePgp(prefs, message.account).enabled ? (
@@ -852,6 +853,7 @@ export function MessageScreen({
               html={mail.html}
               paragraphs={mail.body}
               source={mail.source}
+              senderEmail={mail.email}
               encrypted={mail.pgp === "encrypted"}
             />
           )}

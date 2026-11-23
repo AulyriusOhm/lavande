@@ -120,6 +120,7 @@ import { ContactsSyncRow } from "@/components/contacts-sync-row";
 import { ZimbraFiltersPanel } from "@/components/zimbra-filters";
 import { ZimbraTagsPanel } from "@/components/zimbra-tags";
 import { TrustedWhitelistSection } from "@/components/trusted-whitelist";
+import { ImagesAllowedSection } from "@/components/images-allowed";
 import { DEFAULT_COPILOT_CLIENT_ID, copilotModels, useCopilotSession } from "@/lib/copilot";
 import { openExternal } from "@/lib/open-external";
 import { formatTokens, lastDays, resetAiStats, topModels } from "@/lib/ai-stats";
@@ -2686,6 +2687,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                     trustedDomains={decision.trustedDomains}
                     onUpdate={updateDecision}
                   />
+                  <ImagesAllowedSection readOnly={readOnly} />
                 </Surface>
 
                 <Surface className="mt-3 p-4">

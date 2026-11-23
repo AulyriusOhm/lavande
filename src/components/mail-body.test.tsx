@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { MailSource } from "@/lib/mail";
 import { setAccountDecryptPolicy } from "@/lib/mail-backend";
+import { PrefsProvider } from "@/lib/prefs";
 
 const { htmlImages, openExternal } = vi.hoisted(() => ({
   htmlImages: vi.fn(),
@@ -27,6 +28,7 @@ function renderBody(
   html: string | null = STORED,
   source: MailSource | null = SOURCE,
   encrypted = false,
+  senderEmail?: string,
 ) {
   return render(
     <MailBody
@@ -35,7 +37,9 @@ function renderBody(
       paragraphs={["Soldes du mois"]}
       source={source ?? undefined}
       encrypted={encrypted}
+      senderEmail={senderEmail}
     />,
+    { wrapper: PrefsProvider },
   );
 }
 
@@ -79,6 +83,7 @@ function clickInside(contentDocument: Document, selector: string) {
 }
 
 beforeEach(() => {
+  window.localStorage.clear();
   htmlImages.mockReset();
   openExternal.mockReset();
 });
@@ -793,5 +798,84 @@ describe("images distantes", () => {
 
     expect(screen.queryByText("Images masquées")).toBeNull();
     expect(srcDoc(document.body)).toContain("Soldes du mois");
+  });
+});
+
+describe("images autorisées par expéditeur", () => {
+  const SENDER = "Camille <Camille@Exemple.FR>";
+  const NORMALIZED = "camille@exemple.fr";
+  const stored = () => JSON.parse(window.localStorage.getItem("lavande.prefs") ?? "{}") as Record<string, unknown>;
+
+  const seed = (senders: string[]) =>
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ imagesAllowedSenders: senders }));
+
+  it("ne propose « Toujours » que pour un expéditeur connu", () => {
+    renderBody();
+
+    expect(screen.queryByLabelText("Toujours autoriser les images de cet expéditeur")).toBeNull();
+  });
+
+  it("propose « Toujours pour cet expéditeur » sans l'avoir encore autorisé", () => {
+    const { container } = renderBody(STORED, SOURCE, false, SENDER);
+
+    expect(screen.getByText("Toujours pour cet expéditeur")).toBeTruthy();
+    expect(screen.getByText("Images masquées")).toBeTruthy();
+    expect(srcDoc(container)).not.toContain("<img");
+  });
+
+  it("autorise l'expéditeur au clic, normalisé, et affiche les images", async () => {
+    htmlImages.mockResolvedValue({ html: WITH_IMAGES });
+    const { container } = renderBody(STORED, SOURCE, false, SENDER);
+
+    fireEvent.click(screen.getByLabelText("Toujours autoriser les images de cet expéditeur"));
+
+    await waitFor(() => expect(stored().imagesAllowedSenders).toEqual([NORMALIZED]));
+    await waitFor(() => expect(htmlImages).toHaveBeenCalledWith("perso", "INBOX", 12));
+    await waitFor(() =>
+      expect(srcDoc(container)).toContain('src="https://pix.example/solde.png"'),
+    );
+    expect(screen.queryByText("Images masquées")).toBeNull();
+    expect(screen.queryByText("Toujours pour cet expéditeur")).toBeNull();
+  });
+
+  it("affiche d'office les images d'un expéditeur déjà autorisé, sans bandeau", async () => {
+    seed([NORMALIZED]);
+    htmlImages.mockResolvedValue({ html: WITH_IMAGES });
+    const { container } = renderBody(STORED, SOURCE, false, SENDER);
+
+    await waitFor(() => expect(htmlImages).toHaveBeenCalledWith("perso", "INBOX", 12));
+    await waitFor(() =>
+      expect(srcDoc(container)).toContain('src="https://pix.example/solde.png"'),
+    );
+    expect(screen.queryByText("Images masquées")).toBeNull();
+    expect(screen.queryByText("Toujours pour cet expéditeur")).toBeNull();
+  });
+
+  it("relit une seule fois par message, même après un rendu supplémentaire", async () => {
+    seed([NORMALIZED]);
+    htmlImages.mockResolvedValue({ html: WITH_IMAGES });
+    const view = renderBody(STORED, SOURCE, false, SENDER);
+
+    await waitFor(() => expect(htmlImages).toHaveBeenCalledTimes(1));
+    view.rerender(
+      <MailBody
+        className="mt-5"
+        html={STORED}
+        paragraphs={["Soldes du mois"]}
+        source={SOURCE}
+        encrypted={false}
+        senderEmail={SENDER}
+      />,
+    );
+    expect(htmlImages).toHaveBeenCalledTimes(1);
+  });
+
+  it("laisse un expéditeur non autorisé intact", async () => {
+    seed(["autre@exemple.fr"]);
+    const { container } = renderBody(STORED, SOURCE, false, SENDER);
+
+    expect(screen.getByText("Images masquées")).toBeTruthy();
+    expect(htmlImages).not.toHaveBeenCalled();
+    expect(srcDoc(container)).not.toContain("<img");
   });
 });

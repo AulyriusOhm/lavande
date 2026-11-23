@@ -695,6 +695,42 @@ describe("préférences · densité des mails", () => {
   });
 });
 
+describe("préférences · images autorisées par expéditeur", () => {
+  it("part d'une liste vide", () => {
+    expect(mount().result.current.imagesAllowedSenders).toEqual([]);
+  });
+
+  it("range la liste stockée en minuscules, dédoublonnée et nettoyée", () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({
+        imagesAllowedSenders: [" Camille@Exemple.FR ", "<camille@exemple.fr>", "camille@exemple.fr", 42, ""],
+      }),
+    );
+
+    expect(mount().result.current.imagesAllowedSenders).toEqual(["camille@exemple.fr"]);
+  });
+
+  it("enregistre la liste normalisée et la persiste", () => {
+    const { result } = mount();
+
+    act(() => result.current.setImagesAllowedSenders(["Banque <Paiements@Exemple.FR>", "paiements@exemple.fr"]));
+
+    expect(result.current.imagesAllowedSenders).toEqual(["paiements@exemple.fr"]);
+    expect(stored().imagesAllowedSenders).toEqual(["paiements@exemple.fr"]);
+    expect(result.current.mailDensity).toBe("cozy");
+  });
+
+  it("laisse les expéditeurs de confiance de la décision intacts", () => {
+    const { result } = mount();
+
+    act(() => result.current.setImagesAllowedSenders(["camille@exemple.fr"]));
+
+    expect(result.current.decision.trustedSenders).toEqual([]);
+    expect((stored().decision as { trustedSenders: string[] }).trustedSenders).toEqual([]);
+  });
+});
+
 describe("préférences · moi et mon équipe", () => {
   const FICHE = {
     identity: "Roman",

@@ -144,6 +144,8 @@ export type Prefs = {
   threadView: ThreadView;
   /** Densité de la liste des mails. */
   mailDensity: MailDensity;
+  /** Expéditeurs dont les images distantes s'affichent d'office sur cet appareil. */
+  imagesAllowedSenders: string[];
   /** Largeurs des trois colonnes de la boîte PC, ajustées à la souris. */
   inboxPanes: InboxPanes;
 };
@@ -176,6 +178,7 @@ const DEFAULTS: Prefs = {
   notifications: DEFAULT_NOTIFICATIONS,
   threadView: "tidy",
   mailDensity: "cozy",
+  imagesAllowedSenders: [],
   inboxPanes: DEFAULT_INBOX_PANES,
 };
 
@@ -203,6 +206,7 @@ type PrefsContextValue = Prefs & {
   setAccountNotification: (accountId: string, value: boolean) => void;
   setThreadView: (value: ThreadView) => void;
   setMailDensity: (value: MailDensity) => void;
+  setImagesAllowedSenders: (value: string[]) => void;
   setInboxPanes: (patch: Partial<InboxPanes>) => void;
 };
 
@@ -608,6 +612,7 @@ function read(): Prefs {
     notifications: asNotifications(stored.notifications),
     threadView: asThreadView(stored.threadView),
     mailDensity: asMailDensity(stored.mailDensity),
+    imagesAllowedSenders: asTrustedList(stored.imagesAllowedSenders, false),
     inboxPanes: asPanes(stored.inboxPanes),
   };
 }
@@ -828,6 +833,11 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
 
   const setMailDensity = useCallback((value: MailDensity) => patch("mailDensity", value), [patch]);
 
+  const setImagesAllowedSenders = useCallback(
+    (value: string[]) => patch("imagesAllowedSenders", asTrustedList(value, false)),
+    [patch],
+  );
+
   const setInboxPanes = useCallback(
     (patch: Partial<InboxPanes>) =>
       write((current) => ({ ...current, inboxPanes: { ...current.inboxPanes, ...patch } })),
@@ -860,6 +870,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setAccountNotification,
       setThreadView,
       setMailDensity,
+      setImagesAllowedSenders,
       setInboxPanes,
     }),
     [
@@ -887,6 +898,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setAccountNotification,
       setThreadView,
       setMailDensity,
+      setImagesAllowedSenders,
       setInboxPanes,
     ],
   );

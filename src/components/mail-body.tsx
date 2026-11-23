@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ImageOff, Loader2 } from "lucide-react";
 import { errorText } from "@/lib/api";
+import { demoReadOnly } from "@/lib/demo-mode";
 import type { MailSource } from "@/lib/mail";
 import { htmlImagesOf } from "@/lib/mail-backend";
 import { openExternal } from "@/lib/open-external";
+import { usePrefs } from "@/lib/prefs";
+import { normalizeTrustedSender } from "@/lib/triage";
 import { cn } from "@/lib/utils";
 import jakartaFont from "@/assets/fonts/plus-jakarta-sans-latin.woff2?url";
 import jakartaFontExt from "@/assets/fonts/plus-jakarta-sans-latin-ext.woff2?url";
@@ -391,14 +394,18 @@ export function MailBody({
   paragraphs,
   source,
   encrypted = false,
+  senderEmail,
   className,
 }: {
   html?: string;
   paragraphs: string[];
   source?: MailSource;
   encrypted?: boolean;
+  /** Adresse de l'expéditeur : base de l'autorisation d'images par expéditeur. */
+  senderEmail?: string;
   className?: string;
 }) {
+  const { imagesAllowedSenders, setImagesAllowedSenders } = usePrefs();
   const [reveal, setReveal] = useState<Reveal | null>(null);
   const [theme, setTheme] = useState<Theme>(themeSnapshot);
   const [height, setHeight] = useState<number | null>(null);
@@ -411,15 +418,31 @@ export function MailBody({
   const key = source ? `${source.accountId}:${source.folderPath}:${source.uid}` : undefined;
   const current = key && reveal?.key === key ? reveal : null;
   const body = current?.html ?? html;
+  const sender = senderEmail ? normalizeTrustedSender(senderEmail) : "";
+  const senderAllowed = sender !== "" && imagesAllowedSenders.includes(sender);
+  const autoRevealed = useRef<string | null>(null);
 
-  const showImages = async () => {
-    if (!source || !key || current?.busy) return;
+  const showImages = useCallback(async () => {
+    if (!source || !key) return;
     setReveal({ key, busy: true });
     try {
       setReveal({ key, html: await htmlImagesOf(source, encrypted) });
     } catch (error) {
       setReveal({ key, error: errorText(error) });
     }
+  }, [encrypted, key, source]);
+
+  useEffect(() => {
+    if (!senderAllowed || !key || autoRevealed.current === key) return;
+    autoRevealed.current = key;
+    void showImages();
+  }, [key, senderAllowed, showImages]);
+
+  const allowSender = () => {
+    if (!sender || senderAllowed) return;
+    setImagesAllowedSenders([...imagesAllowedSenders, sender]);
+    autoRevealed.current = key ?? null;
+    void showImages();
   };
 
   useEffect(() => {
@@ -550,7 +573,8 @@ export function MailBody({
     );
   }
 
-  const banner = Boolean(html) && Boolean(key) && !current?.html;
+  const banner =
+    Boolean(html) && Boolean(key) && !current?.html && !(senderAllowed && !current?.error);
 
   return (
     <div className={className}>
@@ -571,6 +595,17 @@ export function MailBody({
             {current?.busy && <Loader2 className="size-3 animate-spin" aria-hidden />}
             {current?.busy ? "Chargement…" : current?.error ? "Réessayer" : "Afficher"}
           </button>
+          {sender && !senderAllowed && !demoReadOnly ? (
+            <button
+              type="button"
+              disabled={current?.busy}
+              onClick={allowSender}
+              aria-label="Toujours autoriser les images de cet expéditeur"
+              className="focus-ring inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10.5px] font-bold text-accent-ink transition-colors hover:bg-accent-soft disabled:opacity-60"
+            >
+              Toujours pour cet expéditeur
+            </button>
+          ) : null}
         </div>
       )}
 

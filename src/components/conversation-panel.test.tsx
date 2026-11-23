@@ -6,6 +6,7 @@ import type { Mail } from "@/lib/mail";
 import type { MailMode } from "@/lib/demo-mode";
 import { setAccountDecryptPolicy, type FolderRecord } from "@/lib/mail-backend";
 import { ConversationPanel } from "@/components/conversation-panel";
+import { PrefsProvider } from "@/lib/prefs";
 
 const ACCOUNT = "perso";
 const INBOX = "INBOX";
@@ -108,13 +109,15 @@ function mount(
 ) {
   const { threadId = THREAD, quoted, replyTargetId, onRetarget, readOnly } = overrides;
   return render(
-    <ConversationPanel
-      draft={{ ...baseDraft(ACCOUNT, false, false, threadId), quoted, replyTargetId }}
-      mode={mode}
-      records={RECORDS}
-      onRetarget={onRetarget}
-      readOnly={readOnly}
-    />,
+    <PrefsProvider>
+      <ConversationPanel
+        draft={{ ...baseDraft(ACCOUNT, false, false, threadId), quoted, replyTargetId }}
+        mode={mode}
+        records={RECORDS}
+        onRetarget={onRetarget}
+        readOnly={readOnly}
+      />
+    </PrefsProvider>
   );
 }
 
@@ -208,11 +211,13 @@ describe("panneau conversation · fil du brouillon", () => {
     expect(screen.queryByTestId("conversation-panel")).toBeNull();
 
     rerender(
-      <ConversationPanel
-        draft={{ ...baseDraft(ACCOUNT, false, false, undefined), quoted: QUOTED }}
-        mode="api"
-        records={RECORDS}
-      />,
+      <PrefsProvider>
+        <ConversationPanel
+          draft={{ ...baseDraft(ACCOUNT, false, false, undefined), quoted: QUOTED }}
+          mode="api"
+          records={RECORDS}
+        />
+      </PrefsProvider>,
     );
     expect(screen.getByTestId("compose-quoted-block")).toBeTruthy();
   });

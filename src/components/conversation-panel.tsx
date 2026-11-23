@@ -180,6 +180,7 @@ export function ConversationPanel({
                         html={shown.html}
                         paragraphs={shown.body}
                         source={shown.source}
+                        senderEmail={shown.email}
                         encrypted={shown.pgp === "encrypted"}
                       />
                     ) : locked ? (

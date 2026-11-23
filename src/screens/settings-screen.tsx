@@ -61,6 +61,7 @@ import { toApiDecisionConfig } from "@/lib/triage";
 import { CategoryManagerSheet, categoryColorStyle } from "@/components/category-manager-sheet";
 import { ContactsSyncRow } from "@/components/contacts-sync-row";
 import { TrustedWhitelistSection } from "@/components/trusted-whitelist";
+import { ImagesAllowedSection } from "@/components/images-allowed";
 import { mailApi } from "@/lib/api";
 import { DEFAULT_COPILOT_CLIENT_ID, copilotModels, useCopilotSession } from "@/lib/copilot";
 import { openExternal } from "@/lib/open-external";
@@ -1640,6 +1641,7 @@ export function SettingsScreen({
                 trustedDomains={decision.trustedDomains}
                 onUpdate={updateDecision}
               />
+              <ImagesAllowedSection readOnly={readOnly} />
             </Card>
           </BlurFade>
 
