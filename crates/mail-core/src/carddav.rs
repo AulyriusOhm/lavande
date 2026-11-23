@@ -16,7 +16,7 @@
 
 use std::time::Duration;
 
-use quick_xml::escape::unescape;
+use quick_xml::escape::{partial_escape, unescape};
 use quick_xml::events::Event;
 use quick_xml::name::QName;
 use quick_xml::Reader;
@@ -41,6 +41,9 @@ const MAX_ADDRESSBOOKS: usize = 10;
 /// Cards kept at most in one sync.
 pub const MAX_CARDS: usize = 5000;
 
+/// Member URLs asked at most in one `addressbook-multiget` report.
+const MAX_MULTIGET_HREFS: usize = 200;
+
 /// Address books of the principal, relative to the URL the client was given.
 const PRINCIPAL_QUERY: &str = concat!(
     r#"<?xml version="1.0" encoding="utf-8"?>"#,
@@ -58,11 +61,21 @@ const COLLECTIONS_QUERY: &str = concat!(
     r#"<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:displayname/></d:prop></d:propfind>"#
 );
 
-const CARDS_REPORT: &str = concat!(
+/// Members of a collection, the collection itself answering first.
+const MEMBERS_QUERY: &str = concat!(
     r#"<?xml version="1.0" encoding="utf-8"?>"#,
-    r#"<card:addressbook-query xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">"#,
-    r#"<d:prop><d:getetag/><card:address-data/></d:prop></card:addressbook-query>"#
+    r#"<d:propfind xmlns:d="DAV:"><d:prop><d:getetag/></d:prop></d:propfind>"#
 );
+
+/// Opening of an `addressbook-multiget` report: the `<d:href>` of the members
+/// asked follow, then [`MULTIGET_END`].
+const MULTIGET_QUERY: &str = concat!(
+    r#"<?xml version="1.0" encoding="utf-8"?>"#,
+    r#"<card:addressbook-multiget xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">"#,
+    r#"<d:prop><d:getetag/><card:address-data/></d:prop>"#
+);
+
+const MULTIGET_END: &str = "</card:addressbook-multiget>";
 
 /// One address the address book lists.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -209,30 +222,52 @@ impl CarddavClient {
     }
 
     /// vCards of one collection, in the order the server lists them.
+    ///
+    /// The members are listed with a `PROPFIND` of the collection — Zimbra
+    /// answers 400 to an `addressbook-query` report — then read in batches with
+    /// an `addressbook-multiget` report.
     async fn cards(&self, collection: &Url) -> Result<Vec<String>, MailError> {
-        let answer = self
-            .send(("REPORT", CARDS_REPORT), collection.clone(), Some("1"))
-            .await?;
+        let answer = self.propfind(collection, "1", MEMBERS_QUERY).await?;
         ensure_authorized(&answer, collection)?;
         if !answer.status.is_success() {
-            return Err(MailError::Carddav(format!(
-                "{} répond {}",
-                address(collection),
-                answer.status.as_u16()
-            )));
+            return Err(status_error(collection, answer.status));
         }
-        Ok(parse_multistatus(&answer.body)?
-            .iter()
-            .filter_map(|response| response.property("address-data"))
-            .map(str::to_string)
-            .collect())
+        let mut members: Vec<String> = Vec::new();
+        for response in parse_multistatus(&answer.body)? {
+            let href = response.href().trim();
+            if href.is_empty() {
+                continue;
+            }
+            // La collection elle-même répond, en tête de liste.
+            if resolve(collection, href)? == *collection {
+                continue;
+            }
+            members.push(href.to_string());
+        }
+        let mut cards: Vec<String> = Vec::new();
+        for batch in members.chunks(MAX_MULTIGET_HREFS) {
+            let body = multiget_body(batch);
+            let answer = self
+                .send(("REPORT", &body), collection.clone(), Some("0"))
+                .await?;
+            ensure_authorized(&answer, collection)?;
+            if !answer.status.is_success() {
+                return Err(status_error(collection, answer.status));
+            }
+            for response in parse_multistatus(&answer.body)? {
+                if let Some(card) = response.property("address-data") {
+                    cards.push(card.to_string());
+                }
+            }
+        }
+        Ok(cards)
     }
 
     async fn propfind(
         &self,
         url: &Url,
         depth: &'static str,
-        body: &'static str,
+        body: &str,
     ) -> Result<Answer, MailError> {
         self.send(("PROPFIND", body), url.clone(), Some(depth))
             .await
@@ -240,7 +275,7 @@ impl CarddavClient {
 
     async fn send(
         &self,
-        (method, body): (&'static str, &'static str),
+        (method, body): (&'static str, &str),
         url: Url,
         depth: Option<&'static str>,
     ) -> Result<Answer, MailError> {
@@ -290,6 +325,18 @@ impl CarddavClient {
             address(&url)
         )))
     }
+}
+
+/// `addressbook-multiget` body asking the vCards of `hrefs`, escaped for XML.
+fn multiget_body(hrefs: &[String]) -> String {
+    let mut body = String::from(MULTIGET_QUERY);
+    for href in hrefs {
+        body.push_str("<d:href>");
+        body.push_str(&partial_escape(href.as_str()));
+        body.push_str("</d:href>");
+    }
+    body.push_str(MULTIGET_END);
+    body
 }
 
 /// `<base>/<email>/Contacts`: la collection que Zimbra expose pour le compte.
@@ -460,6 +507,11 @@ async fn answer_body(response: reqwest::Response, limit: usize) -> Result<String
     }
     String::from_utf8(buffer)
         .map_err(|_| MailError::Carddav("réponse CardDAV non UTF-8".to_string()))
+}
+
+/// The error of a DAV answer the client cannot use.
+fn status_error(url: &Url, status: StatusCode) -> MailError {
+    MailError::Carddav(format!("{} répond {}", address(url), status.as_u16()))
 }
 
 fn ensure_authorized(answer: &Answer, url: &Url) -> Result<(), MailError> {
@@ -863,6 +915,77 @@ END:VCARD
   </D:response>
 </D:multistatus>"#;
 
+    /// Members of a collection: the collection itself, then the card URLs.
+    const MEMBERS: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response>
+    <D:href>./</D:href>
+    <D:propstat>
+      <D:prop><D:getetag>"0"</D:getetag></D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>jean.vcf</D:href>
+    <D:propstat>
+      <D:prop><D:getetag>"1"</D:getetag></D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>camille.vcf</D:href>
+    <D:propstat>
+      <D:prop><D:getetag>"2"</D:getetag></D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>casse.vcf</D:href>
+    <D:propstat>
+      <D:prop><D:getetag>"3"</D:getetag></D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+</D:multistatus>"#;
+
+    /// The same collection without a member: the collection answers alone.
+    const NO_MEMBERS: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response>
+    <D:href>./</D:href>
+    <D:propstat>
+      <D:prop><D:getetag>"0"</D:getetag></D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+</D:multistatus>"#;
+
+    /// Hrefs shaped like the ones Zimbra lists: absolute, and one carrying `&`.
+    const MEMBERS_ESCAPED: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response>
+    <D:href>/dav/roman/Contacts/</D:href>
+    <D:propstat>
+      <D:prop><D:getetag>"0"</D:getetag></D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/dav/roman/Contacts/3bc1eb6f-a517-4434-a862-0500b5863bb6:317.vcf</D:href>
+    <D:propstat>
+      <D:prop><D:getetag>"1"</D:getetag></D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/dav/roman/Contacts/jean&amp;fils.vcf</D:href>
+    <D:propstat>
+      <D:prop><D:getetag>"2"</D:getetag></D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+</D:multistatus>"#;
+
     /// Faux serveur DAV : `answers` associe « METHODE chemin » à sa réponse,
     /// tout le reste répond 404.
     async fn serve(answers: Vec<(&'static str, &'static str)>) -> Url {
@@ -953,6 +1076,7 @@ END:VCARD
             ("PROPFIND /dav/", PRINCIPAL),
             ("PROPFIND /principals/users/roman/", HOME),
             ("PROPFIND /dav/roman/", COLLECTIONS),
+            ("PROPFIND /dav/roman/Contacts/", MEMBERS),
             ("REPORT /dav/roman/Contacts/", CARDS),
         ])
         .await;
@@ -980,7 +1104,11 @@ END:VCARD
 
     #[tokio::test]
     async fn a_silent_discovery_falls_back_to_the_zimbra_collection() {
-        let root = serve(vec![("REPORT /dav/roman@lavande.mail/Contacts/", CARDS)]).await;
+        let root = serve(vec![
+            ("PROPFIND /dav/roman@lavande.mail/Contacts/", MEMBERS),
+            ("REPORT /dav/roman@lavande.mail/Contacts/", CARDS),
+        ])
+        .await;
         let client = CarddavClient::new(&dav_base(&root), "roman", "secret").expect("client");
         let books = client
             .addressbooks("roman@lavande.mail")
@@ -1001,10 +1129,56 @@ END:VCARD
     }
 
     #[tokio::test]
+    async fn an_empty_collection_reads_no_card_without_a_report() {
+        // Aucune route REPORT : un report envoyé recevrait 404 et échouerait.
+        let root = serve(vec![
+            ("PROPFIND /dav/", PRINCIPAL),
+            ("PROPFIND /principals/users/roman/", HOME),
+            ("PROPFIND /dav/roman/", COLLECTIONS),
+            ("PROPFIND /dav/roman/Contacts/", NO_MEMBERS),
+        ])
+        .await;
+        let client = CarddavClient::new(&dav_base(&root), "roman", "secret").expect("client");
+        let book = client.contacts("roman@lavande.mail").await.expect("carnet");
+
+        assert!(book.contacts.is_empty(), "{book:?}");
+        assert_eq!(book.skipped, 0);
+    }
+
+    #[test]
+    fn the_hrefs_of_a_report_are_escaped_for_xml() {
+        let body = multiget_body(&["/dav/roman/Contacts/jean&fils.vcf".to_string()]);
+
+        assert!(
+            body.contains("<d:href>/dav/roman/Contacts/jean&amp;fils.vcf</d:href>"),
+            "{body}"
+        );
+        assert!(!body.contains("jean&fils"), "{body}");
+        assert!(body.ends_with(MULTIGET_END), "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_member_href_of_the_shape_zimbra_lists_is_read() {
+        let root = serve(vec![
+            ("PROPFIND /dav/", PRINCIPAL),
+            ("PROPFIND /principals/users/roman/", HOME),
+            ("PROPFIND /dav/roman/", COLLECTIONS),
+            ("PROPFIND /dav/roman/Contacts/", MEMBERS_ESCAPED),
+            ("REPORT /dav/roman/Contacts/", CARDS),
+        ])
+        .await;
+        let client = CarddavClient::new(&dav_base(&root), "roman", "secret").expect("client");
+        let book = client.contacts("roman@lavande.mail").await.expect("carnet");
+
+        assert_eq!(book.contacts.len(), 2);
+        assert_eq!(book.skipped, 1);
+    }
+
+    #[tokio::test]
     async fn a_refused_server_is_reported_without_the_secret() {
         let root = serve_status(vec![
             ("PROPFIND /dav/", "", 401),
-            ("REPORT /dav/roman@lavande.mail/Contacts/", "", 401),
+            ("PROPFIND /dav/roman@lavande.mail/Contacts/", "", 401),
         ])
         .await;
         let client =

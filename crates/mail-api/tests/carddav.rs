@@ -111,6 +111,39 @@ END:VCARD
   </D:response>
 </D:multistatus>"#;
 
+/// Les membres d'une collection : la collection elle-même, puis les cartes.
+const MEMBERS: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response>
+    <D:href>./</D:href>
+    <D:propstat>
+      <D:prop><D:getetag>"0"</D:getetag></D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>camille.vcf</D:href>
+    <D:propstat>
+      <D:prop><D:getetag>"1"</D:getetag></D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>marc.vcf</D:href>
+    <D:propstat>
+      <D:prop><D:getetag>"2"</D:getetag></D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>casse.vcf</D:href>
+    <D:propstat>
+      <D:prop><D:getetag>"3"</D:getetag></D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+</D:multistatus>"#;
+
 /// Faux serveur DAV : `answers` associe « METHODE chemin » à sa réponse, tout le
 /// reste répond 404. Le nombre d'appels est compté par route.
 async fn serve(answers: Vec<(&'static str, &'static str)>) -> (String, Arc<Vec<AtomicUsize>>) {
@@ -349,6 +382,7 @@ async fn a_sync_fills_the_contact_list_from_the_address_book() {
         ("PROPFIND /dav/", PRINCIPAL),
         ("PROPFIND /principals/users/roman/", HOME),
         ("PROPFIND /dav/roman/", COLLECTIONS),
+        ("PROPFIND /dav/roman/Contacts/", MEMBERS),
         ("REPORT /dav/roman/Contacts/", CARDS),
     ])
     .await;
@@ -381,6 +415,7 @@ async fn a_second_sync_mirrors_the_cards_the_server_dropped() {
         ("PROPFIND /dav/", PRINCIPAL),
         ("PROPFIND /principals/users/roman/", HOME),
         ("PROPFIND /dav/roman/", COLLECTIONS),
+        ("PROPFIND /dav/roman/Contacts/", MEMBERS),
         ("REPORT /dav/roman/Contacts/", CARDS),
     ])
     .await;
@@ -388,6 +423,7 @@ async fn a_second_sync_mirrors_the_cards_the_server_dropped() {
         ("PROPFIND /dav/", PRINCIPAL),
         ("PROPFIND /principals/users/roman/", HOME),
         ("PROPFIND /dav/roman/", COLLECTIONS),
+        ("PROPFIND /dav/roman/Contacts/", MEMBERS),
         ("REPORT /dav/roman/Contacts/", CARDS_REDUCED),
     ])
     .await;
@@ -432,6 +468,7 @@ async fn the_contact_of_a_mail_already_traded_survives_a_sync() {
         ("PROPFIND /dav/", PRINCIPAL),
         ("PROPFIND /principals/users/roman/", HOME),
         ("PROPFIND /dav/roman/", COLLECTIONS),
+        ("PROPFIND /dav/roman/Contacts/", MEMBERS),
         ("REPORT /dav/roman/Contacts/", CARDS_REDUCED),
     ])
     .await;
@@ -447,7 +484,7 @@ async fn the_contact_of_a_mail_already_traded_survives_a_sync() {
     assert_eq!(found[0]["email"], "marc@mail.fr");
     assert_eq!(found[0]["name"], "Marc Delaunay");
     assert!(found[0]["received"].as_i64().unwrap_or_default() > 0);
-    assert_eq!(counts[3].load(Ordering::Relaxed), 1);
+    assert_eq!(counts[4].load(Ordering::Relaxed), 1);
 }
 
 #[tokio::test]
