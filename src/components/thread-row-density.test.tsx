@@ -13,9 +13,10 @@ import type { MailDensity } from "@/lib/prefs";
 vi.stubEnv("VITE_MAIL_BACKEND", "demo");
 
 const THREAD = threadsInFolder(MAILS, "inbox")[0]!;
+const PGP_THREAD = threadsInFolder(MAILS, "inbox").find((entry) => entry.primary.pgp !== "none")!;
 const PREVIEW = THREAD.preview;
 
-function renderRow(density?: MailDensity) {
+function renderRow(density?: MailDensity, thread = THREAD, showAccount = false) {
   const wrapper = ({ children }: { children: React.ReactNode }) => (
     <PrefsProvider>
       <ThemeProvider>
@@ -25,7 +26,16 @@ function renderRow(density?: MailDensity) {
       </ThemeProvider>
     </PrefsProvider>
   );
-  render(<ThreadRow thread={THREAD} density={density} onOpen={() => {}} onToggleStar={() => {}} />, { wrapper });
+  render(
+    <ThreadRow
+      thread={thread}
+      density={density}
+      showAccount={showAccount}
+      onOpen={() => {}}
+      onToggleStar={() => {}}
+    />,
+    { wrapper },
+  );
 }
 
 function rowOf() {
@@ -68,6 +78,29 @@ describe("ligne de mail · densité", () => {
 
     const layers = rowOf().querySelectorAll('span[class*="size-[32px]"]');
     expect(layers.length).toBe(2);
+  });
+
+  it("réduit l'étiquette de compte sous l'avatar en compact", () => {
+    renderRow("cozy", THREAD, true);
+    expect(rowOf().querySelector("[data-account-chip]")!.className).toContain("text-[10.5px]");
+  });
+
+  it("étiquette de compte compacte en mode compact", () => {
+    renderRow("compact", THREAD, true);
+    expect(rowOf().querySelector("[data-account-chip]")!.className).toContain("text-[8px]");
+  });
+
+  it("en compact, le badge PGP rejoint la ligne du nom sans ligne vide", () => {
+    renderRow("compact", PGP_THREAD);
+
+    expect(rowOf().querySelector('div[class*="mt-1.5"]')).toBeNull();
+    expect(rowOf().querySelector('span[title*="PGP"]')).toBeTruthy();
+  });
+
+  it("en confort, le badge PGP garde sa ligne dédiée", () => {
+    renderRow("cozy", PGP_THREAD);
+
+    expect(rowOf().querySelector('div[class*="mt-1.5"]')).toBeTruthy();
   });
 
   it("affiche le confort quand la densité n'est pas fournie", () => {

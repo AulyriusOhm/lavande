@@ -254,7 +254,7 @@ export function ThreadRow({
             : "border border-transparent hover:bg-surface-2/80",
         )}
       >
-        <div className="flex w-[56px] shrink-0 flex-col items-start gap-1">
+        <div className={cn("flex w-[56px] shrink-0 flex-col items-start", tight ? "gap-0.5" : "gap-1")}>
           {thread.count > 1 ? (
             <div className={cn("relative", tight ? "h-[32px] w-[44px]" : "h-[48px] w-[56px]")}>
               <span
@@ -292,8 +292,10 @@ export function ThreadRow({
               data-account-chip={account.id}
               title={account.label}
               className={cn(
-                "-ml-1 inline-block max-w-[64px] overflow-hidden text-clip whitespace-nowrap rounded-full px-1.5 py-[3px] leading-none font-extrabold uppercase",
-                accountChipFont(account.label),
+                "-ml-1 inline-block max-w-[64px] overflow-hidden text-clip whitespace-nowrap rounded-full leading-none font-extrabold uppercase",
+                tight
+                  ? "px-1 py-[2px] text-[8px] tracking-[0.02em]"
+                  : cn("px-1.5 py-[3px]", accountChipFont(account.label)),
               )}
               style={{
                 backgroundColor: accountTint(account.color),
@@ -319,6 +321,9 @@ export function ThreadRow({
             </div>
 
             <span className="flex shrink-0 items-center gap-1.5">
+              {tight && mail.pgp !== "none" ? (
+                <PgpBadge state={mail.pgp} detail={mail.pgp_detail} compact className="size-4" />
+              ) : null}
               {mail.answered ? (
                 <span
                   role="img"
@@ -365,7 +370,7 @@ export function ThreadRow({
             <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-[1.45] text-ink-muted">{thread.preview}</p>
           )}
 
-          {((pillLabel && !tight) || decisionBadges.length > 0 || mail.pgp !== "none") && (
+          {((pillLabel && !tight) || decisionBadges.length > 0 || (!tight && mail.pgp !== "none")) && (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               {pillLabel && !tight ? (
                 <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-[10.5px] font-semibold text-accent-ink">
@@ -383,7 +388,7 @@ export function ThreadRow({
                   {badge.label}
                 </span>
               ))}
-              <PgpBadge state={mail.pgp} detail={mail.pgp_detail} compact className="ml-auto" />
+              {!tight ? <PgpBadge state={mail.pgp} detail={mail.pgp_detail} compact className="ml-auto" /> : null}
             </div>
           )}
         </div>
