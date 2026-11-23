@@ -74,6 +74,7 @@ import {
   CALENDAR_LEAD_MINUTES,
 
   isFolderHidden,
+  MAIL_DENSITIES,
   mergeFlags,
   perimeterOf,
   THREAD_VIEWS,
@@ -990,6 +991,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     perimeters,
     threadView,
     setThreadView,
+    mailDensity,
+    setMailDensity,
   } = usePrefs();
   const {
     notify,
@@ -1822,6 +1825,34 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                   </div>
                   <p className="mt-1.5 text-[12.5px] leading-snug font-medium text-ink-muted">
                     {THREAD_VIEWS.find((option) => option.id === threadView)?.hint}
+                  </p>
+                </Surface>
+
+                <Surface className="mt-3 p-4">
+                  <SectionLabel>Affichage des mails</SectionLabel>
+                  <div className="mt-2 grid grid-cols-2 gap-1.5">
+                    {MAIL_DENSITIES.map((option) => {
+                      const selected = mailDensity === option.id;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => setMailDensity(option.id)}
+                          className={cn(
+                            "focus-ring flex h-10 items-center justify-center rounded-[14px] text-[12px] font-bold transition-colors duration-200",
+                            selected
+                              ? "bg-accent-soft text-accent-ink ring-1 ring-accent-ring/60"
+                              : "border border-line bg-surface text-ink-soft hover:text-ink",
+                          )}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1.5 text-[12.5px] leading-snug font-medium text-ink-muted">
+                    {MAIL_DENSITIES.find((option) => option.id === mailDensity)?.hint}
                   </p>
                 </Surface>
               </Block>

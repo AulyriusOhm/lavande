@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { animate, motion, useMotionValue, useSpring, useTransform } from "motion/react";
-import { Archive, Check, ChevronDown, ChevronUp, Copy, CornerUpLeft, ExternalLink, FolderInput, Inbox, KeyRound, Layers, Loader2, PenLine, Plus, RotateCcw, Search, RefreshCw, Send, ShieldAlert, ShieldCheck, Sparkles, Trash2, type LucideIcon } from "lucide-react";
+import { Archive, Check, ChevronDown, ChevronUp, Copy, CornerUpLeft, ExternalLink, FolderInput, Inbox, KeyRound, Layers, Loader2, PenLine, Plus, RotateCcw, Rows3, Search, RefreshCw, Send, ShieldAlert, ShieldCheck, Sparkles, Trash2, type LucideIcon } from "lucide-react";
 import type { FolderId, Mail } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
 import { summarySourceLabel, type SummaryRef } from "@/lib/summary";
@@ -169,7 +169,7 @@ export function InboxScreen({
   onPlanMail?: (draft: NewTaskDraft) => void;
   onScheduleMail?: (draft: NewEventDraft) => void;
 }) {
-  const { decision: decisionPrefs } = usePrefs();
+  const { decision: decisionPrefs, mailDensity, setMailDensity } = usePrefs();
   const {
     mode,
     readOnly,
@@ -713,6 +713,15 @@ export function InboxScreen({
               <div className="flex items-center gap-1">
                 <IconButton aria-label="Rechercher" onClick={onSearch}>
                   <Search className="size-4" />
+                </IconButton>
+                <IconButton
+                  aria-label="Affichage compact"
+                  title="Affichage compact"
+                  aria-pressed={mailDensity === "compact"}
+                  onClick={() => setMailDensity(mailDensity === "compact" ? "cozy" : "compact")}
+                  className={cn(mailDensity === "compact" && "bg-accent-soft text-accent-ink")}
+                >
+                  <Rows3 className="size-4" />
                 </IconButton>
                 <IconButton
                   aria-label={syncing ? "Synchronisation en cours" : "Synchroniser le dossier"}
@@ -1495,6 +1504,7 @@ export function InboxScreen({
                 thread={thread}
                 delay={Math.min(0.4, 0.16 + index * 0.05)}
                 showAccount={account === ALL_ACCOUNTS}
+                density={mailDensity}
                 decision={decisionForThread(thread)}
                 decisionThresholds={decisionPrefs.thresholds}
                 customCategories={decisionPrefs.customCategories}

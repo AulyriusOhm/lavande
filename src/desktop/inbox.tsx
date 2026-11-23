@@ -30,6 +30,7 @@ import {
   RefreshCw,
   ReplyAll,
   RotateCcw,
+  Rows3,
   Search,
   ShieldAlert,
   ShieldCheck,
@@ -79,7 +80,7 @@ import { InvitationBanner } from "@/components/invitation-banner";
 import { PGP_STATE, formatKeyDate, keyLabel, keyState, shortFingerprint, type PgpKey } from "@/lib/pgp";
 import { listKeys } from "@/lib/pgp-api";
 import { useMailStore, type BulkKind } from "@/lib/store";
-import { DEFAULT_INBOX_PANES, isFolderHidden, resolvePgp, usePrefs } from "@/lib/prefs";
+import { DEFAULT_INBOX_PANES, isFolderHidden, resolvePgp, usePrefs, type MailDensity } from "@/lib/prefs";
 import type { MailNavigation } from "@/lib/app-shortcuts";
 import { useEscapeLayer } from "@/desktop/escape";
 import { PaneSplitter } from "@/desktop/pane-splitter";
@@ -1020,6 +1021,7 @@ function ThreadRow({
   decision = null,
   decisionThresholds = DEFAULT_DECISION_THRESHOLDS,
   customCategories = [],
+  density = "cozy",
   onOpen,
   onStar,
   onRead,
@@ -1036,6 +1038,7 @@ function ThreadRow({
   decision?: MailDecision | null;
   decisionThresholds?: DecisionThresholds;
   customCategories?: readonly CustomCategory[];
+  density?: MailDensity;
   onOpen: (event: React.MouseEvent | null) => void;
   onStar: () => void;
   onRead: () => void;
@@ -1056,6 +1059,7 @@ function ThreadRow({
         }`
       : sender;
   const unread = thread.unread > 0;
+  const tight = density === "compact";
 
   const decisionBadges: { label: string; className: string }[] = [];
   if (decision) {
@@ -1145,9 +1149,14 @@ function ThreadRow({
           className="focus-row absolute inset-0 rounded-[16px]"
         />
 
-        <div className="pointer-events-none relative flex gap-3 px-3 py-3.5">
+        <div className={cn("pointer-events-none relative flex gap-3 px-3", tight ? "py-2" : "py-3.5")}>
           <div className="relative shrink-0">
-            <Avatar name={name} tone={mail.tone} size={40} rounded="rounded-full" />
+            <Avatar
+              name={name}
+              tone={mail.tone}
+              size={tight ? 28 : 40}
+              rounded="rounded-full"
+            />
             {checked ? (
               <span className="absolute -top-1 -left-1 grid size-4 place-items-center rounded-full border-2 border-surface bg-accent text-accent-contrast">
                 <Check className="size-2.5" strokeWidth={3.5} />
@@ -1178,14 +1187,17 @@ function ThreadRow({
 
             <p
               className={cn(
-                "mt-1 truncate text-[13px] text-ink",
+                "truncate text-[13px] text-ink",
+                tight ? "mt-0.5" : "mt-1",
                 unread ? "font-bold" : "font-semibold",
               )}
             >
               {thread.subject}
             </p>
 
-            <p className="mt-1 line-clamp-3 text-[12.5px] leading-[1.5] text-ink-muted">{thread.preview}</p>
+            {tight ? null : (
+              <p className="mt-1 line-clamp-3 text-[12.5px] leading-[1.5] text-ink-muted">{thread.preview}</p>
+            )}
 
             {thread.count > 1 || thread.attachments > 0 || decisionBadges.length > 0 ? (
               <div className="mt-1.5 flex flex-wrap items-center gap-1">
@@ -2422,6 +2434,16 @@ export function DesktopInbox({
               >
                 <RefreshCw className={cn("size-4", syncing && "animate-spin")} />
               </DIconButton>
+              <DIconButton
+                label="Affichage compact"
+                active={prefs.mailDensity === "compact"}
+                aria-pressed={prefs.mailDensity === "compact"}
+                onClick={() =>
+                  prefs.setMailDensity(prefs.mailDensity === "compact" ? "cozy" : "compact")
+                }
+              >
+                <Rows3 className="size-4" />
+              </DIconButton>
             </div>
 
             <button
@@ -2631,6 +2653,7 @@ export function DesktopInbox({
                   decision={decisionForThread(thread)}
                   decisionThresholds={decisionPrefs.thresholds}
                   customCategories={decisionPrefs.customCategories}
+                  density={prefs.mailDensity}
                   onOpen={(event) => selectThread(thread, index, event)}
                   onStar={() => toggleStar(thread.primary.id)}
                   onRead={() => mailAction("read", thread.primary)}

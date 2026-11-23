@@ -19,6 +19,14 @@ export const THREAD_VIEWS: { id: ThreadView; label: string; hint: string }[] = [
   { id: "inline", label: "Tout dans le même mail", hint: "La citation classique, repliable" },
 ];
 
+/** Densité de la liste des mails : carte confortable ou ligne compacte. */
+export type MailDensity = "cozy" | "compact";
+
+export const MAIL_DENSITIES: { id: MailDensity; label: string; hint: string }[] = [
+  { id: "cozy", label: "Confort", hint: "Aperçu du message et avatar large" },
+  { id: "compact", label: "Compact", hint: "Plus de mails à l'écran, sans aperçu" },
+];
+
 const STORAGE_KEY = "lavande.prefs";
 
 import { recordDecisionUsage, recordUsage } from "@/lib/ai-stats";
@@ -134,6 +142,8 @@ export type Prefs = {
   notifications: NotificationPrefs;
   /** Conversation dans la rédaction : panneau repliable ou citation dans le mail. */
   threadView: ThreadView;
+  /** Densité de la liste des mails. */
+  mailDensity: MailDensity;
   /** Largeurs des trois colonnes de la boîte PC, ajustées à la souris. */
   inboxPanes: InboxPanes;
 };
@@ -165,6 +175,7 @@ const DEFAULTS: Prefs = {
   perimeters: {},
   notifications: DEFAULT_NOTIFICATIONS,
   threadView: "tidy",
+  mailDensity: "cozy",
   inboxPanes: DEFAULT_INBOX_PANES,
 };
 
@@ -191,6 +202,7 @@ type PrefsContextValue = Prefs & {
   setNotifications: (patch: Partial<NotificationPrefs>) => void;
   setAccountNotification: (accountId: string, value: boolean) => void;
   setThreadView: (value: ThreadView) => void;
+  setMailDensity: (value: MailDensity) => void;
   setInboxPanes: (patch: Partial<InboxPanes>) => void;
 };
 
@@ -207,6 +219,9 @@ const asBoolean = (value: unknown, fallback: boolean): boolean =>
   typeof value === "boolean" ? value : fallback;
 
 export const asThreadView = (value: unknown): ThreadView => (value === "inline" ? "inline" : "tidy");
+
+export const asMailDensity = (value: unknown): MailDensity =>
+  value === "compact" ? "compact" : "cozy";
 
 const asFlags = (value: unknown): Record<string, boolean> =>
   value && typeof value === "object"
@@ -592,6 +607,7 @@ function read(): Prefs {
     perimeters: asPerimeters(stored.perimeters),
     notifications: asNotifications(stored.notifications),
     threadView: asThreadView(stored.threadView),
+    mailDensity: asMailDensity(stored.mailDensity),
     inboxPanes: asPanes(stored.inboxPanes),
   };
 }
@@ -810,6 +826,8 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
 
   const setThreadView = useCallback((value: ThreadView) => patch("threadView", value), [patch]);
 
+  const setMailDensity = useCallback((value: MailDensity) => patch("mailDensity", value), [patch]);
+
   const setInboxPanes = useCallback(
     (patch: Partial<InboxPanes>) =>
       write((current) => ({ ...current, inboxPanes: { ...current.inboxPanes, ...patch } })),
@@ -841,6 +859,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setNotifications,
       setAccountNotification,
       setThreadView,
+      setMailDensity,
       setInboxPanes,
     }),
     [
@@ -867,6 +886,7 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setNotifications,
       setAccountNotification,
       setThreadView,
+      setMailDensity,
       setInboxPanes,
     ],
   );

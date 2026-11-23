@@ -8,7 +8,7 @@ import { Avatar } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { PgpBadge } from "@/components/ui/pgp-badge";
 import { SwipeAction, type SwipeActionDef } from "@/components/ui/swipe-action";
-import { usePrefs, type SwipeActionId } from "@/lib/prefs";
+import { usePrefs, type MailDensity, type SwipeActionId } from "@/lib/prefs";
 import {
   DEFAULT_DECISION_THRESHOLDS,
   isPhishing,
@@ -49,6 +49,7 @@ export function ThreadRow({
   delay = 0,
   showPreview = true,
   showAccount = false,
+  density = "cozy",
   decision = null,
   decisionThresholds = DEFAULT_DECISION_THRESHOLDS,
   customCategories = [],
@@ -66,6 +67,7 @@ export function ThreadRow({
   delay?: number;
   showPreview?: boolean;
   showAccount?: boolean;
+  density?: MailDensity;
   decision?: MailDecision | null;
   decisionThresholds?: DecisionThresholds;
   customCategories?: readonly CustomCategory[];
@@ -92,6 +94,8 @@ export function ThreadRow({
         : "";
   const { swipeLeft, swipeRight } = usePrefs();
   const { dark } = useTheme();
+  const tight = density === "compact";
+  const avatarSize = tight ? 32 : 42;
 
   const decisionBadges: { label: string; className: string }[] = [];
   if (decision) {
@@ -243,7 +247,8 @@ export function ThreadRow({
         onPointerUp={cancelPress}
         onPointerCancel={cancelPress}
         className={cn(
-          "group relative flex cursor-pointer gap-3 rounded-[22px] px-3 py-3 transition-all duration-300",
+          "group relative flex cursor-pointer gap-3 rounded-[22px] px-3 transition-all duration-300",
+          tight ? "py-2" : "py-3",
           unread
             ? "border border-accent-ring/60 bg-surface shadow-[0_10px_30px_-24px_var(--accent)] hover:border-accent-ring"
             : "border border-transparent hover:bg-surface-2/80",
@@ -251,17 +256,32 @@ export function ThreadRow({
       >
         <div className="flex w-[56px] shrink-0 flex-col items-start gap-1">
           {thread.count > 1 ? (
-            <div className="relative h-[48px] w-[56px]">
-              <span className="absolute bottom-0 left-[8px] size-[42px] rounded-[14px] border border-line bg-surface-2/70" />
-              <span className="absolute bottom-0 left-[4px] size-[42px] rounded-[14px] border border-line bg-surface-2/70" />
-              <Avatar name={displayName} tone={mail.tone} size={42} className="absolute bottom-0 left-0" />
+            <div className={cn("relative", tight ? "h-[32px] w-[44px]" : "h-[48px] w-[56px]")}>
+              <span
+                className={cn(
+                  "absolute bottom-0 rounded-[14px] border border-line bg-surface-2/70",
+                  tight ? "left-[6px] size-[26px]" : "left-[8px] size-[42px]",
+                )}
+              />
+              <span
+                className={cn(
+                  "absolute bottom-0 rounded-[14px] border border-line bg-surface-2/70",
+                  tight ? "left-[3px] size-[26px]" : "left-[4px] size-[42px]",
+                )}
+              />
+              <Avatar
+                name={displayName}
+                tone={mail.tone}
+                size={avatarSize}
+                className="absolute bottom-0 left-0"
+              />
               {unread && (
                 <span className="absolute top-0 left-0 size-2.5 rounded-full border-2 border-surface bg-accent" />
               )}
             </div>
           ) : (
-            <div className="relative flex h-[48px] w-[56px] items-end">
-              <Avatar name={displayName} tone={mail.tone} size={42} className="relative" />
+            <div className={cn("relative flex w-[56px] items-end", tight ? "h-[32px]" : "h-[48px]")}>
+              <Avatar name={displayName} tone={mail.tone} size={avatarSize} className="relative" />
               {unread && (
                 <span className="absolute top-[3px] left-0 size-2.5 rounded-full border-2 border-surface bg-accent" />
               )}
@@ -341,7 +361,7 @@ export function ThreadRow({
             {thread.subject}
           </p>
 
-          {showPreview && (
+          {showPreview && !tight && (
             <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-[1.45] text-ink-muted">{thread.preview}</p>
           )}
 

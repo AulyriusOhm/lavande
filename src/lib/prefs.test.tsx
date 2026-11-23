@@ -16,6 +16,7 @@ import {
   asPgpAccounts,
   asSync,
   asTeamContext,
+  asMailDensity,
   asThreadView,
   perimeterOf,
   storedPerimeters,
@@ -652,6 +653,45 @@ describe("préférences · affichage des conversations", () => {
     expect(stored().threadView).toBe("inline");
     expect(result.current.summary).toEqual(DEFAULT_SUMMARY);
     expect(result.current.notifications).toEqual(DEFAULT_NOTIFICATIONS);
+  });
+});
+
+describe("préférences · densité des mails", () => {
+  it("affiche les cartes confortables par défaut", () => {
+    expect(mount().result.current.mailDensity).toBe("cozy");
+  });
+
+  it("retombe sur confortable pour une valeur inconnue", () => {
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ mailDensity: "serré" }));
+    expect(mount().result.current.mailDensity).toBe("cozy");
+
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ mailDensity: "compact" }));
+    expect(mount().result.current.mailDensity).toBe("compact");
+
+    expect(asMailDensity(undefined)).toBe("cozy");
+    expect(asMailDensity(42)).toBe("cozy");
+    expect(asMailDensity("compact")).toBe("compact");
+  });
+
+  it("enregistre la densité et la persiste, sans toucher aux autres préférences", () => {
+    const { result } = mount();
+
+    act(() => result.current.setMailDensity("compact"));
+
+    expect(result.current.mailDensity).toBe("compact");
+    expect(stored().mailDensity).toBe("compact");
+    expect(result.current.threadView).toBe("tidy");
+    expect(result.current.summary).toEqual(DEFAULT_SUMMARY);
+    expect(result.current.notifications).toEqual(DEFAULT_NOTIFICATIONS);
+  });
+
+  it("revient au confort et le persiste", () => {
+    const { result } = mount();
+
+    act(() => result.current.setMailDensity("compact"));
+    act(() => result.current.setMailDensity("cozy"));
+
+    expect(stored().mailDensity).toBe("cozy");
   });
 });
 

@@ -6,6 +6,7 @@ import type { SearchFilter } from "@/lib/search-query";
 import { readRecentSearches, writeRecentSearches } from "@/lib/recent-searches";
 import { buildThreads } from "@/lib/threads";
 import { useMailStore } from "@/lib/store";
+import { usePrefs } from "@/lib/prefs";
 import { Avatar, Chip } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { MeshGlow } from "@/components/ui/backdrops";
@@ -41,6 +42,7 @@ export function SearchScreen({
   onNotSpam?: (mail: Mail) => void;
   onRestore?: (mail: Mail) => void;
 }) {
+  const { mailDensity } = usePrefs();
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<Scope>("Tout");
   const [recent, setRecent] = useState<string[]>(readRecentSearches);
@@ -250,6 +252,7 @@ export function SearchScreen({
                   key={thread.id}
                   thread={thread}
                   delay={index * 0.04}
+                  density={mailDensity}
                   onOpen={() => onOpen(thread.primary)}
                   onToggleStar={() => onToggleStar(thread.primary.id)}
                   onDelete={() => onMailAction("delete", thread.primary)}
