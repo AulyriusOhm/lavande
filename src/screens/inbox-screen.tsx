@@ -1602,6 +1602,15 @@ export function InboxScreen({
           <IconButton aria-label="Rechercher" onClick={onSearch}>
             <Search className="size-4" />
           </IconButton>
+          <IconButton
+            aria-label="Affichage compact"
+            title="Affichage compact"
+            aria-pressed={mailDensity === "compact"}
+            onClick={() => setMailDensity(mailDensity === "compact" ? "cozy" : "compact")}
+            className={cn(mailDensity === "compact" && "bg-accent-soft text-accent-ink")}
+          >
+            <Rows3 className="size-4" />
+          </IconButton>
           <IconButton aria-label="Changer de compte" onClick={onOpenAccounts}>
             <span
               className="grid size-5 place-items-center rounded-full text-[10px] font-black"

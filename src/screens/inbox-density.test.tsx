@@ -29,7 +29,7 @@ const stored = () => JSON.parse(window.localStorage.getItem("lavande.prefs") ?? 
 
 const previews = () => document.querySelectorAll('[data-mail-row] p.line-clamp-2').length;
 
-const densityButton = () => screen.getByRole("button", { name: "Affichage compact" });
+const densityButton = () => screen.getAllByRole("button", { name: "Affichage compact" })[0]!;
 
 async function openMobile() {
   window.history.replaceState(null, "", "?mobile");
@@ -54,6 +54,16 @@ describe("boîte de réception mobile · densité", () => {
     await waitFor(() => expect(stored().mailDensity).toBe("compact"));
     expect(densityButton().getAttribute("aria-pressed")).toBe("true");
     expect(previews()).toBe(0);
+  });
+
+  it("garde le toggle dans la barre vitrée une fois l'en-tête replié", async () => {
+    await openMobile();
+    const toggles = screen.getAllByRole("button", { name: "Affichage compact" });
+    expect(toggles.length).toBe(2);
+
+    fireEvent.click(toggles[1]!);
+
+    await waitFor(() => expect(stored().mailDensity).toBe("compact"));
   });
 
   it("relit la densité enregistrée à l'ouverture", async () => {
