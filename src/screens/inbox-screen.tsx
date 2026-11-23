@@ -704,7 +704,12 @@ export function InboxScreen({
                   rounded="rounded-full"
                   className="ring-2 ring-accent-ring ring-offset-2 ring-offset-canvas"
                 />
-                <h1 className="text-[24px] leading-[1.05] font-extrabold tracking-[-0.035em] text-ink">
+                <h1
+                  className={cn(
+                    "leading-[1.05] font-extrabold tracking-[-0.035em] text-ink",
+                    mailDensity === "compact" ? "text-[18px]" : "text-[24px]",
+                  )}
+                >
                   {reception ? (
                     <>
                       Boîte de

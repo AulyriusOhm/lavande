@@ -2432,6 +2432,7 @@ export function DesktopInbox({
           <div className="shrink-0 px-4 pt-4 pb-2">
             <div className="flex items-center gap-2">
               <PaneTitle
+                small={prefs.mailDensity === "compact"}
                 hint={
                   reception ? (
                     <>

@@ -54,6 +54,7 @@ describe("boîte de réception mobile · densité", () => {
     await waitFor(() => expect(stored().mailDensity).toBe("compact"));
     expect(densityButton().getAttribute("aria-pressed")).toBe("true");
     expect(previews()).toBe(0);
+    expect(screen.getByRole("heading", { name: /réception/ }).className).toContain("text-[18px]");
   });
 
   it("garde le toggle dans la barre vitrée une fois l'en-tête replié", async () => {

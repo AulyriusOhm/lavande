@@ -18,10 +18,17 @@ export function SectionLabel({ children, className }: { children: React.ReactNod
   );
 }
 
-export function PaneTitle({ children, hint }: { children: React.ReactNode; hint?: React.ReactNode }) {
+export function PaneTitle({ children, hint, small = false }: { children: React.ReactNode; hint?: React.ReactNode; small?: boolean }) {
   return (
     <div className="flex items-baseline gap-2">
-      <h1 className="text-[19px] leading-tight font-extrabold tracking-[-0.035em] text-ink">{children}</h1>
+      <h1
+        className={cn(
+          "leading-tight font-extrabold tracking-[-0.035em] text-ink",
+          small ? "text-[15px]" : "text-[19px]",
+        )}
+      >
+        {children}
+      </h1>
       {hint ? <span className="text-[11.5px] font-semibold text-ink-muted">{hint}</span> : null}
     </div>
   );
