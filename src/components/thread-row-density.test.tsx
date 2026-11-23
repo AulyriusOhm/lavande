@@ -52,6 +52,24 @@ describe("ligne de mail · densité", () => {
     expect(screen.getByText(THREAD.subject)).toBeTruthy();
   });
 
+  it("garde les pastilles messages/pièces jointes en confort", () => {
+    renderRow("cozy");
+    expect(screen.getByText(/messages/)).toBeTruthy();
+  });
+
+  it("masque les pastilles messages/pièces jointes en compact", () => {
+    renderRow("compact");
+    expect(screen.queryByText(/messages/)).toBeNull();
+    expect(screen.queryByText(/pièce.*jointe/)).toBeNull();
+  });
+
+  it("garde l'empilement d'avatars des conversations visible en compact", () => {
+    renderRow("compact");
+
+    const layers = rowOf().querySelectorAll('span[class*="size-[32px]"]');
+    expect(layers.length).toBe(2);
+  });
+
   it("affiche le confort quand la densité n'est pas fournie", () => {
     renderRow();
 

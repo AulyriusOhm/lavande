@@ -1152,12 +1152,26 @@ function ThreadRow({
 
         <div className={cn("pointer-events-none relative flex gap-3 px-3", tight ? "py-2" : "py-3.5")}>
           <div className="relative shrink-0">
-            <Avatar
-              name={name}
-              tone={mail.tone}
-              size={tight ? 28 : 40}
-              rounded="rounded-full"
-            />
+            {tight && thread.count > 1 ? (
+              <div className="relative h-[28px] w-[34px]">
+                <span className="absolute bottom-0 left-[6px] size-[28px] rounded-full border border-line bg-surface-2/70" />
+                <span className="absolute bottom-0 left-[3px] size-[28px] rounded-full border border-line bg-surface-2/70" />
+                <Avatar
+                  name={name}
+                  tone={mail.tone}
+                  size={28}
+                  rounded="rounded-full"
+                  className="absolute bottom-0 left-0"
+                />
+              </div>
+            ) : (
+              <Avatar
+                name={name}
+                tone={mail.tone}
+                size={tight ? 28 : 40}
+                rounded="rounded-full"
+              />
+            )}
             {checked ? (
               <span className="absolute -top-1 -left-1 grid size-4 place-items-center rounded-full border-2 border-surface bg-accent text-accent-contrast">
                 <Check className="size-2.5" strokeWidth={3.5} />
@@ -1200,14 +1214,16 @@ function ThreadRow({
               <p className="mt-1 line-clamp-3 text-[12.5px] leading-[1.5] text-ink-muted">{thread.preview}</p>
             )}
 
-            {thread.count > 1 || thread.attachments > 0 || decisionBadges.length > 0 ? (
+            {(tight
+              ? decisionBadges.length > 0
+              : thread.count > 1 || thread.attachments > 0 || decisionBadges.length > 0) ? (
               <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                {thread.count > 1 ? (
+                {!tight && thread.count > 1 ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] font-bold text-ink-soft">
                     {thread.count} messages
                   </span>
                 ) : null}
-                {thread.attachments > 0 ? (
+                {!tight && thread.attachments > 0 ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] font-bold text-ink-soft">
                     <Paperclip className="size-2.5" />
                     {thread.attachments}

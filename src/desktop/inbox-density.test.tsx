@@ -51,6 +51,10 @@ describe("boîte de réception PC · densité", () => {
     await waitFor(() => expect(stored().mailDensity).toBe("compact"));
     expect(densityButton().getAttribute("aria-pressed")).toBe("true");
     expect(previews()).toBe(0);
+    expect(screen.queryByText(/^\d+ messages$/)).toBeNull();
+    expect(
+      document.querySelectorAll('[data-testid="desktop-inbox"] span[class*="size-[28px]"]').length,
+    ).toBeGreaterThanOrEqual(2);
 
     fireEvent.click(densityButton());
 

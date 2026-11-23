@@ -260,13 +260,13 @@ export function ThreadRow({
               <span
                 className={cn(
                   "absolute bottom-0 rounded-[14px] border border-line bg-surface-2/70",
-                  tight ? "left-[6px] size-[26px]" : "left-[8px] size-[42px]",
+                  tight ? "left-[6px] size-[32px]" : "left-[8px] size-[42px]",
                 )}
               />
               <span
                 className={cn(
                   "absolute bottom-0 rounded-[14px] border border-line bg-surface-2/70",
-                  tight ? "left-[3px] size-[26px]" : "left-[4px] size-[42px]",
+                  tight ? "left-[3px] size-[32px]" : "left-[4px] size-[42px]",
                 )}
               />
               <Avatar
@@ -365,9 +365,9 @@ export function ThreadRow({
             <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-[1.45] text-ink-muted">{thread.preview}</p>
           )}
 
-          {(pillLabel || decisionBadges.length > 0 || mail.pgp !== "none") && (
+          {((pillLabel && !tight) || decisionBadges.length > 0 || mail.pgp !== "none") && (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              {pillLabel ? (
+              {pillLabel && !tight ? (
                 <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-[10.5px] font-semibold text-accent-ink">
                   <span className="truncate">{pillLabel}</span>
                 </span>
