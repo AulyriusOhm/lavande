@@ -538,6 +538,7 @@ async fn seed_oauth_account(state: &Arc<AppState>, token_endpoint: &str, email: 
             token_endpoint: token_endpoint.to_string(),
         },
         synced_folders: None,
+        ai_folders: None,
     };
     state.add_account(&config, &[]).await.expect("compte");
     config.id
@@ -563,6 +564,7 @@ async fn seed_password_account(state: &Arc<AppState>) -> String {
             password: "secret-en-clair".to_string(),
         },
         synced_folders: None,
+        ai_folders: None,
     };
     state.add_account(&config, &[]).await.expect("compte");
     config.id

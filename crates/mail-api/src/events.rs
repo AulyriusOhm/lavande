@@ -9,7 +9,7 @@ use futures::stream::{self, StreamExt};
 use lavande_mail::config::{AccountConfig, FolderMapping};
 use lavande_mail::error::MailError;
 use lavande_mail::imap::{self, ImapSession, SyncReport};
-use lavande_mail::model::FolderRole;
+use lavande_mail::model::{Folder, FolderRole};
 use lavande_mail::store::Store;
 use serde::Serialize;
 use tokio::sync::broadcast;
@@ -35,8 +35,8 @@ fn next_reconnect_delay(current: Duration) -> Duration {
 /// notification chacun, au-delà d'une poignée de mails c'est du bruit.
 const NOTICE_CAP: usize = 5;
 
-/// Plafond et bornes du triage automatique à l'arrivée IMAP IDLE.
-const IDLE_TRIAGE_CAP: usize = 10;
+/// Bornes du triage automatique à l'arrivée IMAP IDLE : le nombre de mails
+/// analysés vient du réglage « mails récents analysés » de la config décision.
 const IDLE_TRIAGE_CONCURRENCY: usize = 3;
 const IDLE_TRIAGE_TIMEOUT: Duration = Duration::from_secs(8);
 const IDLE_TRIAGE_BATCH_TIMEOUT: Duration = Duration::from_secs(20);
@@ -115,16 +115,38 @@ pub fn new_mail_notices_with_config(
     notices
 }
 
-/// Trie en concurrence bornée (max 3 en parallèle, timeout strict) les derniers
-/// messages reçus dans `INBOX` lorsque le modèle de décision est prêt. Une
-/// erreur ou un timeout est silencieux : la synchro et le SSE ne bloquent jamais.
-pub async fn triage_inbox_uids(
+/// `true` quand le dossier alimente l'analyse IA du compte : la sélection
+/// explicite quand elle existe, la réception (INBOX et dossiers personnels)
+/// sinon. Un dossier à rôle connu (Envoyés, Corbeille, Spam, Archives) n'en
+/// fait pas partie par défaut.
+fn ai_covers(ai_folders: Option<&[String]>, folder: &Folder) -> bool {
+    match ai_folders {
+        Some(paths) => paths.iter().any(|path| path == &folder.path),
+        None => matches!(folder.role, FolderRole::Inbox | FolderRole::Other),
+    }
+}
+
+/// Trie en concurrence bornée (max 3 en parallèle, timeout strict) les
+/// `recent_mail_count` derniers messages des dossiers de la sélection IA du
+/// compte lorsque le modèle de décision est prêt. Un dossier hors sélection, une
+/// sélection illisible, une erreur ou un timeout sont silencieux : la synchro et
+/// le SSE ne bloquent jamais.
+pub async fn triage_selection_uids(
     state: &Arc<AppState>,
     account_id: &str,
     folder_path: &str,
     uids: &[u32],
 ) {
-    if !folder_path.eq_ignore_ascii_case("INBOX") || uids.is_empty() {
+    if uids.is_empty() {
+        return;
+    }
+    let Ok(ai_folders) = state.ai_folders(account_id) else {
+        return;
+    };
+    let Ok(Some(folder)) = state.store().get_folder(account_id, folder_path) else {
+        return;
+    };
+    if !ai_covers(ai_folders.as_deref(), &folder) {
         return;
     }
     let Ok(config) = state.decision_config() else {
@@ -138,7 +160,7 @@ pub async fn triage_inbox_uids(
     let messages: Vec<_> = uids
         .iter()
         .rev()
-        .take(IDLE_TRIAGE_CAP)
+        .take(config.recent_mail_count)
         .filter_map(|uid| {
             state
                 .store()
@@ -346,7 +368,7 @@ async fn sync_and_publish(
                 removed = report.removed,
                 "nouveau courrier détecté"
             );
-            triage_inbox_uids(state, &config.id, folder_path, &report.preview_uids).await;
+            triage_selection_uids(state, &config.id, folder_path, &report.preview_uids).await;
             let decision_config = state.decision_config().ok();
             let new_mails = new_mail_notices_with_config(
                 state.store(),
@@ -464,6 +486,68 @@ mod tests {
             body_html: None,
             attachments: Vec::new(),
         }
+    }
+
+    fn folder(path: &str, role: FolderRole) -> Folder {
+        Folder {
+            account_id: "perso".to_string(),
+            path: path.to_string(),
+            name: path.to_string(),
+            role,
+            uidvalidity: 1,
+            uidnext: 1,
+            last_sync_at: None,
+            modseq: None,
+            delimiter: Some("/".to_string()),
+        }
+    }
+
+    /// La sélection par défaut est la réception : l'INBOX et les dossiers
+    /// personnels, jamais un dossier à rôle connu.
+    #[test]
+    fn the_ai_selection_covers_the_reception_by_default() {
+        assert!(ai_covers(None, &folder("INBOX", FolderRole::Inbox)));
+        assert!(ai_covers(
+            None,
+            &folder("INBOX/Informatique", FolderRole::Other)
+        ));
+        assert!(ai_covers(None, &folder("Projets", FolderRole::Other)));
+        assert!(!ai_covers(None, &folder("Sent", FolderRole::Sent)));
+        assert!(!ai_covers(None, &folder("Archive", FolderRole::Archive)));
+        assert!(!ai_covers(None, &folder("Trash", FolderRole::Trash)));
+    }
+
+    /// Une sélection explicite est la seule analysée, INBOX comprise : elle
+    /// nomme des chemins, pas des rôles.
+    #[test]
+    fn an_explicit_ai_selection_is_the_only_one_analysed() {
+        let selection = vec!["INBOX/Informatique".to_string()];
+        assert!(ai_covers(
+            Some(&selection),
+            &folder("INBOX/Informatique", FolderRole::Other)
+        ));
+        assert!(!ai_covers(
+            Some(&selection),
+            &folder("INBOX", FolderRole::Inbox)
+        ));
+        assert!(!ai_covers(
+            Some(&selection),
+            &folder("Projets", FolderRole::Other)
+        ));
+    }
+
+    /// Une sélection vide ne fait analyser aucun dossier, même l'INBOX.
+    #[test]
+    fn an_empty_ai_selection_analyses_nothing() {
+        let selection: Vec<String> = Vec::new();
+        assert!(!ai_covers(
+            Some(&selection),
+            &folder("INBOX", FolderRole::Inbox)
+        ));
+        assert!(!ai_covers(
+            Some(&selection),
+            &folder("INBOX/Informatique", FolderRole::Other)
+        ));
     }
 
     #[test]
@@ -717,9 +801,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn triage_inbox_uids_silently_survives_unreachable_model() {
+    async fn triage_selection_uids_silently_survives_unreachable_model() {
         use crate::discovery::DiscoveryEndpoints;
         use crate::secrets::SecretBackend;
+        use lavande_mail::config::{AuthConfig, Encryption, Endpoint};
         use lavande_mail::tls::TlsOptions;
 
         let dir = tempfile::tempdir().expect("tempdir");
@@ -733,24 +818,31 @@ mod tests {
             .await
             .expect("open"),
         );
+        let endpoint = Endpoint {
+            host: "imap.lavande.fr".to_string(),
+            port: 993,
+            encryption: Encryption::Tls,
+        };
+        let config = AccountConfig {
+            id: "perso".to_string(),
+            label: "Perso".to_string(),
+            email: "roman@lavande.fr".to_string(),
+            username: "roman@lavande.fr".to_string(),
+            imap: endpoint.clone(),
+            smtp: Endpoint {
+                port: 465,
+                ..endpoint
+            },
+            auth: AuthConfig::Password {
+                password: "secret".to_string(),
+            },
+            synced_folders: None,
+            ai_folders: None,
+        };
         state
-            .store()
-            .upsert_account("perso", "Perso", "roman@lavande.fr")
-            .expect("account");
-        state
-            .store()
-            .upsert_folder(&Folder {
-                account_id: "perso".into(),
-                path: "INBOX".into(),
-                name: "INBOX".into(),
-                role: FolderRole::Inbox,
-                uidvalidity: 1,
-                uidnext: 2,
-                last_sync_at: None,
-                modseq: None,
-                delimiter: Some("/".into()),
-            })
-            .expect("folder");
+            .add_account(&config, &[folder("INBOX", FolderRole::Inbox)])
+            .await
+            .expect("compte");
         state
             .store()
             .upsert_message(&message(1, "Test", Some("Marc"), 1_731_000_000))
@@ -765,7 +857,7 @@ mod tests {
             })
             .expect("save cfg");
 
-        triage_inbox_uids(&state, "perso", "INBOX", &[1]).await;
+        triage_selection_uids(&state, "perso", "INBOX", &[1]).await;
         assert!(state
             .store()
             .get_decision("perso", "INBOX", 1)

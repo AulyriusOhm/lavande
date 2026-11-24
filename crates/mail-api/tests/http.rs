@@ -281,6 +281,7 @@ async fn a_selection_sent_at_creation_is_kept_for_the_first_sync() {
             password: "secret-en-clair".to_string(),
         },
         synced_folders: Some(vec!["Archive".to_string()]),
+        ai_folders: None,
     };
 
     state
@@ -804,6 +805,140 @@ async fn choosing_the_synced_folders_keeps_the_rest_of_the_account() {
     assert_eq!(status, StatusCode::OK);
     assert!(json(&body)["synced_folders"].is_null());
     assert_eq!(state.sync_folders("perso").expect("choix"), None);
+}
+
+#[tokio::test]
+async fn an_account_without_an_ai_selection_reads_as_the_default() {
+    let (directory, state) = state().await;
+    seed(directory.path(), &[account("perso")]);
+
+    let (status, body) = call(&state, get("/api/accounts")).await;
+    assert_eq!(status, StatusCode::OK);
+    let listed = json(&body);
+    assert!(
+        listed[0]["ai_folders"].is_null(),
+        "aucun choix : la réception (INBOX et dossiers personnels)"
+    );
+    assert_eq!(state.ai_folders("perso").expect("choix"), None);
+}
+
+#[tokio::test]
+async fn choosing_the_ai_folders_keeps_the_rest_of_the_account() {
+    let (directory, state) = state().await;
+    seed(directory.path(), &[account("perso")]);
+    state
+        .store()
+        .upsert_folder(&folder("INBOX", None))
+        .expect("dossier");
+    state
+        .store()
+        .upsert_folder(&custom_folder("INBOX/Informatique"))
+        .expect("dossier");
+
+    let (status, body) = call(
+        &state,
+        patch(
+            "/api/accounts/perso/ai-folders",
+            &json!({ "folders": ["INBOX/Informatique", " INBOX ", "INBOX/Informatique", ""] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let summary = json(&body);
+    assert_eq!(summary["id"], "perso");
+    assert_eq!(summary["label"], "Perso");
+    assert_eq!(
+        summary["ai_folders"],
+        json!(["INBOX/Informatique", "INBOX"])
+    );
+    assert!(
+        summary["synced_folders"].is_null(),
+        "le périmètre de synchro reste intact"
+    );
+    assert_eq!(
+        state.ai_folders("perso").expect("choix"),
+        Some(vec!["INBOX/Informatique".to_string(), "INBOX".to_string()])
+    );
+
+    let stored = state.stored_accounts().expect("comptes");
+    assert_eq!(stored[0].label, "Perso", "le libellé survit au choix");
+    assert_eq!(
+        stored[0].synced_folders, None,
+        "les deux choix sont distincts"
+    );
+    assert!(
+        state
+            .secrets()
+            .get("perso")
+            .await
+            .expect("secret")
+            .is_some(),
+        "le mot de passe du compte survit au choix"
+    );
+    let text = fs::read_to_string(directory.path().join("accounts.json")).expect("fichier");
+    assert!(
+        text.contains("ai_folders"),
+        "le choix est persisté : {text}"
+    );
+    assert!(
+        !text.contains("secret-en-clair"),
+        "le secret reste hors du fichier"
+    );
+
+    let (status, body) = call(
+        &state,
+        patch("/api/accounts/perso/ai-folders", &json!({ "folders": [] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json(&body)["ai_folders"], json!([]));
+    assert_eq!(state.ai_folders("perso").expect("choix"), Some(Vec::new()));
+
+    let (status, body) = call(
+        &state,
+        patch(
+            "/api/accounts/perso/ai-folders",
+            &json!({ "folders": null }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(json(&body)["ai_folders"].is_null());
+    assert_eq!(state.ai_folders("perso").expect("choix"), None);
+}
+
+#[tokio::test]
+async fn an_unknown_folder_in_the_ai_selection_is_a_400() {
+    let (directory, state) = state().await;
+    seed(directory.path(), &[account("perso")]);
+    state
+        .store()
+        .upsert_folder(&folder("INBOX", None))
+        .expect("dossier");
+
+    let (status, body) = call(
+        &state,
+        patch(
+            "/api/accounts/perso/ai-folders",
+            &json!({ "folders": ["INBOX", "Fantome"] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json(&body)["kind"], "config");
+    assert_eq!(
+        state.ai_folders("perso").expect("choix"),
+        None,
+        "un refus ne modifie rien"
+    );
+
+    let (status, body) = call(
+        &state,
+        patch("/api/accounts/absent/ai-folders", &json!({ "folders": [] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(json(&body)["kind"], "store");
 }
 
 #[tokio::test]

@@ -261,3 +261,87 @@ describe("Réglages · PGP par compte", () => {
     );
   });
 });
+
+describe("Réglages · dossiers analysés par l'IA", () => {
+  const AI_FOLDERS: ApiFolder[] = [
+    ...FOLDERS,
+    {
+      account_id: "a1",
+      path: "INBOX/Informatique",
+      name: "Informatique",
+      role: "other",
+      uidvalidity: 9,
+      uidnext: 3,
+      last_sync_at: null,
+    },
+  ];
+
+  /** Le compte n'a rien choisi : le service renvoie `ai_folders` absent. */
+  function stubAiFetch(folders: ApiFolder[] = AI_FOLDERS) {
+    const state = { saved: undefined as string[] | null | undefined };
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/pgp/keys")) return response({ keys: [] });
+      if (url === "/api/accounts") return response([ACCOUNT]);
+      if (method === "PATCH" && url === "/api/accounts/a1/ai-folders") {
+        state.saved = (JSON.parse(String(init?.body)) as { folders: string[] | null }).folders;
+        return response({ ...ACCOUNT, ai_folders: state.saved });
+      }
+      if (url.endsWith("/folders")) return response(folders);
+      return response([]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return { fetchMock, state };
+  }
+
+  it("affiche la réception par défaut et enregistre le retrait d'un dossier", async () => {
+    const { state } = stubAiFetch();
+    mount();
+
+    fireEvent.click(await screen.findByLabelText("Dossiers analysés par l'IA de Perso"));
+
+    const inbox = (await screen.findByLabelText("Analyser Boîte de réception")) as HTMLInputElement;
+    const informatique = screen.getByLabelText("Analyser Informatique") as HTMLInputElement;
+    const archive = screen.getByLabelText("Analyser Archives") as HTMLInputElement;
+    expect(screen.getByText("Réception (INBOX + dossiers perso)")).toBeTruthy();
+    expect(inbox.checked).toBe(true);
+    expect(informatique.checked).toBe(true);
+    expect(archive.checked).toBe(false);
+
+    fireEvent.click(informatique);
+
+    await waitFor(() => expect(state.saved).toEqual(["INBOX"]));
+    await waitFor(() =>
+      expect((screen.getByLabelText("Analyser Informatique") as HTMLInputElement).checked).toBe(false),
+    );
+    expect(screen.getByText("1 dossier analysé")).toBeTruthy();
+  });
+
+  it("revient à la réception par défaut, enregistrée comme `null`", async () => {
+    const { state } = stubAiFetch();
+    mount();
+
+    fireEvent.click(await screen.findByLabelText("Dossiers analysés par l'IA de Perso"));
+    const informatique = (await screen.findByLabelText("Analyser Informatique")) as HTMLInputElement;
+
+    fireEvent.click(informatique);
+    await waitFor(() => expect(state.saved).toEqual(["INBOX"]));
+
+    fireEvent.click(screen.getByLabelText("Analyser Informatique"));
+
+    await waitFor(() => expect(state.saved).toBeNull());
+    expect(await screen.findByText("Réception (INBOX + dossiers perso)")).toBeTruthy();
+  });
+
+  it("retient la sélection renvoyée par le service", async () => {
+    const { state } = stubAiFetch([FOLDERS[0]]);
+    mount();
+
+    fireEvent.click(await screen.findByLabelText("Dossiers analysés par l'IA de Perso"));
+
+    expect(await screen.findByLabelText("Analyser Boîte de réception")).toBeTruthy();
+    expect(screen.queryByLabelText("Analyser Archives")).toBeNull();
+    expect(state.saved).toBeUndefined();
+  });
+});

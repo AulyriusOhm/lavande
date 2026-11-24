@@ -107,6 +107,7 @@ import {
   mailMode,
   messageToMail,
   PREVIEW_PENDING,
+  RECEPTION_ROLES,
   sendInputOf,
   setAccountDecryptPolicy,
   syncNotice,
@@ -485,6 +486,8 @@ export type MailStoreValue = {
   closeConnect: () => void;
   createAccount: (input: NewAccount) => Promise<string>;
   renameAccount: (id: string, label: string) => Promise<void>;
+  /** Applique la sélection IA renvoyée par le service : la portée du résumé suit. */
+  applyAiFolders: (accountId: string, folders: string[] | null) => void;
   askRemoveAccount: (account: Account) => void;
   cancelRemoveAccount: () => void;
   confirmRemoveAccount: () => void;
@@ -561,6 +564,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const [mails, setMails] = useState<Mail[]>(() =>
     mode === "demo" ? (DEMO_DECISIONS_ON ? [...DEMO_EXTRA_MAILS, ...MAILS] : MAILS) : [],
   );
+  /** Mails des dossiers analysés par l'IA : lus pour eux-mêmes, hors du dossier consulté. */
+  const [aiSourceMails, setAiSourceMails] = useState<Mail[]>([]);
   const [account, setAccountState] = useState<string>(() => (mode === "demo" ? ALL_ACCOUNTS : ""));
   const [folder, setFolderState] = useState<FolderId>(() => (mode === "demo" ? "unified" : "inbox"));
   const [folderPath, setFolderPath] = useState<string | null>(null);
@@ -982,7 +987,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           existingDecisions: decisionsRef.current,
           teamMembers,
           force,
-          limit,
+          limit: limit ?? prefs.decision.recentMailCount,
           db: decisionDb(),
           domain: decisionDomain(prefs.decision),
           publishSynced: publishDecisionSync,
@@ -1124,6 +1129,59 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       ? loaded.filter((target) => !isFolderHidden(prefs.hiddenFolders, target.accountId, target.path))
       : loaded;
   }, [mode, folderRecords, account, mailAccounts, folder, folderPath, prefs.hiddenFolders]);
+
+  /**
+   * Dossiers dont les mails nourrissent le résumé, les suggestions et le tri
+   * automatique : la sélection du compte, ou la réception (INBOX + dossiers
+   * perso) par défaut. Indépendant du dossier consulté et du compte choisi.
+   */
+  const aiTargets = useMemo(() => {
+    if (mode !== "api") return [];
+    const next: { accountId: string; path: string }[] = [];
+    const seen = new Set<string>();
+    for (const entry of mailAccounts) {
+      const wanted = entry.aiFolders;
+      const records = folderRecords.filter((record) => record.accountId === entry.id);
+      const selected =
+        wanted === null || wanted === undefined
+          ? records.filter((record) => RECEPTION_ROLES.includes(record.role))
+          : records.filter((record) => wanted.includes(record.path));
+      for (const record of selected) {
+        const key = `${entry.id}:${record.path}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        next.push({ accountId: entry.id, path: record.path });
+      }
+    }
+    return next;
+  }, [mode, mailAccounts, folderRecords]);
+
+  // La portée IA se lit à part de la liste affichée : elle couvre les dossiers
+  // choisis par le compte, quel que soit le dossier consulté.
+  useEffect(() => {
+    if (mode !== "api" || phase !== "ready" || isComposeWindow()) return;
+    if (aiTargets.length === 0) {
+      setAiSourceMails([]);
+      return;
+    }
+    let cancelled = false;
+    Promise.allSettled(
+      aiTargets.map((target) => mailApi.threads(target.accountId, target.path, PAGE_SIZE, 0)),
+    ).then((results) => {
+      if (cancelled) return;
+      const loaded = results.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      setAiSourceMails(
+        loaded.flatMap((threads) =>
+          threads.flatMap((thread) => threadToMails(thread, folderRecords)),
+        ),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, phase, aiTargets, folderRecords, revision]);
 
   useEffect(() => {
     if (mode !== "api" || phase !== "ready" || isComposeWindow()) return;
@@ -2769,6 +2827,13 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     [notify, readOnlyBlocked],
   );
 
+  /** Sélection IA d'un compte, tenue localement : la portée du résumé suit le réglage. */
+  const applyAiFolders = useCallback((accountId: string, folders: string[] | null) => {
+    setAccounts((current) =>
+      current.map((entry) => (entry.id === accountId ? { ...entry, aiFolders: folders } : entry)),
+    );
+  }, []);
+
   const askRemoveAccount = useCallback(
     (target: Account) => {
       if (readOnlyBlocked()) return;
@@ -2920,22 +2985,30 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     [prefs, account, mode, readOnlyBlocked],
   );
 
-  const inboxMails = useMemo(() => mails.filter((mail) => mail.folder === "inbox"), [mails]);
+  /**
+   * Mails de la réception d'un compte : les dossiers analysés par l'IA en mode
+   * API, la boîte de réception des fixtures en démo.
+   */
+  const receptionMails = useMemo(
+    () => (mode === "api" ? aiSourceMails : mails.filter((mail) => mail.folder === "inbox")),
+    [mode, aiSourceMails, mails],
+  );
 
   const inboxIndex = useMemo(
-    () => new Map(inboxMails.map((mail) => [mail.id, mail])),
-    [inboxMails],
+    () => new Map(receptionMails.map((mail) => [mail.id, mail])),
+    [receptionMails],
   );
 
   /** Mails réellement analysés par le résumé affiché : base de l'aperçu des pièces jointes. */
   const summaryMails = useMemo(() => {
     if (!summary || summary.mailIds.length === 0) return [];
-    const byId = new Map(mails.map((mail) => [mail.id, mail]));
+    // La liste affichée prime : elle porte les drapeaux et pièces jointes à jour.
+    const byId = new Map([...receptionMails, ...mails].map((mail) => [mail.id, mail]));
     return summary.mailIds.flatMap((id) => {
       const mail = byId.get(id);
       return mail ? [mail] : [];
     });
-  }, [mails, summary]);
+  }, [mails, receptionMails, summary]);
 
   /** Comptes coupés des suggestions : leurs mails ne sont ni analysés ni proposés. */
   const excludedAccounts = useMemo(
@@ -2946,9 +3019,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const aiMails = useMemo(
     () =>
       excludedAccounts.size === 0
-        ? inboxMails
-        : inboxMails.filter((mail) => !excludedAccounts.has(mail.account)),
-    [excludedAccounts, inboxMails],
+        ? receptionMails
+        : receptionMails.filter((mail) => !excludedAccounts.has(mail.account)),
+    [excludedAccounts, receptionMails],
   );
 
   /** Suggestions affichées : celles de la fenêtre, hors comptes exclus et mails déjà traités. */
@@ -3077,7 +3150,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       const period = currentPeriod(prefs.summary, now);
       const scope = summaryScope(account && account !== ALL_ACCOUNTS ? account : null);
       const scoped =
-        scope === ALL_ACCOUNTS ? inboxMails : inboxMails.filter((mail) => mail.account === scope);
+        scope === ALL_ACCOUNTS
+          ? receptionMails
+          : receptionMails.filter((mail) => mail.account === scope);
       const inputs = summaryInputs(scoped);
       const decisionCount = Object.keys(decisions).length;
       const baseSig = summarySignature(inputs, prefs.summary);
@@ -3147,7 +3222,6 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       excludedAccounts,
       hasDecisionLayer,
       inboxIndex,
-      inboxMails,
       mode,
       notify,
       prefs.decision.customCategories,
@@ -3157,6 +3231,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       prefs.llm,
       prefs.summary,
       proposeTasks,
+      receptionMails,
       summaryInputs,
       teamContextFor,
     ],
@@ -3473,7 +3548,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (mode !== "api" || phase !== "ready" || !isDecisionReady || isComposeWindow()) return;
-    const pending = inboxMails
+    const pending = receptionMails
       .filter((mail) => {
         if (!mail.source) return false;
         const key = decisionMailKey(mail.source.accountId, mail.source.folderPath, mail.source.uid);
@@ -3481,7 +3556,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         return !triageDecisionFor(mail, decisionIndex.byKey, decisionIndex.byMessageId);
       })
       .sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0))
-      .slice(0, 40);
+      .slice(0, prefs.decision.recentMailCount);
     if (pending.length === 0) return;
     for (const mail of pending) {
       if (mail.source) {
@@ -3491,7 +3566,15 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       }
     }
     void triageMails(pending);
-  }, [decisionIndex, inboxMails, isDecisionReady, mode, phase, triageMails]);
+  }, [
+    decisionIndex,
+    prefs.decision.recentMailCount,
+    receptionMails,
+    isDecisionReady,
+    mode,
+    phase,
+    triageMails,
+  ]);
 
   useEffect(() => {
     if (phase !== "ready" || isComposeWindow()) return;
@@ -3504,7 +3587,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (phase !== "ready" || isComposeWindow()) return;
     void refreshSummaryRef.current();
-  }, [decisions, hasDecisionLayer, inboxMails.length, phase]);
+  }, [decisions, hasDecisionLayer, receptionMails.length, phase]);
 
   useEffect(() => {
     taskRun.current = null;
@@ -3517,7 +3600,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (phase !== "ready" || isComposeWindow()) return;
     void refreshTaskSuggestionsRef.current();
-  }, [decisions, hasDecisionLayer, inboxMails.length, phase]);
+  }, [decisions, hasDecisionLayer, receptionMails.length, phase]);
 
   useEffect(() => {
     eventRun.current = null;
@@ -3530,7 +3613,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (phase !== "ready" || isComposeWindow()) return;
     void refreshEventSuggestionsRef.current();
-  }, [decisions, hasDecisionLayer, inboxMails.length, phase]);
+  }, [decisions, hasDecisionLayer, receptionMails.length, phase]);
 
   const openMailId = openMail?.id ?? null;
   const openMailThreadId = openMail?.threadId ?? null;
@@ -3666,6 +3749,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       closeConnect,
       createAccount,
       renameAccount,
+      applyAiFolders,
       askRemoveAccount,
       cancelRemoveAccount,
       confirmRemoveAccount,
@@ -3778,6 +3862,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       closeConnect,
       createAccount,
       renameAccount,
+      applyAiFolders,
       askRemoveAccount,
       cancelRemoveAccount,
       confirmRemoveAccount,

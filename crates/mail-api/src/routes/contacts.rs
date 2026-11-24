@@ -171,6 +171,7 @@ mod tests {
             },
             auth,
             synced_folders: None,
+            ai_folders: None,
         }
     }
 

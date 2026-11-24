@@ -66,9 +66,13 @@ pub struct AccountConfig {
     pub smtp: Endpoint,
     pub auth: AuthConfig,
     /// Folders the account syncs by itself: `None` keeps the default (every
-    /// folder with a known role), `Some(paths)` limits the automatic pass.
+    /// folder the server announced), `Some(paths)` limits the automatic pass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub synced_folders: Option<Vec<String>>,
+    /// Folders whose mail feeds the AI analysis: `None` keeps the default
+    /// (reception: INBOX and personal folders), `Some(paths)` names them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_folders: Option<Vec<String>>,
 }
 
 impl AccountConfig {

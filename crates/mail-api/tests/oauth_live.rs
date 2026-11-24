@@ -205,6 +205,7 @@ async fn reconnecting_an_account_replaces_its_refresh_token_only() {
             token_endpoint: format!("{provider}/googleapis.com/token"),
         },
         synced_folders: None,
+        ai_folders: None,
     };
     state.add_account(&config, &[]).await.expect("compte");
     state

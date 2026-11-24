@@ -122,6 +122,31 @@ describe("Réglages IA · segmentation Modèle de décision (Système 1) vs LLM"
     );
   });
 
+  it("règle le nombre de mails récents analysés, borné à 10–200", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response([])),
+    );
+
+    mount();
+
+    const field = (await screen.findByLabelText(
+      "Nombre de mails récents analysés par le modèle de décision",
+    )) as HTMLInputElement;
+    expect(field.value).toBe("40");
+    expect(screen.getByText(/Les 40 mails les plus récents passés au modèle de décision/)).toBeTruthy();
+
+    fireEvent.change(field, { target: { value: "120" } });
+    await waitFor(() => expect(stored().decision).toMatchObject({ recentMailCount: 120 }));
+    expect(screen.getByText(/Les 120 mails les plus récents passés au modèle de décision/)).toBeTruthy();
+
+    fireEvent.change(field, { target: { value: "5" } });
+    await waitFor(() => expect(stored().decision).toMatchObject({ recentMailCount: 10 }));
+
+    fireEvent.change(field, { target: { value: "900" } });
+    await waitFor(() => expect(stored().decision).toMatchObject({ recentMailCount: 200 }));
+  });
+
   it("laisse la catégorisation spam coupée par défaut et persiste la bascule", async () => {
     vi.stubGlobal(
       "fetch",

@@ -90,6 +90,7 @@ async fn oauth_account(state: &Arc<AppState>) -> String {
             token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
         },
         synced_folders: None,
+        ai_folders: None,
     };
     state.add_account(&config, &[]).await.expect("compte");
     config.id

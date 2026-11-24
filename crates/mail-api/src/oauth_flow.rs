@@ -191,6 +191,7 @@ pub async fn start(state: &AppState, request: StartRequest) -> Result<StartRespo
             token_endpoint: provider.token_endpoint.clone(),
         },
         synced_folders: None,
+        ai_folders: None,
     };
 
     let response = begin(state, provider, config, false)?;
@@ -251,6 +252,7 @@ pub async fn start_reconnect(
             token_endpoint: provider.token_endpoint.clone(),
         },
         synced_folders: stored.synced_folders,
+        ai_folders: stored.ai_folders,
     };
     let response = begin(state, provider, config, true)?;
     tracing::info!(session = %response.session, account = %account_id, "reconnexion OAuth2 demandée");

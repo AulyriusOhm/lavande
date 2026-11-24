@@ -277,6 +277,13 @@ describe("Réglages PC · Modèle de décision · Système 1", () => {
     fireEvent.click(screen.getByText("Tester le modèle de décision"));
     expect(await screen.findByText(/Modèle de décision · mammoth-1 · .*14\.3 J/)).toBeTruthy();
 
+    const recentMails = screen.getByLabelText(
+      "Nombre de mails récents analysés par le modèle de décision",
+    ) as HTMLInputElement;
+    expect(recentMails.value).toBe("40");
+    fireEvent.change(recentMails, { target: { value: "150" } });
+    await waitFor(() => expect(storedPrefs().decision).toMatchObject({ recentMailCount: 150 }));
+
     fireEvent.click(screen.getByRole("button", { name: "Strict" }));
     fireEvent.click(screen.getByRole("button", { name: "Prioritaire" }));
     fireEvent.click(screen.getByRole("button", { name: "Intelligentes" }));

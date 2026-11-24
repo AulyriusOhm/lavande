@@ -129,6 +129,8 @@ describe("pagination des fils en mode api", () => {
 
     await waitFor(() => expect(result.current.mails).toHaveLength(FIRST_PAGE + SECOND_PAGE));
     expect(result.current.hasMore).toBe(false);
-    expect(offsets).toEqual([0, 0, FIRST_PAGE]);
+    // Trois lectures de la première page : deux pour la liste affichée, une pour
+    // la portée IA qui ne pagine pas ; seule la liste demande la suivante.
+    expect(offsets).toEqual([0, 0, 0, FIRST_PAGE]);
   });
 });

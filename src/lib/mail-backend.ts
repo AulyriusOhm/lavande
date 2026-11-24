@@ -57,6 +57,7 @@ export function toAccount(account: ApiAccount, index: number): Account {
         ? `${account.folders} dossier${account.folders > 1 ? "s" : ""}`
         : "jamais synchronisé",
     syncedFolders: account.synced_folders ?? null,
+    aiFolders: account.ai_folders ?? null,
     oauth: account.auth_kind === "oauth2",
     needsReauth: account.needs_reauth === true,
   };
@@ -73,6 +74,22 @@ export function toFolderRecord(folder: ApiFolder): FolderRecord {
 }
 
 const ROLE_ORDER: FolderId[] = ["inbox", "sent", "drafts", "archive", "spam", "trash", "other"];
+
+/** Dossiers de la réception : ce qu'analyse l'IA quand le compte n'a rien choisi. */
+export const RECEPTION_ROLES: FolderId[] = ["inbox", "other"];
+
+/** Chemins de la réception d'un compte, dans l'ordre du serveur. */
+export function receptionPaths(folders: ApiFolder[]): string[] {
+  return folders
+    .filter((folder) => RECEPTION_ROLES.includes(ROLE_TO_FOLDER[folder.role]))
+    .map((folder) => folder.path);
+}
+
+/** `true` quand la sélection vaut la réception : le compte garde alors `null`. */
+export function isReceptionSelection(paths: string[], folders: ApiFolder[]): boolean {
+  const reception = receptionPaths(folders);
+  return paths.length === reception.length && reception.every((path) => paths.includes(path));
+}
 
 export function folderOptions(records: FolderRecord[], accountId: string): FolderOption[] {
   const own = records

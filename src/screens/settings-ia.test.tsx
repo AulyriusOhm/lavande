@@ -199,3 +199,66 @@ describe("Réglages mobile · section IA accessible sur Android", () => {
     await waitFor(() => expect(stored().aiTasks).toMatchObject({ events: true }));
   });
 });
+
+describe("Réglages mobile · dossiers analysés par l'IA", () => {
+  const ACCOUNT = {
+    id: "a1",
+    label: "Perso",
+    email: "roman@lavande.mail",
+    username: "roman",
+    imap: { host: "imap.lavande.mail", port: 993, encryption: "tls" },
+    smtp: { host: "smtp.lavande.mail", port: 465, encryption: "tls" },
+    folders: 3,
+  };
+
+  const FOLDERS = [
+    { account_id: "a1", path: "INBOX", name: "Boîte de réception", role: "inbox", uidvalidity: 7, uidnext: 42, last_sync_at: null },
+    { account_id: "a1", path: "Archives", name: "Archives", role: "archive", uidvalidity: 8, uidnext: 9, last_sync_at: null },
+    { account_id: "a1", path: "INBOX/Informatique", name: "Informatique", role: "other", uidvalidity: 9, uidnext: 3, last_sync_at: null },
+  ];
+
+  function stubApiFetch() {
+    const state = { saved: undefined as string[] | null | undefined };
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/pgp/keys")) return response({ keys: [] });
+      if (url === "/api/accounts") return response([ACCOUNT]);
+      if (method === "PATCH" && url === "/api/accounts/a1/ai-folders") {
+        state.saved = (JSON.parse(String(init?.body)) as { folders: string[] | null }).folders;
+        return response({ ...ACCOUNT, ai_folders: state.saved });
+      }
+      if (url.endsWith("/folders")) return response(FOLDERS);
+      return response([]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return { fetchMock, state };
+  }
+
+  it("choisit les dossiers analysés pour un compte et enregistre la sélection", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    vi.stubEnv("VITE_PLATFORM", "android");
+    const { state } = stubApiFetch();
+    mount();
+
+    const archive = (await screen.findByLabelText("Analyser Archives")) as HTMLInputElement;
+    expect(screen.getByText("Réception (INBOX + dossiers perso)")).toBeTruthy();
+    expect((screen.getByLabelText("Analyser Informatique") as HTMLInputElement).checked).toBe(true);
+    expect(archive.checked).toBe(false);
+
+    fireEvent.click(archive);
+
+    await waitFor(() => expect(state.saved).toEqual(["INBOX", "INBOX/Informatique", "Archives"]));
+    await waitFor(() =>
+      expect((screen.getByLabelText("Analyser Archives") as HTMLInputElement).checked).toBe(true),
+    );
+  });
+
+  it("n'affiche aucun choix en mode démo", () => {
+    vi.stubEnv("VITE_PLATFORM", "android");
+    stubApiFetch();
+    mount();
+
+    expect(screen.queryByText("Dossiers analysés par l'IA")).toBeNull();
+  });
+});

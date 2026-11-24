@@ -33,6 +33,7 @@ import { recordDecisionUsage, recordUsage } from "@/lib/ai-stats";
 import { refreshCopilotSession } from "@/lib/copilot";
 import {
   DEFAULT_DECISION,
+  clampRecentMailCount,
   clampThresholds,
   setDecisionUsageSink,
   type CustomCategory,
@@ -396,6 +397,10 @@ export const asDecision = (value: unknown): DecisionConfig => {
     typeof raw.defaultInboxFilter === "string" && raw.defaultInboxFilter.trim()
       ? raw.defaultInboxFilter.trim()
       : DEFAULT_DECISION.defaultInboxFilter;
+  const recentMailCount =
+    typeof raw.recentMailCount === "number"
+      ? clampRecentMailCount(raw.recentMailCount)
+      : DEFAULT_DECISION.recentMailCount;
 
   return {
     enabled: asBoolean(raw.enabled, DEFAULT_DECISION.enabled),
@@ -415,6 +420,7 @@ export const asDecision = (value: unknown): DecisionConfig => {
     spamEnabled: asBoolean(raw.spamEnabled, DEFAULT_DECISION.spamEnabled),
     trustedSenders: asTrustedList(raw.trustedSenders, false),
     trustedDomains: asTrustedList(raw.trustedDomains, true),
+    recentMailCount,
   };
 };
 

@@ -44,8 +44,11 @@ import {
 } from "@/lib/llm";
 import {
   DECISION_PROVIDERS,
+  RECENT_MAILS_MAX,
+  RECENT_MAILS_MIN,
   THRESHOLD_PRESETS,
   applyDecisionProvider,
+  clampRecentMailCount,
   decisionProbeDirect,
   decisionProviderPreset,
   decisionReady,
@@ -109,6 +112,7 @@ import { FolderRow } from "@/components/folder-row";
 import { SyncSettings } from "@/components/sync-settings";
 import { ZimbraFiltersPanel } from "@/components/zimbra-filters";
 import { ZimbraTagsPanel } from "@/components/zimbra-tags";
+import { AiFoldersPicker } from "@/components/ai-folders-picker";
 import { ShortcutList } from "@/components/shortcut-list";
 import { detectModKey } from "@/lib/shortcuts";
 import { requestNotifications } from "@/lib/notify";
@@ -1581,6 +1585,28 @@ export function SettingsScreen({
                   ))}
                 </div>
               </div>
+              <div className="space-y-1.5 border-t border-line/70 pt-3">
+                <label className="grid gap-1">
+                  <span className={MOBILE_LABEL}>Mails récents analysés</span>
+                  <input
+                    aria-label="Nombre de mails récents analysés par le modèle de décision"
+                    type="number"
+                    min={RECENT_MAILS_MIN}
+                    max={RECENT_MAILS_MAX}
+                    value={decision.recentMailCount}
+                    onChange={(event) =>
+                      updateDecision({
+                        recentMailCount: clampRecentMailCount(Number(event.target.value)),
+                      })
+                    }
+                    className={MOBILE_FIELD}
+                  />
+                </label>
+                <p className="text-[12px] leading-relaxed font-medium text-ink-muted">
+                  Les {decision.recentMailCount} mails les plus récents passés au modèle de décision
+                  (10–200)
+                </p>
+              </div>
               <div className="divide-y divide-line/70 overflow-hidden rounded-2xl border border-line">
                 <ToggleRow
                   icon={<KeyRound className="size-4" />}
@@ -2076,6 +2102,29 @@ export function SettingsScreen({
               ) : null}
             </Card>
           </BlurFade>
+
+          {mode === "api" ? (
+            <>
+              <SectionTitle hint="résumé, tâches et tri">Dossiers analysés par l'IA</SectionTitle>
+              <BlurFade delay={0.18}>
+                <div className="mx-5 space-y-3">
+                  {accounts.map((item) => (
+                    <Card key={item.id} className="overflow-hidden">
+                      <AiFoldersPicker account={item} variant="mobile" />
+                    </Card>
+                  ))}
+                  {accounts.length === 0 ? (
+                    <Card className="p-3.5">
+                      <p className="text-[12px] font-medium text-ink-muted">
+                        Aucun compte : les dossiers analysés se choisissent après la connexion d'une
+                        boîte.
+                      </p>
+                    </Card>
+                  ) : null}
+                </div>
+              </BlurFade>
+            </>
+          ) : null}
         </>
       ) : null}
 

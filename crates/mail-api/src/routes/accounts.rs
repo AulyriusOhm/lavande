@@ -12,7 +12,9 @@ use lavande_mail::imap;
 use lavande_mail::model::{Folder, FolderRole};
 
 use crate::config_file::StoredAccount;
-use crate::dto::{AccountSummary, ApiJson, PgpEnabledRequest, RenameRequest, SyncFoldersRequest};
+use crate::dto::{
+    AccountSummary, AiFoldersRequest, ApiJson, PgpEnabledRequest, RenameRequest, SyncFoldersRequest,
+};
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -22,6 +24,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/accounts/preview", post(preview))
         .route("/api/accounts/{id}", delete(remove).patch(rename))
         .route("/api/accounts/{id}/sync-folders", patch(set_sync_folders))
+        .route("/api/accounts/{id}/ai-folders", patch(set_ai_folders))
         .route("/api/accounts/{id}/pgp", patch(set_pgp))
         .route("/api/accounts/{id}/folders", get(folders))
         .route("/api/accounts/{id}/folders/{path}", delete(delete_folder))
@@ -62,6 +65,7 @@ async fn add(
     let folders = probe(&state, &config).await?;
     let paths = folder_paths(&folders);
     config.synced_folders = selected_folders(config.synced_folders.take(), &paths)?;
+    config.ai_folders = selected_folders(config.ai_folders.take(), &paths)?;
     state.add_account(&config, &folders).await?;
     crate::events::watch_account(&state, config.clone());
     tracing::info!(account = %config.id, folders = folders.len(), "compte ajouté");
@@ -175,7 +179,7 @@ async fn rename(
 }
 
 /// Selects the folders the account syncs by itself. `folders: null` restores
-/// the default (every folder with a known role), `[]` syncs none.
+/// the default (every discovered folder), `[]` syncs none.
 async fn set_sync_folders(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
@@ -190,6 +194,31 @@ async fn set_sync_folders(
         account = %id,
         selection = updated.synced_folders.as_ref().map_or(-1, |paths| paths.len() as i64),
         "dossiers synchronisés choisis"
+    );
+    Ok(Json(AccountSummary::new(
+        &updated,
+        folders,
+        state.store().pgp_enabled(&id)?,
+    )))
+}
+
+/// Selects the folders that feed the AI analysis of the account. `folders:
+/// null` restores the default (the reception: INBOX and personal folders),
+/// `[]` analyses none.
+async fn set_ai_folders(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    ApiJson(request): ApiJson<AiFoldersRequest>,
+) -> Result<Json<AccountSummary>, ApiError> {
+    state.ensure_account(&id)?;
+    let known = folder_paths(&state.store().list_folders(&id)?);
+    let selected = selected_folders(request.folders, &known)?;
+    let updated = state.update_ai_folders(&id, selected).await?;
+    let folders = known.len();
+    tracing::info!(
+        account = %id,
+        selection = updated.ai_folders.as_ref().map_or(-1, |paths| paths.len() as i64),
+        "dossiers d'analyse choisis"
     );
     Ok(Json(AccountSummary::new(
         &updated,

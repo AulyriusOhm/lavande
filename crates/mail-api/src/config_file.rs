@@ -25,10 +25,16 @@ pub struct StoredAccount {
     pub imap: Endpoint,
     pub smtp: Endpoint,
     pub auth: StoredAuth,
-    /// `None` keeps the default (every folder with a known role), `Some([])`
-    /// syncs no folder automatically, `Some(paths)` only those folders.
+    /// `None` keeps the default (every folder the server announced),
+    /// `Some([])` syncs no folder automatically, `Some(paths)` only those
+    /// folders.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub synced_folders: Option<Vec<String>>,
+    /// Folders whose mail feeds the AI analysis: `None` keeps the default
+    /// (reception: INBOX and personal folders), `Some([])` analyses none of
+    /// them automatically, `Some(paths)` only those folders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_folders: Option<Vec<String>>,
     /// `true` when the provider revoked the authorization: the account keeps its
     /// history, but only a fresh consent makes it usable again. Defaulted so the
     /// files written before this flag existed still load.
@@ -80,6 +86,7 @@ impl StoredAccount {
             smtp: config.smtp.clone(),
             auth,
             synced_folders: config.synced_folders.clone(),
+            ai_folders: config.ai_folders.clone(),
             needs_reauth: false,
         }
     }
@@ -155,6 +162,7 @@ impl StoredAccount {
             smtp: self.smtp,
             auth,
             synced_folders: self.synced_folders,
+            ai_folders: self.ai_folders,
         })
     }
 }
@@ -207,6 +215,7 @@ mod tests {
                 password: "hunter2".to_string(),
             },
             synced_folders: None,
+            ai_folders: None,
         }
     }
 
@@ -249,5 +258,27 @@ mod tests {
         let config = stored.into_config(secrets).expect("config");
         assert_eq!(config.synced_folders, Some(vec!["Archive".to_string()]));
         assert_eq!(config.id, "perso");
+    }
+
+    #[test]
+    fn the_ai_selection_is_stored_and_read_back_with_the_account() {
+        let mut asked = config();
+        asked.ai_folders = Some(vec!["INBOX".to_string(), "INBOX/Informatique".to_string()]);
+        let mut stored = StoredAccount::from_config(&asked);
+        assert_eq!(
+            stored.ai_folders,
+            Some(vec!["INBOX".to_string(), "INBOX/Informatique".to_string()])
+        );
+        assert_eq!(stored.synced_folders, None, "les deux choix sont distincts");
+
+        let secrets = stored.take_secrets();
+        let read_back = stored.into_config(secrets).expect("config");
+        assert_eq!(read_back.ai_folders, asked.ai_folders);
+    }
+
+    #[test]
+    fn an_account_without_an_ai_selection_reads_as_the_default() {
+        let stored = StoredAccount::from_config(&config());
+        assert_eq!(stored.ai_folders, None);
     }
 }

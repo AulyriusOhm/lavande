@@ -83,6 +83,7 @@ fn account() -> AccountConfig {
         imap: endpoint("MAIL_TEST_IMAP", "localhost:3993"),
         smtp: endpoint("MAIL_TEST_SMTP", "localhost:3465"),
         synced_folders: None,
+        ai_folders: None,
         auth: AuthConfig::Password {
             password: env_or("MAIL_TEST_PASSWORD", "secret"),
         },

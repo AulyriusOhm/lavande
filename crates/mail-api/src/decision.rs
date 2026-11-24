@@ -156,6 +156,14 @@ fn default_model() -> String {
     "mammoth-1".to_string()
 }
 
+/// Bornes du nombre de mails récents passés au modèle de décision.
+pub const RECENT_MAILS_MIN: usize = 10;
+pub const RECENT_MAILS_MAX: usize = 200;
+
+fn default_recent_mail_count() -> usize {
+    40
+}
+
 /// Configuration persistée dans `decision.json` (sans clé API).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DecisionConfig {
@@ -191,6 +199,9 @@ pub struct DecisionConfig {
     pub trusted_senders: Vec<String>,
     #[serde(default)]
     pub trusted_domains: Vec<String>,
+    /// Nombre de mails les plus récents passés au modèle de décision (10 à 200).
+    #[serde(default = "default_recent_mail_count")]
+    pub recent_mail_count: usize,
 }
 
 impl Default for DecisionConfig {
@@ -211,6 +222,7 @@ impl Default for DecisionConfig {
             spam_enabled: false,
             trusted_senders: Vec::new(),
             trusted_domains: Vec::new(),
+            recent_mail_count: default_recent_mail_count(),
         }
     }
 }
@@ -325,6 +337,9 @@ impl DecisionConfig {
         }
         self.trusted_senders = normalize_list(self.trusted_senders, normalize_trusted_sender);
         self.trusted_domains = normalize_list(self.trusted_domains, normalize_trusted_domain);
+        self.recent_mail_count = self
+            .recent_mail_count
+            .clamp(RECENT_MAILS_MIN, RECENT_MAILS_MAX);
         self
     }
 

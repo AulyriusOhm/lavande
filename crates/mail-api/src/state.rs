@@ -245,9 +245,15 @@ impl AppState {
     }
 
     /// Which folders an account syncs. `None` means the default selection
-    /// (every folder with a known role).
+    /// (every discovered folder).
     pub fn sync_folders(&self, id: &str) -> Result<Option<Vec<String>>, ApiError> {
         Ok(self.stored_account(id)?.synced_folders)
+    }
+
+    /// Which folders feed the AI analysis of an account. `None` means the
+    /// default selection (the reception: INBOX and personal folders).
+    pub fn ai_folders(&self, id: &str) -> Result<Option<Vec<String>>, ApiError> {
+        Ok(self.stored_account(id)?.ai_folders)
     }
 
     pub async fn add_account(
@@ -362,6 +368,24 @@ impl AppState {
             .find(|account| account.id == id)
             .ok_or_else(|| ApiError::not_found(format!("compte « {id} » inconnu")))?;
         account.synced_folders = folders;
+        let updated = account.clone();
+        self.save_accounts(&mut accounts).await?;
+        Ok(updated)
+    }
+
+    /// Records the folders feeding the AI analysis of one account only: the
+    /// label, the endpoints, the secrets and the sync selection stay untouched.
+    pub async fn update_ai_folders(
+        &self,
+        id: &str,
+        folders: Option<Vec<String>>,
+    ) -> Result<StoredAccount, ApiError> {
+        let mut accounts = self.stored_accounts()?;
+        let account = accounts
+            .iter_mut()
+            .find(|account| account.id == id)
+            .ok_or_else(|| ApiError::not_found(format!("compte « {id} » inconnu")))?;
+        account.ai_folders = folders;
         let updated = account.clone();
         self.save_accounts(&mut accounts).await?;
         Ok(updated)

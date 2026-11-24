@@ -30,11 +30,11 @@ const apiAccount = (accountId = ALPHA): ApiAccount => ({
   folders: 1,
 });
 
-const apiFolder = (accountId = ALPHA): ApiFolder => ({
+const apiFolder = (accountId = ALPHA, path = "INBOX"): ApiFolder => ({
   account_id: accountId,
-  path: "INBOX",
-  name: "Boîte de réception",
-  role: "inbox",
+  path,
+  name: path === "INBOX" ? "Boîte de réception" : path.split("/").pop() ?? path,
+  role: path === "INBOX" ? "inbox" : "other",
   uidvalidity: 1,
   uidnext: 4,
   last_sync_at: null,
@@ -47,10 +47,11 @@ const apiThread = (
   date: string,
   accountId = ALPHA,
   answered = false,
+  folderPath = "INBOX",
 ): ApiThread => {
   const primary: ApiMessage = {
     account_id: accountId,
-    folder_path: "INBOX",
+    folder_path: folderPath,
     uid,
     uidvalidity: 1,
     thread_id: `t-${accountId}-${uid}`,
@@ -133,6 +134,9 @@ function mockBackend(
   decisionsByUid: Record<number, Partial<ApiMailDecision>> = {},
 ) {
   const llmCalls: { system: string; user: string }[] = [];
+  const triaged: { account_id: string; folder_path: string; uid: number }[] = [];
+  /** Un lot par requête : c'est là que se lit le plafond d'un passage. */
+  const triageBatches: { account_id: string; folder_path: string; uid: number }[][] = [];
   const accountIds = threads.length > 0 ? [...new Set(threads.map((thread) => thread.account_id))] : [ALPHA];
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -151,8 +155,10 @@ function mockBackend(
     }
     if (path.endsWith("/api/ai/decisions/triage")) {
       const body = JSON.parse(String(init?.body ?? "{}")) as {
-        targets?: { account_id: string; uid: number }[];
+        targets?: { account_id: string; folder_path: string; uid: number }[];
       };
+      triaged.push(...(body.targets ?? []));
+      triageBatches.push(body.targets ?? []);
       return reply({
         results: (body.targets ?? []).map((t) => ({
           decision: apiDecision(t.account_id, t.uid, decisionsByUid[t.uid]),
@@ -163,12 +169,27 @@ function mockBackend(
     }
     if (path.endsWith("/api/accounts")) return reply(accountIds.map((accountId) => apiAccount(accountId)));
     const folders = path.match(/\/api\/accounts\/([^/]+)\/folders$/);
-    if (folders) return reply([apiFolder(folders[1])]);
-    const list = path.match(/\/api\/accounts\/([^/]+)\/folders\/INBOX\/threads$/);
-    if (list) return reply(threads.filter((thread) => thread.account_id === list[1]));
+    if (folders) {
+      const paths = [
+        ...new Set(
+          threads
+            .filter((thread) => thread.account_id === folders[1])
+            .map((thread) => thread.primary.folder_path),
+        ),
+      ];
+      return reply(paths.map((folderPath) => apiFolder(folders[1], folderPath)));
+    }
+    const list = path.match(/\/api\/accounts\/([^/]+)\/folders\/(.+)\/threads$/);
+    if (list) {
+      return reply(
+        threads.filter(
+          (thread) => thread.account_id === list[1] && thread.primary.folder_path === list[2],
+        ),
+      );
+    }
     return reply([]);
   });
-  return llmCalls;
+  return { llmCalls, triaged, triageBatches };
 }
 
 function mount(storage?: SyncStorage) {
@@ -236,7 +257,7 @@ describe("suggestions de tâches IA · fenêtre des 48 h et modèle de décision
   it("n'émet aucun appel LLM automatique sans modèle de décision ni décisions en cache", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs({ enabled: true, windowHours: 48 }, { enabled: false }, false);
-    const llmCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)]);
+    const { llmCalls } = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)]);
     const { result } = mount();
 
     await waitFor(() => expect(result.current.mails.length).toBeGreaterThan(0), { timeout: 3000 });
@@ -249,7 +270,7 @@ describe("suggestions de tâches IA · fenêtre des 48 h et modèle de décision
   it("filtre promo, spam et auth_totp avant le LLM et propose les tâches qualifiées", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs({ enabled: true, windowHours: 48 });
-    const llmCalls = mockBackend(
+    const { llmCalls } = mockBackend(
       [
         apiThread(1, "Camille", "Maquettes v3", RECEIVED),
         apiThread(2, "Boutique X", "Promo flash -50%", RECEIVED),
@@ -309,7 +330,7 @@ describe("suggestions de tâches IA · fenêtre des 48 h et modèle de décision
   it("n'envoie rien au modèle quand aucun mail n'est dans la fenêtre", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs({ enabled: true, windowHours: 48 });
-    const llmCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", OLD)]);
+    const { llmCalls } = mockBackend([apiThread(1, "Camille", "Maquettes v3", OLD)]);
     const { result } = mount();
 
     await waitFor(() => expect(result.current.mails.length).toBeGreaterThan(0), { timeout: 3000 });
@@ -322,7 +343,7 @@ describe("suggestions de tâches IA · fenêtre des 48 h et modèle de décision
   it("respecte une fenêtre personnalisée plus courte", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs({ enabled: true, windowHours: 1 });
-    const llmCalls = mockBackend([
+    const { llmCalls } = mockBackend([
       apiThread(1, "Camille", "Maquettes v3", new Date(Date.now() - 2 * H).toISOString()),
     ]);
     const { result } = mount();
@@ -337,7 +358,7 @@ describe("suggestions de tâches IA · fenêtre des 48 h et modèle de décision
   it("ne propose aucune tâche pour un mail déjà traité, sans l'écarter du modèle", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs({ enabled: true, windowHours: 48 });
-    const llmCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED, ALPHA, true)]);
+    const { llmCalls } = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED, ALPHA, true)]);
     const { result } = mount();
 
     await waitFor(() => expect(llmCalls).toHaveLength(1), { timeout: 3000 });
@@ -350,7 +371,7 @@ describe("suggestions de tâches IA · fenêtre des 48 h et modèle de décision
   it("ne sollicite pas le modèle quand la préférence est désactivée", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs({ enabled: false, windowHours: 48 });
-    const llmCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)]);
+    const { llmCalls } = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)]);
     const { result } = mount();
 
     await waitFor(() => expect(result.current.mails.length).toBeGreaterThan(0), { timeout: 3000 });
@@ -385,12 +406,12 @@ describe("suggestions de tâches IA · dédup et mémoire des passages", () => {
   it("un passage en échec n'est pas mémoïsé : nouvelle tentative au remontage", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs({ enabled: true, windowHours: 48 });
-    const firstCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)], TASKS_JSON, true);
+    const { llmCalls: firstCalls } = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)], TASKS_JSON, true);
     const first = mount();
     await waitFor(() => expect(firstCalls).toHaveLength(1), { timeout: 3000 });
     expect(window.localStorage.getItem("lavande.ai.runs.v1")).toBeNull();
     first.unmount();
-    const secondCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)], TASKS_JSON, true);
+    const { llmCalls: secondCalls } = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)], TASKS_JSON, true);
     mount();
     await waitFor(() => expect(secondCalls).toHaveLength(1), { timeout: 3000 });
   });
@@ -399,7 +420,7 @@ describe("suggestions de tâches IA · dédup et mémoire des passages", () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs({ enabled: true, windowHours: 48 });
     window.localStorage.setItem("lavande.ai.runs.v1", "{pas du json");
-    const llmCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)]);
+    const { llmCalls } = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)]);
     const { result } = mount();
 
     await waitFor(
@@ -413,7 +434,7 @@ describe("suggestions de tâches IA · dédup et mémoire des passages", () => {
   it("ne rappelle pas le modèle pour le même passage après un remontage", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs({ enabled: true, windowHours: 48 });
-    const llmCalls = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)]);
+    const { llmCalls } = mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)]);
     const first = mount();
 
     await waitFor(
@@ -515,7 +536,7 @@ describe("suggestions de tâches IA · exclusion par compte", () => {
   it("n'envoie pas au modèle les mails d'un compte exclu", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs({ enabled: true, windowHours: 48, excludedAccounts: [SECOND] });
-    const llmCalls = mockBackend([
+    const { llmCalls } = mockBackend([
       apiThread(1, "Camille", "Maquettes v3", RECEIVED),
       apiThread(2, "Marc", "Accès serveur", RECEIVED, SECOND),
     ]);
@@ -560,5 +581,74 @@ describe("suggestions de tâches IA · exclusion par compte", () => {
     const proposal = result.current.suggestions.find((entry) => entry.proposal === "Relancer Marc");
     expect(proposal?.account).toBe(SECOND);
     expect(proposal?.mailId).toBe(SECOND_MAIL_ID);
+  });
+});
+
+describe("suggestions de tâches IA · dossiers analysés", () => {
+  const SUB_FOLDER = "INBOX/Informatique";
+  const SUB_MAIL_ID = `${ALPHA}:${SUB_FOLDER}:7`;
+  const SUB_TASKS = {
+    taches: [{ titre: "Commander le badge", echeance: DUE_ISO, de: "Nadia", mailId: SUB_MAIL_ID }],
+  };
+
+  it("analyse un sous-dossier perso de la réception et lui rattache sa tâche", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: true, windowHours: 48 });
+    const { llmCalls } = mockBackend(
+      [apiThread(7, "Nadia", "Badge d'accès", RECEIVED, ALPHA, false, SUB_FOLDER)],
+      SUB_TASKS,
+    );
+    const { result } = mount();
+
+    await waitFor(
+      () => expect(result.current.suggestions.some((entry) => entry.proposal === "Commander le badge")).toBe(true),
+      { timeout: 3000 },
+    );
+
+    expect(llmCalls.at(-1)?.user).toContain("Badge d'accès");
+    const proposal = result.current.suggestions.find((entry) => entry.proposal === "Commander le badge");
+    expect(proposal?.mailId).toBe(SUB_MAIL_ID);
+    expect(proposal?.account).toBe(ALPHA);
+  });
+
+  it("trie aussi les mails du sous-dossier, pas seulement l'INBOX", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: false, windowHours: 48 });
+    const { triaged } = mockBackend([
+      apiThread(7, "Nadia", "Badge d'accès", RECEIVED, ALPHA, false, SUB_FOLDER),
+    ]);
+    mount();
+
+    await waitFor(
+      () =>
+        expect(
+          triaged.some((target) => target.folder_path === SUB_FOLDER && target.uid === 7),
+        ).toBe(true),
+      { timeout: 3000 },
+    );
+  });
+});
+
+describe("triage automatique · nombre de mails récents analysés", () => {
+  it("ne poste au modèle que les X mails les plus récents du réglage", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({
+        llm: LLM,
+        summary: { enabled: false },
+        aiTasks: { enabled: false },
+        decision: { ...DECISION_CFG, recentMailCount: 10 },
+      }),
+    );
+    const threads = Array.from({ length: 14 }, (_, index) =>
+      apiThread(index + 1, "Camille", `Sujet ${index + 1}`, RECEIVED),
+    );
+    const { triageBatches } = mockBackend(threads);
+    mount();
+
+    await waitFor(() => expect(triageBatches.length).toBeGreaterThan(0), { timeout: 3000 });
+    // Quatorze mails en attente, dix réglés : le premier lot s'arrête à dix.
+    expect(triageBatches[0]).toHaveLength(10);
   });
 });

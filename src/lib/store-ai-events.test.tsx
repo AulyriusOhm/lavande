@@ -34,11 +34,11 @@ const apiAccount = (accountId = ALPHA): ApiAccount => ({
   folders: 1,
 });
 
-const apiFolder = (accountId = ALPHA): ApiFolder => ({
+const apiFolder = (accountId = ALPHA, path = "INBOX"): ApiFolder => ({
   account_id: accountId,
-  path: "INBOX",
-  name: "Boîte de réception",
-  role: "inbox",
+  path,
+  name: path === "INBOX" ? "Boîte de réception" : path.split("/").pop() ?? path,
+  role: path === "INBOX" ? "inbox" : "other",
   uidvalidity: 1,
   uidnext: 4,
   last_sync_at: null,
@@ -51,10 +51,11 @@ const apiThread = (
   date: string,
   accountId = ALPHA,
   answered = false,
+  folderPath = "INBOX",
 ): ApiThread => {
   const primary: ApiMessage = {
     account_id: accountId,
-    folder_path: "INBOX",
+    folder_path: folderPath,
     uid,
     uidvalidity: 1,
     thread_id: `t-${accountId}-${uid}`,
@@ -167,9 +168,24 @@ function mockBackend(
     }
     if (path.endsWith("/api/accounts")) return reply(accountIds.map((accountId) => apiAccount(accountId)));
     const folders = path.match(/\/api\/accounts\/([^/]+)\/folders$/);
-    if (folders) return reply([apiFolder(folders[1])]);
-    const list = path.match(/\/api\/accounts\/([^/]+)\/folders\/INBOX\/threads$/);
-    if (list) return reply(threads.filter((thread) => thread.account_id === list[1]));
+    if (folders) {
+      const paths = [
+        ...new Set(
+          threads
+            .filter((thread) => thread.account_id === folders[1])
+            .map((thread) => thread.primary.folder_path),
+        ),
+      ];
+      return reply(paths.map((folderPath) => apiFolder(folders[1], folderPath)));
+    }
+    const list = path.match(/\/api\/accounts\/([^/]+)\/folders\/(.+)\/threads$/);
+    if (list) {
+      return reply(
+        threads.filter(
+          (thread) => thread.account_id === list[1] && thread.primary.folder_path === list[2],
+        ),
+      );
+    }
     return reply([]);
   });
   return llmCalls;
@@ -516,5 +532,35 @@ describe("suggestions de rendez-vous IA · exclusion par compte", () => {
     expect(result.current.suggestions.filter((entry) => entry.kind === "event").map((entry) => entry.account)).toEqual([
       "pro",
     ]);
+  });
+});
+
+describe("suggestions de rendez-vous IA · dossiers analysés", () => {
+  const SUB_FOLDER = "INBOX/Informatique";
+  const SUB_MAIL_ID = `${ALPHA}:${SUB_FOLDER}:7`;
+
+  it("propose un rendez-vous lu dans un sous-dossier perso de la réception", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs({ enabled: true, events: true, windowHours: 48 });
+    const llmCalls = mockBackend(
+      [apiThread(7, "Nadia", "Comité informatique", RECEIVED, ALPHA, false, SUB_FOLDER)],
+      [event({ titre: "Comité informatique", mailId: SUB_MAIL_ID })],
+      { 7: { category: "important", has_event: 0.9 } },
+    );
+    const { result } = mount();
+
+    await waitFor(
+      () => expect(result.current.suggestions.some((entry) => entry.kind === "event")).toBe(true),
+      { timeout: 3000 },
+    );
+
+    const calls = eventCalls(llmCalls);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].user).toContain("Comité informatique");
+
+    const proposal = result.current.suggestions.find((entry) => entry.kind === "event");
+    expect(proposal?.proposal).toBe("Comité informatique");
+    expect(proposal?.mailId).toBe(SUB_MAIL_ID);
+    expect(proposal?.account).toBe(ALPHA);
   });
 });

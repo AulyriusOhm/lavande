@@ -102,8 +102,11 @@ import {
 } from "@/lib/llm";
 import {
   DECISION_PROVIDERS,
+  RECENT_MAILS_MAX,
+  RECENT_MAILS_MIN,
   THRESHOLD_PRESETS,
   applyDecisionProvider,
+  clampRecentMailCount,
   decisionProbeDirect,
   decisionProviderPreset,
   decisionReady,
@@ -117,6 +120,7 @@ import {
 } from "@/lib/decision";
 import { toApiDecisionConfig } from "@/lib/triage";
 import { CategoryManagerSheet, categoryColorStyle } from "@/components/category-manager-sheet";
+import { AiFoldersPicker } from "@/components/ai-folders-picker";
 import { CaldavCollectionPicker } from "@/components/caldav-collection-picker";
 import { ContactsSyncRow } from "@/components/contacts-sync-row";
 import { ZimbraFiltersPanel } from "@/components/zimbra-filters";
@@ -1032,6 +1036,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   const { keys, error: keysError, loading: keysLoading, load: loadKeys } = usePgpKeys();
   const [renaming, setRenaming] = useState<string | null>(null);
   const [folderPanel, setFolderPanel] = useState<string | null>(null);
+  const [aiPanel, setAiPanel] = useState<string | null>(null);
   const [perimeterPanel, setPerimeterPanel] = useState<string | null>(null);
   const [folderSelection, setFolderSelection] = useState<Record<string, string[] | null>>({});
   const [renameValue, setRenameValue] = useState("");
@@ -1461,6 +1466,20 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                                 <FolderTree className="size-3.5" />
                                 Dossiers
                               </DButton>
+                              {mode === "api" ? (
+                                <DButton
+                                  variant="ghost"
+                                  size="sm"
+                                  aria-label={`Dossiers analysés par l'IA de ${item.label}`}
+                                  aria-pressed={aiPanel === item.id}
+                                  onClick={() =>
+                                    setAiPanel((current) => (current === item.id ? null : item.id))
+                                  }
+                                >
+                                  <Sparkles className="size-3.5" />
+                                  IA
+                                </DButton>
+                              ) : null}
                               <DButton
                                 variant="ghost"
                                 size="sm"
@@ -1501,6 +1520,11 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                             }
                             notify={notify}
                           />
+                        ) : null}
+                        {aiPanel === item.id ? (
+                          <div className="mt-2 rounded-2xl border border-line bg-surface-2/40 pb-1.5">
+                            <AiFoldersPicker account={item} />
+                          </div>
                         ) : null}
                         {perimeterPanel === item.id ? (
                           <div
@@ -2628,6 +2652,29 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                         </button>
                       ))}
                     </div>
+                  </div>
+                  <div className="space-y-1.5 border-t border-line/70 pt-3">
+                    <label className="grid gap-1">
+                      <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                        Mails récents analysés
+                      </span>
+                      <TextInput
+                        aria-label="Nombre de mails récents analysés par le modèle de décision"
+                        type="number"
+                        min={RECENT_MAILS_MIN}
+                        max={RECENT_MAILS_MAX}
+                        value={decision.recentMailCount}
+                        onChange={(event) =>
+                          updateDecision({
+                            recentMailCount: clampRecentMailCount(Number(event.target.value)),
+                          })
+                        }
+                      />
+                    </label>
+                    <p className="text-[10.5px] font-semibold text-ink-muted">
+                      Les {decision.recentMailCount} mails les plus récents passés au modèle de décision
+                      (10–200)
+                    </p>
                   </div>
                   <div className="divide-y divide-line/70 overflow-hidden rounded-2xl border border-line">
                     <ToggleRow

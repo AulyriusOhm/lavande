@@ -43,6 +43,7 @@ fn account() -> AccountConfig {
             encryption: Encryption::Tls,
         },
         synced_folders: None,
+        ai_folders: None,
         auth: AuthConfig::Password {
             password: "secret".to_string(),
         },

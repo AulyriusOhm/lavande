@@ -388,6 +388,117 @@ describe("triage · triageRecentMails (file bornée)", () => {
     const stored54 = await db.getDecision(decisionMailKey("perso", "INBOX", 54));
     expect(stored54?.category).toBe("important");
   });
+
+  const targetsOf = (fetchMock: ReturnType<typeof vi.fn>) =>
+    (
+      JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as {
+        targets: { uid: number }[];
+      }
+    ).targets;
+
+  it("suit une limite explicite au-delà de 40 mails", async () => {
+    const db = createMemoryDecisionDb();
+    const mails = Array.from({ length: 150 }, (_, i) => makeMail(i + 1));
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const payload = JSON.parse(String(init?.body ?? "{}")) as {
+        targets: { account_id: string; folder_path: string; uid: number }[];
+      };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          results: payload.targets.map((t) => ({
+            decision: toApiDecision(
+              makeDecision({
+                accountId: t.account_id,
+                folderPath: t.folder_path,
+                uid: t.uid,
+                messageId: `<m${t.uid}@example.com>`,
+              }),
+            ),
+            cached: false,
+          })),
+          errors: [],
+        }),
+      } as unknown as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const triaged = await triageRecentMails({ mails, db, limit: 120 });
+
+    expect(triaged).toHaveLength(120);
+    expect(targetsOf(fetchMock)).toHaveLength(120);
+  });
+
+  it("borne la limite à 200 mails au plus", async () => {
+    const db = createMemoryDecisionDb();
+    const mails = Array.from({ length: 250 }, (_, i) => makeMail(i + 1));
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const payload = JSON.parse(String(init?.body ?? "{}")) as {
+        targets: { account_id: string; folder_path: string; uid: number }[];
+      };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          results: payload.targets.map((t) => ({
+            decision: toApiDecision(
+              makeDecision({
+                accountId: t.account_id,
+                folderPath: t.folder_path,
+                uid: t.uid,
+                messageId: `<m${t.uid}@example.com>`,
+              }),
+            ),
+            cached: false,
+          })),
+          errors: [],
+        }),
+      } as unknown as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const triaged = await triageRecentMails({ mails, db, limit: 999 });
+
+    expect(triaged).toHaveLength(200);
+    expect(targetsOf(fetchMock)).toHaveLength(200);
+  });
+
+  it("ramène une limite nulle ou négative à un seul mail", async () => {
+    for (const limit of [0, -5]) {
+      const db = createMemoryDecisionDb();
+      const mails = Array.from({ length: 5 }, (_, i) => makeMail(i + 1));
+      const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const payload = JSON.parse(String(init?.body ?? "{}")) as {
+          targets: { account_id: string; folder_path: string; uid: number }[];
+        };
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            results: payload.targets.map((t) => ({
+              decision: toApiDecision(
+                makeDecision({
+                  accountId: t.account_id,
+                  folderPath: t.folder_path,
+                  uid: t.uid,
+                  messageId: `<m${t.uid}@example.com>`,
+                }),
+              ),
+              cached: false,
+            })),
+            errors: [],
+          }),
+        } as unknown as Response;
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const triaged = await triageRecentMails({ mails, db, limit });
+
+      expect(triaged).toHaveLength(1);
+      expect(targetsOf(fetchMock)).toHaveLength(1);
+    }
+  });
 });
 
 describe("triage · extractAuthLink, whitelist de confiance et drafts", () => {

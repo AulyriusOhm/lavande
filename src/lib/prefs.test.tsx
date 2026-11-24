@@ -931,4 +931,13 @@ describe("préférences · modèle de décision", () => {
     expect(asDecision({ spamEnabled: "oui" }).spamEnabled).toBe(false);
     expect(asDecision({ spamEnabled: true }).spamEnabled).toBe(true);
   });
+
+  it("borne le nombre de mails récents analysés entre 10 et 200", () => {
+    expect(asDecision({}).recentMailCount).toBe(40);
+    expect(asDecision({ recentMailCount: "beaucoup" }).recentMailCount).toBe(40);
+    expect(asDecision({ recentMailCount: 120 }).recentMailCount).toBe(120);
+    expect(asDecision({ recentMailCount: 5 }).recentMailCount).toBe(10);
+    expect(asDecision({ recentMailCount: 900 }).recentMailCount).toBe(200);
+    expect(asDecision({ recentMailCount: 42.4 }).recentMailCount).toBe(42);
+  });
 });

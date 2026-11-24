@@ -21,7 +21,9 @@ use crate::dto::ApiJson;
 use crate::error::ApiError;
 use crate::state::AppState;
 
-const MAX_BATCH_TRIAGE: usize = 50;
+/// Un lot de triage ne dépasse jamais le plafond du réglage « mails récents
+/// analysés » : le front envoie jusqu'à `RECENT_MAILS_MAX` cibles d'un coup.
+const MAX_BATCH_TRIAGE: usize = decision::RECENT_MAILS_MAX;
 const DECIDE_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub fn router() -> Router<Arc<AppState>> {

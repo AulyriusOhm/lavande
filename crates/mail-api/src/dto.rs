@@ -132,9 +132,12 @@ pub struct AccountSummary {
     pub imap: EndpointSummary,
     pub smtp: EndpointSummary,
     pub folders: usize,
-    /// `null`: every folder with a known role; `[]`: none. Mirrors
+    /// `null`: every folder the server announced; `[]`: none. Mirrors
     /// `StoredAccount::synced_folders`.
     pub synced_folders: Option<Vec<String>>,
+    /// `null`: the reception (INBOX and personal folders); `[]`: none. Mirrors
+    /// `StoredAccount::ai_folders`.
+    pub ai_folders: Option<Vec<String>>,
     /// Interrupteur PGP du compte: `false` laisse les corps chiffrés fermés.
     pub pgp: bool,
     /// Le fournisseur a révoqué l'autorisation : seule une reconnexion rend le
@@ -156,6 +159,7 @@ impl AccountSummary {
             smtp: EndpointSummary::new(&account.smtp),
             folders,
             synced_folders: account.synced_folders.clone(),
+            ai_folders: account.ai_folders.clone(),
             pgp,
             needs_reauth: account.needs_reauth,
             auth_kind: match &account.auth {
@@ -268,6 +272,12 @@ pub struct RenameRequest {
 /// `folders` omitted or `null` restores the default selection.
 #[derive(Deserialize)]
 pub struct SyncFoldersRequest {
+    #[serde(default)]
+    pub folders: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+pub struct AiFoldersRequest {
     #[serde(default)]
     pub folders: Option<Vec<String>>,
 }

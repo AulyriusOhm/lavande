@@ -29,6 +29,7 @@ fn account(encryption: Encryption) -> AccountConfig {
             encryption,
         },
         synced_folders: None,
+        ai_folders: None,
         auth: AuthConfig::Password {
             password: "hunter2".to_string(),
         },

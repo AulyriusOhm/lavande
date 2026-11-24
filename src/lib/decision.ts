@@ -59,6 +59,8 @@ export type DecisionConfig = {
   spamEnabled: boolean;
   trustedSenders: string[];
   trustedDomains: string[];
+  /** Nombre de mails les plus récents passés au modèle de décision (10–200). */
+  recentMailCount: number;
 };
 
 export type DecisionQuestion =
@@ -225,7 +227,18 @@ export const DEFAULT_DECISION: DecisionConfig = {
   spamEnabled: false,
   trustedSenders: [],
   trustedDomains: [],
+  recentMailCount: 40,
 };
+
+/** Bornes du nombre de mails récents passés au modèle de décision. */
+export const RECENT_MAILS_MIN = 10;
+export const RECENT_MAILS_MAX = 200;
+
+/** Ramène la valeur saisie dans les bornes ; une saisie illisible garde le défaut. */
+export function clampRecentMailCount(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_DECISION.recentMailCount;
+  return Math.min(RECENT_MAILS_MAX, Math.max(RECENT_MAILS_MIN, Math.round(value)));
+}
 
 export function decisionProviderPreset(provider: DecisionProvider) {
   return DECISION_PROVIDERS.find((entry) => entry.id === provider) ?? DECISION_PROVIDERS[0];

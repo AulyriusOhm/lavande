@@ -145,6 +145,8 @@ export type ApiAccount = {
   folders: number;
   /** `null` : tous les dossiers à rôle connu ; `[]` : aucun. */
   synced_folders?: string[] | null;
+  /** `null`/absent : la réception (INBOX + dossiers perso) ; `[]` : aucun. */
+  ai_folders?: string[] | null;
   /** Interrupteur PGP du compte : `false` laisse les corps chiffrés fermés. */
   pgp?: boolean;
   /** Le refresh token a été refusé : le consentement OAuth est à refaire. */
@@ -450,6 +452,8 @@ export type ApiDecisionConfig = {
   spam_enabled: boolean;
   trusted_senders: string[];
   trusted_domains: string[];
+  /** Mails les plus récents passés au modèle de décision (10 à 200). */
+  recent_mail_count: number;
 };
 
 export type ApiDecisionPublicConfig = ApiDecisionConfig & {
@@ -879,6 +883,13 @@ export const mailApi = {
   /** `null` : tous les dossiers à rôle connu ; `[]` : aucun. */
   setSyncFolders: (id: string, folders: string[] | null) =>
     request<ApiAccount>(`${accountPath(id)}/sync-folders`, {
+      method: "PATCH",
+      body: { folders },
+    }),
+
+  /** Dossiers analysés par l'IA : `null` = réception (INBOX + dossiers perso), `[]` = aucun. */
+  setAiFolders: (id: string, folders: string[] | null) =>
+    request<ApiAccount>(`${accountPath(id)}/ai-folders`, {
       method: "PATCH",
       body: { folders },
     }),

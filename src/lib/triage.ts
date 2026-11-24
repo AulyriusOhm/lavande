@@ -6,6 +6,7 @@ import {
   isNoiseCategory,
   isPhishing,
   isPromptInjection,
+  RECENT_MAILS_MAX,
   type CustomCategory,
   type DecisionConfig,
   type DecisionThresholds,
@@ -742,21 +743,23 @@ export function toApiDecisionConfig(
     spam_enabled: config.spamEnabled,
     trusted_senders: config.trustedSenders ?? [],
     trusted_domains: config.trustedDomains ?? [],
+    recent_mail_count: config.recentMailCount,
     ...(options?.apiKey ? { api_key: options.apiKey } : {}),
     ...(options?.clearApiKey ? { clear_api_key: true } : {}),
   };
 }
 
 /**
- * File de triage bornée côté front : en mode API, trie au plus 40 mails récents
- * (ou jusqu'à `limit`, borné à 50 pour le scan manuel) non encore en cache,
- * met à jour IndexedDB, émet les stats de décision et publie chaque décision
- * sur le canal E2EE `ai` si actif.
+ * File de triage bornée côté front : en mode API, trie au plus `limit` mails
+ * récents (le réglage « mails récents analysés », 10 à 200) non encore en
+ * cache, met à jour IndexedDB, émet les stats de décision et publie chaque
+ * décision sur le canal E2EE `ai` si actif. Sans limite explicite, le défaut
+ * `MAX_RECENT_TRIAGE` s'applique.
  */
 export async function triageRecentMails(options: TriageRecentOptions): Promise<MailDecision[]> {
   const cap =
     typeof options.limit === "number"
-      ? Math.min(Math.max(1, options.limit), 50)
+      ? Math.min(Math.max(1, options.limit), RECENT_MAILS_MAX)
       : MAX_RECENT_TRIAGE;
   const existing = asDecisionIndex(options.existingDecisions ?? new Map());
   const store = options.db ?? decisionDb();

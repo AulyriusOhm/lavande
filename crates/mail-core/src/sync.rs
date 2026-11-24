@@ -5,7 +5,7 @@ use chrono::{Duration, SecondsFormat, Utc};
 use crate::config::{AccountConfig, FolderMapping};
 use crate::error::MailError;
 use crate::imap::{self, SyncReport};
-use crate::model::{Folder, FolderRole};
+use crate::model::Folder;
 use crate::store::Store;
 use crate::tls::TlsOptions;
 
@@ -14,8 +14,8 @@ use crate::tls::TlsOptions;
 const EVICT_BODY_DAYS: u32 = 30;
 
 /// Connects once against the webpki roots, stores the account and its folders,
-/// syncs every folder with a known role (inbox, sent, drafts, archive, spam,
-/// trash), then logs out. Custom folders are synced on demand, per folder.
+/// syncs every folder the server announced (inbox, sent, drafts, archive, spam,
+/// trash, and the user's own folders), then logs out.
 pub async fn sync_account(
     store: &Store,
     cfg: &AccountConfig,
@@ -36,7 +36,7 @@ pub async fn sync_account_with(
 }
 
 /// `sync_account_with` with the folders the account syncs by itself: `None`
-/// keeps the default (every folder with a known role), `Some(paths)` limits the
+/// keeps the default (every discovered folder), `Some(paths)` limits the
 /// automatic pass to those folders, `Some([])` syncs none of them. Folder
 /// discovery and the on-demand per-folder sync are untouched.
 pub async fn sync_account_selected(
@@ -116,11 +116,11 @@ fn evict_bodies(store: &Store, account_id: &str) {
 }
 
 /// `true` when the automatic pass of the account covers `folder`: the explicit
-/// selection when there is one, every folder with a known role otherwise.
+/// selection when there is one, every discovered folder otherwise.
 pub fn auto_syncs(folder: &Folder, synced_folders: Option<&[String]>) -> bool {
     match synced_folders {
         Some(paths) => paths.iter().any(|path| path == &folder.path),
-        None => folder.role != FolderRole::Other,
+        None => true,
     }
 }
 
@@ -144,10 +144,10 @@ mod tests {
     }
 
     #[test]
-    fn no_selection_keeps_every_known_role() {
+    fn no_selection_syncs_every_discovered_folder() {
         assert!(auto_syncs(&folder("INBOX", FolderRole::Inbox), None));
         assert!(auto_syncs(&folder("Archive", FolderRole::Archive), None));
-        assert!(!auto_syncs(&folder("Projets", FolderRole::Other), None));
+        assert!(auto_syncs(&folder("Projets", FolderRole::Other), None));
     }
 
     #[test]

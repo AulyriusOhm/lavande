@@ -662,3 +662,216 @@ async fn spam_category_is_offered_and_kept_only_when_enabled() {
         .expect("questions");
     assert!(last["category"]["criteria"].get("spam").is_some());
 }
+
+/// Le nombre de mails récents analysés voyage dans la config décision : défaut
+/// 40, valeur choisie conservée d'un appel à l'autre, bornée à 10–200.
+#[tokio::test]
+async fn recent_mail_count_defaults_clamps_and_persists() {
+    let (_dir, state, router, token) = setup_daemon().await;
+
+    let (status, initial) = send_json(
+        &router,
+        &token,
+        Method::GET,
+        "/api/ai/decision/config",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(initial["recent_mail_count"], 40);
+
+    let (status, saved) = send_json(
+        &router,
+        &token,
+        Method::PUT,
+        "/api/ai/decision/config",
+        Some(json!({ "recent_mail_count": 120 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["recent_mail_count"], 120);
+
+    let (_, reread) = send_json(
+        &router,
+        &token,
+        Method::GET,
+        "/api/ai/decision/config",
+        None,
+    )
+    .await;
+    assert_eq!(reread["recent_mail_count"], 120);
+    assert_eq!(
+        state
+            .decision_config()
+            .expect("config relue")
+            .recent_mail_count,
+        120
+    );
+
+    let (_, high) = send_json(
+        &router,
+        &token,
+        Method::PUT,
+        "/api/ai/decision/config",
+        Some(json!({ "recent_mail_count": 500 })),
+    )
+    .await;
+    assert_eq!(high["recent_mail_count"], 200);
+
+    let (_, low) = send_json(
+        &router,
+        &token,
+        Method::PUT,
+        "/api/ai/decision/config",
+        Some(json!({ "recent_mail_count": 3 })),
+    )
+    .await;
+    assert_eq!(low["recent_mail_count"], 10);
+}
+
+/// À l'arrivée IMAP IDLE, le nombre de mails triés suit le réglage de la config
+/// décision : l'ancien plafond fixe de 10 est remplacé par `recent_mail_count`.
+#[tokio::test]
+async fn idle_triage_follows_the_configured_recent_mail_count() {
+    use lavande_mail::config::{AccountConfig, AuthConfig, Encryption, Endpoint};
+    use lavande_mail::model::{Folder, FolderRole};
+    use lavande_mail_api::decision::DecisionConfig;
+    use lavande_mail_api::events::triage_selection_uids;
+
+    let mock = start_mock_neuralwatt().await;
+    let (_dir, state, _router, _token) = setup_daemon().await;
+
+    let endpoint = Endpoint {
+        host: "imap.lavande.fr".to_string(),
+        port: 993,
+        encryption: Encryption::Tls,
+    };
+    let config = AccountConfig {
+        id: "perso".to_string(),
+        label: "Perso".to_string(),
+        email: "roman@lavande.fr".to_string(),
+        username: "roman@lavande.fr".to_string(),
+        imap: endpoint.clone(),
+        smtp: Endpoint {
+            port: 465,
+            ..endpoint
+        },
+        auth: AuthConfig::Password {
+            password: "secret".to_string(),
+        },
+        synced_folders: None,
+        ai_folders: None,
+    };
+    state
+        .add_account(
+            &config,
+            &[Folder {
+                account_id: "perso".to_string(),
+                path: "INBOX".to_string(),
+                name: "INBOX".to_string(),
+                role: FolderRole::Inbox,
+                uidvalidity: 1,
+                uidnext: 9,
+                last_sync_at: None,
+                modseq: None,
+                delimiter: Some("/".to_string()),
+            }],
+        )
+        .await
+        .expect("compte");
+    for uid in 1..=24 {
+        state
+            .store()
+            .upsert_message(&Message {
+                account_id: "perso".into(),
+                folder_path: "INBOX".into(),
+                uid,
+                uidvalidity: 1,
+                thread_id: format!("t-{uid}"),
+                message_id: Some(format!("<{uid}@lavande.fr>")),
+                in_reply_to: None,
+                references: vec![],
+                from: Address {
+                    name: Some("Camille".into()),
+                    email: "camille@lavande.fr".into(),
+                },
+                to: vec![],
+                cc: vec![],
+                subject: format!("Sujet {uid}"),
+                date: None,
+                flags: Flags {
+                    unread: true,
+                    starred: false,
+                    answered: false,
+                },
+                size: 120,
+                pgp: PgpState::None,
+                preview: format!("Aperçu {uid}"),
+                body_text: Some(format!("Corps {uid}")),
+                body_html: None,
+                pgp_detail: None,
+                attachments: vec![],
+            })
+            .expect("msg");
+    }
+    state
+        .set_decision_api_key("nw-secret-key")
+        .await
+        .expect("clé");
+    state
+        .save_decision_config(&DecisionConfig {
+            enabled: true,
+            endpoint: mock.url.clone(),
+            recent_mail_count: 200,
+            ..Default::default()
+        })
+        .expect("config");
+
+    let first: Vec<u32> = (1..=12).collect();
+    triage_selection_uids(&state, "perso", "INBOX", &first).await;
+
+    // Les douze mails passent : l'ancien plafond fixe de 10 n'existe plus.
+    assert_eq!(mock.hits.load(Ordering::SeqCst), 12);
+
+    // Réglé plus bas, le même lot est coupé au nombre demandé.
+    state
+        .save_decision_config(&DecisionConfig {
+            enabled: true,
+            endpoint: mock.url.clone(),
+            recent_mail_count: 10,
+            ..Default::default()
+        })
+        .expect("config");
+    let second: Vec<u32> = (13..=24).collect();
+    triage_selection_uids(&state, "perso", "INBOX", &second).await;
+
+    assert_eq!(mock.hits.load(Ordering::SeqCst), 22);
+}
+
+/// Un lot de triage n'est plus coupé à 50 cibles : le réglage « mails récents
+/// analysés » monte jusqu'à 200, et le lot suit. Les cibles inconnues reviennent
+/// en erreurs, une par cible — sans appel au modèle.
+#[tokio::test]
+async fn a_triage_batch_carries_more_than_fifty_targets() {
+    let (_dir, state, router, token) = setup_daemon().await;
+    state
+        .store()
+        .upsert_account("perso", "Perso", "roman@lavande.fr")
+        .expect("account");
+
+    let targets: Vec<Value> = (1..=120)
+        .map(|uid| json!({ "account_id": "perso", "folder_path": "INBOX", "uid": uid }))
+        .collect();
+    let (status, reply) = send_json(
+        &router,
+        &token,
+        Method::POST,
+        "/api/ai/decisions/triage",
+        Some(json!({ "targets": targets })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(reply["errors"].as_array().expect("erreurs").len(), 120);
+    assert!(reply["results"].as_array().expect("résultats").is_empty());
+}

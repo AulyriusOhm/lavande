@@ -24,7 +24,7 @@ const H = 3_600_000;
 const RECEIVED = new Date(Date.now() - H).toISOString();
 const ATTACHMENT_BYTES = 317_440;
 
-const apiAccount = (accountId: string): ApiAccount => ({
+const apiAccount = (accountId: string, aiFolders?: string[] | null): ApiAccount => ({
   id: accountId,
   label: accountId,
   email: `${accountId}@test.fr`,
@@ -32,6 +32,7 @@ const apiAccount = (accountId: string): ApiAccount => ({
   imap: { host: "imap.test", port: 993, encryption: "tls" },
   smtp: { host: "smtp.test", port: 465, encryption: "tls" },
   folders: 1,
+  ...(aiFolders === undefined ? {} : { ai_folders: aiFolders }),
 });
 
 const apiFolder = (accountId: string): ApiFolder => ({
@@ -44,10 +45,30 @@ const apiFolder = (accountId: string): ApiFolder => ({
   last_sync_at: null,
 });
 
-const apiThread = (uid: number, from: string, subject: string, accountId: string, withFile = false): ApiThread => {
+/** Sous-dossier perso du compte de travail : le cas qui échappait au résumé. */
+const SUB_FOLDER = "INBOX/Informatique";
+
+const subFolder = (accountId: string): ApiFolder => ({
+  account_id: accountId,
+  path: SUB_FOLDER,
+  name: "Informatique",
+  role: "other",
+  uidvalidity: 2,
+  uidnext: 2,
+  last_sync_at: null,
+});
+
+const apiThread = (
+  uid: number,
+  from: string,
+  subject: string,
+  accountId: string,
+  withFile = false,
+  folderPath = "INBOX",
+): ApiThread => {
   const primary: ApiMessage = {
     account_id: accountId,
-    folder_path: "INBOX",
+    folder_path: folderPath,
     uid,
     uidvalidity: 1,
     thread_id: `t-${accountId}-${uid}`,
@@ -131,8 +152,16 @@ const apiDecision = (
   ...overrides,
 });
 
-function mockBackend() {
+const SUB_THREAD = apiThread(9, "Nadia", "Badge d'accès", ALPHA, false, SUB_FOLDER);
+
+/** `informatique` ajoute au compte ALPHA un sous-dossier perso et son message. */
+function mockBackend(
+  options: { informatique?: boolean; aiFolders?: Record<string, string[] | null> } = {},
+) {
   const prompts: { system: string; user: string }[] = [];
+  const folders = [apiFolder(ALPHA), apiFolder(BETA)];
+  if (options.informatique) folders.push(subFolder(ALPHA));
+  const threads = options.informatique ? [...THREADS, SUB_THREAD] : THREADS;
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const { pathname } = new URL(String(input), "http://localhost");
     const path = decodeURIComponent(pathname);
@@ -153,12 +182,19 @@ function mockBackend() {
         errors: [],
       });
     }
-    if (path.endsWith("/api/accounts")) return reply([apiAccount(ALPHA), apiAccount(BETA)]);
-    if (/\/api\/accounts\/[^/]+\/folders$/.test(path)) {
-      return reply([apiFolder(ALPHA), apiFolder(BETA)]);
+    if (path.endsWith("/api/accounts")) {
+      const account = (id: string) => apiAccount(id, options.aiFolders?.[id]);
+      return reply([account(ALPHA), account(BETA)]);
     }
-    const list = path.match(/\/api\/accounts\/([^/]+)\/folders\/INBOX\/threads$/);
-    if (list) return reply(THREADS.filter((thread) => thread.account_id === list[1]));
+    if (/\/api\/accounts\/[^/]+\/folders$/.test(path)) return reply(folders);
+    const list = path.match(/\/api\/accounts\/([^/]+)\/folders\/(.+)\/threads$/);
+    if (list) {
+      return reply(
+        threads.filter(
+          (thread) => thread.account_id === list[1] && thread.primary.folder_path === list[2],
+        ),
+      );
+    }
     return reply([]);
   });
   return prompts;
@@ -359,5 +395,103 @@ describe("résumé IA · pièces jointes des mails analysés", () => {
         inline: false,
       },
     ]);
+  });
+});
+
+describe("résumé IA · dossiers analysés par compte", () => {
+  const mailId = (thread: ApiThread) =>
+    `${thread.account_id}:${thread.primary.folder_path}:${thread.primary.uid}`;
+
+  it("couvre le sous-dossier perso depuis la boîte unifiée", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs();
+    mockBackend({ informatique: true });
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.summary?.source).toBe("hybrid"), { timeout: 3000 });
+    expect(result.current.folder).toBe("unified");
+    expect(result.current.summary?.mailIds.sort()).toEqual(
+      [
+        apiThread(1, "Camille", "Maquettes v3", ALPHA),
+        apiThread(2, "Marc", "Accès serveur", ALPHA),
+        apiThread(3, "Léa", "Devis Léa", BETA),
+        SUB_THREAD,
+      ]
+        .map(mailId)
+        .sort(),
+    );
+    expect(
+      result.current.summaryMails.some((mail) => mail.source?.folderPath === SUB_FOLDER),
+    ).toBe(true);
+  });
+
+  it("garde le sous-dossier analysé quand la vue se réduit à la réception", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs();
+    mockBackend({ informatique: true });
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.summary?.source).toBe("hybrid"), { timeout: 3000 });
+    act(() => result.current.setFolder("inbox", null));
+
+    await waitFor(() => expect(result.current.folder).toBe("inbox"));
+    await waitFor(() =>
+      expect(result.current.mails.every((mail) => mail.source?.folderPath === "INBOX")).toBe(true),
+    );
+    expect(result.current.mails.some((mail) => mail.source?.folderPath === SUB_FOLDER)).toBe(false);
+    expect(result.current.summary?.mailIds).toContain(mailId(SUB_THREAD));
+    expect(
+      result.current.summaryMails.some((mail) => mail.source?.folderPath === SUB_FOLDER),
+    ).toBe(true);
+  });
+
+  it("suit la sélection explicite du compte quand elle écarte le sous-dossier", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs();
+    mockBackend({ informatique: true, aiFolders: { [ALPHA]: ["INBOX"] } });
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.summary?.source).toBe("hybrid"), { timeout: 3000 });
+
+    expect(result.current.summary?.mailIds.sort()).toEqual(
+      [
+        apiThread(1, "Camille", "Maquettes v3", ALPHA),
+        apiThread(2, "Marc", "Accès serveur", ALPHA),
+        apiThread(3, "Léa", "Devis Léa", BETA),
+      ]
+        .map(mailId)
+        .sort(),
+    );
+    expect(result.current.summary?.mailIds).not.toContain(mailId(SUB_THREAD));
+  });
+
+  it("relit la portée dès qu'un réglage change la sélection du compte", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs();
+    mockBackend({ informatique: true });
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.summary?.mailIds).toContain(mailId(SUB_THREAD)), {
+      timeout: 3000,
+    });
+
+    act(() => result.current.applyAiFolders(ALPHA, ["INBOX"]));
+
+    await waitFor(
+      () => expect(result.current.summary?.mailIds).not.toContain(mailId(SUB_THREAD)),
+      { timeout: 3000 },
+    );
+    expect(result.current.summary?.mailIds).toContain(mailId(THREADS[0]));
+  });
+
+  it("n'analyse rien quand la sélection du compte est vide", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs();
+    mockBackend({ informatique: true, aiFolders: { [ALPHA]: [], [BETA]: [] } });
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.summary).not.toBeNull(), { timeout: 3000 });
+    expect(result.current.summary?.mailCount).toBe(0);
+    expect(result.current.summary?.mailIds).toEqual([]);
   });
 });

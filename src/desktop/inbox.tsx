@@ -1559,17 +1559,14 @@ export function DesktopInbox({
 
   const handleScanMoreCleanup = useCallback(async () => {
     if (cleanupScanning) return;
-    const untriaged = mails
-      .filter(
-        (entry) =>
-          entry.source &&
-          !triageDecisionFor(entry, decisionIndex.byKey, decisionIndex.byMessageId),
-      )
-      .slice(0, 50);
+    const untriaged = mails.filter(
+      (entry) =>
+        entry.source && !triageDecisionFor(entry, decisionIndex.byKey, decisionIndex.byMessageId),
+    );
     if (untriaged.length === 0) return;
     setCleanupScanning(true);
     try {
-      await triageMails(untriaged, false, 50);
+      await triageMails(untriaged, false);
     } finally {
       setCleanupScanning(false);
     }
