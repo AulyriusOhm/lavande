@@ -101,6 +101,12 @@ function renderSettings() {
   );
 }
 
+function openSection(label: string) {
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Sections des réglages" })).getByRole("button", { name: label }),
+  );
+}
+
 beforeEach(() => {
   vi.unstubAllEnvs();
   vi.stubEnv("VITE_MAIL_BACKEND", "local");
@@ -111,6 +117,7 @@ describe("Réglages · étiquettes Zimbra", () => {
   it("liste les étiquettes du compte avec leur couleur et leur compte d'items", async () => {
     stubDaemon();
     renderSettings();
+    openSection("Filtres & absence");
 
     await waitFor(() => expect(within(panel()).getByText("Travail")).toBeTruthy());
     expect(within(panel()).getByText("Facture")).toBeTruthy();
@@ -125,6 +132,7 @@ describe("Réglages · étiquettes Zimbra", () => {
   it("crée, renomme puis supprime une étiquette sur le serveur", async () => {
     const fetchMock = stubDaemon();
     renderSettings();
+    openSection("Filtres & absence");
     await waitFor(() => expect(within(panel()).getByText("Travail")).toBeTruthy());
 
     fireEvent.change(within(panel()).getByLabelText("Nom de l'étiquette"), {
@@ -163,6 +171,7 @@ describe("Réglages · étiquettes Zimbra", () => {
   it("refuse une étiquette sans nom sans appeler le serveur", async () => {
     const fetchMock = stubDaemon();
     renderSettings();
+    openSection("Filtres & absence");
     await waitFor(() => expect(within(panel()).getByText("Travail")).toBeTruthy());
 
     fireEvent.change(within(panel()).getByLabelText("Nom de l'étiquette"), { target: { value: "  " } });
@@ -175,6 +184,7 @@ describe("Réglages · étiquettes Zimbra", () => {
   it("dit un serveur muet sans crier", async () => {
     stubDaemon({ readStatus: 502 });
     renderSettings();
+    openSection("Filtres & absence");
 
     await waitFor(() =>
       expect(within(panel()).getByRole("status").textContent).toContain("serveur Zimbra injoignable"),
@@ -185,6 +195,7 @@ describe("Réglages · étiquettes Zimbra", () => {
   it("annonce un refus d'écriture du serveur", async () => {
     stubDaemon({ writeStatus: 502 });
     renderSettings();
+    openSection("Filtres & absence");
     await waitFor(() => expect(within(panel()).getByText("Travail")).toBeTruthy());
 
     fireEvent.change(within(panel()).getByLabelText("Nom de l'étiquette"), { target: { value: "Projet" } });

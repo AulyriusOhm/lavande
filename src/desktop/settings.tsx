@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -8,20 +8,25 @@ import {
   Check,
   ChevronDown,
   Download,
+  FileText,
   FolderTree,
   Globe,
+  Info,
   KeyRound,
+  Keyboard,
   Link2,
   ListChecks,
   Loader2,
   Lock,
   Mail,
   Moon,
+  Palette,
   PenLine,
   PlugZap,
   Plus,
   RefreshCw,
   RotateCcw,
+  Search,
   ShieldCheck,
   ShieldOff,
   SlidersHorizontal,
@@ -31,6 +36,8 @@ import {
   Terminal,
   Trash2,
   Upload,
+  Users,
+  type LucideIcon,
 } from "lucide-react";
 import { errorText, mailApi } from "@/lib/api";
 import type { ApiAccount, ApiFolder, GoogleCalendar } from "@/lib/api";
@@ -232,6 +239,53 @@ const NAV_GROUPS: readonly { id: string; label: string; sections: readonly Secti
   SECTION_GROUPS.filter((group) => group.sections.length > 0);
 
 const SECTIONS: readonly SectionEntry[] = NAV_GROUPS.flatMap((group) => group.sections);
+
+const SECTION_ICONS: Record<SectionId, LucideIcon> = {
+  comptes: Mail,
+  signatures: PenLine,
+  messagerie: SlidersHorizontal,
+  "moi-equipe": Users,
+  apparence: Palette,
+  modules: Blocks,
+  synchronisation: RefreshCw,
+  calendriers: CalendarDays,
+  notifications: Bell,
+  securite: ShieldCheck,
+  ia: Sparkles,
+  resumes: FileText,
+  "taches-ia": ListChecks,
+  assistant: PlugZap,
+  clavier: Keyboard,
+  "mise-a-jour": Download,
+  apropos: Info,
+};
+
+const SECTION_KEYWORDS: Record<SectionId, string> = {
+  comptes: "imap smtp gmail google adresse ajouter boite bal",
+  signatures: "signature pied de page editeur",
+  messagerie: "filtres absence vacances sieve zimbra dossiers masquer",
+  "moi-equipe": "profil identite role equipe collaborateurs",
+  apparence: "theme sombre clair accent couleur densite apercu affichage conversations",
+  modules: "agenda planif mails widgets activer",
+  synchronisation: "sync e2ee chiffrement intervalle arriere-plan contacts",
+  calendriers: "caldav google ics agenda calendrier externe",
+  notifications: "notification rappel son alerte",
+  securite: "pgp cle chiffrement openpgp empreinte confiance images",
+  ia: "llm copilot openai modele decision triage providers",
+  resumes: "resume digest matin midi soir",
+  "taches-ia": "taches suggestions planif",
+  assistant: "mcp serveurs outils droits journal",
+  clavier: "raccourcis touches keyboard",
+  "mise-a-jour": "update version installer mise a jour",
+  apropos: "version a propos credits",
+};
+
+const ActiveSectionContext = createContext<SectionId>("comptes");
+
+const normalize = (value: string) => value.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+
+const sectionMatches = (section: SectionEntry, needle: string) =>
+  needle === "" || normalize(`${section.label} ${SECTION_KEYWORDS[section.id]}`).includes(needle);
 
 const PREVIEW_EXAMPLES: readonly {
   id: MailPreviewStyle;
@@ -1039,6 +1093,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
   } = useMailStore();
   const smartActive = decisionReady(decision) || Object.keys(decisions).length > 0;
   const [active, setActive] = useState<SectionId>("comptes");
+  const [query, setQuery] = useState("");
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [hex, setHex] = useState(accent);
   const [openServer, setOpenServer] = useState<string | null>(null);
   const [signatureAccount, setSignatureAccount] = useState<string | null>(null);
@@ -1327,17 +1383,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
 
   const goTo = (id: SectionId) => {
     setActive(id);
-    document.getElementById(anchor(id))?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
-
-  const track = (event: React.UIEvent<HTMLDivElement>) => {
-    const line = event.currentTarget.getBoundingClientRect().top + 120;
-    let current: SectionId = SECTIONS[0].id;
-    for (const section of SECTIONS) {
-      const node = document.getElementById(anchor(section.id));
-      if (node && node.getBoundingClientRect().top <= line) current = section.id;
-    }
-    if (current !== active) setActive(current);
+    setQuery("");
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
   };
 
   const updateHex = (value: string) => {
@@ -1347,10 +1394,81 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     setAccent(clean.startsWith("#") ? clean.toLowerCase() : `#${clean.toLowerCase()}`);
   };
 
+  const needle = normalize(query.trim());
+  const visibleGroups = NAV_GROUPS.map((group) => ({
+    ...group,
+    sections: group.sections.filter((section) => sectionMatches(section, needle)),
+  })).filter((group) => group.sections.length > 0);
+  const firstMatch = visibleGroups[0]?.sections[0];
+
   return (
     <div className="relative h-full">
-      <div className="h-full overflow-y-auto no-scrollbar" onScroll={track}>
-        <div className="mx-auto max-w-[1080px] px-4 pb-32 sm:px-8">
+      <div className="mx-auto flex h-full max-w-[1080px] items-stretch gap-8 px-4 sm:px-8">
+        <nav
+          aria-label="Sections des réglages"
+          className="hidden w-[220px] shrink-0 flex-col pt-6 pb-6 min-[900px]:flex"
+        >
+          <div className="relative mb-4">
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-ink-muted" />
+            <TextInput
+              aria-label="Rechercher un réglage"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && firstMatch) goTo(firstMatch.id);
+                if (event.key === "Escape") setQuery("");
+              }}
+              placeholder="Rechercher…"
+              className="h-8 pl-8 text-[12px] font-semibold"
+            />
+          </div>
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto no-scrollbar pb-4">
+            {visibleGroups.map((group) => (
+              <div key={group.id} role="group" aria-label={group.label}>
+                <p className="px-2.5 pb-1 text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                  {group.label}
+                </p>
+                <ul className="space-y-0.5">
+                  {group.sections.map((section) => {
+                    const Icon = SECTION_ICONS[section.id];
+                    return (
+                      <li key={section.id}>
+                        <button
+                          type="button"
+                          onClick={() => goTo(section.id)}
+                          aria-current={active === section.id}
+                          className={cn(
+                            "focus-ring flex h-9 w-full items-center gap-2 rounded-[10px] px-2 text-left text-[12px] font-semibold transition-colors duration-200",
+                            active === section.id
+                              ? "bg-accent-soft text-accent-ink"
+                              : "text-ink-soft hover:bg-surface-2 hover:text-ink",
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "grid size-6 shrink-0 place-items-center rounded-[8px]",
+                              active === section.id
+                                ? "bg-accent text-accent-contrast"
+                                : "bg-surface-2 text-ink-muted",
+                            )}
+                          >
+                            <Icon className="size-3.5" />
+                          </span>
+                          {section.label}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
+            {visibleGroups.length === 0 ? (
+              <p className="px-2.5 text-[12px] font-medium text-ink-muted">Aucun réglage ne correspond.</p>
+            ) : null}
+          </div>
+        </nav>
+
+        <div ref={scrollRef} className="h-full min-w-0 flex-1 overflow-y-auto no-scrollbar">
           <header className="flex items-center justify-between gap-4 pt-6">
             <div className="flex items-center gap-2.5">
               <PaneTitle hint={import.meta.env.VITE_DISTRIBUTION === "1" ? undefined : "maquette PC"}>
@@ -1361,39 +1479,35 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
             <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">v0.1.0</span>
           </header>
 
-          <div className="mt-6 flex items-start gap-8">
-            <nav aria-label="Sections des réglages" className="sticky top-6 hidden w-[200px] shrink-0 min-[900px]:block">
-              <div className="space-y-3">
-                {NAV_GROUPS.map((group) => (
-                  <div key={group.id} role="group" aria-label={group.label}>
-                    <p className="px-2.5 pb-1 text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
-                      {group.label}
-                    </p>
-                    <ul className="space-y-0.5">
-                      {group.sections.map((section) => (
-                        <li key={section.id}>
-                          <button
-                            type="button"
-                            onClick={() => goTo(section.id)}
-                            aria-current={active === section.id}
-                            className={cn(
-                              "focus-ring flex h-8 w-full items-center rounded-[10px] px-2.5 text-left text-[12px] font-semibold transition-colors duration-200",
-                              active === section.id
-                                ? "bg-accent-soft text-accent-ink"
-                                : "text-ink-soft hover:bg-surface-2 hover:text-ink",
-                            )}
-                          >
-                            {section.label}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            </nav>
+          <div
+            role="navigation"
+            aria-label="Sections des réglages · compact"
+            className="-mx-4 mt-4 flex gap-1.5 overflow-x-auto no-scrollbar px-4 pb-1 min-[900px]:hidden"
+          >
+            {SECTIONS.map((section) => {
+              const Icon = SECTION_ICONS[section.id];
+              return (
+                <button
+                  key={section.id}
+                  type="button"
+                  onClick={() => goTo(section.id)}
+                  aria-current={active === section.id}
+                  className={cn(
+                    "focus-ring flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[11.5px] font-bold transition-colors duration-200",
+                    active === section.id
+                      ? "border-accent-ring bg-accent-soft text-accent-ink"
+                      : "border-line bg-surface text-ink-soft hover:text-ink",
+                  )}
+                >
+                  <Icon className="size-3.5" />
+                  {section.label}
+                </button>
+              );
+            })}
+          </div>
 
-            <div className="min-w-0 flex-1 space-y-7">
+          <ActiveSectionContext.Provider value={active}>
+            <BlurFade key={active} duration={0.3} yOffset={8} className="mt-6 space-y-7 pb-32">
               <Block id="comptes" label="Comptes" hint={`${accounts.length} compte${accounts.length > 1 ? "s" : ""}`}>
                 <BlurFade delay={0.04}>
                   <div className="grid gap-3 md:grid-cols-2">
@@ -3700,8 +3814,8 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                   )}
                 </Surface>
               </Block>
-            </div>
-          </div>
+            </BlurFade>
+          </ActiveSectionContext.Provider>
         </div>
       </div>
 
@@ -3725,13 +3839,15 @@ function Block({
   hint?: string;
   children: React.ReactNode;
 }) {
+  const active = useContext(ActiveSectionContext);
+  if (id !== active) return null;
   return (
-    <section id={anchor(id)} className="scroll-mt-5">
+    <section id={anchor(id)}>
       <div className="flex items-baseline justify-between gap-3">
-        <SectionLabel>{label}</SectionLabel>
+        <h2 className="text-[19px] font-extrabold tracking-[-0.03em] text-ink">{label}</h2>
         {hint ? <span className="text-[10.5px] font-semibold text-ink-muted">{hint}</span> : null}
       </div>
-      <div className="mt-2.5">{children}</div>
+      <div className="mt-3">{children}</div>
     </section>
   );
 }

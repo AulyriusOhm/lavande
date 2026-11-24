@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DesktopSettings } from "@/desktop/settings";
 import { MailStoreProvider } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
@@ -67,6 +67,11 @@ function mount() {
   );
 }
 
+function openSection(label: string) {
+  const nav = screen.getByRole("navigation", { name: "Sections des réglages" });
+  fireEvent.click(within(nav).getByRole("button", { name: label }));
+}
+
 const provider = (label: string) => screen.getByRole("button", { name: label });
 const pressed = (label: string) => provider(label).getAttribute("aria-pressed");
 
@@ -87,6 +92,7 @@ describe("Réglages PC · fournisseur du modèle IA", () => {
   it("propose les trois fournisseurs et garde le custom par défaut", () => {
     stubFetch();
     mount();
+    openSection("Intelligence artificielle");
 
     expect(screen.getByRole("group", { name: "Fournisseur du modèle IA" })).toBeTruthy();
     expect(pressed("Custom")).toBe("true");
@@ -100,6 +106,7 @@ describe("Réglages PC · fournisseur du modèle IA", () => {
   it("préremplit OpenAI sans écraser une configuration existante", async () => {
     stubFetch();
     mount();
+    openSection("Intelligence artificielle");
 
     fireEvent.click(provider("OpenAI"));
     await waitFor(() =>
@@ -129,6 +136,7 @@ describe("Réglages PC · GitHub Copilot", () => {
   it("connecte le compte par device flow, puis le déconnecte", async () => {
     const { fetchMock } = stubFetch();
     mount();
+    openSection("Intelligence artificielle");
 
     fireEvent.click(provider("GitHub Copilot"));
     expect(await screen.findByText("Se connecter à GitHub")).toBeTruthy();
@@ -166,6 +174,7 @@ describe("Réglages PC · GitHub Copilot", () => {
   it("transmet le client_id personnalisé au démon", async () => {
     const { fetchMock } = stubFetch();
     mount();
+    openSection("Intelligence artificielle");
 
     fireEvent.click(provider("GitHub Copilot"));
     fireEvent.change(await screen.findByLabelText("Client ID GitHub Copilot"), {
@@ -191,6 +200,7 @@ describe("Réglages PC · GitHub Copilot", () => {
     setConnected(true);
     await refreshCopilotSession();
     mount();
+    openSection("Intelligence artificielle");
 
     expect(await screen.findByText("Connecté · lavande-fan")).toBeTruthy();
 

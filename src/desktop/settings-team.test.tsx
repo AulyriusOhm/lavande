@@ -27,6 +27,11 @@ function renderSettings() {
   );
 }
 
+function openSection(label: string) {
+  const nav = screen.getByRole("navigation", { name: "Sections des réglages" });
+  fireEvent.click(within(nav).getByRole("button", { name: label }));
+}
+
 const panel = () => document.getElementById("reglages-moi-equipe") as HTMLElement;
 
 beforeEach(() => {
@@ -52,6 +57,7 @@ describe("Réglages · moi et mon équipe", () => {
 
   it("enregistre l'identité, le rôle et le contexte de la boîte", async () => {
     renderSettings();
+    openSection("Moi et mon équipe");
 
     const fiche = within(panel());
     fireEvent.change(fiche.getByLabelText("Votre nom"), { target: { value: "Roman FELDEN" } });
@@ -74,6 +80,7 @@ describe("Réglages · moi et mon équipe", () => {
 
   it("ajoute, renseigne puis retire un membre", async () => {
     renderSettings();
+    openSection("Moi et mon équipe");
 
     const fiche = within(panel());
     expect(fiche.queryByLabelText("Nom du membre 1")).toBeNull();
@@ -94,6 +101,7 @@ describe("Réglages · moi et mon équipe", () => {
 
   it("garde une fiche distincte par boîte", async () => {
     renderSettings();
+    openSection("Moi et mon équipe");
 
     const fiche = within(panel());
     fireEvent.change(fiche.getByLabelText("Votre nom"), { target: { value: "Roman perso" } });

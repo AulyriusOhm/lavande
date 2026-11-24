@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { DesktopSettings } from "@/desktop/settings";
 import { MailStoreProvider } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
@@ -34,6 +34,12 @@ function renderSettings() {
   );
 }
 
+function openSection(label: string) {
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Sections des réglages" })).getByRole("button", { name: label }),
+  );
+}
+
 describe("Réglages · serveurs MCP", () => {
   it("affiche le journal réel des actions et plus aucune entrée factice", () => {
     recordMcpAction({
@@ -44,6 +50,7 @@ describe("Réglages · serveurs MCP", () => {
       detail: "Facture d'août · envoi refusé",
     });
     renderSettings();
+    openSection("Serveurs MCP");
 
     expect(screen.getByText("mail.send")).toBeTruthy();
     expect(screen.getByText("Facture d'août · envoi refusé")).toBeTruthy();
@@ -56,6 +63,7 @@ describe("Réglages · serveurs MCP", () => {
 
   it("affiche un état vide sans action", () => {
     renderSettings();
+    openSection("Serveurs MCP");
 
     expect(screen.getByText("Aucune action journalisée.")).toBeTruthy();
     expect(screen.queryByText(/Point maquettes/)).toBeNull();
@@ -63,6 +71,7 @@ describe("Réglages · serveurs MCP", () => {
 
   it("persiste « toujours autoriser » pour un type d'action", () => {
     renderSettings();
+    openSection("Serveurs MCP");
 
     fireEvent.click(screen.getByRole("switch", { name: "Toujours autoriser · envoi" }));
 
@@ -81,6 +90,7 @@ describe("Réglages · serveurs MCP", () => {
       JSON.stringify({ mcpAlwaysAllow: { envoi: true, suppression: true } }),
     );
     renderSettings();
+    openSection("Serveurs MCP");
 
     expect(screen.getByRole("switch", { name: "Toujours autoriser · envoi" }).getAttribute("aria-checked")).toBe(
       "true",

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { DesktopSettings } from "@/desktop/settings";
 import { MailStoreProvider } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
@@ -31,9 +31,16 @@ function renderSettings() {
   );
 }
 
+function openSection(label: string) {
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Sections des réglages" })).getByRole("button", { name: label }),
+  );
+}
+
 describe("Réglages · mise à jour", () => {
   it("hors coquille de bureau : section inactive, aucun téléchargement possible", async () => {
     renderSettings();
+    openSection("Mise à jour");
 
     expect(await screen.findByRole("heading", { name: "Mise à jour" })).toBeTruthy();
     expect(screen.getByText("Version installée")).toBeTruthy();

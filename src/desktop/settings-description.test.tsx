@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { DesktopSettings } from "@/desktop/settings";
 import { MailStoreProvider } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
@@ -38,6 +38,11 @@ function renderSettings() {
   );
 }
 
+function openSection(label: string) {
+  const nav = screen.getByRole("navigation", { name: "Sections des réglages" });
+  fireEvent.click(within(nav).getByRole("button", { name: label }));
+}
+
 describe("Réglages PC · description des mails", () => {
   it("n'expose plus de source ni de modèle de description, même avec des prefs héritées", () => {
     window.localStorage.setItem(
@@ -47,6 +52,7 @@ describe("Réglages PC · description des mails", () => {
       }),
     );
     renderSettings();
+    openSection("Intelligence artificielle");
 
     expect(screen.queryByText("Description des mails")).toBeNull();
     expect(screen.queryByText("Source de la description")).toBeNull();
@@ -57,6 +63,7 @@ describe("Réglages PC · description des mails", () => {
   it("annonce que la Description rapide vient du LLM des Réglages IA", () => {
     window.localStorage.setItem("lavande.prefs", JSON.stringify({ decision: DECISION_READY }));
     renderSettings();
+    openSection("Apparence");
 
     fireEvent.click(screen.getByRole("button", { name: "Description rapide" }));
     expect(
@@ -67,6 +74,7 @@ describe("Réglages PC · description des mails", () => {
   it("nomme l'exemple d'aperçu « Description rapide » dans l'Apparence", () => {
     window.localStorage.setItem("lavande.prefs", JSON.stringify({ decision: DECISION_READY }));
     renderSettings();
+    openSection("Apparence");
 
     expect(screen.getByText("Exemple — mail de Marc Delaunay")).toBeTruthy();
     expect(screen.getByRole("button", { name: /Description rapideAvenant signé/ })).toBeTruthy();

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DesktopSettings } from "@/desktop/settings";
 import { MailStoreProvider } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
@@ -32,12 +32,19 @@ function renderSettings() {
   );
 }
 
+function openSection(label: string) {
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Sections des réglages" })).getByRole("button", { name: label }),
+  );
+}
+
 const toggle = () => screen.getByRole("switch", { name: /Vérification automatique/ });
 const chip = (label: string) => screen.getByRole("button", { name: label });
 
 describe("Réglages PC · vérification des mises à jour", () => {
   it("active la vérification automatique et propose 24 h par défaut", () => {
     renderSettings();
+    openSection("Mise à jour");
 
     expect(toggle().getAttribute("aria-checked")).toBe("true");
     expect(chip("24 h").getAttribute("aria-pressed")).toBe("true");
@@ -46,6 +53,7 @@ describe("Réglages PC · vérification des mises à jour", () => {
 
   it("coupe la vérification et masque la fréquence", async () => {
     renderSettings();
+    openSection("Mise à jour");
 
     fireEvent.click(toggle());
 
@@ -57,6 +65,7 @@ describe("Réglages PC · vérification des mises à jour", () => {
 
   it("change la fréquence et la persiste", async () => {
     renderSettings();
+    openSection("Mise à jour");
 
     fireEvent.click(chip("6 h"));
 

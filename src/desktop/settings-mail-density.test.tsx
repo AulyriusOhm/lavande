@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DesktopSettings } from "@/desktop/settings";
 import { MailStoreProvider } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
@@ -40,9 +40,15 @@ function renderSettings() {
   );
 }
 
+function openSection(label: string) {
+  const nav = screen.getByRole("navigation", { name: "Sections des réglages" });
+  fireEvent.click(within(nav).getByRole("button", { name: label }));
+}
+
 describe("Réglages PC · affichage des mails", () => {
   it("choisit le confort par défaut et bascule vers le compact", async () => {
     renderSettings();
+    openSection("Apparence");
 
     const cozy = screen.getByRole("button", { name: "Confort" });
     const compact = screen.getByRole("button", { name: "Compact" });
@@ -65,6 +71,7 @@ describe("Réglages PC · affichage des mails", () => {
 describe("Réglages PC · aperçu de la liste", () => {
   it("propose les trois aperçus et désactive la description IA sans modèle", async () => {
     renderSettings();
+    openSection("Apparence");
 
     const excerpt = screen.getByRole("button", { name: "Extrait" });
     const ai = screen.getByRole("button", { name: "Description IA" });
@@ -95,6 +102,7 @@ describe("Réglages PC · aperçu de la liste", () => {
   it("active la description IA quand le modèle est configuré", async () => {
     window.localStorage.setItem("lavande.prefs", JSON.stringify({ decision: DECISION_READY }));
     renderSettings();
+    openSection("Apparence");
 
     const ai = screen.getByRole("button", { name: "Description IA" });
     expect(ai.hasAttribute("disabled")).toBe(false);
@@ -113,6 +121,7 @@ describe("Réglages PC · aperçu de la liste", () => {
   it("choisit le style de description et bascule depuis les exemples", async () => {
     window.localStorage.setItem("lavande.prefs", JSON.stringify({ decision: DECISION_READY }));
     renderSettings();
+    openSection("Apparence");
 
     expect(screen.getByText("Style de description")).toBeTruthy();
     const signaux = screen.getByRole("button", { name: "Signaux" });

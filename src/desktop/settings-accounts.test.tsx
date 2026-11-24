@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { DesktopSettings } from "@/desktop/settings";
 import { MailStoreProvider } from "@/lib/store";
@@ -136,6 +136,12 @@ function mount() {
   );
 }
 
+function openSection(label: string) {
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Sections des réglages" })).getByRole("button", { name: label }),
+  );
+}
+
 beforeEach(() => {
   window.localStorage.clear();
 });
@@ -233,6 +239,7 @@ describe("Réglages · PGP par compte", () => {
   it("affiche l'interrupteur du compte et enregistre sa coupure", async () => {
     stubFetch();
     mount();
+    openSection("Sécurité & PGP");
 
     const master = await screen.findByRole("switch", { name: /PGP pour Perso/ });
     expect(master.getAttribute("aria-checked")).toBe("true");
@@ -250,6 +257,7 @@ describe("Réglages · PGP par compte", () => {
   it("règle la signature du compte sans toucher au chiffrement", async () => {
     stubFetch();
     mount();
+    openSection("Sécurité & PGP");
 
     fireEvent.click(await screen.findByRole("switch", { name: /Signer ses messages/ }));
 

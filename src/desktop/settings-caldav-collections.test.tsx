@@ -98,8 +98,14 @@ const calls = (fetchMock: ReturnType<typeof vi.fn>, suffix: string, method?: str
 
 const section = () => document.getElementById("reglages-calendriers") as HTMLElement;
 
+const openSection = (label: string) => {
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Sections des réglages" })).getByRole("button", { name: label }),
+  );
+};
+
 function renderSettings() {
-  return render(
+  const view = render(
     <PrefsProvider>
       <ThemeProvider>
         <PlanningProvider storage={createMemoryStorage()}>
@@ -110,6 +116,8 @@ function renderSettings() {
       </ThemeProvider>
     </PrefsProvider>,
   );
+  openSection("Calendriers");
+  return view;
 }
 
 const fillCredentials = () => {

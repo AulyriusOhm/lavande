@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DesktopSettings } from "@/desktop/settings";
 import { MailStoreProvider } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
@@ -31,9 +31,15 @@ function renderSettings() {
   );
 }
 
+function openSection(label: string) {
+  const nav = screen.getByRole("navigation", { name: "Sections des réglages" });
+  fireEvent.click(within(nav).getByRole("button", { name: label }));
+}
+
 describe("Réglages PC · affichage des conversations", () => {
   it("choisit bien rangé par défaut et bascule vers la citation classique", async () => {
     renderSettings();
+    openSection("Apparence");
 
     const tidy = screen.getByRole("button", { name: "Bien rangé" });
     const inline = screen.getByRole("button", { name: "Tout dans le même mail" });

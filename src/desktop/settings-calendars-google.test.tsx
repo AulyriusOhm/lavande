@@ -131,6 +131,12 @@ const renderSettings = () =>
 
 const section = () => document.getElementById("reglages-calendriers") as HTMLElement;
 
+const openSection = (label: string) => {
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Sections des réglages" })).getByRole("button", { name: label }),
+  );
+};
+
 beforeEach(() => {
   window.localStorage.clear();
 });
@@ -139,6 +145,7 @@ describe("Réglages · calendriers Google", () => {
   it("liste les calendriers du seul compte Google et en ajoute un", async () => {
     const fetchMock = stubDaemon();
     renderSettings();
+    openSection("Calendriers");
 
     const add = await screen.findByRole("button", { name: "Ajouter le calendrier Google Agenda perso" });
     expect(within(section()).getByText("Compte Google")).toBeTruthy();
@@ -189,6 +196,7 @@ describe("Réglages · calendriers Google", () => {
   it("affiche le refus du démon quand le droit agenda manque, sans boucle", async () => {
     const fetchMock = stubDaemon({ calendarsStatus: 403 });
     renderSettings();
+    openSection("Calendriers");
 
     await waitFor(() =>
       expect(section().textContent).toContain(
@@ -207,6 +215,7 @@ describe("Réglages · calendriers Google", () => {
         "accès Google Calendar interdit (403) : Google Calendar API has not been used in project 123 before or it is disabled",
     });
     renderSettings();
+    openSection("Calendriers");
 
     await waitFor(() =>
       expect(section().textContent).toContain("Google Calendar API has not been used in project 123"),
@@ -219,6 +228,7 @@ describe("Réglages · calendriers Google", () => {
     renderSettings();
 
     await waitFor(() => expect(screen.getByLabelText("Renommer Studio")).toBeTruthy());
+    openSection("Calendriers");
     expect(screen.queryByText("Compte Google")).toBeNull();
     expect(calls(fetchMock, /\/calendars\/google\//)).toHaveLength(0);
   });
@@ -252,6 +262,7 @@ describe("Réglages · calendriers Google", () => {
       }),
     );
     renderSettings();
+    openSection("Calendriers");
 
     fireEvent.click(screen.getByRole("button", { name: "Supprimer le calendrier Agenda" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirmer" }));
@@ -274,6 +285,7 @@ describe("Réglages · calendriers Google", () => {
       ]),
     );
     renderSettings();
+    openSection("Calendriers");
 
     fireEvent.click(await screen.findByRole("button", { name: "Ajouter le calendrier Google Équipe" }));
 
@@ -294,6 +306,7 @@ describe("Réglages · calendriers Google", () => {
   it("garde le calendrier quand les événements seuls échouent", async () => {
     stubDaemon({ eventsStatus: 502, events: { error: "serveur muet", kind: "gcal" } });
     renderSettings();
+    openSection("Calendriers");
 
     fireEvent.click(await screen.findByRole("button", { name: "Ajouter le calendrier Google Agenda perso" }));
 
@@ -307,6 +320,7 @@ describe("Réglages · compte Google absent", () => {
   it("propose de connecter un compte sans lancer de requête Google", async () => {
     const fetchMock = stubDaemon({ accounts: [] });
     renderSettings();
+    openSection("Calendriers");
 
     const connect = await screen.findByRole("button", { name: "Connecter un compte Google" });
     expect(screen.getByText(/Aucun compte Google connecté/)).toBeTruthy();

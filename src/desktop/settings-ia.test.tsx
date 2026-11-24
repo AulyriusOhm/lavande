@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { DesktopSettings } from "@/desktop/settings";
 import { MailStoreProvider } from "@/lib/store";
@@ -52,6 +52,11 @@ function mount() {
   );
 }
 
+function openSection(label: string) {
+  const nav = screen.getByRole("navigation", { name: "Sections des réglages" });
+  fireEvent.click(within(nav).getByRole("button", { name: label }));
+}
+
 beforeEach(() => {
   window.localStorage.clear();
 });
@@ -66,6 +71,7 @@ describe("Réglages · section IA sous VITE_PLATFORM=android", () => {
     vi.stubEnv("VITE_PLATFORM", "android");
     stubFetch(() => response({}));
     mount();
+    openSection("Intelligence artificielle");
 
     expect(screen.getAllByText("Intelligence artificielle").length).toBeGreaterThan(0);
     expect(screen.getByLabelText("Endpoint du modèle")).toBeTruthy();
@@ -73,6 +79,8 @@ describe("Réglages · section IA sous VITE_PLATFORM=android", () => {
     expect(screen.getByLabelText("Clé API")).toBeTruthy();
     expect(screen.getByText("Tester la connexion")).toBeTruthy();
     expect(screen.getByRole("switch", { name: /Suggestions de réponse IA/ })).toBeTruthy();
+
+    openSection("Suggestions de tâches");
     expect(screen.getByRole("switch", { name: /Suggestions de tâches IA/ })).toBeTruthy();
   });
 });
@@ -81,6 +89,7 @@ describe("Réglages · section IA", () => {
   it("désactive le test tant que la configuration est incomplète", async () => {
     stubFetch(() => response({}));
     mount();
+    openSection("Intelligence artificielle");
 
     const button = (await screen.findByText("Tester la connexion")).closest("button");
     expect(button?.disabled).toBe(true);
@@ -90,6 +99,7 @@ describe("Réglages · section IA", () => {
     window.localStorage.setItem("lavande.prefs", JSON.stringify({ llm: LLM }));
     const fetchMock = stubFetch(() => response({ choices: [{ message: { content: "OK" } }] }));
     mount();
+    openSection("Intelligence artificielle");
 
     fireEvent.click(await screen.findByText("Tester la connexion"));
 
@@ -109,6 +119,7 @@ describe("Réglages · section IA", () => {
     window.localStorage.setItem("lavande.prefs", JSON.stringify({ llm: LLM }));
     stubFetch(() => response({ error: "MissingSessionID" }, 401));
     mount();
+    openSection("Intelligence artificielle");
 
     fireEvent.click(await screen.findByText("Tester la connexion"));
 
@@ -130,6 +141,7 @@ describe("Réglages · modèles et consommation", () => {
     window.localStorage.setItem("lavande.prefs", JSON.stringify({ llm: LLM }));
     const fetchMock = stubFetch(() => response({}));
     const view = mount();
+    openSection("Intelligence artificielle");
 
     fireEvent.click(await screen.findByText("Charger les modèles"));
 
@@ -156,6 +168,7 @@ describe("Réglages · modèles et consommation", () => {
     window.localStorage.setItem("lavande.prefs", JSON.stringify({ llm: LLM }));
     stubFetch(() => response({}), () => response({ error: "not_found" }, 404));
     mount();
+    openSection("Intelligence artificielle");
 
     fireEvent.click(await screen.findByText("Charger les modèles"));
 
@@ -167,6 +180,7 @@ describe("Réglages · modèles et consommation", () => {
     window.localStorage.setItem("lavande.prefs", JSON.stringify({ llm: LLM }));
     stubFetch(withUsage);
     mount();
+    openSection("Intelligence artificielle");
 
     expect(await screen.findByText("Consommation")).toBeTruthy();
     expect(screen.getByText("cet appareil")).toBeTruthy();
@@ -193,6 +207,7 @@ describe("Réglages · suggestions de tâches IA", () => {
   it("bascule l'option et borne la fenêtre entre 1 et 168 heures", async () => {
     stubFetch(() => response({}));
     mount();
+    openSection("Suggestions de tâches");
 
     const toggle = screen.getByRole("switch", { name: /Suggestions de tâches IA/ });
     expect(toggle.getAttribute("aria-checked")).toBe("true");
@@ -218,6 +233,7 @@ describe("Réglages · suggestions de tâches IA", () => {
   it("rappelle qu'aucun modèle n'est configuré et que rien n'est créé sans validation", () => {
     stubFetch(() => response({}));
     mount();
+    openSection("Suggestions de tâches");
 
     expect(screen.getByText(/Le LLM analyse vos mails récents pour proposer des tâches/)).toBeTruthy();
     expect(
@@ -228,6 +244,7 @@ describe("Réglages · suggestions de tâches IA", () => {
   it("exclut puis réinclut un compte des suggestions IA", async () => {
     stubFetch(() => response({}));
     mount();
+    openSection("Suggestions de tâches");
 
     expect(screen.getAllByText("Analysé par l'IA")).toHaveLength(3);
 
@@ -245,6 +262,7 @@ describe("Réglages · suggestions de tâches IA", () => {
   it("active puis désactive les suggestions de rendez-vous IA", async () => {
     stubFetch(() => response({}));
     mount();
+    openSection("Suggestions de tâches");
 
     const toggle = screen.getByRole("switch", { name: /Suggestions de rendez-vous IA/ });
     expect(toggle.getAttribute("aria-checked")).toBe("false");

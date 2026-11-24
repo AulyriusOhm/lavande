@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { DesktopInbox } from "@/desktop/inbox";
 import { DesktopSettings } from "@/desktop/settings";
@@ -64,6 +64,12 @@ function mount(children: ReactNode) {
   );
 }
 
+function openSection(label: string) {
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Sections des réglages" })).getByRole("button", { name: label }),
+  );
+}
+
 beforeEach(() => {
   window.localStorage.clear();
 });
@@ -72,6 +78,7 @@ describe("Réglages · Sécurité & PGP", () => {
   it("affiche la clé secrète réelle et la liste des clés", async () => {
     stubKeys([SECRET, CONTACT]);
     mount(<DesktopSettings />);
+    openSection("Sécurité & PGP");
 
     await waitFor(() =>
       expect(screen.getByText("9F3A 71C4 D0B8 5E62 4A17 88CD 2B90 7F31 AE45 6C08")).toBeTruthy(),
@@ -87,6 +94,7 @@ describe("Réglages · Sécurité & PGP", () => {
   it("propose de générer une clé quand le service est injoignable", async () => {
     stubKeys(null);
     mount(<DesktopSettings />);
+    openSection("Sécurité & PGP");
 
     await waitFor(() => expect(screen.getByText("Générer ma clé")).toBeTruthy());
     expect(screen.getByText("Aucune clé secrète")).toBeTruthy();

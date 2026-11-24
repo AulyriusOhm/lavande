@@ -131,8 +131,14 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
+const openSection = (label: string) => {
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Sections des réglages" })).getByRole("button", { name: label }),
+  );
+};
+
 function renderSettings() {
-  return render(
+  const view = render(
     <PrefsProvider>
       <ThemeProvider>
         <PlanningProvider storage={createMemoryStorage()}>
@@ -143,6 +149,8 @@ function renderSettings() {
       </ThemeProvider>
     </PrefsProvider>,
   );
+  openSection("Calendriers");
+  return view;
 }
 
 const section = () => document.getElementById("reglages-calendriers") as HTMLElement;

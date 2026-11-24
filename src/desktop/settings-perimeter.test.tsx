@@ -64,6 +64,12 @@ const prefs = () => JSON.parse(window.localStorage.getItem("lavande.prefs") ?? "
 
 const section = () => document.getElementById("reglages-calendriers") as HTMLElement;
 
+const openSection = (label: string) => {
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Sections des réglages" })).getByRole("button", { name: label }),
+  );
+};
+
 const openPerimeter = async (label: string) => {
   const button = await screen.findByRole("button", { name: `Périmètre de synchronisation de ${label}` });
   fireEvent.click(button);
@@ -176,6 +182,7 @@ describe("Réglages PC · périmètre par compte", () => {
 
     await openPerimeter("Gmail");
     fireEvent.click(switches("Gmail", "Agenda")[0]);
+    openSection("Calendriers");
 
     await waitFor(() => expect(within(section()).getAllByText("En pause")).toHaveLength(1));
     expect(within(section()).getByText(/agenda du compte coupé/)).toBeTruthy();

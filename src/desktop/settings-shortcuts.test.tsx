@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { DesktopSettings } from "@/desktop/settings";
 import { MailStoreProvider } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
@@ -39,6 +39,11 @@ function mount() {
   );
 }
 
+function openSection(label: string) {
+  const nav = screen.getByRole("navigation", { name: "Sections des réglages" });
+  fireEvent.click(within(nav).getByRole("button", { name: label }));
+}
+
 beforeEach(() => {
   window.localStorage.clear();
 });
@@ -46,6 +51,7 @@ beforeEach(() => {
 describe("Réglages · section raccourcis clavier", () => {
   it("propose la section dans le sommaire", () => {
     mount();
+    openSection("Raccourcis clavier");
 
     expect(screen.getAllByText("Raccourcis clavier").length).toBeGreaterThan(1);
     expect(document.getElementById("reglages-clavier")).toBeTruthy();
@@ -53,6 +59,7 @@ describe("Réglages · section raccourcis clavier", () => {
 
   it("liste toutes les touches groupées, actions sur le message comprises", () => {
     mount();
+    openSection("Raccourcis clavier");
     const section = document.getElementById("reglages-clavier") as HTMLElement;
 
     expect(within(section).getByText("Suppr")).toBeTruthy();

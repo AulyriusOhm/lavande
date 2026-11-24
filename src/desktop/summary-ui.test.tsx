@@ -41,6 +41,12 @@ function mount(children: ReactNode) {
   return render(providers(children));
 }
 
+function openSection(label: string) {
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Sections des réglages" })).getByRole("button", { name: label }),
+  );
+}
+
 const byId = (id: string): Mail => {
   const mail = MAILS.find((entry) => entry.id === id);
   if (!mail) throw new Error(`mail de démo ${id} introuvable`);
@@ -634,6 +640,7 @@ describe("Réglages · section Résumés", () => {
   it("liste les préférences de résumé et enregistre le consentement LLM", async () => {
     stubBackend();
     mount(<DesktopSettings />);
+    openSection("Résumés");
 
     expect(await screen.findByText("Résumés périodiques")).toBeTruthy();
     const consent = screen.getByText("Autoriser l'analyse de mes mails par le LLM").closest("button");

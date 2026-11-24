@@ -119,6 +119,12 @@ function renderSettings() {
   );
 }
 
+function openSection(label: string) {
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Sections des réglages" })).getByRole("button", { name: label }),
+  );
+}
+
 const section = () => document.getElementById("reglages-messagerie") as HTMLElement;
 /** Le panneau des filtres : la section porte aussi les étiquettes. */
 const panel = () => document.querySelector('[data-testid="zimbra-filters"]') as HTMLElement;
@@ -133,6 +139,7 @@ describe("Réglages · filtres et absence Zimbra", () => {
   it("liste les filtres du serveur et résume conditions puis actions", async () => {
     const fetchMock = stubDaemon();
     renderSettings();
+    openSection("Filtres & absence");
 
     await waitFor(() => expect(within(section()).getByText("facture")).toBeTruthy());
     expect(within(section()).getByText("actif")).toBeTruthy();
@@ -149,6 +156,7 @@ describe("Réglages · filtres et absence Zimbra", () => {
   it("ajoute un filtre et n'envoie que la règle au serveur", async () => {
     const fetchMock = stubDaemon();
     renderSettings();
+    openSection("Filtres & absence");
     await waitFor(() => expect(within(section()).getByText("facture")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: "Nouveau filtre" }));
@@ -181,6 +189,7 @@ describe("Réglages · filtres et absence Zimbra", () => {
   it("supprime un filtre après confirmation", async () => {
     const fetchMock = stubDaemon();
     renderSettings();
+    openSection("Filtres & absence");
     await waitFor(() => expect(within(section()).getByText("facture")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: "Supprimer le filtre facture" }));
@@ -199,6 +208,7 @@ describe("Réglages · filtres et absence Zimbra", () => {
   it("enregistre le message d'absence et ses dates sur le serveur", async () => {
     const fetchMock = stubDaemon();
     renderSettings();
+    openSection("Filtres & absence");
     await waitFor(() => expect(within(section()).getByText("facture")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("switch", { name: /Répondre automatiquement/ }));
@@ -225,6 +235,7 @@ describe("Réglages · filtres et absence Zimbra", () => {
   it("remonte un serveur muet sans rien inventer", async () => {
     stubDaemon({ filterStatus: 502 });
     renderSettings();
+    openSection("Filtres & absence");
 
     await waitFor(() => expect(within(panel()).getByRole("status").textContent).toContain("serveur Zimbra injoignable"));
     expect(within(panel()).getByRole("status").textContent).toContain("soap");
@@ -234,6 +245,7 @@ describe("Réglages · filtres et absence Zimbra", () => {
   it("annonce un refus d'écriture du serveur", async () => {
     stubDaemon({ writeStatus: 502 });
     renderSettings();
+    openSection("Filtres & absence");
     await waitFor(() => expect(within(section()).getByText("facture")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: "Nouveau filtre" }));

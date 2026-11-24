@@ -67,6 +67,12 @@ function mount(children: ReactNode) {
   );
 }
 
+function openSection(label: string) {
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Sections des réglages" })).getByRole("button", { name: label }),
+  );
+}
+
 const storedPrefs = () =>
   JSON.parse(window.localStorage.getItem("lavande.prefs") ?? "{}") as Record<string, unknown>;
 
@@ -245,6 +251,7 @@ describe("Réglages PC · Modèle de décision · Système 1", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     mount(<DesktopSettings />);
+    openSection("Intelligence artificielle");
 
     expect(screen.getByText("Modèle de décision · Système 1")).toBeTruthy();
     expect(
@@ -359,6 +366,7 @@ describe("Réglages PC · Modèle de décision · Système 1", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     mount(<DesktopSettings />);
+    openSection("Intelligence artificielle");
 
     const toggle = screen.getByRole("switch", { name: /Catégorisation spam/ });
     expect(toggle.getAttribute("aria-checked")).toBe("false");

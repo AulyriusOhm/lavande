@@ -80,6 +80,9 @@ function renderSettings() {
 }
 
 const nav = () => screen.getByRole("navigation", { name: "Sections des réglages" });
+const compactNav = () => screen.getByRole("navigation", { name: "Sections des réglages · compact" });
+const search = () => screen.getByRole("textbox", { name: "Rechercher un réglage" });
+const mountedAnchors = () => Array.from(document.querySelectorAll("[id^='reglages-']")).map((node) => node.id);
 
 describe("Réglages · sommaire groupé", () => {
   it("range les sections en huit groupes nommés, dans l'ordre acté", () => {
@@ -114,15 +117,16 @@ describe("Réglages · sommaire groupé", () => {
     const buttons = within(nav()).getAllByRole("button");
     expect(buttons.map((button) => button.textContent)).toEqual(SECTIONS.map((section) => section.label));
   });
+});
 
-  it("rend les corps de sections dans l'ordre du sommaire", () => {
+describe("Réglages · une page à la fois", () => {
+  it("ne monte que la section active, Comptes au départ", () => {
     renderSettings();
 
-    const anchors = Array.from(document.querySelectorAll("[id^='reglages-']")).map((node) => node.id);
-    expect(anchors).toEqual(SECTIONS.map((section) => section.anchor));
+    expect(mountedAnchors()).toEqual(["reglages-comptes"]);
   });
 
-  it("navigue vers une sous-section et marque le sommaire", () => {
+  it("navigue vers une page, remplace la précédente et marque le sommaire", () => {
     renderSettings();
 
     const target = within(nav()).getByRole("button", { name: "Calendriers" });
@@ -130,6 +134,51 @@ describe("Réglages · sommaire groupé", () => {
 
     expect(target.getAttribute("aria-current")).toBe("true");
     expect(within(nav()).getByRole("button", { name: "Comptes" }).getAttribute("aria-current")).toBe("false");
-    expect(scrolled).toEqual([document.getElementById("reglages-calendriers")]);
+    expect(mountedAnchors()).toEqual(["reglages-calendriers"]);
+    expect(scrolled).toEqual([]);
+  });
+
+  it("offre les mêmes pages en chips compactes", () => {
+    renderSettings();
+
+    const chips = within(compactNav()).getAllByRole("button");
+    expect(chips.map((chip) => chip.textContent)).toEqual(SECTIONS.map((section) => section.label));
+
+    fireEvent.click(within(compactNav()).getByRole("button", { name: "Mise à jour" }));
+    expect(mountedAnchors()).toEqual(["reglages-mise-a-jour"]);
+  });
+});
+
+describe("Réglages · recherche", () => {
+  it("filtre le sommaire par libellé ou mot-clé, sans tenir compte des accents", () => {
+    renderSettings();
+
+    fireEvent.change(search(), { target: { value: "pgp" } });
+    expect(within(nav()).getAllByRole("button").map((button) => button.textContent)).toEqual(["Sécurité & PGP"]);
+
+    fireEvent.change(search(), { target: { value: "securite" } });
+    expect(within(nav()).getAllByRole("button").map((button) => button.textContent)).toEqual(["Sécurité & PGP"]);
+  });
+
+  it("ouvre la première correspondance avec Entrée et vide la recherche", () => {
+    renderSettings();
+
+    fireEvent.change(search(), { target: { value: "caldav" } });
+    fireEvent.keyDown(search(), { key: "Enter" });
+
+    expect(mountedAnchors()).toEqual(["reglages-calendriers"]);
+    expect((search() as HTMLInputElement).value).toBe("");
+    expect(within(nav()).getAllByRole("button")).toHaveLength(SECTIONS.length);
+  });
+
+  it("dit quand rien ne correspond et restaure le sommaire avec Échap", () => {
+    renderSettings();
+
+    fireEvent.change(search(), { target: { value: "zzz" } });
+    expect(within(nav()).queryAllByRole("button")).toEqual([]);
+    expect(within(nav()).getByText("Aucun réglage ne correspond.")).toBeTruthy();
+
+    fireEvent.keyDown(search(), { key: "Escape" });
+    expect(within(nav()).getAllByRole("button")).toHaveLength(SECTIONS.length);
   });
 });

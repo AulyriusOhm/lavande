@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 // Démo vitrine : le drapeau est posé avant l'évaluation des modules, comme dans
 // un build `VITE_MAIL_BACKEND=demo VITE_DEMO_READONLY=1 vite build`.
@@ -14,6 +14,12 @@ import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { ThemeProvider } from "@/lib/theme";
 import { createMemoryStorage } from "@/lib/sync/storage";
+
+function openSection(label: string) {
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Sections des réglages" })).getByRole("button", { name: label }),
+  );
+}
 
 const section = () => document.getElementById("reglages-messagerie") as HTMLElement;
 
@@ -36,6 +42,7 @@ describe("Réglages · filtres Zimbra en démo", () => {
         </ThemeProvider>
       </PrefsProvider>,
     );
+    openSection("Filtres & absence");
 
     await waitFor(() =>
       expect(within(section()).getByText(/Démo : les filtres et le message d'absence/)).toBeTruthy(),

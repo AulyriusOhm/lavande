@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DesktopSettings } from "@/desktop/settings";
 import { MailStoreProvider } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
@@ -32,9 +32,15 @@ function renderSettings() {
   );
 }
 
+function openSection(label: string) {
+  const nav = screen.getByRole("navigation", { name: "Sections des réglages" });
+  fireEvent.click(within(nav).getByRole("button", { name: label }));
+}
+
 describe("Réglages PC · fenêtre du résumé", () => {
   it("choisit le mode périodique par défaut et garde les heures", () => {
     renderSettings();
+    openSection("Résumés");
 
     expect(screen.getByRole("button", { name: "Périodique" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "Jours glissants" }).getAttribute("aria-pressed")).toBe(
@@ -46,6 +52,7 @@ describe("Réglages PC · fenêtre du résumé", () => {
 
   it("bascule en jours glissants et remplace les heures par la fenêtre", async () => {
     renderSettings();
+    openSection("Résumés");
 
     fireEvent.click(screen.getByRole("button", { name: "Jours glissants" }));
 
@@ -61,6 +68,7 @@ describe("Réglages PC · fenêtre du résumé", () => {
 
   it("borne les jours entre 1 et 90 et les persiste", async () => {
     renderSettings();
+    openSection("Résumés");
     fireEvent.click(screen.getByRole("button", { name: "Jours glissants" }));
     const days = () => screen.getByLabelText("Nombre de jours de mails non lus") as HTMLInputElement;
 
