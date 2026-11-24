@@ -138,6 +138,26 @@ describe("useAiSync", () => {
     expect(screen.getByTestId("devices").textContent).toBe("2");
   });
 
+  it("porte la description du modèle de décision dans le doc decision:settings", async () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({
+        llm: LLM,
+        decision: { enabled: true, descriptionModel: "my-chat-model", descriptionSource: "llm" },
+      }),
+    );
+    stubServer();
+    const storage = await configuredStorage();
+    mount(storage);
+
+    const decisionKey = docKey("ai", "decision:settings");
+    await waitFor(() => expect(storage.read().docs[decisionKey]).toBeDefined());
+    const raw = storage.read().docs[decisionKey]?.raw ?? {};
+    expect(raw.descriptionModel).toBe("my-chat-model");
+    expect(raw.descriptionSource).toBe("llm");
+    expect(JSON.stringify(raw)).not.toContain(LLM.apiKey);
+  });
+
   it("applique un doc settings distant plus récent sans réémettre d'écho", async () => {
     stubServer();
     const storage = await configuredStorage();

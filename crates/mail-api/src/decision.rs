@@ -27,7 +27,7 @@ use crate::state::AppState;
 
 pub const CONFIG_FILE: &str = "decision.json";
 pub const SECRET_ID: &str = "ai:decision";
-pub const TRIAGE_SCHEMA_VERSION: i64 = 1;
+pub const TRIAGE_SCHEMA_VERSION: i64 = 2;
 
 pub const NEURALWATT_ENDPOINT: &str = "https://api.neuralwatt.com/v1/systemone";
 pub const BASETEN_ENDPOINT: &str = "https://inference.baseten.co/v1/systemone";
@@ -37,6 +37,13 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_STATE_BODY_CHARS: usize = 1600;
 const MAX_CUSTOM_CATEGORIES: usize = 8;
+
+/// Une phrase courte suffit à la liste : au-delà, le résumé devient un paragraphe.
+const DESCRIPTION_MAX_CHARS: usize = 240;
+/// Un modèle de raisonnement dépense tout son budget à réfléchir : 80 jetons
+/// laissaient `content` à null, 400 rend la phrase avec de la marge.
+const DESCRIPTION_MAX_TOKENS: u32 = 400;
+const DESCRIPTION_PROMPT: &str = "Résume cet email pour le destinataire en une seule phrase courte en français : sujet, action attendue ou échéance. Sans salutation ni formule creuse.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -164,6 +171,27 @@ fn default_recent_mail_count() -> usize {
     40
 }
 
+/// Modèle de chat qui rédige la phrase de résumé : le protocole de décision
+/// (`/v1/systemone`, `/v1/decide`) n'accepte que `noul`, `choice` et `score`.
+const DESCRIPTION_MODEL_NEURALWATT: &str = "nw-flash";
+
+/// Source de la phrase : le modèle de chat du fournisseur de décision, ou le
+/// LLM conversationnel du front (le démon n'appelle alors aucun modèle).
+const DESCRIPTION_SOURCE_LLM: &str = "llm";
+
+fn default_description_source() -> String {
+    "decision".to_string()
+}
+
+/// Défaut d'un fournisseur neuf. Un fournisseur sans modèle de chat connu laisse
+/// la description vide, donc désactivée ; une valeur explicite est toujours gardée.
+fn description_model_default(provider: DecisionProvider) -> &'static str {
+    match provider {
+        DecisionProvider::Neuralwatt => DESCRIPTION_MODEL_NEURALWATT,
+        DecisionProvider::Baseten | DecisionProvider::Jev | DecisionProvider::Custom => "",
+    }
+}
+
 /// Configuration persistée dans `decision.json` (sans clé API).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DecisionConfig {
@@ -177,6 +205,14 @@ pub struct DecisionConfig {
     pub endpoint: String,
     #[serde(default = "default_model")]
     pub model: String,
+    /// Modèle de chat chargé de la phrase de résumé ; vide = description désactivée.
+    /// Absent du fichier = vide : le défaut du fournisseur ne vit que dans
+    /// `DecisionConfig::default`, jamais sur une valeur déjà écrite.
+    #[serde(default)]
+    pub description_model: String,
+    /// `decision` (modèle de chat du fournisseur) ou `llm` (le front écrit la phrase).
+    #[serde(default = "default_description_source")]
+    pub description_source: String,
     #[serde(default)]
     pub auth_header: DecisionAuthHeader,
     #[serde(default)]
@@ -212,6 +248,8 @@ impl Default for DecisionConfig {
             protocol: DecisionProtocol::Systemone,
             endpoint: default_endpoint(),
             model: default_model(),
+            description_model: description_model_default(DecisionProvider::Neuralwatt).to_string(),
+            description_source: default_description_source(),
             auth_header: DecisionAuthHeader::Bearer,
             thresholds: DecisionThresholds::default(),
             custom_categories: Vec::new(),
@@ -327,6 +365,11 @@ impl DecisionConfig {
     pub fn normalized(mut self) -> Self {
         self.endpoint = self.endpoint.trim().to_string();
         self.model = self.model.trim().to_string();
+        self.description_model = self.description_model.trim().to_string();
+        self.description_source = self.description_source.trim().to_ascii_lowercase();
+        if self.description_source != DESCRIPTION_SOURCE_LLM {
+            self.description_source = default_description_source();
+        }
         self.thresholds = self.thresholds.clamped();
         self.custom_categories.truncate(MAX_CUSTOM_CATEGORIES);
         self.custom_categories.retain(|c| {
@@ -471,16 +514,26 @@ pub struct TriageOutcome {
     pub latency_ms: Option<u64>,
 }
 
+/// Trois cas diffèrent : une clé absente (fichier écrit avant le réglage) prend
+/// le défaut de son propre fournisseur, une valeur explicite — même vide — est
+/// gardée telle quelle.
 pub fn load_config(path: &Path) -> Result<DecisionConfig, ApiError> {
     match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice::<DecisionConfig>(&bytes)
-            .map(DecisionConfig::normalized)
-            .map_err(|error| {
+        Ok(bytes) => {
+            let unreadable = |error: serde_json::Error| {
                 ApiError::internal(
                     "config",
                     format!("{} est illisible : {error}", path.display()),
                 )
-            }),
+            };
+            let raw: Value = serde_json::from_slice(&bytes).map_err(unreadable)?;
+            let mut config: DecisionConfig =
+                serde_json::from_value(raw.clone()).map_err(unreadable)?;
+            if raw.get("description_model").is_none() {
+                config.description_model = description_model_default(config.provider).to_string();
+            }
+            Ok(config.normalized())
+        }
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(DecisionConfig::default()),
         Err(error) => Err(ApiError::internal(
             "config",
@@ -983,25 +1036,148 @@ pub fn build_triage_questions(
     questions
 }
 
-fn mail_state_payload(message: &Message) -> Value {
+fn mail_sender(message: &Message) -> String {
+    match message.from.name.as_deref().map(str::trim) {
+        Some(name) if !name.is_empty() => format!("{name} <{}>", message.from.email),
+        _ => message.from.email.clone(),
+    }
+}
+
+fn mail_excerpt(message: &Message) -> String {
     let body = message
         .body_text
         .as_deref()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or(message.preview.as_str());
-    let excerpt: String = body.chars().take(MAX_STATE_BODY_CHARS).collect();
-    let sender = match message.from.name.as_deref().map(str::trim) {
-        Some(name) if !name.is_empty() => format!("{name} <{}>", message.from.email),
-        _ => message.from.email.clone(),
-    };
+    body.chars().take(MAX_STATE_BODY_CHARS).collect()
+}
+
+fn mail_state_payload(message: &Message) -> Value {
     json!({
-        "from": sender,
+        "from": mail_sender(message),
         "subject": message.subject,
         "date": message.date.map(|d| d.to_rfc3339()).unwrap_or_default(),
         "has_attachment": !message.attachments.is_empty(),
         "answered": message.flags.answered,
-        "excerpt": excerpt,
+        "excerpt": mail_excerpt(message),
     })
+}
+
+/// Le même hôte et la même clé que la décision, sur le chemin des modèles de
+/// chat : `/v1/systemone` et `/v1/decide` deviennent `/v1/chat/completions`.
+fn chat_endpoint(endpoint: &str) -> String {
+    let trimmed = endpoint.trim().trim_end_matches('/');
+    let (scheme, rest) = match trimmed.split_once("://") {
+        Some((scheme, rest)) => (Some(scheme), rest),
+        None => (None, trimmed),
+    };
+    let base = match rest.rsplit_once('/') {
+        Some((base, _segment)) => base,
+        None => rest,
+    };
+    match scheme {
+        Some(scheme) => format!("{scheme}://{base}/chat/completions"),
+        None => format!("{base}/chat/completions"),
+    }
+}
+
+/// `choices[0].message.content` d'une réponse de chat, vide ou blanc refusé.
+fn description_from_chat(payload: &Value) -> Option<String> {
+    let content = payload
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_str)?;
+    let trimmed = content.trim();
+    (!trimmed.is_empty()).then(|| trimmed.chars().take(DESCRIPTION_MAX_CHARS).collect())
+}
+
+async fn request_description(
+    tls: &TlsOptions,
+    config: &DecisionConfig,
+    api_key: Option<&str>,
+    model: &str,
+    message: &Message,
+    timeout: Duration,
+) -> Result<Option<String>, ApiError> {
+    let prompt = format!(
+        "{DESCRIPTION_PROMPT}\n\nDe : {}\nObjet : {}\nExtrait : {}",
+        mail_sender(message),
+        message.subject,
+        mail_excerpt(message)
+    );
+    let body = json!({
+        "model": model,
+        "messages": [{ "role": "user", "content": prompt }],
+        "max_tokens": DESCRIPTION_MAX_TOKENS,
+        "temperature": 0.2,
+        "reasoning_effort": "low",
+    });
+    let client = build_http_client(tls, timeout)?;
+    let mut req = client
+        .post(chat_endpoint(&config.endpoint))
+        .header("content-type", "application/json")
+        .header("accept", "application/json");
+    if let Some(header_val) = auth_header_value(config.auth_header, api_key)? {
+        req = req.header("authorization", header_val);
+    }
+    let response = req
+        .body(
+            serde_json::to_vec(&body).map_err(|error| {
+                ApiError::internal("decision", format!("sérialisation : {error}"))
+            })?,
+        )
+        .send()
+        .await
+        .map_err(|error| {
+            ApiError::transport("decision", format!("modèle de chat injoignable : {error}"))
+        })?;
+    let status = response.status();
+    let raw_bytes = response.bytes().await.map_err(|error| {
+        ApiError::transport("decision", format!("lecture réponse chat : {error}"))
+    })?;
+    if !status.is_success() {
+        let snippet = String::from_utf8_lossy(&raw_bytes);
+        return Err(ApiError::gateway(
+            "decision",
+            format!(
+                "le modèle de chat a répondu {} · {}",
+                status.as_u16(),
+                snippet.trim().chars().take(120).collect::<String>()
+            ),
+        ));
+    }
+    let payload: Value = serde_json::from_slice(&raw_bytes).map_err(|error| {
+        ApiError::gateway("decision", format!("réponse chat invalide : {error}"))
+    })?;
+    Ok(description_from_chat(&payload))
+}
+
+/// Phrase de résumé du mail par le modèle de chat du fournisseur. Toute erreur
+/// est avalée : une description manquante ne casse jamais le triage.
+async fn describe_mail(
+    tls: &TlsOptions,
+    config: &DecisionConfig,
+    api_key: Option<&str>,
+    message: &Message,
+    timeout: Duration,
+) -> Option<String> {
+    if config.description_source.trim() == DESCRIPTION_SOURCE_LLM {
+        return None;
+    }
+    let model = config.description_model.trim();
+    if model.is_empty() {
+        return None;
+    }
+    match request_description(tls, config, api_key, model, message, timeout).await {
+        Ok(description) => description,
+        Err(error) => {
+            tracing::debug!(
+                target: "decision",
+                error = %error.message(),
+                "description du mail ignorée"
+            );
+            None
+        }
+    }
 }
 
 /// Trie un message avec le modèle de décision (ou renvoie le cache SQLite à jour).
@@ -1052,16 +1228,20 @@ pub async fn triage_message_with_timeout(
         }
     }
 
+    let state_payload = mail_state_payload(message);
     let questions = build_triage_questions(&config, team_members);
-    let output = decide_with_config(
+    let decision_call = decide_with_config(
         state.tls(),
         &config,
         api_key.as_deref(),
-        mail_state_payload(message),
+        state_payload,
         questions,
         timeout,
-    )
-    .await?;
+    );
+    let description_call =
+        describe_mail(state.tls(), &config, api_key.as_deref(), message, timeout);
+    let (output, description) = tokio::join!(decision_call, description_call);
+    let output = output?;
 
     let category_ans = output.answers.get("category");
     let category = category_ans
@@ -1151,6 +1331,7 @@ pub async fn triage_message_with_timeout(
         content_hash: hash,
         schema_version: TRIAGE_SCHEMA_VERSION,
         model: output.model,
+        description,
         category,
         category_conf,
         category_probs,
@@ -1274,6 +1455,233 @@ mod tests {
     }
 
     #[test]
+    fn a_free_text_answer_is_not_parsed() {
+        let raw = r#"{
+            "model": "mammoth-1",
+            "answers": { "description": "Code de vérification GitHub." }
+        }"#;
+        let parsed = parse_decision_response(raw.as_bytes(), "mammoth-1", 10).expect("parse");
+        assert!(
+            !parsed.answers.contains_key("description"),
+            "le protocole de décision n'a que noul, choice et score"
+        );
+    }
+
+    #[test]
+    fn triage_questions_stay_structured_only() {
+        let questions = build_triage_questions(&DecisionConfig::default(), &[]);
+        let keys: Vec<&str> = questions.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "category",
+                "cleanup_candidate",
+                "has_event",
+                "has_task",
+                "needs_reply",
+                "security",
+                "urgency",
+            ]
+        );
+        assert!(!questions.contains_key("assignee"));
+    }
+
+    #[test]
+    fn chat_endpoint_replaces_the_last_path_segment() {
+        assert_eq!(
+            chat_endpoint("https://api.neuralwatt.com/v1/systemone"),
+            "https://api.neuralwatt.com/v1/chat/completions"
+        );
+        assert_eq!(
+            chat_endpoint("https://api.typesafe.ai/v1/decide"),
+            "https://api.typesafe.ai/v1/chat/completions"
+        );
+        assert_eq!(
+            chat_endpoint("  https://api.neuralwatt.com/v1/systemone/  "),
+            "https://api.neuralwatt.com/v1/chat/completions"
+        );
+        assert_eq!(
+            chat_endpoint("http://127.0.0.1:9/v1/systemone"),
+            "http://127.0.0.1:9/v1/chat/completions"
+        );
+        assert_eq!(
+            chat_endpoint("https://api.neuralwatt.com"),
+            "https://api.neuralwatt.com/chat/completions"
+        );
+    }
+
+    #[test]
+    fn description_from_chat_trims_caps_and_rejects_empty() {
+        let payload = json!({ "choices": [{ "message": { "content": "  Marc a signé.  " } }] });
+        assert_eq!(
+            description_from_chat(&payload).as_deref(),
+            Some("Marc a signé.")
+        );
+
+        let long = json!({
+            "choices": [{ "message": { "content": "é".repeat(DESCRIPTION_MAX_CHARS + 60) } }]
+        });
+        let description = description_from_chat(&long).expect("phrase");
+        assert_eq!(description.chars().count(), DESCRIPTION_MAX_CHARS);
+
+        let empty = json!({ "choices": [{ "message": { "content": "   " } }] });
+        assert!(description_from_chat(&empty).is_none());
+
+        let null = json!({ "choices": [{ "message": { "content": null } }] });
+        assert!(description_from_chat(&null).is_none());
+
+        assert!(description_from_chat(&json!({ "choices": [] })).is_none());
+    }
+
+    #[test]
+    fn description_model_defaults_are_kept_and_explicit_values_survive() {
+        assert_eq!(
+            DecisionConfig::default().description_model,
+            DESCRIPTION_MODEL_NEURALWATT
+        );
+
+        let baseten: DecisionConfig = serde_json::from_value(json!({
+            "provider": "baseten",
+            "endpoint": BASETEN_ENDPOINT,
+        }))
+        .expect("config");
+        assert_eq!(baseten.normalized().description_model, "");
+
+        let custom: DecisionConfig =
+            serde_json::from_value(json!({ "provider": "custom" })).expect("config");
+        assert_eq!(custom.normalized().description_model, "");
+
+        let trimmed: DecisionConfig = serde_json::from_value(json!({
+            "provider": "neuralwatt",
+            "description_model": "  nw-flash  ",
+        }))
+        .expect("config");
+        assert_eq!(
+            trimmed.normalized().description_model,
+            DESCRIPTION_MODEL_NEURALWATT
+        );
+
+        let custom_neuralwatt: DecisionConfig = serde_json::from_value(json!({
+            "provider": "custom",
+            "description_model": DESCRIPTION_MODEL_NEURALWATT,
+        }))
+        .expect("config");
+        assert_eq!(
+            custom_neuralwatt.normalized().description_model,
+            DESCRIPTION_MODEL_NEURALWATT,
+            "une valeur explicite n'est jamais réécrite selon le fournisseur"
+        );
+
+        let baseten_explicit: DecisionConfig = serde_json::from_value(json!({
+            "provider": "baseten",
+            "description_model": " mistral-small ",
+        }))
+        .expect("config");
+        assert_eq!(
+            baseten_explicit.normalized().description_model,
+            "mistral-small"
+        );
+
+        let disabled: DecisionConfig = serde_json::from_value(json!({
+            "provider": "neuralwatt",
+            "description_model": "",
+        }))
+        .expect("config");
+        assert_eq!(disabled.normalized().description_model, "");
+    }
+
+    fn write_config(raw: &Value) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join(CONFIG_FILE);
+        fs::write(&path, raw.to_string()).expect("écriture");
+        (dir, path)
+    }
+
+    #[test]
+    fn a_config_written_before_the_setting_takes_its_own_provider_default() {
+        for (provider, expected) in [
+            ("neuralwatt", DESCRIPTION_MODEL_NEURALWATT),
+            ("baseten", ""),
+            ("jev", ""),
+            ("custom", ""),
+        ] {
+            let (_dir, path) = write_config(&json!({ "enabled": true, "provider": provider }));
+            assert_eq!(
+                load_config(&path).expect("config").description_model,
+                expected,
+                "fournisseur {provider}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_explicit_description_model_is_never_backfilled() {
+        let (_dir, path) = write_config(&json!({
+            "provider": "neuralwatt",
+            "description_model": "",
+        }));
+        assert_eq!(
+            load_config(&path).expect("config").description_model,
+            "",
+            "une valeur vide explicite reste désactivée"
+        );
+
+        let (_dir, path) = write_config(&json!({
+            "provider": "custom",
+            "description_model": "  mon-chat  ",
+        }));
+        assert_eq!(
+            load_config(&path).expect("config").description_model,
+            "mon-chat"
+        );
+
+        let (_dir, path) = write_config(&json!({
+            "provider": "baseten",
+            "description_model": "mistral-small",
+        }));
+        assert_eq!(
+            load_config(&path).expect("config").description_model,
+            "mistral-small"
+        );
+    }
+
+    #[test]
+    fn description_source_defaults_to_the_decision_model_and_normalizes() {
+        assert_eq!(DecisionConfig::default().description_source, "decision");
+
+        let absent: DecisionConfig = serde_json::from_value(json!({})).expect("config");
+        assert_eq!(absent.normalized().description_source, "decision");
+
+        let llm: DecisionConfig =
+            serde_json::from_value(json!({ "description_source": "  LLM  " })).expect("config");
+        assert_eq!(llm.normalized().description_source, DESCRIPTION_SOURCE_LLM);
+
+        for unknown in ["gpt", "", "   ", "décision"] {
+            let config: DecisionConfig =
+                serde_json::from_value(json!({ "description_source": unknown })).expect("config");
+            assert_eq!(
+                config.normalized().description_source,
+                "decision",
+                "source inconnue « {unknown} »"
+            );
+        }
+    }
+
+    #[test]
+    fn a_config_without_a_source_keeps_the_decision_model() {
+        let (_dir, path) = write_config(&json!({ "provider": "neuralwatt", "enabled": true }));
+        let config = load_config(&path).expect("config");
+        assert_eq!(config.description_source, "decision");
+        assert_eq!(config.description_model, DESCRIPTION_MODEL_NEURALWATT);
+
+        let (_dir, path) = write_config(&json!({ "description_source": " LLM " }));
+        assert_eq!(
+            load_config(&path).expect("config").description_source,
+            DESCRIPTION_SOURCE_LLM
+        );
+    }
+
+    #[test]
     fn smart_notifications_mute_promos_and_pass_totp() {
         let config = DecisionConfig {
             notif_mode: NotifFilterMode::Smart,
@@ -1288,6 +1696,7 @@ mod tests {
             content_hash: "h".into(),
             schema_version: 1,
             model: "mammoth-1".into(),
+            description: None,
             category: "promo".into(),
             category_conf: 0.95,
             category_probs: HashMap::new(),
@@ -1337,6 +1746,7 @@ mod tests {
             content_hash: "h".into(),
             schema_version: 1,
             model: "mammoth-1".into(),
+            description: None,
             category: "spam".into(),
             category_conf: 0.9,
             category_probs: HashMap::new(),
@@ -1386,6 +1796,7 @@ mod tests {
             content_hash: "h".into(),
             schema_version: 1,
             model: "mammoth-1".into(),
+            description: None,
             category: category.into(),
             category_conf: 0.9,
             category_probs: HashMap::new(),

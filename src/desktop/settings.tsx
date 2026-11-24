@@ -72,15 +72,17 @@ import {
   accountPgp,
   activeSignature,
   CALENDAR_LEAD_MINUTES,
-
   isFolderHidden,
   MAIL_DENSITIES,
+  MAIL_PREVIEWS,
+  MAIL_PREVIEW_STYLES,
   mergeFlags,
   UPDATE_INTERVALS,
   updateIntervalLabel,
   perimeterOf,
   THREAD_VIEWS,
   usePrefs,
+  type MailPreviewStyle,
 } from "@/lib/prefs";
 import {
   EMPTY_TEAM_CONTEXT,
@@ -115,6 +117,7 @@ import {
   type DecisionConfig,
   type DecisionProtocol,
   type DecisionProvider,
+  type DescriptionSource,
   type NotifFilterMode,
   type ThresholdPresetId,
 } from "@/lib/decision";
@@ -230,6 +233,32 @@ const NAV_GROUPS: readonly { id: string; label: string; sections: readonly Secti
   SECTION_GROUPS.filter((group) => group.sections.length > 0);
 
 const SECTIONS: readonly SectionEntry[] = NAV_GROUPS.flatMap((group) => group.sections);
+
+const PREVIEW_EXAMPLES: readonly {
+  id: MailPreviewStyle;
+  tag: string;
+  text: string;
+}[] = [
+  { id: "signaux", tag: "Signaux", text: "Réponse attendue · Tâche détectée" },
+  { id: "phrase", tag: "Description rapide", text: "Avenant signé : confirmer le lancement de la phase 2 lundi." },
+];
+
+const DESCRIPTION_SOURCES: readonly {
+  id: DescriptionSource;
+  label: string;
+  hint: string;
+}[] = [
+  {
+    id: "decision",
+    label: "Modèle de décision",
+    hint: "La phrase est rédigée par le modèle de chat du provider de décision.",
+  },
+  {
+    id: "llm",
+    label: "LLM",
+    hint: "La phrase est rédigée par le LLM conversationnel (Copilot, OpenAI ou custom) configuré dans les Réglages IA.",
+  },
+];
 
 const anchor = (id: SectionId) => `reglages-${id}`;
 
@@ -1006,6 +1035,10 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     setThreadView,
     mailDensity,
     setMailDensity,
+    mailPreview,
+    setMailPreview,
+    mailPreviewStyle,
+    setMailPreviewStyle,
     updates,
     setUpdates,
   } = usePrefs();
@@ -1020,7 +1053,9 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
     renameAccount,
     reconnectAccount,
     triageMails,
+    decisions,
   } = useMailStore();
+  const smartActive = decisionReady(decision) || Object.keys(decisions).length > 0;
   const [active, setActive] = useState<SectionId>("comptes");
   const [hex, setHex] = useState(accent);
   const [openServer, setOpenServer] = useState<string | null>(null);
@@ -1890,6 +1925,99 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                     {MAIL_DENSITIES.find((option) => option.id === mailDensity)?.hint}
                   </p>
                 </Surface>
+
+                <Surface className="mt-3 p-4">
+                  <SectionLabel>Aperçu de la liste</SectionLabel>
+                  <div className="mt-2 grid grid-cols-3 gap-1.5">
+                    {MAIL_PREVIEWS.map((option) => {
+                      const selected = mailPreview === option.id;
+                      const unavailable = option.id === "ai" && !smartActive;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          aria-pressed={selected}
+                          aria-disabled={unavailable || undefined}
+                          disabled={unavailable}
+                          onClick={() => setMailPreview(option.id)}
+                          className={cn(
+                            "focus-ring flex h-10 items-center justify-center rounded-[14px] text-[12px] font-bold transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-55",
+                            selected
+                              ? "bg-accent-soft text-accent-ink ring-1 ring-accent-ring/60"
+                              : "border border-line bg-surface text-ink-soft hover:text-ink",
+                          )}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1.5 text-[12.5px] leading-snug font-medium text-ink-muted">
+                    {smartActive
+                      ? MAIL_PREVIEWS.find((option) => option.id === mailPreview)?.hint
+                      : "Modèle de décision non configuré : l'aperçu reste l'extrait du message."}
+                  </p>
+                </Surface>
+
+                {mailPreview === "ai" && smartActive ? (
+                  <Surface className="mt-3 p-4">
+                    <SectionLabel>Style de description</SectionLabel>
+                    <div className="mt-2 grid grid-cols-2 gap-1.5">
+                      {MAIL_PREVIEW_STYLES.map((option) => {
+                        const selected = mailPreviewStyle === option.id;
+                        return (
+                          <button
+                            key={option.id}
+                            type="button"
+                            aria-pressed={selected}
+                            onClick={() => setMailPreviewStyle(option.id)}
+                            className={cn(
+                              "focus-ring flex h-10 items-center justify-center rounded-[14px] text-[12px] font-bold transition-colors duration-200",
+                              selected
+                                ? "bg-accent-soft text-accent-ink ring-1 ring-accent-ring/60"
+                                : "border border-line bg-surface text-ink-soft hover:text-ink",
+                            )}
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="mt-1.5 text-[12.5px] leading-snug font-medium text-ink-muted">
+                      {MAIL_PREVIEW_STYLES.find((option) => option.id === mailPreviewStyle)?.hint}
+                    </p>
+
+                    <SectionLabel className="mt-3">Exemple — mail de Marc Delaunay</SectionLabel>
+                    <p className="mt-1 text-[13px] font-semibold text-ink">
+                      Devis signé — retour de ma part
+                    </p>
+                    {PREVIEW_EXAMPLES.map((example) => {
+                      const active = mailPreviewStyle === example.id;
+                      return (
+                        <button
+                          key={example.id}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => setMailPreviewStyle(example.id)}
+                          className={cn(
+                            "mt-1.5 flex w-full items-baseline gap-1.5 rounded-[12px] border px-2.5 py-2 text-left transition-colors duration-200",
+                            active
+                              ? "border-transparent bg-accent-soft ring-1 ring-accent-ring/60"
+                              : "border-line bg-surface hover:border-accent-ring",
+                          )}
+                        >
+                          <span className="shrink-0 rounded-full bg-surface-2 px-1.5 py-0.5 text-[9.5px] font-extrabold text-ink-muted">
+                            {example.tag}
+                          </span>
+                          <Sparkles className="size-3 shrink-0 text-accent-ink" strokeWidth={2.4} />
+                          <span className="text-[12.5px] font-medium text-accent-ink">
+                            {example.text}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </Surface>
+                ) : null}
               </Block>
 
               <Block id="modules" label="Modules">
@@ -2745,6 +2873,58 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                     onUpdate={updateDecision}
                   />
                   <ImagesAllowedSection readOnly={readOnly} />
+                </Surface>
+
+                <Surface className="mt-3 p-4">
+                  <SectionLabel>Description des mails</SectionLabel>
+                  <p className="mt-1.5 text-[12.5px] leading-snug font-medium text-ink-muted">
+                    Source de la description
+                  </p>
+                  <div className="mt-2 grid grid-cols-2 gap-1.5">
+                    {DESCRIPTION_SOURCES.map((option) => {
+                      const selected = decision.descriptionSource === option.id;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => updateDecision({ descriptionSource: option.id })}
+                          className={cn(
+                            "focus-ring flex h-10 items-center justify-center rounded-[14px] text-[12px] font-bold transition-colors duration-200",
+                            selected
+                              ? "bg-accent-soft text-accent-ink ring-1 ring-accent-ring/60"
+                              : "border border-line bg-surface text-ink-soft hover:text-ink",
+                          )}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1.5 text-[12.5px] leading-snug font-medium text-ink-muted">
+                    {DESCRIPTION_SOURCES.find((option) => option.id === decision.descriptionSource)?.hint}
+                  </p>
+
+                  {decision.descriptionSource === "decision" ? (
+                    <>
+                      <p className="mt-3 text-[12.5px] font-bold text-ink">Modèle de description</p>
+                      <input
+                        aria-label="Modèle de description"
+                        placeholder="nw-flash"
+                        value={decision.descriptionModel}
+                        onChange={(event) => updateDecision({ descriptionModel: event.target.value })}
+                        className="focus-ring mt-1.5 w-full rounded-[12px] border border-line bg-surface px-3 py-2 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
+                      />
+                      <p className="mt-1.5 text-[12.5px] leading-snug font-medium text-ink-muted">
+                        Modèle de chat qui rédige la phrase. Vide = signaux uniquement. nw-flash pour
+                        NeuralWatt.
+                      </p>
+                    </>
+                  ) : (
+                    <p className="mt-3 text-[12.5px] leading-snug font-medium text-ink-muted">
+                      Aucun modèle supplémentaire : la phrase utilise le LLM configuré ci-dessus.
+                    </p>
+                  )}
                 </Surface>
 
                 <Surface className="mt-3 p-4">

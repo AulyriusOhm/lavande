@@ -15,7 +15,7 @@ use crate::mime::ParsedMessage;
 use crate::model::{Address, AttachmentMeta, Flags, Folder, FolderRole, Message, PgpState, Thread};
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 /// Rows reindexed per statement when `migrate` fills the FTS index of a
 /// database written before it existed: a big mailbox must not hold the daemon
@@ -78,6 +78,8 @@ pub struct MailDecision {
     pub content_hash: String,
     pub schema_version: i64,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub category: String,
     pub category_conf: f64,
     pub category_probs: HashMap<String, f64>,
@@ -1920,7 +1922,21 @@ fn add_missing_columns(conn: &Connection) -> Result<(), MailError> {
             [],
         )?;
     }
+    if table_exists(conn, "mail_decisions")?
+        && !column_exists(conn, "mail_decisions", "description")?
+    {
+        conn.execute("ALTER TABLE mail_decisions ADD COLUMN description TEXT", [])?;
+    }
     Ok(())
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool, MailError> {
+    let found: i64 = conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        params![table],
+        |row| row.get(0),
+    )?;
+    Ok(found > 0)
 }
 
 fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, MailError> {
@@ -1981,12 +1997,13 @@ fn sender_label(message: &Message) -> String {
 }
 
 const DECISION_COLUMNS: &str = "account_id, folder_path, uid, message_id, content_hash, \
-    schema_version, model, category, category_conf, category_probs_json, urgency, needs_reply, \
-    has_task, has_event, security, security_conf, cleanup_score, assignee, assignee_conf, \
-    totp_code, totp_service, suggested_folder, suggested_folder_conf, decided_at, source";
+    schema_version, model, description, category, category_conf, category_probs_json, urgency, \
+    needs_reply, has_task, has_event, security, security_conf, cleanup_score, assignee, \
+    assignee_conf, totp_code, totp_service, suggested_folder, suggested_folder_conf, decided_at, \
+    source";
 
 fn decision_from_row(row: &Row<'_>) -> Result<MailDecision, rusqlite::Error> {
-    let probs_raw: String = row.get(9)?;
+    let probs_raw: String = row.get(10)?;
     let category_probs: HashMap<String, f64> = serde_json::from_str(&probs_raw).unwrap_or_default();
     Ok(MailDecision {
         account_id: row.get(0)?,
@@ -1996,24 +2013,25 @@ fn decision_from_row(row: &Row<'_>) -> Result<MailDecision, rusqlite::Error> {
         content_hash: row.get(4)?,
         schema_version: row.get(5)?,
         model: row.get(6)?,
-        category: row.get(7)?,
-        category_conf: row.get(8)?,
+        description: row.get(7)?,
+        category: row.get(8)?,
+        category_conf: row.get(9)?,
         category_probs,
-        urgency: row.get(10)?,
-        needs_reply: row.get(11)?,
-        has_task: row.get(12)?,
-        has_event: row.get(13)?,
-        security: row.get(14)?,
-        security_conf: row.get(15)?,
-        cleanup_score: row.get(16)?,
-        assignee: row.get(17)?,
-        assignee_conf: row.get(18)?,
-        totp_code: row.get(19)?,
-        totp_service: row.get(20)?,
-        suggested_folder: row.get(21)?,
-        suggested_folder_conf: row.get(22)?,
-        decided_at: row.get(23)?,
-        source: row.get(24)?,
+        urgency: row.get(11)?,
+        needs_reply: row.get(12)?,
+        has_task: row.get(13)?,
+        has_event: row.get(14)?,
+        security: row.get(15)?,
+        security_conf: row.get(16)?,
+        cleanup_score: row.get(17)?,
+        assignee: row.get(18)?,
+        assignee_conf: row.get(19)?,
+        totp_code: row.get(20)?,
+        totp_service: row.get(21)?,
+        suggested_folder: row.get(22)?,
+        suggested_folder_conf: row.get(23)?,
+        decided_at: row.get(24)?,
+        source: row.get(25)?,
     })
 }
 
@@ -2024,19 +2042,20 @@ impl Store {
         conn.execute(
             "INSERT INTO mail_decisions ( \
                  account_id, folder_path, uid, message_id, content_hash, schema_version, model, \
-                 category, category_conf, category_probs_json, urgency, needs_reply, has_task, \
-                 has_event, security, security_conf, cleanup_score, assignee, assignee_conf, \
-                 totp_code, totp_service, suggested_folder, suggested_folder_conf, decided_at, \
-                 source \
+                 description, category, category_conf, category_probs_json, urgency, needs_reply, \
+                 has_task, has_event, security, security_conf, cleanup_score, assignee, \
+                 assignee_conf, totp_code, totp_service, suggested_folder, suggested_folder_conf, \
+                 decided_at, source \
              ) VALUES ( \
                  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, \
-                 ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25 \
+                 ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26 \
              ) \
              ON CONFLICT(account_id, folder_path, uid) DO UPDATE SET \
                  message_id = excluded.message_id, \
                  content_hash = excluded.content_hash, \
                  schema_version = excluded.schema_version, \
                  model = excluded.model, \
+                 description = COALESCE(excluded.description, mail_decisions.description), \
                  category = excluded.category, \
                  category_conf = excluded.category_conf, \
                  category_probs_json = excluded.category_probs_json, \
@@ -2063,6 +2082,7 @@ impl Store {
                 decision.content_hash,
                 decision.schema_version,
                 decision.model,
+                decision.description,
                 decision.category,
                 decision.category_conf,
                 probs_json,
@@ -2366,6 +2386,43 @@ mod tests {
         add_missing_columns(&conn).expect("migrate again");
     }
 
+    /// A database written before the free-text summary gains the column on the
+    /// decisions it already holds, empty: a cached decision stays readable.
+    #[test]
+    fn migrate_adds_the_decision_description_to_an_older_database() {
+        let conn = legacy_database();
+        conn.execute_batch(
+            "CREATE TABLE mail_decisions (account_id TEXT NOT NULL, folder_path TEXT NOT NULL, \
+             uid INTEGER NOT NULL, message_id TEXT, content_hash TEXT NOT NULL, \
+             schema_version INTEGER NOT NULL, model TEXT NOT NULL, category TEXT NOT NULL, \
+             category_conf REAL NOT NULL, category_probs_json TEXT NOT NULL, urgency REAL NOT NULL, \
+             needs_reply REAL NOT NULL, has_task REAL NOT NULL, has_event REAL NOT NULL, \
+             security TEXT NOT NULL, security_conf REAL NOT NULL, cleanup_score REAL NOT NULL, \
+             assignee TEXT, assignee_conf REAL, totp_code TEXT, totp_service TEXT, \
+             suggested_folder TEXT, suggested_folder_conf REAL, decided_at INTEGER NOT NULL, \
+             source TEXT NOT NULL DEFAULT 'local', \
+             PRIMARY KEY (account_id, folder_path, uid)); \
+             INSERT INTO mail_decisions VALUES ('perso', 'INBOX', 7, NULL, 'hash', 1, \
+             'mammoth-1', 'info', 0.9, '{}', 1.0, 0.0, 0.0, 0.0, 'safe', 0.99, 0.0, NULL, NULL, \
+             NULL, NULL, NULL, NULL, 1700000000, 'local');",
+        )
+        .expect("old decisions");
+        assert!(!column_exists(&conn, "mail_decisions", "description").expect("probe"));
+
+        add_missing_columns(&conn).expect("migrate");
+        assert!(column_exists(&conn, "mail_decisions", "description").expect("probe"));
+        let description: Option<String> = conn
+            .query_row(
+                "SELECT description FROM mail_decisions WHERE uid = 7",
+                [],
+                |row| row.get(0),
+            )
+            .expect("décision");
+        assert_eq!(description, None);
+
+        add_missing_columns(&conn).expect("migrate again");
+    }
+
     /// The bundled SQLite must carry FTS5 (`ENABLE_FTS5`) with
     /// `contentless_delete`: the local search has no fallback.
     #[test]
@@ -2506,6 +2563,7 @@ mod tests {
             content_hash: "abc12345".into(),
             schema_version: 1,
             model: "mammoth-1".into(),
+            description: Some("Code de vérification GitHub, expire dans 10 minutes.".into()),
             category: "auth_totp".into(),
             category_conf: 0.96,
             category_probs: probs,
@@ -2533,6 +2591,23 @@ mod tests {
             .expect("present");
         assert_eq!(fetched.totp_code.as_deref(), Some("482917"));
         assert_eq!(fetched.category, "auth_totp");
+        assert_eq!(
+            fetched.description.as_deref(),
+            Some("Code de vérification GitHub, expire dans 10 minutes.")
+        );
+
+        let mut cleared = fetched.clone();
+        cleared.description = None;
+        store.upsert_decision(&cleared).expect("re-upsert");
+        let kept = store
+            .get_decision("perso", "INBOX", 42)
+            .expect("get")
+            .expect("present");
+        assert_eq!(
+            kept.description.as_deref(),
+            Some("Code de vérification GitHub, expire dans 10 minutes."),
+            "une description existante survit à un nouveau triage sans description"
+        );
 
         let by_mid = store
             .get_decision_by_message_id("<otp-42@github.com>")

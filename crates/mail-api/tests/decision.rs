@@ -24,11 +24,79 @@ use tower::ServiceExt;
 struct MockServer {
     url: String,
     hits: Arc<AtomicUsize>,
+    chat_hits: Arc<AtomicUsize>,
+}
+
+const MOCK_DESCRIPTION: &str = "Code de vérification GitHub, expire dans 10 minutes.";
+
+/// Comment le fournisseur répond au modèle de chat chargé du résumé.
+#[derive(Clone, Copy)]
+enum ChatReply {
+    Text(&'static str),
+    Fails,
 }
 
 async fn start_mock_neuralwatt() -> MockServer {
+    start_mock(ChatReply::Text(MOCK_DESCRIPTION)).await
+}
+
+async fn start_mock_with_broken_chat() -> MockServer {
+    start_mock(ChatReply::Fails).await
+}
+
+async fn start_mock(chat: ChatReply) -> MockServer {
     let hits = Arc::new(AtomicUsize::new(0));
-    let counter = Arc::clone(&hits);
+    let chat_hits = Arc::new(AtomicUsize::new(0));
+
+    let chat_router = match chat {
+        ChatReply::Text(content) => Router::new().route(
+            "/v1/chat/completions",
+            post(
+                move |AxumState(counter): AxumState<Arc<AtomicUsize>>,
+                      headers: HeaderMap,
+                      Json(body): Json<Value>| async move {
+                    let auth = headers
+                        .get(header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("");
+                    if auth != "Bearer nw-secret-key" {
+                        return (
+                            StatusCode::UNAUTHORIZED,
+                            Json(json!({ "error": "unauthorized" })),
+                        );
+                    }
+                    assert_eq!(body["model"], "nw-flash");
+                    assert_eq!(body["messages"][0]["role"], "user");
+                    assert!(body["messages"][0]["content"]
+                        .as_str()
+                        .expect("prompt")
+                        .contains("une seule phrase courte en français"));
+                    assert_eq!(body["max_tokens"], 400);
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "model": "nw-flash",
+                            "choices": [{ "message": { "content": content } }],
+                            "usage": { "prompt_tokens": 210, "completion_tokens": 24 }
+                        })),
+                    )
+                },
+            ),
+        ),
+        ChatReply::Fails => Router::new().route(
+            "/v1/chat/completions",
+            post(
+                |AxumState(counter): AxumState<Arc<AtomicUsize>>| async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": "chat indisponible" })),
+                    )
+                },
+            ),
+        ),
+    };
 
     let router = Router::new()
         .route(
@@ -112,7 +180,8 @@ async fn start_mock_neuralwatt() -> MockServer {
                 },
             ),
         )
-        .with_state(counter);
+        .with_state(Arc::clone(&hits))
+        .merge(chat_router.with_state(Arc::clone(&chat_hits)));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -125,6 +194,7 @@ async fn start_mock_neuralwatt() -> MockServer {
     MockServer {
         url: format!("http://{addr}/v1/systemone"),
         hits,
+        chat_hits,
     }
 }
 
@@ -211,6 +281,7 @@ async fn config_probe_triage_cache_and_sync_import() {
             "protocol": "systemone",
             "endpoint": mock.url,
             "model": "mammoth-1",
+            "description_model": "nw-flash",
             "auth_header": "bearer",
             "api_key": "nw-secret-key"
         })),
@@ -291,7 +362,16 @@ async fn config_probe_triage_cache_and_sync_import() {
     assert_eq!(triaged["results"][0]["decision"]["category"], "auth_totp");
     assert_eq!(triaged["results"][0]["decision"]["totp_code"], "482917");
     assert_eq!(triaged["results"][0]["decision"]["totp_service"], "GitHub");
+    assert_eq!(
+        triaged["results"][0]["decision"]["description"],
+        MOCK_DESCRIPTION
+    );
     assert_eq!(mock.hits.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        mock.chat_hits.load(Ordering::SeqCst),
+        1,
+        "le résumé vient du modèle de chat, pas des questions"
+    );
 
     // 5. Deuxième appel sans `force` : servi depuis le cache SQLite (0 appel HTTP).
     let (status, cached) = send_json(
@@ -306,7 +386,16 @@ async fn config_probe_triage_cache_and_sync_import() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(cached["results"][0]["cached"], true);
+    assert_eq!(
+        cached["results"][0]["decision"]["description"], MOCK_DESCRIPTION,
+        "le cache SQLite rend la description persistée"
+    );
     assert_eq!(mock.hits.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        mock.chat_hits.load(Ordering::SeqCst),
+        1,
+        "un cache à jour ne rappelle pas le chat"
+    );
 
     // 6. Import E2EE depuis un autre appareil (PC -> Mobile) via `message_id`.
     let (status, imported) = send_json(
@@ -323,6 +412,7 @@ async fn config_probe_triage_cache_and_sync_import() {
                 "content_hash": "remote-hash",
                 "schema_version": 1,
                 "model": "mammoth-1",
+                "description": "Relevé important à traiter.",
                 "category": "important",
                 "category_conf": 0.91,
                 "category_probs": { "important": 0.91 },
@@ -348,6 +438,360 @@ async fn config_probe_triage_cache_and_sync_import() {
     assert_eq!(listed[0]["uid"], 10);
     assert_eq!(listed[0]["source"], "synced");
     assert_eq!(listed[0]["category"], "important");
+    assert_eq!(
+        listed[0]["description"], "Relevé important à traiter.",
+        "l'import E2EE garde la description reçue"
+    );
+}
+
+/// Un modèle de chat en panne ne casse pas le triage : la décision structurée
+/// passe, la phrase manque.
+#[tokio::test]
+async fn a_broken_chat_model_leaves_the_triage_descriptionless() {
+    let mock = start_mock_with_broken_chat().await;
+    let (_dir, state, router, token) = setup_daemon().await;
+
+    let (status, saved) = send_json(
+        &router,
+        &token,
+        Method::PUT,
+        "/api/ai/decision/config",
+        Some(json!({
+            "enabled": true,
+            "provider": "neuralwatt",
+            "protocol": "systemone",
+            "endpoint": mock.url,
+            "model": "mammoth-1",
+            "description_model": "nw-flash",
+            "auth_header": "bearer",
+            "api_key": "nw-secret-key"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["ready"], true);
+    assert_eq!(saved["description_model"], "nw-flash");
+
+    state
+        .store()
+        .upsert_account("perso", "Perso", "roman@lavande.fr")
+        .expect("account");
+    state
+        .store()
+        .upsert_message(&Message {
+            account_id: "perso".into(),
+            folder_path: "INBOX".into(),
+            uid: 30,
+            uidvalidity: 1,
+            thread_id: "t-30".into(),
+            message_id: Some("<30@github.com>".into()),
+            in_reply_to: None,
+            references: vec![],
+            from: Address {
+                name: Some("GitHub Security".into()),
+                email: "noreply@github.com".into(),
+            },
+            to: vec![],
+            cc: vec![],
+            subject: "Code de vérification 30".into(),
+            date: None,
+            flags: Flags {
+                unread: true,
+                starred: false,
+                answered: false,
+            },
+            size: 120,
+            pgp: PgpState::None,
+            preview: "Votre code de vérification est 482917".into(),
+            body_text: Some("Votre code de vérification est 482917.".into()),
+            body_html: None,
+            pgp_detail: None,
+            attachments: vec![],
+        })
+        .expect("msg");
+
+    let (status, triaged) = send_json(
+        &router,
+        &token,
+        Method::POST,
+        "/api/ai/decisions/triage",
+        Some(json!({
+            "targets": [{ "account_id": "perso", "folder_path": "INBOX", "uid": 30 }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(triaged["results"][0]["decision"]["category"], "auth_totp");
+    assert_eq!(triaged["results"][0]["decision"]["totp_code"], "482917");
+    assert!(
+        triaged["results"][0]["decision"]
+            .get("description")
+            .is_none(),
+        "aucune description quand le chat échoue"
+    );
+    assert_eq!(
+        mock.hits.load(Ordering::SeqCst),
+        1,
+        "décision structurée servie"
+    );
+    assert_eq!(
+        mock.chat_hits.load(Ordering::SeqCst),
+        1,
+        "le chat est appelé une fois, en parallèle"
+    );
+
+    let (status, listed) = send_json(&router, &token, Method::GET, "/api/ai/decisions", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(listed[0].get("description").is_none());
+}
+
+/// Le modèle de résumé est un réglage libre : le défaut ne vaut que pour une
+/// config neuve (NeuralWatt → `nw-flash`, les autres → rien), et toute valeur
+/// écrite se relit telle quelle, quel que soit le fournisseur.
+#[tokio::test]
+async fn description_model_defaults_per_provider_and_persists() {
+    let (_dir, _state, router, token) = setup_daemon().await;
+
+    let (status, initial) = send_json(
+        &router,
+        &token,
+        Method::GET,
+        "/api/ai/decision/config",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(initial["provider"], "neuralwatt");
+    assert_eq!(initial["description_model"], "nw-flash");
+    assert_eq!(initial["description_source"], "decision");
+
+    let (status, saved) = send_json(
+        &router,
+        &token,
+        Method::PUT,
+        "/api/ai/decision/config",
+        Some(json!({ "provider": "neuralwatt", "description_model": "  nw-flash  " })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["description_model"], "nw-flash");
+
+    let (_, disabled) = send_json(
+        &router,
+        &token,
+        Method::PUT,
+        "/api/ai/decision/config",
+        Some(json!({ "provider": "neuralwatt", "description_model": "" })),
+    )
+    .await;
+    assert_eq!(disabled["description_model"], "");
+
+    let (_, reread) = send_json(
+        &router,
+        &token,
+        Method::GET,
+        "/api/ai/decision/config",
+        None,
+    )
+    .await;
+    assert_eq!(reread["description_model"], "", "désactivé est persisté");
+
+    let (_, baseten) = send_json(
+        &router,
+        &token,
+        Method::PUT,
+        "/api/ai/decision/config",
+        Some(json!({
+            "provider": "baseten",
+            "endpoint": "https://inference.baseten.co/v1/systemone"
+        })),
+    )
+    .await;
+    assert_eq!(baseten["provider"], "baseten");
+    assert_eq!(baseten["description_model"], "");
+
+    let (_, jev) = send_json(
+        &router,
+        &token,
+        Method::PUT,
+        "/api/ai/decision/config",
+        Some(json!({
+            "provider": "jev",
+            "endpoint": "https://api.typesafe.ai/v1/decide"
+        })),
+    )
+    .await;
+    assert_eq!(jev["description_model"], "");
+
+    let (_, baseten_kept) = send_json(
+        &router,
+        &token,
+        Method::PUT,
+        "/api/ai/decision/config",
+        Some(json!({ "provider": "baseten", "description_model": " mistral-small " })),
+    )
+    .await;
+    assert_eq!(baseten_kept["description_model"], "mistral-small");
+
+    let (_, custom_neuralwatt) = send_json(
+        &router,
+        &token,
+        Method::PUT,
+        "/api/ai/decision/config",
+        Some(json!({ "provider": "custom", "description_model": "nw-flash" })),
+    )
+    .await;
+    assert_eq!(
+        custom_neuralwatt["description_model"], "nw-flash",
+        "un modèle explicite n'est jamais effacé selon le fournisseur"
+    );
+
+    let (_, custom_reread) = send_json(
+        &router,
+        &token,
+        Method::GET,
+        "/api/ai/decision/config",
+        None,
+    )
+    .await;
+    assert_eq!(custom_reread["provider"], "custom");
+    assert_eq!(custom_reread["description_model"], "nw-flash");
+}
+
+/// Source « llm » : la phrase appartient au LLM du front, le démon n'appelle
+/// aucun modèle de chat même quand un modèle de description est configuré.
+#[tokio::test]
+async fn an_llm_description_source_skips_the_chat_model() {
+    let mock = start_mock_neuralwatt().await;
+    let (_dir, state, router, token) = setup_daemon().await;
+
+    let (status, saved) = send_json(
+        &router,
+        &token,
+        Method::PUT,
+        "/api/ai/decision/config",
+        Some(json!({
+            "enabled": true,
+            "provider": "neuralwatt",
+            "protocol": "systemone",
+            "endpoint": mock.url,
+            "model": "mammoth-1",
+            "description_model": "nw-flash",
+            "description_source": "LLM",
+            "auth_header": "bearer",
+            "api_key": "nw-secret-key"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["description_model"], "nw-flash");
+    assert_eq!(
+        saved["description_source"], "llm",
+        "normalisé en minuscules"
+    );
+
+    let (_, reread) = send_json(
+        &router,
+        &token,
+        Method::GET,
+        "/api/ai/decision/config",
+        None,
+    )
+    .await;
+    assert_eq!(
+        reread["description_source"], "llm",
+        "la source se relit telle quelle"
+    );
+
+    state
+        .store()
+        .upsert_account("perso", "Perso", "roman@lavande.fr")
+        .expect("account");
+    state
+        .store()
+        .upsert_message(&Message {
+            account_id: "perso".into(),
+            folder_path: "INBOX".into(),
+            uid: 40,
+            uidvalidity: 1,
+            thread_id: "t-40".into(),
+            message_id: Some("<40@github.com>".into()),
+            in_reply_to: None,
+            references: vec![],
+            from: Address {
+                name: Some("GitHub Security".into()),
+                email: "noreply@github.com".into(),
+            },
+            to: vec![],
+            cc: vec![],
+            subject: "Code de vérification 40".into(),
+            date: None,
+            flags: Flags {
+                unread: true,
+                starred: false,
+                answered: false,
+            },
+            size: 120,
+            pgp: PgpState::None,
+            preview: "Votre code de vérification est 482917".into(),
+            body_text: Some("Votre code de vérification est 482917.".into()),
+            body_html: None,
+            pgp_detail: None,
+            attachments: vec![],
+        })
+        .expect("msg");
+
+    let (status, triaged) = send_json(
+        &router,
+        &token,
+        Method::POST,
+        "/api/ai/decisions/triage",
+        Some(json!({
+            "targets": [{ "account_id": "perso", "folder_path": "INBOX", "uid": 40 }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(triaged["results"][0]["decision"]["category"], "auth_totp");
+    assert_eq!(triaged["results"][0]["decision"]["totp_code"], "482917");
+    assert!(
+        triaged["results"][0]["decision"]
+            .get("description")
+            .is_none(),
+        "le démon ne rédige pas la phrase quand la source est le LLM du front"
+    );
+    assert_eq!(
+        mock.hits.load(Ordering::SeqCst),
+        1,
+        "décision structurée servie"
+    );
+    assert_eq!(
+        mock.chat_hits.load(Ordering::SeqCst),
+        0,
+        "aucun appel au modèle de chat"
+    );
+
+    let (_, listed) = send_json(&router, &token, Method::GET, "/api/ai/decisions", None).await;
+    assert!(listed[0].get("description").is_none());
+
+    let (_, back) = send_json(
+        &router,
+        &token,
+        Method::PUT,
+        "/api/ai/decision/config",
+        Some(json!({
+            "enabled": true,
+            "provider": "neuralwatt",
+            "endpoint": mock.url,
+            "model": "mammoth-1",
+            "description_model": "nw-flash",
+            "description_source": "decision",
+            "auth_header": "bearer",
+            "api_key": "nw-secret-key"
+        })),
+    )
+    .await;
+    assert_eq!(back["description_source"], "decision");
 }
 
 #[tokio::test]

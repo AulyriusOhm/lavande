@@ -67,6 +67,7 @@ export function fromApiDecision(api: ApiMailDecision): MailDecision {
     contentHash: api.content_hash,
     schemaVersion: api.schema_version,
     model: api.model,
+    ...(api.description ? { description: api.description } : {}),
     category: api.category,
     categoryConf: api.category_conf,
     categoryProbs: api.category_probs ?? {},
@@ -99,6 +100,7 @@ export function toApiDecision(dec: MailDecision): ApiMailDecision {
     content_hash: dec.contentHash,
     schema_version: dec.schemaVersion,
     model: dec.model,
+    ...(dec.description ? { description: dec.description } : {}),
     category: dec.category,
     category_conf: dec.categoryConf,
     category_probs: dec.categoryProbs,
@@ -563,6 +565,41 @@ export function reasonFromDecision(dec: MailDecision, thresholds: DecisionThresh
   return "";
 }
 
+const CATEGORY_TAGS: Record<string, string> = {
+  important: "Message prioritaire",
+  info: "Information",
+  notification: "Notification",
+  promo: "Publicité / offre",
+  spam: "Courrier indésirable",
+  auth_totp: "Code de vérification",
+};
+
+/**
+ * Ligne de description affichée dans la liste : l'alerte sécurité passe
+ * toujours avant, une phrase du modèle remplace les signaux quand elle existe.
+ */
+export function listDescription(
+  dec: MailDecision,
+  thresholds: DecisionThresholds,
+  style: "signaux" | "phrase",
+  customCategories?: readonly CustomCategory[],
+): string {
+  if (isPhishing(dec, thresholds) || isPromptInjection(dec, thresholds)) {
+    return reasonFromDecision(dec, thresholds);
+  }
+  if (style === "phrase") {
+    const phrase = dec.description?.trim();
+    if (phrase) return phrase;
+  }
+  const signals = reasonFromDecision(dec, thresholds);
+  if (signals) return signals;
+  return (
+    findCustomCategory(dec.category, customCategories)?.name ??
+    CATEGORY_TAGS[dec.category] ??
+    "Information"
+  );
+}
+
 /**
  * Construit instantanément les 3 groupes `{ actions, infos, notifications }`
  * à partir des décisions Système 1, sans aucun appel LLM.
@@ -708,6 +745,8 @@ export type TriageRecentOptions = {
   db?: DecisionCacheStore;
   domain?: string;
   publishSynced?: (decision: MailDecision) => void;
+  /** Reçoit une fois les clés des mails réellement envoyés au modèle. */
+  onPendingKeys?: (keys: string[]) => void;
 };
 
 export function toApiDecisionConfig(
@@ -720,6 +759,8 @@ export function toApiDecisionConfig(
     protocol: config.protocol,
     endpoint: config.endpoint,
     model: config.model,
+    description_model: config.descriptionModel.trim(),
+    description_source: config.descriptionSource,
     auth_header: config.authHeader,
     thresholds: {
       llm_escalate: config.thresholds.llmEscalate,
@@ -786,6 +827,10 @@ export async function triageRecentMails(options: TriageRecentOptions): Promise<M
   }
 
   if (targets.length === 0) return [];
+
+  options.onPendingKeys?.(
+    targets.map((target) => decisionMailKey(target.account_id, target.folder_path, target.uid)),
+  );
 
   const reply = await mailApi.triageDecisions({
     targets,

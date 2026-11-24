@@ -27,7 +27,8 @@ if (!Element.prototype.scrollTo) {
 
 const stored = () => JSON.parse(window.localStorage.getItem("lavande.prefs") ?? "{}") as Record<string, unknown>;
 
-const previews = () => document.querySelectorAll('[data-mail-row] p.line-clamp-2').length;
+const clampTwo = () => document.querySelectorAll("[data-mail-row] p.line-clamp-2").length;
+const clampOne = () => document.querySelectorAll("[data-mail-row] p.line-clamp-1").length;
 
 const densityButton = () => screen.getAllByRole("button", { name: "Affichage compact" })[0]!;
 
@@ -44,16 +45,18 @@ beforeEach(() => {
 });
 
 describe("boîte de réception mobile · densité", () => {
-  it("bascule en compact depuis l'en-tête et masque les aperçus", async () => {
+  it("bascule en compact depuis l'en-tête et resserre la troisième ligne", async () => {
     await openMobile();
-    expect(previews()).toBeGreaterThan(0);
+    expect(clampTwo()).toBeGreaterThan(0);
+    expect(clampOne()).toBe(0);
     expect(densityButton().getAttribute("aria-pressed")).toBe("false");
 
     fireEvent.click(densityButton());
 
     await waitFor(() => expect(stored().mailDensity).toBe("compact"));
     expect(densityButton().getAttribute("aria-pressed")).toBe("true");
-    expect(previews()).toBe(0);
+    expect(clampTwo()).toBe(0);
+    expect(clampOne()).toBeGreaterThan(0);
     expect(screen.getByRole("heading", { name: /réception/ }).className).toContain("text-[18px]");
   });
 
@@ -73,6 +76,17 @@ describe("boîte de réception mobile · densité", () => {
     await openMobile();
 
     expect(densityButton().getAttribute("aria-pressed")).toBe("true");
-    expect(previews()).toBe(0);
+    expect(clampTwo()).toBe(0);
+    expect(clampOne()).toBeGreaterThan(0);
+  });
+
+  it("n'affiche aucune troisième ligne quand l'aperçu est coupé", async () => {
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ mailPreview: "none" }));
+
+    await openMobile();
+
+    expect(clampTwo()).toBe(0);
+    expect(clampOne()).toBe(0);
+    expect(document.querySelector('[data-mail-row] p.text-ink-muted')).toBeNull();
   });
 });

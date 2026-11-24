@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { motion, useReducedMotion } from "motion/react";
 import {
   AlertTriangle,
   Archive,
@@ -60,11 +61,13 @@ import {
   type MailDecision,
 } from "@/lib/decision";
 import { countCleanupByFilter } from "@/lib/cleanup";
+import { decisionMailKey } from "@/lib/decision-db";
 import {
   applyTrustRules,
   asDecisionIndex,
   eventDraftFromMail,
   indexDecisions,
+  listDescription,
   senderDomain,
   summaryDecisionMeta,
   taskDraftFromMail,
@@ -80,7 +83,15 @@ import { InvitationBanner } from "@/components/invitation-banner";
 import { PGP_STATE, formatKeyDate, keyLabel, keyState, shortFingerprint, type PgpKey } from "@/lib/pgp";
 import { listKeys } from "@/lib/pgp-api";
 import { useMailStore, type BulkKind } from "@/lib/store";
-import { DEFAULT_INBOX_PANES, isFolderHidden, resolvePgp, usePrefs, type MailDensity } from "@/lib/prefs";
+import {
+  DEFAULT_INBOX_PANES,
+  isFolderHidden,
+  resolvePgp,
+  usePrefs,
+  type MailDensity,
+  type MailPreview,
+  type MailPreviewStyle,
+} from "@/lib/prefs";
 import type { MailNavigation } from "@/lib/app-shortcuts";
 import { useEscapeLayer } from "@/desktop/escape";
 import { PaneSplitter } from "@/desktop/pane-splitter";
@@ -88,6 +99,7 @@ import { SelectionBar } from "@/desktop/selection-bar";
 import { useTheme } from "@/lib/theme";
 import { clockOf, cn, initials } from "@/lib/utils";
 import { Avatar } from "@/components/ui/primitives";
+import { ShinyText } from "@/components/ui/animated-text";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { BorderBeam } from "@/components/ui/border-beam";
 import { NumberTicker } from "@/components/ui/number-ticker";
@@ -1014,15 +1026,90 @@ export function MorningSummary({
   );
 }
 
+function PreviewFade({ children }: { children: React.ReactNode }) {
+  const reduce = useReducedMotion();
+  if (reduce) return <>{children}</>;
+  return (
+    <motion.span
+      initial={{ opacity: 0, y: 2 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+      className="min-w-0"
+    >
+      {children}
+    </motion.span>
+  );
+}
+
+function PreviewLine({
+  preview,
+  previewStyle,
+  excerpt,
+  decision,
+  decisionThresholds,
+  customCategories,
+  endPending,
+  tight,
+}: {
+  preview: MailPreview;
+  previewStyle: MailPreviewStyle;
+  excerpt: string;
+  decision: MailDecision | null;
+  decisionThresholds: DecisionThresholds;
+  customCategories: readonly CustomCategory[];
+  endPending: boolean;
+  tight: boolean;
+}) {
+  if (preview === "none") return null;
+
+  const line = tight
+    ? "text-[11.5px] leading-[16px] line-clamp-1"
+    : "text-[12.5px] leading-[1.5] line-clamp-2";
+  const gap = tight ? "mt-0.5" : "mt-1";
+
+  const plain = <p className={cn("min-w-0 text-ink-muted", gap, line)}>{excerpt}</p>;
+
+  if (preview === "excerpt" || (!decision && !endPending)) return plain;
+
+  if (!decision) {
+    return (
+      <div className={cn("flex items-start gap-1 text-accent-ink", gap)}>
+        <Sparkles className="mt-[2px] size-3 shrink-0" strokeWidth={2.4} />
+        <ShinyText className={line} duration={2.2}>
+          Analyse en cours…
+        </ShinyText>
+      </div>
+    );
+  }
+
+  const alert =
+    isPhishing(decision, decisionThresholds) || isPromptInjection(decision, decisionThresholds);
+  const tone = alert ? "text-rose-700 dark:text-rose-300" : "text-accent-ink";
+
+  return (
+    <div className={cn("flex items-start gap-1", gap)}>
+      <Sparkles className={cn("mt-[2px] size-3 shrink-0", tone)} strokeWidth={2.4} />
+      <PreviewFade>
+        <span className={cn("block min-w-0", line, tone)}>
+          {listDescription(decision, decisionThresholds, previewStyle, customCategories)}
+        </span>
+      </PreviewFade>
+    </div>
+  );
+}
+
 function ThreadRow({
   thread,
   selected,
   checked,
   delay,
   decision = null,
+  decisionPending = false,
   decisionThresholds = DEFAULT_DECISION_THRESHOLDS,
   customCategories = [],
   density = "cozy",
+  preview = "ai",
+  previewStyle = "signaux",
   onOpen,
   onStar,
   onRead,
@@ -1037,9 +1124,12 @@ function ThreadRow({
   checked: boolean;
   delay: number;
   decision?: MailDecision | null;
+  decisionPending?: boolean;
   decisionThresholds?: DecisionThresholds;
   customCategories?: readonly CustomCategory[];
   density?: MailDensity;
+  preview?: MailPreview;
+  previewStyle?: MailPreviewStyle;
   onOpen: (event: React.MouseEvent | null) => void;
   onStar: () => void;
   onRead: () => void;
@@ -1052,15 +1142,11 @@ function ThreadRow({
   const mail = thread.primary;
   const { accountById } = useMailStore();
   const account = accountById(mail.account);
-  const sender = mail.folder === "sent" && mail.to ? `À ${mail.to}` : mail.name;
-  const name =
-    thread.count > 1 && thread.participants.length
-      ? `${thread.participants.slice(0, 2).join(", ")}${
-          thread.participants.length > 2 ? ` +${thread.participants.length - 2}` : ""
-        }`
-      : sender;
+  const name = mail.folder === "sent" && mail.to ? `À ${mail.to}` : mail.name;
   const unread = thread.unread > 0;
   const tight = density === "compact";
+  const aiMode = preview === "ai";
+  const suspect = Boolean(decision && isPhishing(decision, decisionThresholds));
 
   const decisionBadges: { label: string; className: string }[] = [];
   if (decision) {
@@ -1125,7 +1211,10 @@ function ThreadRow({
           selected || checked
             ? "border-transparent bg-accent-soft ring-1 ring-accent-ring"
             : unread
-              ? "border-accent-ring/60 bg-surface shadow-[0_10px_30px_-24px_var(--accent)] hover:border-accent-ring"
+              ? cn(
+                  "border-accent-ring/60 bg-surface hover:border-accent-ring",
+                  !tight && "shadow-[0_10px_30px_-24px_var(--accent)]",
+                )
               : "border-transparent hover:bg-surface-2",
         )}
         onContextMenu={(event) => {
@@ -1144,33 +1233,43 @@ function ThreadRow({
           aria-current={selected}
           aria-pressed={checked}
           data-mail-row={thread.id}
-          aria-label={`${name} — ${thread.subject}${thread.count > 1 ? ` · ${thread.count} messages` : ""}${
-            unread ? " · non lu" : ""
-          }${checked ? " · sélectionné" : ""}`}
+          aria-label={`${name} — ${thread.subject}${unread ? " · non lu" : ""}${
+            checked ? " · sélectionné" : ""
+          }`}
           className="focus-row absolute inset-0 rounded-[16px]"
         />
 
-        <div className={cn("pointer-events-none relative flex gap-3 px-3", tight ? "py-2" : "py-3.5")}>
+        <div
+          className={cn(
+            "pointer-events-none relative flex gap-3",
+            tight ? "px-3 py-2" : "px-3.5 py-3",
+          )}
+        >
           <div className="relative shrink-0">
-            {tight && thread.count > 1 ? (
-              <div className="relative h-[28px] w-[34px]">
-                <span className="absolute bottom-0 left-[6px] size-[28px] rounded-full border border-line bg-surface-2/70" />
-                <span className="absolute bottom-0 left-[3px] size-[28px] rounded-full border border-line bg-surface-2/70" />
+            {thread.count > 1 ? (
+              <div className={cn("relative", tight ? "h-[28px] w-[34px]" : "h-[40px] w-[48px]")}>
+                <span
+                  className={cn(
+                    "absolute bottom-0 rounded-full border border-line bg-surface-2/70",
+                    tight ? "left-[6px] size-[28px]" : "left-[8px] size-[34px]",
+                  )}
+                />
+                <span
+                  className={cn(
+                    "absolute bottom-0 rounded-full border border-line bg-surface-2/70",
+                    tight ? "left-[3px] size-[28px]" : "left-[4px] size-[34px]",
+                  )}
+                />
                 <Avatar
                   name={name}
                   tone={mail.tone}
-                  size={28}
+                  size={tight ? 28 : 40}
                   rounded="rounded-full"
                   className="absolute bottom-0 left-0"
                 />
               </div>
             ) : (
-              <Avatar
-                name={name}
-                tone={mail.tone}
-                size={tight ? 28 : 40}
-                rounded="rounded-full"
-              />
+              <Avatar name={name} tone={mail.tone} size={tight ? 28 : 40} rounded="rounded-full" />
             )}
             {checked ? (
               <span className="absolute -top-1 -left-1 grid size-4 place-items-center rounded-full border-2 border-surface bg-accent text-accent-contrast">
@@ -1192,6 +1291,11 @@ function ThreadRow({
                 {name}
               </p>
               {account ? <Badge tone={accountTone(mail.account)}>{account.label}</Badge> : null}
+              {aiMode && suspect ? (
+                <span className="inline-flex shrink-0 items-center rounded-full bg-rose-500/12 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 dark:text-rose-300">
+                  Suspect
+                </span>
+              ) : null}
               {mail.pgp === "encrypted" ? (
                 <Lock className="size-3.5 shrink-0 text-emerald-700 dark:text-emerald-300" strokeWidth={2.6} />
               ) : mail.pgp === "signed" ? (
@@ -1202,33 +1306,27 @@ function ThreadRow({
 
             <p
               className={cn(
-                "truncate text-[13px] text-ink",
-                tight ? "mt-0.5" : "mt-1",
+                "truncate text-ink",
+                tight ? "mt-0.5 text-[13px]" : "mt-1 text-[13.5px] leading-[18px]",
                 unread ? "font-bold" : "font-semibold",
               )}
             >
               {thread.subject}
             </p>
 
-            {tight ? null : (
-              <p className="mt-1 line-clamp-3 text-[12.5px] leading-[1.5] text-ink-muted">{thread.preview}</p>
-            )}
+            <PreviewLine
+              preview={preview}
+              previewStyle={previewStyle}
+              excerpt={thread.preview}
+              decision={decision}
+              decisionThresholds={decisionThresholds}
+              customCategories={customCategories}
+              endPending={decisionPending}
+              tight={tight}
+            />
 
-            {(tight
-              ? decisionBadges.length > 0
-              : thread.count > 1 || thread.attachments > 0 || decisionBadges.length > 0) ? (
+            {!aiMode && decisionBadges.length > 0 ? (
               <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                {!tight && thread.count > 1 ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] font-bold text-ink-soft">
-                    {thread.count} messages
-                  </span>
-                ) : null}
-                {!tight && thread.attachments > 0 ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] font-bold text-ink-soft">
-                    <Paperclip className="size-2.5" />
-                    {thread.attachments}
-                  </span>
-                ) : null}
                 {decisionBadges.map((badge) => (
                   <span
                     key={badge.label}
@@ -1329,6 +1427,7 @@ export function DesktopInbox({
     setFolderOrder,
     decisions,
     isDecisionReady,
+    triagePendingKeys,
     triageMails,
     trustSender,
     trustDomain,
@@ -1337,6 +1436,8 @@ export function DesktopInbox({
   const prefs = usePrefs();
   const { decision: decisionPrefs } = prefs;
   const smartActive = decisionReady(decisionPrefs) || Object.keys(decisions).length > 0;
+  const listPreview: MailPreview =
+    prefs.mailPreview === "ai" && !smartActive ? "excerpt" : prefs.mailPreview;
   const reception = folder === "inbox" || folder === "unified";
   const [filter, setFilter] = useState<Filter>(() =>
     reception
@@ -2660,27 +2761,42 @@ export function DesktopInbox({
             ) : null}
 
             <div className="space-y-1">
-              {visible.map((thread, index) => (
-                <ThreadRow
-                  key={thread.id}
-                  thread={thread}
-                  selected={selectedThreadId === thread.id}
-                  checked={selectedIds.has(thread.id)}
-                  delay={Math.min(0.4, 0.06 + index * 0.04)}
-                  decision={decisionForThread(thread)}
-                  decisionThresholds={decisionPrefs.thresholds}
-                  customCategories={decisionPrefs.customCategories}
-                  density={prefs.mailDensity}
-                  onOpen={(event) => selectThread(thread, index, event)}
-                  onStar={() => toggleStar(thread.primary.id)}
-                  onRead={() => mailAction("read", thread.primary)}
-                  onArchive={() => mailAction("archive", thread.primary)}
-                  onDelete={() => mailAction("delete", thread.primary)}
-                  onRestore={() => restoreMail(thread.primary)}
-                  onNotSpam={() => moveToInbox(thread.primary)}
-                  onMenu={({ x, y }) => setMenu({ mail: thread.primary, x, y })}
-                />
-              ))}
+              {visible.map((thread, index) => {
+                const decision = decisionForThread(thread);
+                const source = thread.primary.source;
+                const decisionPending = Boolean(
+                  isDecisionReady &&
+                    source &&
+                    !decision &&
+                    triagePendingKeys.has(
+                      decisionMailKey(source.accountId, source.folderPath, source.uid),
+                    ),
+                );
+                return (
+                  <ThreadRow
+                    key={thread.id}
+                    thread={thread}
+                    selected={selectedThreadId === thread.id}
+                    checked={selectedIds.has(thread.id)}
+                    delay={Math.min(0.4, 0.06 + index * 0.04)}
+                    decision={decision}
+                    decisionPending={decisionPending}
+                    decisionThresholds={decisionPrefs.thresholds}
+                    customCategories={decisionPrefs.customCategories}
+                    density={prefs.mailDensity}
+                    preview={listPreview}
+                    previewStyle={prefs.mailPreviewStyle}
+                    onOpen={(event) => selectThread(thread, index, event)}
+                    onStar={() => toggleStar(thread.primary.id)}
+                    onRead={() => mailAction("read", thread.primary)}
+                    onArchive={() => mailAction("archive", thread.primary)}
+                    onDelete={() => mailAction("delete", thread.primary)}
+                    onRestore={() => restoreMail(thread.primary)}
+                    onNotSpam={() => moveToInbox(thread.primary)}
+                    onMenu={({ x, y }) => setMenu({ mail: thread.primary, x, y })}
+                  />
+                );
+              })}
 
               {visible.length === 0 ? (
                 <div className="px-3 py-8">

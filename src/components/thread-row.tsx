@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
-import { Archive, CornerUpLeft, MailOpen, RotateCcw, ShieldCheck, Star, Trash2 } from "lucide-react";
+import { motion, useReducedMotion } from "motion/react";
+import { Archive, CornerUpLeft, MailOpen, RotateCcw, ShieldCheck, Sparkles, Star, Trash2 } from "lucide-react";
 import { useMailStore } from "@/lib/store";
 import { haptic } from "@/lib/haptics";
 import type { Thread } from "@/lib/threads";
@@ -8,14 +9,23 @@ import { Avatar } from "@/components/ui/primitives";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { PgpBadge } from "@/components/ui/pgp-badge";
 import { SwipeAction, type SwipeActionDef } from "@/components/ui/swipe-action";
-import { usePrefs, type MailDensity, type SwipeActionId } from "@/lib/prefs";
+import { ShinyText } from "@/components/ui/animated-text";
+import {
+  usePrefs,
+  type MailDensity,
+  type MailPreview,
+  type MailPreviewStyle,
+  type SwipeActionId,
+} from "@/lib/prefs";
 import {
   DEFAULT_DECISION_THRESHOLDS,
   isPhishing,
+  isPromptInjection,
   type CustomCategory,
   type DecisionThresholds,
   type MailDecision,
 } from "@/lib/decision";
+import { listDescription } from "@/lib/triage";
 import { categoryColorStyle } from "@/components/category-manager-sheet";
 import { accountLabelInk, accountTint, useTheme } from "@/lib/theme";
 
@@ -50,6 +60,9 @@ export function ThreadRow({
   showPreview = true,
   showAccount = false,
   density = "cozy",
+  preview = "ai",
+  previewStyle = "signaux",
+  decisionPending = false,
   decision = null,
   decisionThresholds = DEFAULT_DECISION_THRESHOLDS,
   customCategories = [],
@@ -68,34 +81,33 @@ export function ThreadRow({
   showPreview?: boolean;
   showAccount?: boolean;
   density?: MailDensity;
+  preview?: MailPreview;
+  previewStyle?: MailPreviewStyle;
+  decisionPending?: boolean;
   decision?: MailDecision | null;
   decisionThresholds?: DecisionThresholds;
   customCategories?: readonly CustomCategory[];
 }) {
   const mail = thread.primary;
-  const { accountById } = useMailStore();
+  const { accountById, isDecisionReady } = useMailStore();
   const account = accountById(mail.account);
   const senderName = mail.folder === "sent" && mail.to ? `À ${mail.to}` : mail.name;
-  const displayName =
-    thread.count > 1 && thread.participants.length
-      ? `${thread.participants.slice(0, 2).join(", ")}${
-          thread.participants.length > 2 ? ` +${thread.participants.length - 2}` : ""
-        }`
-      : senderName;
   const unread = thread.unread > 0;
-  const pieces = `${thread.attachments} pièce${thread.attachments > 1 ? "s" : ""} jointe${
-    thread.attachments > 1 ? "s" : ""
-  }`;
-  const pillLabel =
-    thread.count > 1
-      ? `${thread.count} messages${thread.attachments > 0 ? ` · ${pieces}` : ""}`
-      : thread.attachments > 0
-        ? pieces
-        : "";
   const { swipeLeft, swipeRight } = usePrefs();
   const { dark } = useTheme();
+  const reduceMotion = useReducedMotion();
   const tight = density === "compact";
   const avatarSize = tight ? 32 : 42;
+  const aiActive = preview === "ai" && isDecisionReady;
+  const description = decision
+    ? listDescription(decision, decisionThresholds, previewStyle, customCategories)
+    : null;
+  const securityAlert = decision
+    ? isPhishing(decision, decisionThresholds) || isPromptInjection(decision, decisionThresholds)
+    : false;
+  const pending = aiActive && !decision && decisionPending;
+  const excerpt = preview === "excerpt" || (preview === "ai" && (!aiActive || (!decision && !pending)));
+  const lineClamp = tight ? "line-clamp-1" : "line-clamp-2";
 
   const decisionBadges: { label: string; className: string }[] = [];
   if (decision) {
@@ -126,6 +138,58 @@ export function ThreadRow({
         className: categoryColorStyle(customCat.color).pill,
       });
     }
+  }
+
+  const badges = aiActive && decision
+    ? decisionBadges.filter((badge) => badge.label === "Suspect")
+    : decisionBadges;
+
+  let thirdLine: React.ReactNode = null;
+  if (showPreview && excerpt) {
+    thirdLine = (
+      <p className={cn("mt-0.5 text-[12.5px] leading-[1.45] text-ink-muted", lineClamp)}>{thread.preview}</p>
+    );
+  } else if (showPreview && preview === "ai" && description) {
+    const text = (
+      <span
+        className={cn(
+          "min-w-0",
+          lineClamp,
+          securityAlert
+            ? "font-semibold text-rose-700 dark:text-rose-300"
+            : "font-medium text-accent-ink",
+        )}
+      >
+        {description}
+      </span>
+    );
+    const lineClass = "mt-0.5 flex items-baseline gap-1 text-[12.5px] leading-[1.45]";
+    thirdLine = reduceMotion ? (
+      <p className={lineClass}>
+        <Sparkles className="size-3 shrink-0 text-accent-ink" strokeWidth={2.4} />
+        {text}
+      </p>
+    ) : (
+      <motion.p
+        key={`${mail.id}:${previewStyle}`}
+        initial={{ opacity: 0, y: 3 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+        className={lineClass}
+      >
+        <Sparkles className="size-3 shrink-0 text-accent-ink" strokeWidth={2.4} />
+        {text}
+      </motion.p>
+    );
+  } else if (showPreview && pending) {
+    thirdLine = (
+      <p className="mt-0.5 flex items-baseline gap-1 text-[12.5px] leading-[1.45]">
+        <Sparkles className="size-3 shrink-0 text-accent-ink" strokeWidth={2.4} />
+        <ShinyText className={cn("min-w-0 font-medium", lineClamp)} duration={2.2}>
+          Analyse en cours…
+        </ShinyText>
+      </p>
+    );
   }
 
   const press = useRef<{ timer: number; x: number; y: number } | null>(null);
@@ -208,7 +272,7 @@ export function ThreadRow({
       <div
         role="button"
         tabIndex={0}
-        aria-label={`${displayName} — ${thread.subject}${thread.count > 1 ? ` · ${thread.count} messages` : ""}${
+        aria-label={`${senderName} — ${thread.subject}${thread.count > 1 ? ` · ${thread.count} messages` : ""}${
           unread ? " · non lu" : ""
         }${thread.starred ? " · étoilé" : ""}`}
         onClick={() => {
@@ -270,7 +334,7 @@ export function ThreadRow({
                 )}
               />
               <Avatar
-                name={displayName}
+                name={senderName}
                 tone={mail.tone}
                 size={avatarSize}
                 className="absolute bottom-0 left-0"
@@ -281,7 +345,7 @@ export function ThreadRow({
             </div>
           ) : (
             <div className={cn("relative flex w-[56px] items-end", tight ? "h-[32px]" : "h-[48px]")}>
-              <Avatar name={displayName} tone={mail.tone} size={avatarSize} className="relative" />
+              <Avatar name={senderName} tone={mail.tone} size={avatarSize} className="relative" />
               {unread && (
                 <span className="absolute top-[3px] left-0 size-2.5 rounded-full border-2 border-surface bg-accent" />
               )}
@@ -316,7 +380,7 @@ export function ThreadRow({
                   unread ? "font-bold text-ink" : "font-semibold text-ink-soft",
                 )}
               >
-                {displayName}
+                {senderName}
               </p>
             </div>
 
@@ -366,18 +430,11 @@ export function ThreadRow({
             {thread.subject}
           </p>
 
-          {showPreview && !tight && (
-            <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-[1.45] text-ink-muted">{thread.preview}</p>
-          )}
+          {thirdLine}
 
-          {((pillLabel && !tight) || decisionBadges.length > 0 || (!tight && mail.pgp !== "none")) && (
+          {(badges.length > 0 || (!tight && mail.pgp !== "none")) && (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              {pillLabel && !tight ? (
-                <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-[10.5px] font-semibold text-accent-ink">
-                  <span className="truncate">{pillLabel}</span>
-                </span>
-              ) : null}
-              {decisionBadges.map((badge) => (
+              {badges.map((badge) => (
                 <span
                   key={badge.label}
                   className={cn(

@@ -51,6 +51,7 @@ import { analyseMail } from "@/lib/analyse";
 import type { AnalyseResult, AnalyseTask } from "@/lib/analyse";
 import { sentSamples, styleProfile, threadConversation } from "@/lib/assist";
 import { EMPTY_LLM, llmReady } from "@/lib/llm";
+import { llmDescription } from "@/lib/description-llm";
 import { TODAY_ISO } from "@/lib/calendar";
 import type { CalendarEvent } from "@/lib/calendar";
 import {
@@ -190,6 +191,8 @@ function bulkSummary(kind: BulkKind, count: number, definitive: number): string 
 
 const PAGE_SIZE = 50;
 const SUMMARY_TICK_MS = 5 * 60_000;
+/** Mails décrits par le LLM par passage : la liste reste réactive. */
+const LLM_DESCRIPTION_BATCH = 6;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** La borne de la route des aperçus, par dossier et par requête. */
@@ -503,6 +506,8 @@ export type MailStoreValue = {
   decisions: Record<string, MailDecision>;
   /** Indique si le modèle de décision est prêt (config locale ou trousseau démon). */
   isDecisionReady: boolean;
+  /** Clés des mails envoyés au modèle et pas encore revenus. */
+  triagePendingKeys: ReadonlySet<string>;
   /** Indique si la vue Mails est actuellement au premier plan (pour ne pas superposer le popup TOTP). */
   inboxActive: boolean;
   setInboxActive: (active: boolean) => void;
@@ -627,7 +632,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const decisionPrefsRef = useRef(prefs.decision);
   decisionPrefsRef.current = prefs.decision;
   const autoTriagedKeys = useRef(new Set<string>());
+  const llmDescribedKeys = useRef(new Set<string>());
   const importedSyncKeys = useRef(new Set<string>());
+  const [triagePendingKeys, setTriagePendingKeys] = useState<ReadonlySet<string>>(() => new Set());
   const [analyse, setAnalyse] = useState<MailAnalyse | null>(null);
   const analyseRun = useRef<string | null>(null);
   const analyseRunning = useRef(false);
@@ -950,6 +957,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         contentHash: dec.contentHash,
         schemaVersion: dec.schemaVersion,
         model: dec.model,
+        ...(dec.description ? { description: dec.description } : {}),
         category: dec.category,
         categoryConf: dec.categoryConf,
         categoryProbs: dec.categoryProbs,
@@ -981,6 +989,17 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     async (targetMails: Mail[], force = false, limit?: number) => {
       if (mode !== "api" || !isDecisionReady || targetMails.length === 0) return;
       const teamMembers = allTeamMembers(prefs).map((member) => member.name);
+      const pending = new Set<string>();
+      const releasePending = () => {
+        if (pending.size === 0) return;
+        const done = new Set(pending);
+        pending.clear();
+        setTriagePendingKeys((current) => {
+          const next = new Set(current);
+          for (const key of done) next.delete(key);
+          return next;
+        });
+      };
       try {
         const triaged = await triageRecentMails({
           mails: targetMails,
@@ -991,10 +1010,16 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
           db: decisionDb(),
           domain: decisionDomain(prefs.decision),
           publishSynced: publishDecisionSync,
+          onPendingKeys: (keys) => {
+            for (const key of keys) pending.add(key);
+            setTriagePendingKeys((current) => new Set([...current, ...keys]));
+          },
         });
         if (triaged.length > 0) mergeDecisions(triaged);
       } catch {
         // Un échec réseau du modèle de décision ne bloque jamais la boîte mail.
+      } finally {
+        releasePending();
       }
     },
     [isDecisionReady, mergeDecisions, mode, prefs, publishDecisionSync],
@@ -3599,6 +3624,51 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     triageMails,
   ]);
 
+  // Source `llm` : la phrase de description vient du LLM du front, une fois par mail.
+  useEffect(() => {
+    if (mode !== "api" || demoReadOnly || isComposeWindow()) return;
+    if (prefs.decision.descriptionSource !== "llm" || !llmReady(prefs.llm)) return;
+    const batch: { key: string; mail: Mail; decision: MailDecision }[] = [];
+    for (const mail of receptionMails) {
+      if (batch.length >= LLM_DESCRIPTION_BATCH) break;
+      if (!mail.source) continue;
+      const key = decisionMailKey(mail.source.accountId, mail.source.folderPath, mail.source.uid);
+      if (llmDescribedKeys.current.has(key)) continue;
+      const decision = triageDecisionFor(mail, decisionIndex.byKey, decisionIndex.byMessageId);
+      if (!decision || decision.description?.trim()) continue;
+      batch.push({ key, mail, decision });
+    }
+    if (batch.length === 0) return;
+    for (const entry of batch) llmDescribedKeys.current.add(entry.key);
+    void (async () => {
+      const phrases = await Promise.all(
+        batch.map((entry) =>
+          llmDescription(prefs.llm, {
+            name: entry.mail.name,
+            subject: entry.mail.subject,
+            preview: entry.mail.preview,
+          }),
+        ),
+      );
+      for (const [index, phrase] of phrases.entries()) {
+        if (!phrase) continue;
+        const updated: MailDecision = { ...batch[index].decision, description: phrase };
+        mergeDecisions([updated]);
+        void decisionDb().putDecisions([updated]).catch(() => {});
+        publishDecisionSync(updated);
+        void mailApi.importDecisions([toApiDecision(updated)]).catch(() => {});
+      }
+    })();
+  }, [
+    decisionIndex,
+    mergeDecisions,
+    mode,
+    prefs.decision.descriptionSource,
+    prefs.llm,
+    publishDecisionSync,
+    receptionMails,
+  ]);
+
   useEffect(() => {
     if (phase !== "ready" || isComposeWindow()) return;
     summaryRun.current = null;
@@ -3784,6 +3854,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       setFolderOrder,
       decisions,
       isDecisionReady,
+      triagePendingKeys,
       inboxActive,
       setInboxActive,
       trustSender,
@@ -3897,6 +3968,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       setFolderOrder,
       decisions,
       isDecisionReady,
+      triagePendingKeys,
       inboxActive,
       setInboxActive,
       trustSender,

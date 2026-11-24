@@ -6,6 +6,7 @@ import { folderLabel } from "@/lib/mail";
 import { currentPeriod, summarySourceLabel, type SummaryRef } from "@/lib/summary";
 import { dueToneFor, formatDueDate } from "@/lib/tasks";
 import { threadsInFolder, type Thread } from "@/lib/threads";
+import { decisionMailKey } from "@/lib/decision-db";
 import { ALL_ACCOUNTS } from "@/lib/accounts";
 import { decisionReady, type CustomCategory, type MailDecision } from "@/lib/decision";
 import { countCleanupByFilter } from "@/lib/cleanup";
@@ -174,6 +175,8 @@ export function InboxScreen({
     decision: decisionPrefs,
     mailDensity,
     setMailDensity,
+    mailPreview,
+    mailPreviewStyle,
   } = usePrefs();
   const summaryLabel = currentPeriod(summaryConfig).label;
   const {
@@ -199,6 +202,8 @@ export function InboxScreen({
     openMail,
     closeMessage,
     decisions,
+    isDecisionReady,
+    triagePendingKeys,
     triageMails,
     trustSender,
   } = useMailStore();
@@ -371,6 +376,18 @@ export function InboxScreen({
       return undefined;
     },
     [decisionIndex, decisionPrefs],
+  );
+
+  const decisionPendingFor = useCallback(
+    (thread: Thread) => {
+      const source = thread.primary.source;
+      if (!isDecisionReady || !source) return false;
+      if (triageDecisionFor(thread.primary, decisionIndex.byKey, decisionIndex.byMessageId)) return false;
+      return triagePendingKeys.has(
+        decisionMailKey(source.accountId, source.folderPath, source.uid),
+      );
+    },
+    [decisionIndex, isDecisionReady, triagePendingKeys],
   );
 
   const smartCounts = useMemo(() => {
@@ -1516,6 +1533,9 @@ export function InboxScreen({
                 delay={Math.min(0.4, 0.16 + index * 0.05)}
                 showAccount={account === ALL_ACCOUNTS}
                 density={mailDensity}
+                preview={mailPreview}
+                previewStyle={mailPreviewStyle}
+                decisionPending={decisionPendingFor(thread)}
                 decision={decisionForThread(thread)}
                 decisionThresholds={decisionPrefs.thresholds}
                 customCategories={decisionPrefs.customCategories}

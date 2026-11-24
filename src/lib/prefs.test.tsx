@@ -16,7 +16,10 @@ import {
   asPgpAccounts,
   asSync,
   asTeamContext,
+  MAIL_PREVIEW_STYLES,
   asMailDensity,
+  asMailPreview,
+  asMailPreviewStyle,
   asThreadView,
   asUpdates,
   DEFAULT_UPDATES,
@@ -733,6 +736,98 @@ describe("préférences · densité des mails", () => {
   });
 });
 
+describe("préférences · aperçu de la liste", () => {
+  it("affiche la description IA par défaut", () => {
+    expect(mount().result.current.mailPreview).toBe("ai");
+  });
+
+  it("retombe sur la description IA pour une valeur inconnue", () => {
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ mailPreview: "resume" }));
+    expect(mount().result.current.mailPreview).toBe("ai");
+
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ mailPreview: "none" }));
+    expect(mount().result.current.mailPreview).toBe("none");
+
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ mailPreview: "excerpt" }));
+    expect(mount().result.current.mailPreview).toBe("excerpt");
+
+    expect(asMailPreview(undefined)).toBe("ai");
+    expect(asMailPreview(42)).toBe("ai");
+    expect(asMailPreview("excerpt")).toBe("excerpt");
+    expect(asMailPreview("none")).toBe("none");
+  });
+
+  it("enregistre l'aperçu et le persiste, sans toucher aux autres préférences", () => {
+    const { result } = mount();
+
+    act(() => result.current.setMailPreview("excerpt"));
+
+    expect(result.current.mailPreview).toBe("excerpt");
+    expect(stored().mailPreview).toBe("excerpt");
+    expect(result.current.mailPreviewStyle).toBe("signaux");
+    expect(result.current.mailDensity).toBe("cozy");
+    expect(result.current.threadView).toBe("tidy");
+    expect(result.current.summary).toEqual(DEFAULT_SUMMARY);
+  });
+
+  it("revient à la description IA et le persiste", () => {
+    const { result } = mount();
+
+    act(() => result.current.setMailPreview("none"));
+    act(() => result.current.setMailPreview("ai"));
+
+    expect(stored().mailPreview).toBe("ai");
+  });
+});
+
+describe("préférences · style de description", () => {
+  it("nomme le style phrase « Description rapide »", () => {
+    expect(MAIL_PREVIEW_STYLES.map((entry) => entry.id)).toEqual(["signaux", "phrase"]);
+    expect(MAIL_PREVIEW_STYLES[1].label).toBe("Description rapide");
+    expect(MAIL_PREVIEW_STYLES[1].hint).toBe(
+      "Phrase de synthèse générée par le modèle de décision ou le LLM.",
+    );
+    expect(MAIL_PREVIEW_STYLES[0].label).toBe("Signaux");
+  });
+
+  it("affiche les signaux par défaut", () => {
+    expect(mount().result.current.mailPreviewStyle).toBe("signaux");
+  });
+
+  it("retombe sur les signaux pour une valeur inconnue", () => {
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ mailPreviewStyle: "paragraphe" }));
+    expect(mount().result.current.mailPreviewStyle).toBe("signaux");
+
+    window.localStorage.setItem("lavande.prefs", JSON.stringify({ mailPreviewStyle: "phrase" }));
+    expect(mount().result.current.mailPreviewStyle).toBe("phrase");
+
+    expect(asMailPreviewStyle(undefined)).toBe("signaux");
+    expect(asMailPreviewStyle(42)).toBe("signaux");
+    expect(asMailPreviewStyle("phrase")).toBe("phrase");
+  });
+
+  it("enregistre le style et le persiste, sans toucher aux autres préférences", () => {
+    const { result } = mount();
+
+    act(() => result.current.setMailPreviewStyle("phrase"));
+
+    expect(result.current.mailPreviewStyle).toBe("phrase");
+    expect(stored().mailPreviewStyle).toBe("phrase");
+    expect(result.current.mailPreview).toBe("ai");
+    expect(result.current.mailDensity).toBe("cozy");
+    expect(result.current.notifications).toEqual(DEFAULT_NOTIFICATIONS);
+  });
+
+  it("revient aux signaux et le persiste", () => {
+    const { result } = mount();
+
+    act(() => result.current.setMailPreviewStyle("phrase"));
+    act(() => result.current.setMailPreviewStyle("signaux"));
+
+    expect(stored().mailPreviewStyle).toBe("signaux");
+  });
+});
+
 describe("préférences · images autorisées par expéditeur", () => {
   it("part d'une liste vide", () => {
     expect(mount().result.current.imagesAllowedSenders).toEqual([]);
@@ -930,6 +1025,48 @@ describe("préférences · modèle de décision", () => {
     expect(asDecision({}).spamEnabled).toBe(false);
     expect(asDecision({ spamEnabled: "oui" }).spamEnabled).toBe(false);
     expect(asDecision({ spamEnabled: true }).spamEnabled).toBe(true);
+  });
+
+  it("hydrate le modèle de description, avec nw-flash par défaut", () => {
+    expect(asDecision({}).descriptionModel).toBe("nw-flash");
+    expect(asDecision({ descriptionModel: 42 }).descriptionModel).toBe("nw-flash");
+    expect(asDecision({ descriptionModel: "  nw-flash  " }).descriptionModel).toBe("nw-flash");
+    expect(asDecision({ descriptionModel: "my-chat-model" }).descriptionModel).toBe("my-chat-model");
+    expect(asDecision({ descriptionModel: "" }).descriptionModel).toBe("");
+  });
+
+  it("suit le fournisseur pour le défaut du modèle de description", () => {
+    expect(asDecision({ provider: "baseten" }).descriptionModel).toBe("");
+    expect(asDecision({ provider: "jev" }).descriptionModel).toBe("");
+    expect(asDecision({ provider: "custom" }).descriptionModel).toBe("");
+    expect(asDecision({ provider: "neuralwatt" }).descriptionModel).toBe("nw-flash");
+    expect(asDecision({ provider: "baseten", descriptionModel: "my-chat" }).descriptionModel).toBe(
+      "my-chat",
+    );
+  });
+
+  it("hydrate la source de description, decision par défaut", () => {
+    expect(asDecision({}).descriptionSource).toBe("decision");
+    expect(asDecision({ descriptionSource: "llm" }).descriptionSource).toBe("llm");
+    expect(asDecision({ descriptionSource: "LLM" }).descriptionSource).toBe("decision");
+    expect(asDecision({ descriptionSource: 1 }).descriptionSource).toBe("decision");
+  });
+
+  it("persiste le modèle de description choisi et le relit", () => {
+    const { result } = mount();
+
+    act(() => result.current.setDecision({ descriptionModel: "my-chat-model" }));
+
+    expect(result.current.decision.descriptionModel).toBe("my-chat-model");
+    expect(
+      (stored().decision as Record<string, unknown> | undefined)?.descriptionModel,
+    ).toBe("my-chat-model");
+
+    act(() => result.current.setDecision({ descriptionModel: "" }));
+
+    expect(
+      (stored().decision as Record<string, unknown> | undefined)?.descriptionModel,
+    ).toBe("");
   });
 
   it("borne le nombre de mails récents analysés entre 10 et 200", () => {

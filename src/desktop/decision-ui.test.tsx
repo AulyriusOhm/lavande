@@ -447,9 +447,9 @@ describe("Boîte & Lecteur PC · catégories, nettoyage, sécurité et rangement
     expect(document.querySelector(`[data-mail-row="${ACCOUNT}:t-3"]`)).toBeNull();
     expect(document.querySelector(`[data-mail-row="${ACCOUNT}:t-4"]`)).toBeNull();
 
-    // Pastilles sur les lignes visibles
-    expect(rowCardText(`${ACCOUNT}:t-1`)).toContain("Urgent");
-    expect(rowCardText(`${ACCOUNT}:t-1`)).toContain("À répondre");
+    // Description IA sur les lignes visibles, badge Suspect inline
+    expect(rowCardText(`${ACCOUNT}:t-1`)).toContain("Urgent · Réponse attendue");
+    expect(rowCardText(`${ACCOUNT}:t-1`)).not.toContain("À répondre");
     expect(rowCardText(`${ACCOUNT}:t-5`)).toContain("Suspect");
 
     // Passer sur la catégorie custom Factures (bouton filtre avec aria-pressed)

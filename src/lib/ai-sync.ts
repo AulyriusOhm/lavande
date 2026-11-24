@@ -42,6 +42,9 @@ export function syncedDecisionDocs(docs: Record<string, Doc>): MailDecision[] {
       contentHash: text(raw.contentHash),
       schemaVersion: typeof raw.schemaVersion === "number" ? raw.schemaVersion : 1,
       model: text(raw.model),
+      ...(typeof raw.description === "string" && raw.description.trim()
+        ? { description: raw.description }
+        : {}),
       category: raw.category,
       categoryConf: typeof raw.categoryConf === "number" ? raw.categoryConf : 0.5,
       categoryProbs:
@@ -156,6 +159,8 @@ export function useAiSync(): void {
     protocol: decision.protocol,
     endpoint: decision.endpoint,
     model: decision.model,
+    descriptionModel: decision.descriptionModel,
+    descriptionSource: decision.descriptionSource,
     authHeader: decision.authHeader,
     thresholds: decision.thresholds,
     customCategories: decision.customCategories,
@@ -183,6 +188,8 @@ export function useAiSync(): void {
         protocol: parsed.protocol,
         endpoint: parsed.endpoint,
         model: parsed.model,
+        descriptionModel: parsed.descriptionModel,
+        descriptionSource: parsed.descriptionSource,
         authHeader: parsed.authHeader,
         thresholds: parsed.thresholds,
         customCategories: parsed.customCategories,
@@ -224,6 +231,8 @@ export function useAiSync(): void {
       protocol: doc?.raw.protocol,
       endpoint: doc?.raw.endpoint,
       model: doc?.raw.model,
+      descriptionModel: doc?.raw.descriptionModel,
+      descriptionSource: doc?.raw.descriptionSource,
       authHeader: doc?.raw.authHeader,
       thresholds: doc?.raw.thresholds,
       customCategories: doc?.raw.customCategories,

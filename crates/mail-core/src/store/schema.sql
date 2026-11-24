@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS mail_decisions (
     content_hash TEXT NOT NULL,
     schema_version INTEGER NOT NULL,
     model TEXT NOT NULL,
+    description TEXT,
     category TEXT NOT NULL,
     category_conf REAL NOT NULL,
     category_probs_json TEXT NOT NULL,

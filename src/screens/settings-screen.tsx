@@ -79,6 +79,8 @@ import {
 
   THREAD_VIEWS,
   MAIL_DENSITIES,
+  MAIL_PREVIEWS,
+  MAIL_PREVIEW_STYLES,
   mergeFlags,
   perimeterOf,
   usePrefs,
@@ -225,9 +227,14 @@ export function SettingsScreen({
     setThreadView,
     mailDensity,
     setMailDensity,
+    mailPreview,
+    setMailPreview,
+    mailPreviewStyle,
+    setMailPreviewStyle,
     updates,
     setUpdates,
   } = usePrefs();
+  const decisionLayerReady = decisionReady(decision);
   const [openGroup, setOpenGroup] = useState<GroupId | null>(null);
   const [teamAccount, setTeamAccount] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewMode>("unlocked");
@@ -1081,6 +1088,120 @@ export function SettingsScreen({
               </p>
             </Card>
           </BlurFade>
+
+          <BlurFade delay={0.22}>
+            <Card className="mx-5 mt-3 p-3.5">
+              <p className="text-[12.5px] font-bold text-ink">Aperçu de la liste</p>
+              <p className="text-[10.5px] font-medium text-ink-muted">Contenu de la troisième ligne</p>
+              <div className="mt-2.5 flex gap-1.5">
+                {MAIL_PREVIEWS.map((option) => {
+                  const selected = mailPreview === option.id;
+                  const unavailable = option.id === "ai" && !decisionLayerReady;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      aria-pressed={selected}
+                      aria-disabled={unavailable}
+                      disabled={unavailable}
+                      onClick={() => setMailPreview(option.id)}
+                      className={cn(
+                        "focus-ring min-h-11 flex-1 rounded-xl px-1 text-[11.5px] font-bold transition-colors disabled:opacity-40",
+                        selected
+                          ? "bg-accent text-accent-contrast"
+                          : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
+                      )}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-2 text-[12px] leading-relaxed font-medium text-ink-muted">
+                {mailPreview === "ai" && !decisionLayerReady
+                  ? "Modèle de décision non configuré : l'aperçu reste l'extrait du message."
+                  : MAIL_PREVIEWS.find((option) => option.id === mailPreview)?.hint}
+              </p>
+            </Card>
+          </BlurFade>
+
+          {mailPreview === "ai" && decisionLayerReady ? (
+            <BlurFade delay={0.24}>
+              <Card className="mx-5 mt-3 p-3.5">
+                <p className="text-[12.5px] font-bold text-ink">Style de description</p>
+                <p className="text-[10.5px] font-medium text-ink-muted">
+                  Forme de la description du modèle
+                </p>
+                <div className="mt-2.5 flex gap-1.5">
+                  {MAIL_PREVIEW_STYLES.map((option) => {
+                    const selected = mailPreviewStyle === option.id;
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() => setMailPreviewStyle(option.id)}
+                        className={cn(
+                          "focus-ring min-h-11 flex-1 rounded-xl px-1 text-[11.5px] font-bold transition-colors",
+                          selected
+                            ? "bg-accent text-accent-contrast"
+                            : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
+                        )}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-2 text-[12px] leading-relaxed font-medium text-ink-muted">
+                  {MAIL_PREVIEW_STYLES.find((option) => option.id === mailPreviewStyle)?.hint}
+                </p>
+                <div className="mt-3 rounded-2xl border border-line bg-surface-2/60 p-2.5">
+                  <p className="text-[10px] font-bold tracking-[0.12em] text-ink-muted uppercase">
+                    Exemple — mail de Marc Delaunay
+                  </p>
+                  <p className="mt-1 text-[12px] font-bold text-ink">Devis signé — retour de ma part</p>
+                  {[
+                    {
+                      id: "signaux" as const,
+                      label: "Signaux",
+                      text: "Réponse attendue · Tâche détectée",
+                    },
+                    {
+                      id: "phrase" as const,
+                      label: "Description rapide",
+                      text: "Avenant signé : confirmer le lancement de la phase 2 lundi.",
+                    },
+                  ].map((sample) => {
+                    const selected = mailPreviewStyle === sample.id;
+                    return (
+                      <button
+                        key={sample.id}
+                        type="button"
+                        aria-pressed={selected}
+                        aria-label={`${sample.label} — ${sample.text}`}
+                        onClick={() => setMailPreviewStyle(sample.id)}
+                        className={cn(
+                          "focus-ring mt-1.5 flex w-full items-baseline gap-1.5 rounded-xl border px-2.5 py-2 text-left transition-colors",
+                          selected
+                            ? "border-transparent bg-accent-soft ring-1 ring-accent-ring/60"
+                            : "border-line bg-surface",
+                        )}
+                      >
+                        <span className="shrink-0 rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] font-bold text-ink-soft">
+                          {sample.label}
+                        </span>
+                        <Sparkles className="size-3 shrink-0 text-accent-ink" strokeWidth={2.4} />
+                        <span className="min-w-0 text-[12.5px] leading-snug font-medium text-accent-ink">
+                          {sample.text}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </Card>
+            </BlurFade>
+          ) : null}
         </>
       ) : null}
 
@@ -1673,6 +1794,67 @@ export function SettingsScreen({
                 onUpdate={updateDecision}
               />
               <ImagesAllowedSection readOnly={readOnly} />
+            </Card>
+          </BlurFade>
+
+          <BlurFade delay={0.07}>
+            <Card className="mx-5 mt-3 p-3.5">
+              <p className="text-[12.5px] font-bold text-ink">Description des mails</p>
+              <p className="text-[10.5px] font-medium text-ink-muted">Source de la phrase de résumé</p>
+              <div className="mt-2.5 flex gap-1.5">
+                {(
+                  [
+                    { id: "decision" as const, label: "Modèle de décision" },
+                    { id: "llm" as const, label: "LLM" },
+                  ]
+                ).map((option) => {
+                  const selected = decision.descriptionSource === option.id;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => updateDecision({ descriptionSource: option.id })}
+                      className={cn(
+                        "focus-ring min-h-11 flex-1 rounded-xl px-1 text-[11.5px] font-bold transition-colors",
+                        selected
+                          ? "bg-accent text-accent-contrast"
+                          : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
+                      )}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-2 text-[12px] leading-relaxed font-medium text-ink-muted">
+                {decision.descriptionSource === "llm"
+                  ? "Phrase rédigée par le LLM conversationnel configuré dans les Réglages IA."
+                  : "Phrase rédigée par le modèle de chat du provider de décision."}
+              </p>
+              {decision.descriptionSource === "decision" ? (
+                <label className="block">
+                  <span className="mt-3 block text-[12.5px] font-bold text-ink">Modèle de description</span>
+                  <input
+                    aria-label="Modèle de description"
+                    type="text"
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    placeholder="nw-flash"
+                    value={decision.descriptionModel}
+                    onChange={(event) => updateDecision({ descriptionModel: event.target.value })}
+                    className="focus-ring mt-1.5 w-full rounded-xl border border-line bg-surface px-3 py-2 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
+                  />
+                  <span className="mt-2 block text-[12px] leading-relaxed font-medium text-ink-muted">
+                    Vide = signaux uniquement. nw-flash pour NeuralWatt.
+                  </span>
+                </label>
+              ) : (
+                <p className="mt-3 text-[12px] leading-relaxed font-medium text-ink-muted">
+                  Aucun modèle supplémentaire : la phrase utilise le LLM configuré ci-dessus.
+                </p>
+              )}
             </Card>
           </BlurFade>
 

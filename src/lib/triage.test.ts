@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { THRESHOLD_PRESETS, setDecisionUsageSink, type MailDecision } from "@/lib/decision";
+import {
+  DEFAULT_DECISION,
+  THRESHOLD_PRESETS,
+  setDecisionUsageSink,
+  type DecisionConfig,
+  type MailDecision,
+} from "@/lib/decision";
 import { createMemoryDecisionDb, decisionMailKey } from "@/lib/decision-db";
 import { buildDemoDecisions } from "@/lib/demo-decisions";
 import type { Mail } from "@/lib/mail";
@@ -17,6 +23,7 @@ import {
   summaryGroupsFromDecisions,
   taskDraftFromMail,
   toApiDecision,
+  toApiDecisionConfig,
   triageDecisionFor,
   triageRecentMails,
 } from "@/lib/triage";
@@ -89,6 +96,7 @@ describe("triage · convertisseurs et recherche multi-appareils", () => {
       totpService: "GitHub",
       suggestedFolder: "Factures",
       suggestedFolderConf: 0.91,
+      description: "Camille valide la v3 et attend ton retour.",
       source: "synced",
     });
 
@@ -96,6 +104,7 @@ describe("triage · convertisseurs et recherche multi-appareils", () => {
     expect(api.account_id).toBe("perso");
     expect(api.totp_code).toBe("482917");
     expect(api.suggested_folder).toBe("Factures");
+    expect(api.description).toBe("Camille valide la v3 et attend ton retour.");
     expect(fromApiDecision(api)).toEqual(dec);
   });
 
@@ -464,6 +473,67 @@ describe("triage · triageRecentMails (file bornée)", () => {
     expect(targetsOf(fetchMock)).toHaveLength(200);
   });
 
+  it("annonce une fois les clés envoyées au modèle, avant l'appel réseau", async () => {
+    const db = createMemoryDecisionDb();
+    const mails = Array.from({ length: 5 }, (_, i) => makeMail(i + 1));
+    const seen: string[][] = [];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(seen).toHaveLength(1);
+      const payload = JSON.parse(String(init?.body ?? "{}")) as {
+        targets: { account_id: string; folder_path: string; uid: number }[];
+      };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          results: payload.targets.map((t) => ({
+            decision: toApiDecision(
+              makeDecision({
+                accountId: t.account_id,
+                folderPath: t.folder_path,
+                uid: t.uid,
+                messageId: `<m${t.uid}@example.com>`,
+              }),
+            ),
+            cached: false,
+          })),
+          errors: [],
+        }),
+      } as unknown as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const triaged = await triageRecentMails({
+      mails,
+      db,
+      limit: 3,
+      onPendingKeys: (keys) => seen.push(keys),
+    });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toEqual([
+      decisionMailKey("perso", "INBOX", 5),
+      decisionMailKey("perso", "INBOX", 4),
+      decisionMailKey("perso", "INBOX", 3),
+    ]);
+    expect(triaged).toHaveLength(3);
+  });
+
+  it("n'annonce aucune clé quand tout est déjà décidé", async () => {
+    const db = createMemoryDecisionDb();
+    const mails = [makeMail(1)];
+    await db.putDecision(makeDecision({ uid: 1, messageId: "<m1@example.com>" }));
+    const seen: string[][] = [];
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const triaged = await triageRecentMails({ mails, db, onPendingKeys: (keys) => seen.push(keys) });
+
+    expect(triaged).toEqual([]);
+    expect(seen).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("ramène une limite nulle ou négative à un seul mail", async () => {
     for (const limit of [0, -5]) {
       const db = createMemoryDecisionDb();
@@ -561,5 +631,41 @@ describe("triage · extractAuthLink, whitelist de confiance et drafts", () => {
       mailFrom: "Camille",
       mailSubject: "Devis signé",
     });
+  });
+});
+
+describe("triage · configuration de décision envoyée au démon", () => {
+  const config = (overrides: Partial<DecisionConfig> = {}): DecisionConfig => ({
+    ...DEFAULT_DECISION,
+    ...overrides,
+  });
+
+  it("envoie description_model tel quel, espaces retirés", () => {
+    expect(toApiDecisionConfig(config()).description_model).toBe("nw-flash");
+    expect(
+      toApiDecisionConfig(config({ descriptionModel: "  my-chat-model  " })).description_model,
+    ).toBe("my-chat-model");
+    expect(toApiDecisionConfig(config({ descriptionModel: "" })).description_model).toBe("");
+  });
+
+  it("envoie la source de description", () => {
+    expect(toApiDecisionConfig(config()).description_source).toBe("decision");
+    expect(
+      toApiDecisionConfig(config({ descriptionSource: "llm", descriptionModel: "" }))
+        .description_source,
+    ).toBe("llm");
+  });
+
+  it("garde les autres champs du contrat intacts", () => {
+    const api = toApiDecisionConfig(
+      config({ provider: "baseten", descriptionModel: "my-chat-model", recentMailCount: 120 }),
+    );
+
+    expect(api.provider).toBe("baseten");
+    expect(api.endpoint).toBe(DEFAULT_DECISION.endpoint);
+    expect(api.recent_mail_count).toBe(120);
+    expect(api.description_model).toBe("my-chat-model");
+    expect(api).not.toHaveProperty("api_key");
+    expect(toApiDecisionConfig(config(), { apiKey: "nw-key" }).api_key).toBe("nw-key");
   });
 });

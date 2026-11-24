@@ -23,8 +23,33 @@ export const THREAD_VIEWS: { id: ThreadView; label: string; hint: string }[] = [
 export type MailDensity = "cozy" | "compact";
 
 export const MAIL_DENSITIES: { id: MailDensity; label: string; hint: string }[] = [
-  { id: "cozy", label: "Confort", hint: "Aperçu du message et avatar large" },
-  { id: "compact", label: "Compact", hint: "Plus de mails à l'écran, sans aperçu" },
+  { id: "cozy", label: "Confort", hint: "Carte aérée avec aperçu configurable" },
+  { id: "compact", label: "Compact", hint: "Lignes serrées avec aperçu configurable" },
+];
+
+/** Troisième ligne de la liste : extrait du message, description du modèle, rien. */
+export type MailPreview = "excerpt" | "ai" | "none";
+
+export const MAIL_PREVIEWS: { id: MailPreview; label: string; hint: string }[] = [
+  { id: "excerpt", label: "Extrait", hint: "Aperçu du message, comme aujourd'hui." },
+  { id: "ai", label: "Description IA", hint: "La description du modèle de décision remplace l'aperçu." },
+  { id: "none", label: "Aucun", hint: "Aucun aperçu : expéditeur et objet seulement." },
+];
+
+/** Style de la description IA : étiquettes de signaux ou phrase de synthèse. */
+export type MailPreviewStyle = "signaux" | "phrase";
+
+export const MAIL_PREVIEW_STYLES: { id: MailPreviewStyle; label: string; hint: string }[] = [
+  {
+    id: "signaux",
+    label: "Signaux",
+    hint: "Étiquettes courtes : urgence, réponse attendue, code de vérification…",
+  },
+  {
+    id: "phrase",
+    label: "Description rapide",
+    hint: "Phrase de synthèse générée par le modèle de décision ou le LLM.",
+  },
 ];
 
 const STORAGE_KEY = "lavande.prefs";
@@ -33,8 +58,10 @@ import { recordDecisionUsage, recordUsage } from "@/lib/ai-stats";
 import { refreshCopilotSession } from "@/lib/copilot";
 import {
   DEFAULT_DECISION,
+  asDescriptionSource,
   clampRecentMailCount,
   clampThresholds,
+  defaultDescriptionModel,
   setDecisionUsageSink,
   type CustomCategory,
   type DecisionAuthHeader,
@@ -157,6 +184,10 @@ export type Prefs = {
   threadView: ThreadView;
   /** Densité de la liste des mails. */
   mailDensity: MailDensity;
+  /** Contenu de la troisième ligne de la liste : extrait, description IA ou rien. */
+  mailPreview: MailPreview;
+  /** Style de la description IA : signaux ou phrase. */
+  mailPreviewStyle: MailPreviewStyle;
   /** Expéditeurs dont les images distantes s'affichent d'office sur cet appareil. */
   imagesAllowedSenders: string[];
   /** Largeurs des trois colonnes de la boîte PC, ajustées à la souris. */
@@ -192,6 +223,8 @@ const DEFAULTS: Prefs = {
   updates: DEFAULT_UPDATES,
   threadView: "tidy",
   mailDensity: "cozy",
+  mailPreview: "ai",
+  mailPreviewStyle: "signaux",
   imagesAllowedSenders: [],
   inboxPanes: DEFAULT_INBOX_PANES,
 };
@@ -221,6 +254,8 @@ type PrefsContextValue = Prefs & {
   setAccountNotification: (accountId: string, value: boolean) => void;
   setThreadView: (value: ThreadView) => void;
   setMailDensity: (value: MailDensity) => void;
+  setMailPreview: (value: MailPreview) => void;
+  setMailPreviewStyle: (value: MailPreviewStyle) => void;
   setImagesAllowedSenders: (value: string[]) => void;
   setInboxPanes: (patch: Partial<InboxPanes>) => void;
 };
@@ -241,6 +276,12 @@ export const asThreadView = (value: unknown): ThreadView => (value === "inline" 
 
 export const asMailDensity = (value: unknown): MailDensity =>
   value === "compact" ? "compact" : "cozy";
+
+export const asMailPreview = (value: unknown): MailPreview =>
+  value === "excerpt" || value === "none" ? value : "ai";
+
+export const asMailPreviewStyle = (value: unknown): MailPreviewStyle =>
+  value === "phrase" ? "phrase" : "signaux";
 
 const asFlags = (value: unknown): Record<string, boolean> =>
   value && typeof value === "object"
@@ -408,6 +449,11 @@ export const asDecision = (value: unknown): DecisionConfig => {
     protocol,
     endpoint: typeof raw.endpoint === "string" ? raw.endpoint : DEFAULT_DECISION.endpoint,
     model: typeof raw.model === "string" ? raw.model : DEFAULT_DECISION.model,
+    descriptionModel:
+      typeof raw.descriptionModel === "string"
+        ? raw.descriptionModel.trim()
+        : defaultDescriptionModel(provider),
+    descriptionSource: asDescriptionSource(raw.descriptionSource),
     authHeader,
     apiKey: typeof raw.apiKey === "string" ? raw.apiKey : "",
     daemonHasKey: asBoolean(raw.daemonHasKey, false),
@@ -650,6 +696,8 @@ function read(): Prefs {
     updates: asUpdates(stored.updates),
     threadView: asThreadView(stored.threadView),
     mailDensity: asMailDensity(stored.mailDensity),
+    mailPreview: asMailPreview(stored.mailPreview),
+    mailPreviewStyle: asMailPreviewStyle(stored.mailPreviewStyle),
     imagesAllowedSenders: asTrustedList(stored.imagesAllowedSenders, false),
     inboxPanes: asPanes(stored.inboxPanes),
   };
@@ -877,6 +925,13 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
 
   const setMailDensity = useCallback((value: MailDensity) => patch("mailDensity", value), [patch]);
 
+  const setMailPreview = useCallback((value: MailPreview) => patch("mailPreview", value), [patch]);
+
+  const setMailPreviewStyle = useCallback(
+    (value: MailPreviewStyle) => patch("mailPreviewStyle", value),
+    [patch],
+  );
+
   const setImagesAllowedSenders = useCallback(
     (value: string[]) => patch("imagesAllowedSenders", asTrustedList(value, false)),
     [patch],
@@ -915,6 +970,8 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setAccountNotification,
       setThreadView,
       setMailDensity,
+      setMailPreview,
+      setMailPreviewStyle,
       setImagesAllowedSenders,
       setInboxPanes,
     }),
@@ -944,6 +1001,8 @@ export function PrefsProvider({ children }: { children: React.ReactNode }) {
       setAccountNotification,
       setThreadView,
       setMailDensity,
+      setMailPreview,
+      setMailPreviewStyle,
       setImagesAllowedSenders,
       setInboxPanes,
     ],

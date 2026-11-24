@@ -135,6 +135,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
   return {
     "1": dec("1", "perso", {
       uid: 101,
+      description: "Camille attend ton retour sur les maquettes v3 et les nouveaux contrastes.",
       category: "important",
       categoryConf: 0.96,
       categoryProbs: { important: 0.96 },
@@ -155,6 +156,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
     }),
     "1d": dec("1d", "perso", {
       uid: 103,
+      description: "Discussion sur les maquettes mobiles v3 ; un retour est attendu.",
       category: "important",
       categoryConf: 0.94,
       categoryProbs: { important: 0.94 },
@@ -165,6 +167,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
     }),
     "3": dec("3", "pro", {
       uid: 104,
+      description: "Marc a signé l'avenant ; la phase 2 peut être lancée lundi prochain.",
       category: "important",
       categoryConf: 0.95,
       categoryProbs: { important: 0.95 },
@@ -175,6 +178,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
     }),
     "4": dec("4", "perso", {
       uid: 105,
+      description: "Léa propose un déjeuner jeudi au café rue des Lilas ; répondre pour confirmer.",
       category: "important",
       categoryConf: 0.93,
       categoryProbs: { important: 0.93 },
@@ -185,6 +189,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
     }),
     "5": dec("5", "gmail", {
       uid: 106,
+      description: "Anaïs a trié les photos du week-end et partage le lien dans le message.",
       category: "info",
       categoryConf: 0.91,
       categoryProbs: { info: 0.91 },
@@ -194,6 +199,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
     }),
     "2": dec("2", "perso", {
       uid: 107,
+      description: "Trois pull requests attendent une revue, dont feat/imap-sync par Marie.",
       category: "notification",
       categoryConf: 0.94,
       categoryProbs: { notification: 0.94 },
@@ -203,6 +209,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
     }),
     "6": dec("6", "pro", {
       uid: 108,
+      description: "Récapitulatif hebdo Notion : 12 pages modifiées, 4 commentaires, 2 tâches terminées.",
       category: "notification",
       categoryConf: 0.95,
       categoryProbs: { notification: 0.95 },
@@ -212,6 +219,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
     }),
     "7": dec("7", "gmail", {
       uid: 109,
+      description: "18 nouveaux morceaux ajoutés à la playlist Focus lavande.",
       category: "promo",
       categoryConf: 0.94,
       categoryProbs: { promo: 0.94 },
@@ -221,6 +229,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
     }),
     "8": dec("8", "pro", {
       uid: 110,
+      description: "Facture OVH d'octobre (11,98 €) disponible ; classement proposé dans Factures.",
       category: "custom:factures",
       categoryConf: 0.95,
       categoryProbs: { "custom:factures": 0.95, notification: 0.05 },
@@ -242,6 +251,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
     }),
     "demo-totp-live": dec("demo-totp-live", "perso", {
       uid: 112,
+      description: "Code de vérification GitHub : 482917, expire dans 10 minutes.",
       category: "auth_totp",
       categoryConf: 0.99,
       categoryProbs: { auth_totp: 0.99 },
@@ -264,6 +274,7 @@ export function buildDemoDecisions(): Record<string, MailDecision> {
     }),
     "demo-promo-2": dec("demo-promo-2", "gmail", {
       uid: 114,
+      description: "Offre Spotify Duo : -50 % pendant 3 mois, cette semaine seulement.",
       category: "promo",
       categoryConf: 0.96,
       categoryProbs: { promo: 0.96 },
