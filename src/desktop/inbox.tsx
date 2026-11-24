@@ -2660,6 +2660,9 @@ export function DesktopInbox({
                 {activeGroup.tags.map((tag) => {
                   const tagFilter = `tag:${tag}` as Filter;
                   const activeTag = filter === tagFilter;
+                  const idleTone = activeGroup.color
+                    ? categoryColorStyle(activeGroup.color).pill
+                    : "border border-line bg-surface text-ink-soft hover:text-ink";
                   return (
                     <button
                       key={tag}
@@ -2672,11 +2675,7 @@ export function DesktopInbox({
                       }
                       className={cn(
                         "focus-ring inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-semibold transition-colors",
-                        activeTag
-                          ? "bg-accent text-accent-contrast"
-                          : activeGroup.color
-                            ? categoryColorStyle(activeGroup.color).pill
-                            : "border border-line bg-surface text-ink-soft hover:text-ink",
+                        activeTag ? "bg-accent text-accent-contrast" : idleTone,
                       )}
                     >
                       <span>{inboxTagLabel(tag)}</span>
