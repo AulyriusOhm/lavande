@@ -3,10 +3,14 @@ import { mailApi, type ApiDecisionConfigUpdate, type ApiMailDecision } from "@/l
 import {
   emitDecisionUsage,
   isBlockedFromAutoLlm,
+  isExcludedFromPriority,
   isNoiseCategory,
   isPhishing,
   isPromptInjection,
+  matchesCustomCategory,
+  PRIORITY_TAGS,
   RECENT_MAILS_MAX,
+  TAG_LABELS,
   type CustomCategory,
   type DecisionConfig,
   type DecisionThresholds,
@@ -451,7 +455,7 @@ export function summaryDecisionMeta(
 
 /**
  * Filtre strictement les mails avant tout envoi automatique au LLM Système 2 :
- * - Exclut promo, spam, auth_totp, notification et prompt_injection (>= security).
+ * - Exclut les catégories bruyantes (`NOISE_CATEGORIES`) et prompt_injection (>= security).
  * - Garde pour `"tasks"` uniquement `hasTask >= thresholds.llmEscalate`.
  * - Garde pour `"events"` uniquement `hasEvent >= thresholds.llmEscalate`.
  * - Garde pour `"summary"` important, info, catégories custom non exclues,
@@ -549,7 +553,6 @@ export function reasonFromDecision(dec: MailDecision, thresholds: DecisionThresh
   }
   if (dec.category === "promo") return "Publicité / offre";
   if (dec.category === "spam") return "Courrier indésirable";
-  if (dec.category === "notification") return "Notification";
 
   const signals: string[] = [];
   if (dec.urgency >= 2.0) signals.push("Urgent");
@@ -562,17 +565,22 @@ export function reasonFromDecision(dec: MailDecision, thresholds: DecisionThresh
   }
   if (signals.length > 0) return signals.slice(0, 3).join(" · ");
   if (dec.category === "important") return "Message prioritaire";
-  return "";
+  return TAG_LABELS[dec.category] ?? "";
 }
 
 const CATEGORY_TAGS: Record<string, string> = {
   important: "Message prioritaire",
   info: "Information",
-  notification: "Notification",
   promo: "Publicité / offre",
   spam: "Courrier indésirable",
   auth_totp: "Code de vérification",
+  ...TAG_LABELS,
 };
+
+/** Libellé FR d'un tag de puce fine : taxonomie, sinon catégorie historique, sinon id. */
+export function inboxTagLabel(tag: string): string {
+  return CATEGORY_TAGS[tag] ?? tag;
+}
 
 /**
  * Ligne de description affichée dans la liste : l'alerte sécurité passe
@@ -673,6 +681,7 @@ export function summaryGroupsFromDecisions<T extends TriageMailRef>(
     const custom = findCustomCategory(dec.category, options?.customCategories);
     const isAction =
       dec.category === "important" ||
+      PRIORITY_TAGS.has(dec.category) ||
       dec.needsReply >= thresholds.category ||
       dec.hasTask >= thresholds.llmEscalate ||
       dec.hasEvent >= thresholds.llmEscalate ||
@@ -693,6 +702,170 @@ export function summaryGroupsFromDecisions<T extends TriageMailRef>(
   groups.actions = [...authActions, ...suspectActions, ...normalActions].slice(0, MAX_SUMMARY_ACTIONS);
   return groups;
 }
+
+/** Tons de `categoryColorStyle` utilisables par les groupes de puces. */
+export type InboxGroupColor = "accent" | "emerald" | "amber" | "rose" | "sky" | "violet";
+
+export type InboxGroupId =
+  | "codes"
+  | "achats"
+  | "compte"
+  | "activite"
+  | "lecture"
+  | "promos";
+
+export type InboxGroup = {
+  id: InboxGroupId;
+  label: string;
+  /** Teinte du groupe ; `null` = neutre (pas de pastille). */
+  color: InboxGroupColor | null;
+  tags: readonly string[];
+};
+
+/**
+ * Taxonomie de la première rangée de puces : chaque groupe fédère ses tags.
+ * RDV et le résiduel « notification » n'ont qu'un tag : ce sont des filtres
+ * directs (`tag:calendar_invite`, `tag:notification`), sans rangée fine.
+ */
+export const INBOX_GROUPS: readonly InboxGroup[] = [
+  { id: "codes", label: "Codes & Auth", color: "sky", tags: ["auth_totp", "login_alert"] },
+  {
+    id: "achats",
+    label: "Achats",
+    color: "amber",
+    tags: ["order_confirmation", "delivery_tracking", "invoice_receipt"],
+  },
+  {
+    id: "compte",
+    label: "Compte & admin",
+    color: "emerald",
+    tags: ["account_notice", "messaging_notice", "finance_activity"],
+  },
+  {
+    id: "activite",
+    label: "Activité",
+    color: "violet",
+    tags: ["dev_activity", "social_digest", "system_alert"],
+  },
+  { id: "lecture", label: "Lecture", color: "accent", tags: ["newsletter_digest", "survey_request"] },
+  { id: "promos", label: "Pub & Promos", color: null, tags: ["promo", "spam"] },
+];
+
+/** Vues proposées dans les réglages ; ids persistés dans `defaultInboxFilter`. */
+export const INBOX_VIEWS: readonly { id: string; label: string }[] = [
+  { id: "all", label: "Tous" },
+  { id: "priority", label: "Prioritaire" },
+  { id: "needs_reply", label: "À répondre" },
+  ...INBOX_GROUPS.map((group) => ({ id: `group:${group.id}`, label: group.label })),
+  { id: "tag:calendar_invite", label: "RDV" },
+  { id: "tag:notification", label: "Notifications" },
+];
+
+export function inboxGroup(id: string): InboxGroup | undefined {
+  return INBOX_GROUPS.find((group) => group.id === id);
+}
+
+/** Groupe qui porte une catégorie décidée ; `undefined` hors taxonomie groupée. */
+export function inboxGroupForCategory(category: string): InboxGroup | undefined {
+  return INBOX_GROUPS.find((group) => group.tags.includes(category));
+}
+
+/** Groupe concerné par un filtre `group:<id>` ou `tag:<catégorie>` (rangée fine). */
+export function inboxGroupForFilter(filter: string): InboxGroup | undefined {
+  if (filter.startsWith("group:")) return inboxGroup(filter.slice("group:".length));
+  if (filter.startsWith("tag:")) return inboxGroupForCategory(filter.slice("tag:".length));
+  return undefined;
+}
+
+export type InboxSmartCounts = {
+  priority: number;
+  needsReply: number;
+  /** Nombre de conversations par catégorie décidée (important, info et résiduel inclus). */
+  tags: Record<string, number>;
+  /** Somme des tags membres de chaque groupe de puces. */
+  groups: Record<InboxGroupId, number>;
+  custom: Record<string, number>;
+};
+
+/**
+ * Compteurs des puces de la boîte de réception, calculés une seule fois pour PC
+ * (`inbox.tsx`) et mobile (`inbox-screen.tsx`) : priorité (hors bruit par nature),
+ * réponse attendue, volume par catégorie, par groupe et par catégorie custom.
+ * Passer une liste vide donne les compteurs à zéro (vue intelligente inactive).
+ */
+export function inboxSmartCounts<T>(
+  threads: readonly T[],
+  decisionFor: (thread: T) => MailDecision | undefined,
+  options: {
+    customCategories: readonly CustomCategory[];
+    thresholds: Pick<DecisionThresholds, "category">;
+    answered?: (thread: T) => boolean;
+  },
+): InboxSmartCounts {
+  const custom: Record<string, number> = {};
+  for (const cat of options.customCategories) custom[cat.id] = 0;
+  const tags: Record<string, number> = {};
+  let priority = 0;
+  let needsReply = 0;
+
+  for (const thread of threads) {
+    const dec = decisionFor(thread);
+    if (!isExcludedFromPriority(dec, options.customCategories)) priority += 1;
+    if (!dec) continue;
+    if (dec.needsReply >= options.thresholds.category && !options.answered?.(thread)) {
+      needsReply += 1;
+    }
+    tags[dec.category] = (tags[dec.category] ?? 0) + 1;
+    for (const cat of options.customCategories) {
+      if (matchesCustomCategory(dec.category, cat.id)) custom[cat.id] += 1;
+    }
+  }
+
+  const groups = {} as Record<InboxGroupId, number>;
+  for (const group of INBOX_GROUPS) {
+    groups[group.id] = group.tags.reduce((sum, tag) => sum + (tags[tag] ?? 0), 0);
+  }
+
+  return { priority, needsReply, tags, groups, custom };
+}
+
+export type InboxChipEntry = {
+  id: string;
+  label: string;
+  count: number;
+  color: InboxGroupColor | null;
+};
+
+/** Puces de la première rangée, dans l'ordre validé (PC et mobile identiques). */
+export function inboxChipEntries(counts: InboxSmartCounts): InboxChipEntry[] {
+  return [
+    { id: "priority", label: "Prioritaire", count: counts.priority, color: null },
+    { id: "needs_reply", label: "À répondre", count: counts.needsReply, color: null },
+    ...INBOX_GROUPS.map((group) => ({
+      id: `group:${group.id}`,
+      label: group.label,
+      count: counts.groups[group.id],
+      color: group.color,
+    })),
+    { id: "tag:calendar_invite", label: "RDV", count: counts.tags.calendar_invite ?? 0, color: "rose" },
+    {
+      id: "tag:notification",
+      label: "Notifications",
+      count: counts.tags.notification ?? 0,
+      color: null,
+    },
+  ];
+}
+
+/** Tags adressables par un filtre `tag:<catégorie>` (taxonomie + catégories historiques). */
+export const INBOX_FILTER_TAGS: ReadonlySet<string> = new Set([
+  ...Object.keys(TAG_LABELS),
+  "important",
+  "info",
+  "auth_totp",
+  "promo",
+  "spam",
+]);
 
 export function taskDraftFromMail(
   mail: Pick<Mail, "id" | "name" | "subject" | "preview" | "body">,

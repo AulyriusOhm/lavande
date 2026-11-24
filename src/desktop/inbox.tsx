@@ -54,8 +54,10 @@ import type { FolderOption } from "@/lib/mail-backend";
 import {
   DEFAULT_DECISION_THRESHOLDS,
   decisionReady,
+  isExcludedFromPriority,
   isPhishing,
   isPromptInjection,
+  matchesCustomCategory,
   type CustomCategory,
   type DecisionThresholds,
   type MailDecision,
@@ -66,6 +68,12 @@ import {
   applyTrustRules,
   asDecisionIndex,
   eventDraftFromMail,
+  INBOX_FILTER_TAGS,
+  inboxChipEntries,
+  inboxGroup,
+  inboxGroupForFilter,
+  inboxSmartCounts,
+  inboxTagLabel,
   indexDecisions,
   listDescription,
   senderDomain,
@@ -135,31 +143,9 @@ type Filter =
   | "attachments"
   | "priority"
   | "needs_reply"
-  | "auth_totp"
-  | "notification"
-  | "promo"
+  | `group:${string}`
+  | `tag:${string}`
   | `custom:${string}`;
-
-function matchesCustomCategory(category: string, customId: string): boolean {
-  return category === `custom:${customId}` || category === customId;
-}
-
-function isExcludedFromPriority(
-  decision: MailDecision | undefined,
-  customCategories: readonly CustomCategory[],
-): boolean {
-  if (!decision) return false;
-  if (
-    decision.category === "promo" ||
-    decision.category === "spam" ||
-    decision.category === "auth_totp" ||
-    decision.category === "notification"
-  ) {
-    return true;
-  }
-  const custom = customCategories.find((cat) => matchesCustomCategory(decision.category, cat.id));
-  return Boolean(custom?.excludeFromPriority);
-}
 
 function resolveDefaultFilter(
   configured: string,
@@ -168,15 +154,13 @@ function resolveDefaultFilter(
 ): Filter {
   if (!configured || configured === "all") return "all";
   if (!smartActive) return "all";
-  if (
-    configured === "priority" ||
-    configured === "needs_reply" ||
-    configured === "auth_totp" ||
-    configured === "notification" ||
-    configured === "promo"
-  ) {
-    return configured;
+  if (configured === "priority" || configured === "needs_reply") return configured;
+  if (configured.startsWith("group:")) {
+    return inboxGroup(configured.slice("group:".length)) ? (configured as Filter) : "all";
   }
+  // Vues héritées enregistrées avant les groupes : un tag nu devient un filtre fin.
+  const tag = configured.startsWith("tag:") ? configured.slice("tag:".length) : configured;
+  if (INBOX_FILTER_TAGS.has(tag)) return `tag:${tag}`;
   if (configured.startsWith("custom:")) {
     const id = configured.slice("custom:".length);
     if (customCategories.some((cat) => cat.id === id)) {
@@ -184,6 +168,20 @@ function resolveDefaultFilter(
     }
   }
   return "all";
+}
+
+function FilterCount({ active, count }: { active: boolean; count: number }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "rounded-full px-1.5 text-[10px] font-bold tabular-nums",
+        active ? "bg-ink/10 text-accent-contrast" : "bg-accent-soft text-accent-ink",
+      )}
+    >
+      {count}
+    </span>
+  );
 }
 
 const SUMMARY_DUE_TONE: Record<ReturnType<typeof dueToneFor>, "rose" | "amber" | "green"> = {
@@ -1594,53 +1592,23 @@ export function DesktopInbox({
     [decisionIndex, decisionPrefs],
   );
 
-  const smartCounts = useMemo(() => {
-    if (!smartActive) {
-      return {
-        priority: 0,
-        needsReply: 0,
-        authTotp: 0,
-        notification: 0,
-        promo: 0,
-        custom: {} as Record<string, number>,
-      };
-    }
-    const custom: Record<string, number> = {};
-    for (const cat of decisionPrefs.customCategories) custom[cat.id] = 0;
-    let priority = 0;
-    let needsReply = 0;
-    let authTotp = 0;
-    let notification = 0;
-    let promo = 0;
-
-    for (const thread of threads) {
-      const dec = decisionForThread(thread);
-      if (!isExcludedFromPriority(dec, decisionPrefs.customCategories)) priority += 1;
-      if (dec) {
-        if (dec.needsReply >= decisionPrefs.thresholds.category && !thread.primary.answered) {
-          needsReply += 1;
-        }
-        if (dec.category === "auth_totp") authTotp += 1;
-        else if (dec.category === "notification") notification += 1;
-        else if (dec.category === "promo" || dec.category === "spam") promo += 1;
-        else {
-          for (const cat of decisionPrefs.customCategories) {
-            if (matchesCustomCategory(dec.category, cat.id)) {
-              custom[cat.id] = (custom[cat.id] ?? 0) + 1;
-            }
-          }
-        }
-      }
-    }
-
-    return { priority, needsReply, authTotp, notification, promo, custom };
-  }, [
-    smartActive,
-    threads,
-    decisionForThread,
-    decisionPrefs.customCategories,
-    decisionPrefs.thresholds.category,
-  ]);
+  const smartCounts = useMemo(
+    () =>
+      inboxSmartCounts(smartActive ? threads : [], decisionForThread, {
+        customCategories: decisionPrefs.customCategories,
+        thresholds: decisionPrefs.thresholds,
+        answered: (thread) => Boolean(thread.primary.answered),
+      }),
+    [
+      smartActive,
+      threads,
+      decisionForThread,
+      decisionPrefs.customCategories,
+      decisionPrefs.thresholds,
+    ],
+  );
+  const chipEntries = inboxChipEntries(smartCounts);
+  const activeGroup = inboxGroupForFilter(filter);
 
   const cleanupCount = useMemo(
     () =>
@@ -1687,9 +1655,11 @@ export function DesktopInbox({
     if (filter === "needs_reply") {
       return dec.needsReply >= decisionPrefs.thresholds.category && !thread.primary.answered;
     }
-    if (filter === "auth_totp") return dec.category === "auth_totp";
-    if (filter === "notification") return dec.category === "notification";
-    if (filter === "promo") return dec.category === "promo" || dec.category === "spam";
+    if (filter.startsWith("group:")) {
+      const group = inboxGroup(filter.slice("group:".length));
+      return Boolean(group?.tags.includes(dec.category));
+    }
+    if (filter.startsWith("tag:")) return dec.category === filter.slice("tag:".length);
     if (filter.startsWith("custom:")) {
       const id = filter.slice("custom:".length);
       return matchesCustomCategory(dec.category, id);
@@ -2625,32 +2595,27 @@ export function DesktopInbox({
               ))}
               {smartActive ? (
                 <>
-                  {(
-                    [
-                      { id: "priority", label: "Prioritaire", count: smartCounts.priority },
-                      { id: "needs_reply", label: "À répondre", count: smartCounts.needsReply },
-                      { id: "auth_totp", label: "Codes & Auth", count: smartCounts.authTotp },
-                      { id: "notification", label: "Notifications", count: smartCounts.notification },
-                      { id: "promo", label: "Pub & Promos", count: smartCounts.promo },
-                    ] as { id: Filter; label: string; count: number }[]
-                  ).map((item) => (
-                    <DChip
-                      key={item.id}
-                      active={filter === item.id}
-                      onClick={() => selectFilter(item.id)}
-                    >
-                      <span>{item.label}</span>
-                      <span
-                        aria-hidden
-                        className={cn(
-                          "rounded-full px-1.5 text-[10px] font-bold tabular-nums",
-                          filter === item.id ? "bg-ink/10 text-accent-contrast" : "bg-accent-soft text-accent-ink",
-                        )}
+                  {chipEntries.map((item) => {
+                    const activeChip = filter === item.id;
+                    return (
+                      <DChip
+                        key={item.id}
+                        active={activeChip}
+                        onClick={() => selectFilter(item.id as Filter)}
                       >
-                        {item.count}
-                      </span>
-                    </DChip>
-                  ))}
+                        {item.color ? (
+                          <span
+                            className={cn(
+                              "size-2 rounded-full",
+                              activeChip ? "bg-accent-contrast" : categoryColorStyle(item.color).dot,
+                            )}
+                          />
+                        ) : null}
+                        <span>{item.label}</span>
+                        <FilterCount active={activeChip} count={item.count} />
+                      </DChip>
+                    );
+                  })}
                   {decisionPrefs.customCategories.map((cat) => {
                     const catFilter: Filter = `custom:${cat.id}`;
                     const activeChip = filter === catFilter;
@@ -2664,15 +2629,7 @@ export function DesktopInbox({
                       >
                         <span className={cn("size-2 rounded-full", activeChip ? "bg-accent-contrast" : style.dot)} />
                         <span>{cat.name}</span>
-                        <span
-                          aria-hidden
-                          className={cn(
-                            "rounded-full px-1.5 text-[10px] font-bold tabular-nums",
-                            activeChip ? "bg-ink/10 text-accent-contrast" : "bg-accent-soft text-accent-ink",
-                          )}
-                        >
-                          {count}
-                        </span>
+                        <FilterCount active={activeChip} count={count} />
                       </DChip>
                     );
                   })}
@@ -2695,6 +2652,42 @@ export function DesktopInbox({
                 </>
               ) : null}
             </div>
+            {smartActive && activeGroup ? (
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pb-1">
+                <span className="text-[10px] font-bold tracking-[0.14em] text-ink-muted uppercase">
+                  {activeGroup.label}
+                </span>
+                {activeGroup.tags.map((tag) => {
+                  const tagFilter = `tag:${tag}` as Filter;
+                  const activeTag = filter === tagFilter;
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      aria-pressed={activeTag}
+                      onClick={() =>
+                        selectFilter(
+                          activeTag ? (`group:${activeGroup.id}` as Filter) : tagFilter,
+                        )
+                      }
+                      className={cn(
+                        "focus-ring inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-semibold transition-colors",
+                        activeTag
+                          ? "bg-accent text-accent-contrast"
+                          : activeGroup.color
+                            ? categoryColorStyle(activeGroup.color).pill
+                            : "border border-line bg-surface text-ink-soft hover:text-ink",
+                      )}
+                    >
+                      <span>{inboxTagLabel(tag)}</span>
+                      <span aria-hidden className="text-[10px] font-bold tabular-nums opacity-70">
+                        {smartCounts.tags[tag] ?? 0}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
 
           <div ref={listRef} className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-[104px]">

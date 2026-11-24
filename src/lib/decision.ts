@@ -331,11 +331,75 @@ export function decisionDomain(config: Pick<DecisionConfig, "endpoint">): string
   return endpointHost(config.endpoint);
 }
 
-/** Catégories bruyantes qui ne doivent jamais être transmises automatiquement au LLM. */
-export const NOISE_CATEGORIES = new Set(["promo", "spam", "auth_totp", "notification"]);
+/**
+ * Catégories bruyantes : jamais transmises automatiquement au LLM, repliées dans
+ * les notifications du résumé, exclues de la priorité et candidates au nettoyage.
+ * Le résiduel `notification` n'en fait plus partie : il suit ses scores (urgence,
+ * réponse attendue, score de nettoyage) au lieu d'une sourdine systématique.
+ */
+export const NOISE_CATEGORIES = new Set([
+  "promo",
+  "spam",
+  "auth_totp",
+  "dev_activity",
+  "social_digest",
+  "newsletter_digest",
+  "survey_request",
+  "finance_activity",
+  "order_confirmation",
+  "delivery_tracking",
+  "account_notice",
+  "invoice_receipt",
+]);
+
+/** Tags qui portent la priorité par nature (un humain ou un service attend une action). */
+export const PRIORITY_TAGS = new Set([
+  "login_alert",
+  "messaging_notice",
+  "system_alert",
+  "calendar_invite",
+]);
+
+/** Libellés FR courts des tags de la taxonomie, partagés entre liste, résumé et réglages. */
+export const TAG_LABELS: Record<string, string> = {
+  order_confirmation: "Confirmation de commande",
+  login_alert: "Alerte de sécurité",
+  delivery_tracking: "Suivi de livraison",
+  account_notice: "Info de compte",
+  dev_activity: "Activité dev",
+  invoice_receipt: "Facture / reçu",
+  social_digest: "Notification de plateforme",
+  newsletter_digest: "Newsletter",
+  messaging_notice: "Message en attente",
+  system_alert: "Alerte système",
+  survey_request: "Enquête / avis",
+  finance_activity: "Activité financière",
+  calendar_invite: "Rendez-vous",
+  notification: "Notification",
+};
 
 export function isNoiseCategory(category: string): boolean {
   return NOISE_CATEGORIES.has(category);
+}
+
+/** Une catégorie custom se stocke en `custom:<id>` ; l'id nu reste accepté. */
+export function matchesCustomCategory(category: string, customId: string): boolean {
+  return category === `custom:${customId}` || category === customId;
+}
+
+/**
+ * Un mail exclu de la priorité est un bruit par nature (tag de `NOISE_CATEGORIES`)
+ * ou une catégorie custom dont l'utilisateur a coupé la priorité. Source unique
+ * PC/mobile : `inbox.tsx` et `inbox-screen.tsx` importent ce helper.
+ */
+export function isExcludedFromPriority(
+  decision: MailDecision | undefined,
+  customCategories: readonly CustomCategory[],
+): boolean {
+  if (!decision) return false;
+  if (isNoiseCategory(decision.category)) return true;
+  const custom = customCategories.find((cat) => matchesCustomCategory(decision.category, cat.id));
+  return Boolean(custom?.excludeFromPriority);
 }
 
 /**
@@ -371,8 +435,8 @@ export function isPhishing(
 }
 
 /**
- * Règle budgétaire & sécurité : un mail classé PUB, spam, TOTP, notification
- * ou prompt_injection n'est jamais envoyé automatiquement au LLM Système 2.
+ * Règle budgétaire & sécurité : un mail d'une catégorie bruyante (`NOISE_CATEGORIES`)
+ * ou en prompt_injection n'est jamais envoyé automatiquement au LLM Système 2.
  */
 export function isBlockedFromAutoLlm(
   decision: Pick<MailDecision, "category" | "security" | "securityConf">,

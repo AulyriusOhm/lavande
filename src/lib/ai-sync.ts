@@ -153,7 +153,11 @@ export function useAiSync(): void {
     pushLocal();
   }, [active, engine, llm.endpoint, llm.model, setLlm, settingsKey, settingsUpdatedAt]);
 
-  /** Synchro des réglages non secrets du modèle de décision (seuils, catégories custom, filtre par défaut). */
+  /**
+   * Synchro des réglages non secrets du modèle de décision (seuils, catégories custom, filtre par défaut).
+   * `spamEnabled` et `recentMailCount` en font partie : sans eux deux appareils divergent (l'un classe
+   * en spam, l'autre non ; volumes de triage différents). `apiKey` reste volontairement exclu.
+   */
   const decisionPayload = JSON.stringify({
     provider: decision.provider,
     protocol: decision.protocol,
@@ -168,8 +172,10 @@ export function useAiSync(): void {
     notifMode: decision.notifMode,
     preSendGuard: decision.preSendGuard,
     totpPopup: decision.totpPopup,
+    spamEnabled: decision.spamEnabled,
     trustedSenders: decision.trustedSenders,
     trustedDomains: decision.trustedDomains,
+    recentMailCount: decision.recentMailCount,
   });
 
   useEffect(() => {
@@ -197,8 +203,10 @@ export function useAiSync(): void {
         notifMode: parsed.notifMode,
         preSendGuard: parsed.preSendGuard,
         totpPopup: parsed.totpPopup,
+        spamEnabled: parsed.spamEnabled,
         trustedSenders: parsed.trustedSenders,
         trustedDomains: parsed.trustedDomains,
+        recentMailCount: parsed.recentMailCount,
       });
     };
     const pushLocal = () => {
@@ -240,8 +248,10 @@ export function useAiSync(): void {
       notifMode: doc?.raw.notifMode,
       preSendGuard: doc?.raw.preSendGuard,
       totpPopup: doc?.raw.totpPopup,
+      spamEnabled: doc?.raw.spamEnabled,
       trustedSenders: doc?.raw.trustedSenders,
       trustedDomains: doc?.raw.trustedDomains,
+      recentMailCount: doc?.raw.recentMailCount,
     });
     if (remoteStr === decisionPayload) return;
     pushLocal();

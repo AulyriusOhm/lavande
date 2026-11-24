@@ -360,6 +360,10 @@ async fn config_probe_triage_cache_and_sync_import() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(triaged["results"][0]["cached"], false);
     assert_eq!(triaged["results"][0]["decision"]["category"], "auth_totp");
+    assert_eq!(
+        triaged["results"][0]["decision"]["schema_version"], 3,
+        "la taxonomie de triage estampille les décisions en v3"
+    );
     assert_eq!(triaged["results"][0]["decision"]["totp_code"], "482917");
     assert_eq!(triaged["results"][0]["decision"]["totp_service"], "GitHub");
     assert_eq!(
@@ -1053,6 +1057,27 @@ async fn spam_category_is_offered_and_kept_only_when_enabled() {
         criteria["important"],
         "Message humain ou professionnel important nécessitant attention ou suivi"
     );
+    for id in [
+        "order_confirmation",
+        "login_alert",
+        "delivery_tracking",
+        "account_notice",
+        "dev_activity",
+        "invoice_receipt",
+        "social_digest",
+        "newsletter_digest",
+        "messaging_notice",
+        "system_alert",
+        "survey_request",
+        "finance_activity",
+        "calendar_invite",
+    ] {
+        assert!(
+            criteria.get(id).is_some(),
+            "critère `{id}` absent des questions"
+        );
+    }
+    assert!(criteria.get("notification").is_some(), "résiduel absent");
 
     // 2. La liste relue ne garde pas le libellé spam stocké.
     let (status, listed) =

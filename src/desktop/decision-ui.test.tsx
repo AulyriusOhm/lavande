@@ -286,6 +286,32 @@ describe("Réglages PC · Modèle de décision · Système 1", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Strict" }));
     fireEvent.click(screen.getByRole("button", { name: "Prioritaire" }));
+    // Nouvelles vues : groupes de tags puis vues directes RDV / Notifications
+    const views = within(
+      screen.getByRole("group", { name: "Vue par défaut de la boîte" }),
+    );
+    for (const label of [
+      "Codes & Auth",
+      "Achats",
+      "Compte & admin",
+      "Activité",
+      "Lecture",
+      "Pub & Promos",
+      "RDV",
+      "Notifications",
+    ]) {
+      expect(views.getByRole("button", { name: label })).toBeTruthy();
+    }
+    fireEvent.click(views.getByRole("button", { name: "Achats" }));
+    await waitFor(() =>
+      expect(storedPrefs().decision).toMatchObject({ defaultInboxFilter: "group:achats" }),
+    );
+    fireEvent.click(views.getByRole("button", { name: "RDV" }));
+    await waitFor(() =>
+      expect(storedPrefs().decision).toMatchObject({ defaultInboxFilter: "tag:calendar_invite" }),
+    );
+    // Retour sur une vue compatible avec la suite du test
+    fireEvent.click(views.getByRole("button", { name: "Prioritaire" }));
     fireEvent.click(screen.getByRole("button", { name: "Intelligentes" }));
     fireEvent.click(screen.getByRole("switch", { name: /Popup TOTP instantané/ }));
     fireEvent.click(screen.getByRole("switch", { name: /Garde-fou avant envoi/ }));
@@ -451,6 +477,20 @@ describe("Boîte & Lecteur PC · catégories, nettoyage, sécurité et rangement
     expect(rowCardText(`${ACCOUNT}:t-1`)).toContain("Urgent · Réponse attendue");
     expect(rowCardText(`${ACCOUNT}:t-1`)).not.toContain("À répondre");
     expect(rowCardText(`${ACCOUNT}:t-5`)).toContain("Suspect");
+
+    // Puces de groupes : compteurs réels et seconde rangée de tags fins
+    expect(screen.getByRole("button", { name: /^Codes & Auth/ }).textContent).toContain("1");
+    expect(screen.getByRole("button", { name: /^Pub & Promos/ }).textContent).toContain("1");
+    expect(screen.getByRole("button", { name: /^Achats/ }).textContent).toContain("0");
+    fireEvent.click(screen.getByRole("button", { name: /^Codes & Auth/ }));
+    expect(document.querySelector(`[data-mail-row="${ACCOUNT}:t-1"]`)).toBeNull();
+    expect(document.querySelector(`[data-mail-row="${ACCOUNT}:t-2"]`)).toBeTruthy();
+    // Tag fin = filtre exact, reclic = retour au groupe
+    fireEvent.click(screen.getByRole("button", { name: /^Code de vérification/ }));
+    expect(document.querySelector(`[data-mail-row="${ACCOUNT}:t-2"]`)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Code de vérification/ }));
+    expect(document.querySelector(`[data-mail-row="${ACCOUNT}:t-2"]`)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Prioritaire/ }));
 
     // Passer sur la catégorie custom Factures (bouton filtre avec aria-pressed)
     const facturesChip = screen

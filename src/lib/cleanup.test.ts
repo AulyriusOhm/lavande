@@ -7,6 +7,7 @@ import {
 import { decisionMailKey, type CleanupReview } from "@/lib/decision-db";
 import type { Mail } from "@/lib/mail";
 import {
+  ORDER_STALE_MS,
   TOTP_STALE_MS,
   applyCleanupStat,
   buildCleanupDeck,
@@ -123,7 +124,8 @@ describe("cleanup logic", () => {
     expect(all.map((c) => c.mail.id)).toEqual(["p1", "t-old", "n1", "n2"]);
     expect(all[0].reason).toBe("Publicité · 94 %");
     expect(all[1].reason).toBe("Code TOTP expiré · il y a 5 j · 97 %");
-    expect(all[2].reason).toBe("Notification jetable · 88 %");
+    // Résiduel `notification` : plus de branche catégorie, il passe par le score.
+    expect(all[2].reason).toBe("Mail éphémère · 92 %");
     expect(all[3].reason).toBe("Mail éphémère · 82 %");
 
     expect(
@@ -159,6 +161,117 @@ describe("cleanup logic", () => {
 
     const deck = buildCleanupDeck([justUnder, exactBoundary], decisions, [], [], DEFAULT_DECISION_THRESHOLDS, "all", NOW);
     expect(deck.map((c) => c.mail.id)).toEqual(["e"]);
+  });
+
+  it("nettoie les tags de bruit par catégorie et jamais reçu/agenda/sécurité/messagerie", () => {
+    const DAY = 24 * 3_600_000;
+    const noiseTags = [
+      "dev_activity",
+      "social_digest",
+      "newsletter_digest",
+      "survey_request",
+      "finance_activity",
+      "delivery_tracking",
+      "account_notice",
+    ];
+    const mails = noiseTags.map((tag) => makeMail({ id: tag }));
+    const decisions: Record<string, MailDecision> = {};
+    noiseTags.forEach((tag, i) => {
+      decisions[tag] = makeDecision({ uid: i + 1, category: tag, categoryConf: 0.9, cleanupScore: 0 });
+    });
+
+    const deck = buildCleanupDeck(mails, decisions, [], [], DEFAULT_DECISION_THRESHOLDS, "all", NOW);
+    expect(deck.map((c) => c.mail.id)).toEqual(noiseTags);
+    expect(deck.every((c) => c.kind === "notifications")).toBe(true);
+    expect(deck[1].reason).toBe("Notification de plateforme · 90 %");
+
+    const protectedTags = ["invoice_receipt", "calendar_invite", "login_alert", "messaging_notice", "system_alert"];
+    const protectedMails = protectedTags.map((tag) => makeMail({ id: tag }));
+    const protectedDecisions: Record<string, MailDecision> = {};
+    protectedTags.forEach((tag, i) => {
+      protectedDecisions[tag] = makeDecision({
+        uid: i + 20,
+        category: tag,
+        categoryConf: 0.9,
+        cleanupScore: 0.1,
+        decidedAt: NOW - 200 * DAY,
+      });
+      protectedMails[i] = { ...protectedMails[i], timestamp: NOW - 200 * DAY };
+    });
+    expect(
+      buildCleanupDeck(
+        protectedMails,
+        protectedDecisions,
+        [],
+        [],
+        DEFAULT_DECISION_THRESHOLDS,
+        "all",
+        NOW,
+      ),
+    ).toEqual([]);
+
+    // Le repli générique reste le score du modèle, quel que soit le tag.
+    const invoiceWithScore = makeMail({ id: "inv-score", timestamp: NOW - 2 * 3_600_000 });
+    expect(
+      buildCleanupDeck(
+        [invoiceWithScore],
+        { "inv-score": makeDecision({ category: "invoice_receipt", cleanupScore: 0.9, decidedAt: NOW }) },
+        [],
+        [],
+        DEFAULT_DECISION_THRESHOLDS,
+        "all",
+        NOW,
+      ).map((c) => c.mail.id),
+    ).toEqual(["inv-score"]);
+  });
+
+  it("ne nettoie une confirmation de commande qu'après 30 jours", () => {
+    const young = makeMail({ id: "cmd-young", timestamp: NOW - 10 * 24 * 3_600_000 });
+    const old = makeMail({ id: "cmd-old", timestamp: NOW - 31 * 24 * 3_600_000 });
+    const decisions: Record<string, MailDecision> = {
+      "cmd-young": makeDecision({ category: "order_confirmation", categoryConf: 0.9, cleanupScore: 0 }),
+      "cmd-old": makeDecision({ category: "order_confirmation", categoryConf: 0.88, cleanupScore: 0 }),
+    };
+
+    const deck = buildCleanupDeck([young, old], decisions, [], [], DEFAULT_DECISION_THRESHOLDS, "all", NOW);
+    expect(deck.map((c) => c.mail.id)).toEqual(["cmd-old"]);
+    expect(deck[0].kind).toBe("notifications");
+    expect(deck[0].reason).toBe("Confirmation de commande · il y a 31 j · 88 %");
+
+    const boundary = makeMail({ id: "cmd-edge", timestamp: NOW - ORDER_STALE_MS });
+    expect(
+      buildCleanupDeck(
+        [boundary],
+        { "cmd-edge": makeDecision({ category: "order_confirmation", cleanupScore: 0 }) },
+        [],
+        [],
+        DEFAULT_DECISION_THRESHOLDS,
+        "all",
+        NOW,
+      ).map((c) => c.mail.id),
+    ).toEqual(["cmd-edge"]);
+  });
+
+  it("laisse le résiduel notification au seul score de nettoyage", () => {
+    const quiet = makeMail({ id: "notif-quiet", timestamp: NOW - 2 * 3_600_000 });
+    const scored = makeMail({ id: "notif-scored", timestamp: NOW - 2 * 3_600_000 });
+    const decisions: Record<string, MailDecision> = {
+      "notif-quiet": makeDecision({ category: "notification", categoryConf: 0.9, cleanupScore: 0.2 }),
+      "notif-scored": makeDecision({ category: "notification", categoryConf: 0.9, cleanupScore: 0.9 }),
+    };
+
+    const deck = buildCleanupDeck(
+      [quiet, scored],
+      decisions,
+      [],
+      [],
+      DEFAULT_DECISION_THRESHOLDS,
+      "all",
+      NOW,
+    );
+    expect(deck.map((c) => c.mail.id)).toEqual(["notif-scored"]);
+    expect(deck[0].kind).toBe("notifications");
+    expect(deck[0].reason).toBe("Mail éphémère · 90 %");
   });
 
   it("exclut corbeille, spam, envoyés, brouillons, étoilés, déjà revus et expéditeurs protégés", () => {

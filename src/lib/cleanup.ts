@@ -1,5 +1,6 @@
 import {
   DEFAULT_DECISION_THRESHOLDS,
+  TAG_LABELS,
   type CustomCategory,
   type DecisionThresholds,
   type MailDecision,
@@ -25,6 +26,24 @@ export type CleanupCardKind = Exclude<CleanupFilter, "all">;
 
 /** Âge minimal (24 h) avant qu'un code TOTP soit proposé au nettoyage. */
 export const TOTP_STALE_MS = 24 * 3_600_000;
+
+/** Âge minimal (30 j) avant qu'une confirmation de commande soit proposée au nettoyage. */
+export const ORDER_STALE_MS = 30 * 24 * 3_600_000;
+
+/**
+ * Tags de bruit nettoyables directement par leur catégorie (sans condition d'âge).
+ * `invoice_receipt`, `calendar_invite`, `login_alert`, `messaging_notice` et
+ * `system_alert` en sont volontairement absents : valeur d'archive ou de sécurité.
+ */
+const CLEANUP_NOISE_TAGS = new Set([
+  "dev_activity",
+  "social_digest",
+  "newsletter_digest",
+  "survey_request",
+  "finance_activity",
+  "delivery_tracking",
+  "account_notice",
+]);
 
 const DAY_MS = 24 * 3_600_000;
 const IGNORED_FOLDERS = new Set<FolderId>(["trash", "spam", "sent", "drafts"]);
@@ -154,6 +173,20 @@ function classifyCleanupMail(
     };
   }
 
+  if (decision.category === "order_confirmation") {
+    const ts = mailTimestampMs(mail, decision);
+    const ageMs = ts === null ? null : now - ts;
+    if (ageMs !== null && ageMs >= ORDER_STALE_MS) {
+      const days = Math.max(1, Math.floor(ageMs / DAY_MS));
+      const confidence = decision.categoryConf;
+      return {
+        kind: "notifications",
+        confidence,
+        reason: `${TAG_LABELS.order_confirmation} · il y a ${days} j · ${percent(confidence)} %`,
+      };
+    }
+  }
+
   const custom = customCategories.find(
     (entry) => entry.id === decision.category || entry.name === decision.category,
   );
@@ -167,12 +200,12 @@ function classifyCleanupMail(
     };
   }
 
-  if (decision.category === "notification") {
+  if (CLEANUP_NOISE_TAGS.has(decision.category)) {
     const confidence = decision.categoryConf;
     return {
       kind: "notifications",
       confidence,
-      reason: `Notification jetable · ${percent(confidence)} %`,
+      reason: `${TAG_LABELS[decision.category] ?? "Notification"} · ${percent(confidence)} %`,
     };
   }
 

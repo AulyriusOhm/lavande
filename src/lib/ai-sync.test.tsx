@@ -54,15 +54,21 @@ async function configuredStorage(): Promise<SyncStorage> {
   return storage;
 }
 
+let prefsApi: ReturnType<typeof usePrefs> | null = null;
+
 function AiProbe() {
   useAiSync();
   const usage = useAiUsage();
-  const { llm } = usePrefs();
+  const prefs = usePrefs();
+  const { llm, decision } = prefs;
+  prefsApi = prefs;
   return (
     <div>
       <span data-testid="calls">{usage.combined.total.calls}</span>
       <span data-testid="devices">{usage.devices}</span>
       <span data-testid="model">{llm.model}</span>
+      <span data-testid="spam">{String(decision.spamEnabled)}</span>
+      <span data-testid="recent">{String(decision.recentMailCount)}</span>
     </div>
   );
 }
@@ -90,6 +96,116 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+const decisionKey = docKey("ai", "decision:settings");
+
+function storedDecision(): Record<string, unknown> {
+  const stored = JSON.parse(window.localStorage.getItem("lavande.prefs") ?? "{}") as {
+    decision?: Record<string, unknown>;
+  };
+  return stored.decision ?? {};
+}
+
+/** Écrit un doc decision:settings distant plus récent que tout ce que l'appareil connaît. */
+async function writeRemoteDecision(storage: SyncStorage, raw: Record<string, unknown>) {
+  await act(async () => {
+    const state = storage.read();
+    const doc = remoteDoc("decision:settings", raw, new Date(Date.now() + 60_000).toISOString());
+    storage.write({ ...state, docs: { ...state.docs, [decisionKey]: doc } });
+  });
+}
+
+describe("useAiSync · réglages de décision", () => {
+  it("publie spamEnabled et recentMailCount dans le payload décision", async () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({
+        llm: LLM,
+        decision: { enabled: true, spamEnabled: true, recentMailCount: 120 },
+      }),
+    );
+    stubServer();
+    const storage = await configuredStorage();
+    mount(storage);
+
+    await waitFor(() => expect(storage.read().docs[decisionKey]).toBeDefined());
+    const raw = storage.read().docs[decisionKey]?.raw ?? {};
+    expect(raw.spamEnabled).toBe(true);
+    expect(raw.recentMailCount).toBe(120);
+    expect(JSON.stringify(raw)).not.toContain(LLM.apiKey);
+  });
+
+  it("applique un doc distant ancien sans spamEnabled/recentMailCount avec les défauts", async () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({
+        llm: LLM,
+        decision: { spamEnabled: true, recentMailCount: 120, defaultInboxFilter: "all" },
+      }),
+    );
+    stubServer();
+    const storage = await configuredStorage();
+    mount(storage);
+
+    await writeRemoteDecision(storage, { defaultInboxFilter: "unread", model: "modele-distant" });
+
+    await waitFor(() => expect(storedDecision().defaultInboxFilter).toBe("unread"));
+    expect(screen.getByTestId("spam").textContent).toBe("false");
+    expect(screen.getByTestId("recent").textContent).toBe("40");
+    expect(storedDecision().model).toBe("modele-distant");
+  });
+
+  it("applique spamEnabled et recentMailCount d'un doc distant récent tels quels", async () => {
+    stubServer();
+    const storage = await configuredStorage();
+    mount(storage);
+
+    await writeRemoteDecision(storage, { spamEnabled: true, recentMailCount: 120 });
+
+    await waitFor(() => expect(screen.getByTestId("spam").textContent).toBe("true"));
+    expect(screen.getByTestId("recent").textContent).toBe("120");
+    expect(storedDecision().spamEnabled).toBe(true);
+    expect(storedDecision().recentMailCount).toBe(120);
+  });
+
+  it("pousse le doc après un changement local de spamEnabled", async () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({ llm: LLM, decision: { enabled: true } }),
+    );
+    stubServer();
+    const storage = await configuredStorage();
+    mount(storage);
+
+    await waitFor(() => expect(storage.read().docs[decisionKey]).toBeDefined());
+    expect(storage.read().docs[decisionKey]?.raw.spamEnabled).toBe(false);
+
+    await act(async () => {
+      prefsApi?.setDecision({ spamEnabled: true });
+    });
+
+    await waitFor(() => expect(storage.read().docs[decisionKey]?.raw.spamEnabled).toBe(true));
+  });
+
+  it("pousse le doc après un changement local de recentMailCount", async () => {
+    window.localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({ llm: LLM, decision: { enabled: true } }),
+    );
+    stubServer();
+    const storage = await configuredStorage();
+    mount(storage);
+
+    await waitFor(() => expect(storage.read().docs[decisionKey]).toBeDefined());
+    expect(storage.read().docs[decisionKey]?.raw.recentMailCount).toBe(40);
+
+    await act(async () => {
+      prefsApi?.setDecision({ recentMailCount: 120 });
+    });
+
+    await waitFor(() => expect(storage.read().docs[decisionKey]?.raw.recentMailCount).toBe(120));
+  });
 });
 
 describe("useAiSync", () => {

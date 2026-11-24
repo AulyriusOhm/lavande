@@ -16,6 +16,11 @@ import {
   extractAuthLink,
   filterMailsForLlm,
   fromApiDecision,
+  INBOX_GROUPS,
+  inboxChipEntries,
+  inboxGroupForCategory,
+  inboxGroupForFilter,
+  inboxSmartCounts,
   indexDecisions,
   isTrustedSender,
   reasonFromDecision,
@@ -171,10 +176,11 @@ describe("triage · filterMailsForLlm (budget & pare-feu)", () => {
     makeMail(2), // promo
     makeMail(3), // spam
     makeMail(4), // auth_totp
-    makeMail(5), // notification
+    makeMail(5), // notification (résiduel : plus bruit, gardé s'il a un signal)
     makeMail(6), // prompt_injection >= 0.8
     makeMail(7), // info avec hasEvent=0.85, hasTask=0.1, urgency=1.2
     makeMail(8), // custom exclu de prioritaire
+    makeMail(9), // dev_activity (bruit)
   ];
 
   const decisions = indexDecisions([
@@ -211,18 +217,26 @@ describe("triage · filterMailsForLlm (budget & pare-feu)", () => {
       hasTask: 0.2,
       hasEvent: 0.1,
     }),
+    makeDecision({
+      uid: 9,
+      messageId: "<m9@example.com>",
+      category: "dev_activity",
+      hasTask: 0.95,
+      hasEvent: 0.9,
+      urgency: 1.9,
+    }),
   ]);
 
-  it("exclut strictement promo, spam, auth_totp, notification et prompt_injection pour tasks", () => {
+  it("exclut strictement promo, spam, auth_totp, dev_activity et prompt_injection pour tasks", () => {
     const { kept, skippedCount } = filterMailsForLlm(mails, decisions, THRESHOLDS, "tasks");
-    expect(kept.map((m) => m.source?.uid)).toEqual([1]);
+    expect(kept.map((m) => m.source?.uid)).toEqual([1, 5]);
     expect(skippedCount).toBe(7);
   });
 
   it("ne garde que hasEvent >= llmEscalate et hors bruit/injection pour events", () => {
     const { kept, skippedCount } = filterMailsForLlm(mails, decisions, THRESHOLDS, "events");
     expect(kept.map((m) => m.source?.uid)).toEqual([7]);
-    expect(skippedCount).toBe(7);
+    expect(skippedCount).toBe(8);
   });
 
   it("trie les mails qualifiés du résumé par urgence décroissante et exclut bruit/injection/custom exclu", () => {
@@ -239,7 +253,7 @@ describe("triage · filterMailsForLlm (budget & pare-feu)", () => {
         },
       ],
     });
-    expect(kept.map((m) => m.source?.uid)).toEqual([7, 1]);
+    expect(kept.map((m) => m.source?.uid)).toEqual([7, 1, 5]);
     expect(skippedCount).toBe(6);
   });
 });
@@ -293,6 +307,68 @@ describe("triage · summaryGroupsFromDecisions", () => {
     ]);
     expect(groups.actions[2].reason).toContain("Hameçonnage détecté");
     expect(groups.notifications.map((ref) => ref.mailId)).toEqual(["perso:INBOX:3"]);
+  });
+
+  it("place les tags prioritaires par nature dans les actions, même sans signal", () => {
+    const now = Date.now();
+    const mails = [makeMail(1), makeMail(2), makeMail(3), makeMail(4), makeMail(5)];
+    const quiet = { urgency: 0.4, needsReply: 0.1, hasTask: 0.1, hasEvent: 0.1 };
+    const decisions = indexDecisions([
+      makeDecision({ uid: 1, messageId: "<m1@example.com>", category: "login_alert", ...quiet }),
+      makeDecision({ uid: 2, messageId: "<m2@example.com>", category: "messaging_notice", ...quiet }),
+      makeDecision({ uid: 3, messageId: "<m3@example.com>", category: "system_alert", ...quiet }),
+      makeDecision({ uid: 4, messageId: "<m4@example.com>", category: "calendar_invite", ...quiet }),
+      makeDecision({ uid: 5, messageId: "<m5@example.com>", category: "dev_activity", ...quiet }),
+    ]);
+
+    const groups = summaryGroupsFromDecisions(mails, decisions, THRESHOLDS, { now });
+    expect(groups.actions.map((ref) => ref.mailId)).toEqual([
+      "perso:INBOX:1",
+      "perso:INBOX:2",
+      "perso:INBOX:3",
+      "perso:INBOX:4",
+    ]);
+    expect(groups.actions.map((ref) => ref.reason)).toEqual([
+      "Alerte de sécurité",
+      "Message en attente",
+      "Alerte système",
+      "Rendez-vous",
+    ]);
+    expect(groups.notifications.map((ref) => ref.mailId)).toEqual(["perso:INBOX:5"]);
+    expect(groups.notifications[0].reason).toBe("Activité dev");
+    expect(groups.infos).toEqual([]);
+  });
+
+  it("laisse le résiduel notification suivre ses scores (action si réponse attendue, sinon infos)", () => {
+    const now = Date.now();
+    const mails = [makeMail(1), makeMail(2)];
+    const decisions = indexDecisions([
+      makeDecision({
+        uid: 1,
+        messageId: "<m1@example.com>",
+        category: "notification",
+        urgency: 0.6,
+        needsReply: 0.8,
+        hasTask: 0.1,
+        hasEvent: 0.1,
+      }),
+      makeDecision({
+        uid: 2,
+        messageId: "<m2@example.com>",
+        category: "notification",
+        urgency: 0.6,
+        needsReply: 0.1,
+        hasTask: 0.1,
+        hasEvent: 0.1,
+      }),
+    ]);
+
+    const groups = summaryGroupsFromDecisions(mails, decisions, THRESHOLDS, { now });
+    expect(groups.actions.map((ref) => ref.mailId)).toEqual(["perso:INBOX:1"]);
+    expect(groups.actions[0].reason).toBe("Réponse attendue");
+    expect(groups.infos.map((ref) => ref.mailId)).toEqual(["perso:INBOX:2"]);
+    expect(groups.infos[0].reason).toBe("Notification");
+    expect(groups.notifications).toEqual([]);
   });
 
   it("génère des raisons courtes combinées via reasonFromDecision (au plus 3 signaux)", () => {
@@ -568,6 +644,152 @@ describe("triage · triageRecentMails (file bornée)", () => {
       expect(triaged).toHaveLength(1);
       expect(targetsOf(fetchMock)).toHaveLength(1);
     }
+  });
+});
+
+describe("triage · inboxSmartCounts (puces PC/mobile)", () => {
+  const CUSTOM_FACTURES = {
+    id: "factures",
+    name: "Factures",
+    description: "Factures et reçus",
+    color: "emerald",
+    excludeFromPriority: true,
+    allowNotifications: true,
+    cleanupEligible: false,
+  };
+
+  type FakeThread = { id: string; answered?: boolean };
+
+  const threads: FakeThread[] = [
+    { id: "important" },
+    { id: "info", answered: true },
+    { id: "totp" },
+    { id: "login" },
+    { id: "order" },
+    { id: "delivery" },
+    { id: "invoice" },
+    { id: "account" },
+    { id: "messaging" },
+    { id: "finance" },
+    { id: "dev" },
+    { id: "social" },
+    { id: "system" },
+    { id: "newsletter" },
+    { id: "survey" },
+    { id: "promo" },
+    { id: "spam" },
+    { id: "notification" },
+    { id: "custom" },
+    { id: "undecided" },
+  ];
+
+  const decisionByThread: Record<string, MailDecision> = {
+    important: makeDecision({ category: "important", needsReply: 0.9 }),
+    info: makeDecision({ category: "info", needsReply: 0.95 }),
+    totp: makeDecision({ category: "auth_totp", needsReply: 0.1 }),
+    login: makeDecision({ category: "login_alert", needsReply: 0.1 }),
+    order: makeDecision({ category: "order_confirmation", needsReply: 0.1 }),
+    delivery: makeDecision({ category: "delivery_tracking", needsReply: 0.1 }),
+    invoice: makeDecision({ category: "invoice_receipt", needsReply: 0.1 }),
+    account: makeDecision({ category: "account_notice", needsReply: 0.1 }),
+    messaging: makeDecision({ category: "messaging_notice", needsReply: 0.8 }),
+    finance: makeDecision({ category: "finance_activity", needsReply: 0.1 }),
+    dev: makeDecision({ category: "dev_activity", needsReply: 0.1 }),
+    social: makeDecision({ category: "social_digest", needsReply: 0.1 }),
+    system: makeDecision({ category: "system_alert", needsReply: 0.1 }),
+    newsletter: makeDecision({ category: "newsletter_digest", needsReply: 0.1 }),
+    survey: makeDecision({ category: "survey_request", needsReply: 0.1 }),
+    promo: makeDecision({ category: "promo", needsReply: 0.1 }),
+    spam: makeDecision({ category: "spam", needsReply: 0.1 }),
+    notification: makeDecision({ category: "notification", needsReply: 0.1 }),
+    custom: makeDecision({ category: "custom:factures", needsReply: 0.1 }),
+  };
+
+  const counts = inboxSmartCounts(threads, (thread) => decisionByThread[thread.id], {
+    customCategories: [CUSTOM_FACTURES],
+    thresholds: THRESHOLDS,
+    answered: (thread) => Boolean(thread.answered),
+  });
+
+  it("compte chaque catégorie, y compris important, info et le résiduel", () => {
+    expect(counts.tags.important).toBe(1);
+    expect(counts.tags.info).toBe(1);
+    expect(counts.tags.notification).toBe(1);
+    expect(counts.tags.login_alert).toBe(1);
+    expect(counts.tags["custom:factures"]).toBe(1);
+    expect(Object.keys(counts.tags)).toHaveLength(19);
+  });
+
+  it("somme les tags membres de chaque groupe", () => {
+    expect(counts.groups).toEqual({
+      codes: 2,
+      achats: 3,
+      compte: 3,
+      activite: 3,
+      lecture: 2,
+      promos: 2,
+    });
+  });
+
+  it("exclut le bruit par nature de la priorité, garde le résiduel", () => {
+    // 20 conversations - 9 bruits (totp, order, delivery, invoice, account, finance, dev,
+    // social, newsletter, survey, promo, spam = 12) - la custom excludeFromPriority
+    expect(counts.priority).toBe(7);
+  });
+
+  it("ne compte à répondre que les conversations sans réponse", () => {
+    // important (0.9) + messaging (0.8) ; info est déjà répondu
+    expect(counts.needsReply).toBe(2);
+  });
+
+  it("compte les catégories custom et garde une clé à zéro", () => {
+    expect(counts.custom).toEqual({ factures: 1 });
+    const vide = inboxSmartCounts([], () => undefined, {
+      customCategories: [CUSTOM_FACTURES],
+      thresholds: THRESHOLDS,
+    });
+    expect(vide).toEqual({
+      priority: 0,
+      needsReply: 0,
+      tags: {},
+      groups: { codes: 0, achats: 0, compte: 0, activite: 0, lecture: 0, promos: 0 },
+      custom: { factures: 0 },
+    });
+  });
+
+  it("expose les puces et les groupes de la maquette", () => {
+    expect(INBOX_GROUPS.map((group) => group.label)).toEqual([
+      "Codes & Auth",
+      "Achats",
+      "Compte & admin",
+      "Activité",
+      "Lecture",
+      "Pub & Promos",
+    ]);
+    expect(inboxChipEntries(counts).map((entry) => entry.id)).toEqual([
+      "priority",
+      "needs_reply",
+      "group:codes",
+      "group:achats",
+      "group:compte",
+      "group:activite",
+      "group:lecture",
+      "group:promos",
+      "tag:calendar_invite",
+      "tag:notification",
+    ]);
+    expect(inboxChipEntries(counts)[8]).toMatchObject({ label: "RDV", count: 0, color: "rose" });
+    expect(inboxChipEntries(counts)[9]).toMatchObject({ label: "Notifications", count: 1, color: null });
+  });
+
+  it("résout le groupe d'un tag comme d'un filtre", () => {
+    expect(inboxGroupForCategory("login_alert")?.id).toBe("codes");
+    expect(inboxGroupForCategory("notification")).toBeUndefined();
+    expect(inboxGroupForCategory("important")).toBeUndefined();
+    expect(inboxGroupForFilter("group:achats")?.id).toBe("achats");
+    expect(inboxGroupForFilter("tag:invoice_receipt")?.id).toBe("achats");
+    expect(inboxGroupForFilter("tag:calendar_invite")).toBeUndefined();
+    expect(inboxGroupForFilter("priority")).toBeUndefined();
   });
 });
 

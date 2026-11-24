@@ -13,9 +13,15 @@ import {
   defaultDescriptionModel,
   detectThresholdPreset,
   isBlockedFromAutoLlm,
+  isExcludedFromPriority,
+  isNoiseCategory,
+  matchesCustomCategory,
   parseDecisionPayload,
+  PRIORITY_TAGS,
   setDecisionUsageSink,
+  TAG_LABELS,
   withoutSpamCategory,
+  type CustomCategory,
   type MailDecision,
 } from "@/lib/decision";
 
@@ -120,7 +126,7 @@ describe("decision (Système 1)", () => {
     expect(asDescriptionSource(42)).toBe("decision");
   });
 
-  it("détecte le profil de seuils actif et bloque pub/spam/totp/injection du LLM auto", () => {
+  it("détecte le profil de seuils actif et bloque pub/spam/totp/bruit/injection du LLM auto", () => {
     expect(detectThresholdPreset(THRESHOLD_PRESETS.balanced.values)).toBe("balanced");
     expect(detectThresholdPreset(THRESHOLD_PRESETS.strict.values)).toBe("strict");
     expect(detectThresholdPreset({ ...THRESHOLD_PRESETS.balanced.values, llmEscalate: 0.61 })).toBe("custom");
@@ -128,11 +134,16 @@ describe("decision (Système 1)", () => {
     const thresholds = THRESHOLD_PRESETS.balanced.values;
     expect(isBlockedFromAutoLlm({ category: "promo", security: "safe", securityConf: 0.99 }, thresholds)).toBe(true);
     expect(isBlockedFromAutoLlm({ category: "auth_totp", security: "safe", securityConf: 0.99 }, thresholds)).toBe(true);
+    expect(isBlockedFromAutoLlm({ category: "dev_activity", security: "safe", securityConf: 0.99 }, thresholds)).toBe(true);
     expect(
       isBlockedFromAutoLlm({ category: "important", security: "prompt_injection", securityConf: 0.85 }, thresholds),
     ).toBe(true);
     expect(
       isBlockedFromAutoLlm({ category: "important", security: "safe", securityConf: 0.99 }, thresholds),
+    ).toBe(false);
+    // Le résiduel `notification` n'est plus bruit : il repart au LLM comme les autres.
+    expect(
+      isBlockedFromAutoLlm({ category: "notification", security: "safe", securityConf: 0.99 }, thresholds),
     ).toBe(false);
   });
 
@@ -213,5 +224,98 @@ describe("decision · catégorisation spam désactivée", () => {
 
     const promo = { ...spamDecision(), category: "promo" };
     expect(withoutSpamCategory(promo, false)).toBe(promo);
+  });
+});
+
+describe("decision · taxonomie partagée (bruit, priorité, libellés)", () => {
+  const decision = (category: string): MailDecision => ({
+    accountId: "perso",
+    folderPath: "INBOX",
+    uid: 11,
+    messageId: "<taxo@example.com>",
+    contentHash: "hash",
+    schemaVersion: 3,
+    model: "mammoth-1",
+    category,
+    categoryConf: 0.9,
+    categoryProbs: { [category]: 0.9 },
+    urgency: 0.4,
+    needsReply: 0.1,
+    hasTask: 0.1,
+    hasEvent: 0.1,
+    security: "safe",
+    securityConf: 0.99,
+    cleanupScore: 0.2,
+    decidedAt: 1_731_000_000,
+    source: "local",
+  });
+
+  const custom = (id: string, excludeFromPriority: boolean): CustomCategory => ({
+    id,
+    name: id,
+    description: id,
+    color: "accent",
+    excludeFromPriority,
+    allowNotifications: true,
+    cleanupEligible: false,
+  });
+
+  it("classe les tags de bruit par nature et sort le résiduel notification", () => {
+    expect(isNoiseCategory("promo")).toBe(true);
+    expect(isNoiseCategory("spam")).toBe(true);
+    expect(isNoiseCategory("auth_totp")).toBe(true);
+    expect(isNoiseCategory("dev_activity")).toBe(true);
+    expect(isNoiseCategory("newsletter_digest")).toBe(true);
+    expect(isNoiseCategory("invoice_receipt")).toBe(true);
+    expect(isNoiseCategory("order_confirmation")).toBe(true);
+    expect(isNoiseCategory("notification")).toBe(false);
+    expect(isNoiseCategory("login_alert")).toBe(false);
+    expect(isNoiseCategory("messaging_notice")).toBe(false);
+    expect(isNoiseCategory("system_alert")).toBe(false);
+    expect(isNoiseCategory("calendar_invite")).toBe(false);
+    expect(isNoiseCategory("important")).toBe(false);
+  });
+
+  it("déclare les tags qui portent la priorité par nature", () => {
+    expect([...PRIORITY_TAGS].sort()).toEqual([
+      "calendar_invite",
+      "login_alert",
+      "messaging_notice",
+      "system_alert",
+    ]);
+    expect(PRIORITY_TAGS.has("notification")).toBe(false);
+    expect(PRIORITY_TAGS.has("dev_activity")).toBe(false);
+  });
+
+  it("exclut de la priorité le bruit, pas le résiduel, et respecte les catégories custom", () => {
+    expect(isExcludedFromPriority(undefined, [])).toBe(false);
+    expect(isExcludedFromPriority(decision("promo"), [])).toBe(true);
+    expect(isExcludedFromPriority(decision("auth_totp"), [])).toBe(true);
+    expect(isExcludedFromPriority(decision("dev_activity"), [])).toBe(true);
+    expect(isExcludedFromPriority(decision("notification"), [])).toBe(false);
+    expect(isExcludedFromPriority(decision("login_alert"), [])).toBe(false);
+    expect(isExcludedFromPriority(decision("important"), [])).toBe(false);
+
+    expect(isExcludedFromPriority(decision("custom:factures"), [custom("factures", true)])).toBe(true);
+    expect(isExcludedFromPriority(decision("factures"), [custom("factures", true)])).toBe(true);
+    expect(isExcludedFromPriority(decision("custom:factures"), [custom("factures", false)])).toBe(false);
+    expect(isExcludedFromPriority(decision("custom:colis"), [custom("factures", true)])).toBe(false);
+  });
+
+  it("matche les catégories custom par préfixe ou id nu", () => {
+    expect(matchesCustomCategory("custom:factures", "factures")).toBe(true);
+    expect(matchesCustomCategory("factures", "factures")).toBe(true);
+    expect(matchesCustomCategory("custom:colis", "factures")).toBe(false);
+    expect(matchesCustomCategory("promo", "factures")).toBe(false);
+  });
+
+  it("fournit un libellé FR court pour les 13 tags et le résiduel", () => {
+    expect(Object.keys(TAG_LABELS)).toHaveLength(14);
+    expect(TAG_LABELS.order_confirmation).toBe("Confirmation de commande");
+    expect(TAG_LABELS.login_alert).toBe("Alerte de sécurité");
+    expect(TAG_LABELS.dev_activity).toBe("Activité dev");
+    expect(TAG_LABELS.invoice_receipt).toBe("Facture / reçu");
+    expect(TAG_LABELS.calendar_invite).toBe("Rendez-vous");
+    expect(TAG_LABELS.notification).toBe("Notification");
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { THRESHOLD_PRESETS, type CustomCategory, type MailDecision } from "@/lib/decision";
+import { TAG_LABELS, THRESHOLD_PRESETS, type CustomCategory, type MailDecision } from "@/lib/decision";
 import { listDescription, reasonFromDecision } from "@/lib/triage";
 
 const THRESHOLDS = THRESHOLD_PRESETS.balanced.values;
@@ -81,6 +81,35 @@ describe("triage · description de la liste (signaux)", () => {
     expect(
       listDescription(makeDecision({ category: "auth_totp", ...quiet }), THRESHOLDS, "signaux"),
     ).toBe("Code de vérification");
+  });
+
+  it("étiquette chaque tag de la taxonomie (3e ligne de la liste)", () => {
+    const quiet = { urgency: 1, needsReply: 0.1, hasTask: 0.1, hasEvent: 0.1 };
+    expect(TAG_LABELS.login_alert).toBe("Alerte de sécurité");
+    expect(TAG_LABELS.order_confirmation).toBe("Confirmation de commande");
+    expect(TAG_LABELS.calendar_invite).toBe("Rendez-vous");
+    expect(TAG_LABELS.notification).toBe("Notification");
+
+    for (const [category, label] of Object.entries(TAG_LABELS)) {
+      if (category === "auth_totp") continue;
+      expect(listDescription(makeDecision({ category, ...quiet }), THRESHOLDS, "signaux")).toBe(label);
+      expect(reasonFromDecision(makeDecision({ category, ...quiet }), THRESHOLDS)).toBe(label);
+    }
+  });
+
+  it("laisse les signaux passer avant l'étiquette, même sur un tag prioritaire", () => {
+    expect(
+      reasonFromDecision(
+        makeDecision({ category: "login_alert", urgency: 2.4, needsReply: 0.1, hasTask: 0.1, hasEvent: 0.1 }),
+        THRESHOLDS,
+      ),
+    ).toBe("Urgent");
+    expect(
+      reasonFromDecision(
+        makeDecision({ category: "notification", urgency: 1, needsReply: 0.1, hasTask: 0.1, hasEvent: 0.1 }),
+        THRESHOLDS,
+      ),
+    ).toBe("Notification");
   });
 
   it("nomme la catégorie personnalisée, et retombe sur Information si inconnue", () => {

@@ -27,7 +27,10 @@ use crate::state::AppState;
 
 pub const CONFIG_FILE: &str = "decision.json";
 pub const SECRET_ID: &str = "ai:decision";
-pub const TRIAGE_SCHEMA_VERSION: i64 = 2;
+/// Version de la taxonomie de triage. `content_hash` ne couvre que les catégories
+/// custom : à bumper dès que les critères par défaut changent, sinon le cache
+/// SQLite resservirait indéfiniment des décisions rendues par l'ancienne liste.
+pub const TRIAGE_SCHEMA_VERSION: i64 = 3;
 
 pub const NEURALWATT_ENDPOINT: &str = "https://api.neuralwatt.com/v1/systemone";
 pub const BASETEN_ENDPOINT: &str = "https://inference.baseten.co/v1/systemone";
@@ -889,6 +892,25 @@ pub fn content_hash(message: &Message, config: &DecisionConfig, team_members: &[
     digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
+/// Les 13 familles de notifications automatiques, injectées telles quelles dans la
+/// question `category` : ce sont les descriptions qui portent la priorité par tag
+/// (`should_notify`), l'urgence seule ne discriminant pas ce fourre-tout.
+const NOTIFICATION_CRITERIA: [(&str, &str); 13] = [
+    ("order_confirmation", "Confirmation de commande — Mail transactionnel accusant réception d'un achat : « commande #X confirmée », « merci pour votre achat », « merci d'avoir activé votre produit », « votre cadeau a été accepté », « nous avons reçu votre commande », « votre commande est en cuisine », « en attente de paiement », « you have claimed » (jeu, DLC ou clé activé). Émis juste après l'achat ou pendant la préparation. Ne pas confondre avec delivery_tracking (le colis bouge) ni invoice_receipt (le document comptable est disponible). Si le sujet dit « en attente de paiement », marquer une tâche et une priorité haute."),
+    ("login_alert", "Alerte de connexion / sécurité de compte — Notification de sécurité émise par le service lui-même : nouvelle connexion, nouvel appareil, nouvelle adresse IP, application tierce autorisée, clé d'accès ou code d'accès ajouté, mot de passe ou adresse e-mail modifié, alerte de sécurité, alerte de connexion FranceConnect, adresse trouvée dans une fuite de données. Jamais émise par un humain. Priorité haute : c'est le seul type de notification qui peut signaler une intrusion. Ne pas y mettre les codes de vérification, liens magiques, demandes de confirmation ou de réinitialisation (auth_totp) ni les nudges marketing de sécurité (« la sécurité de vos données est une priorité »)."),
+    ("delivery_tracking", "Suivi de livraison — Information d'acheminement d'un colis physique : « votre colis arrive / est en route / a été livré / est déposé », numéro de suivi (Colissimo, Chronopost, Cainiao, DPD, UPS, sendcloud), « nous préparons ta commande », « expédiée », « en transit », « tentative de remise », « prêt à retirer ». Émis par un transporteur ou une boutique pendant le transport. Aucune action requise, sauf « tentative de remise » (colis à récupérer : priorité haute)."),
+    ("account_notice", "Info de compte / administratif — Message de gestion de compte ou de dossier administratif sans enjeu immédiat : ouverture d'espace client, accusé de réception d'une démarche, état des lieux, attestation reçue, dossier de candidature, fermeture d'agence, changement de CGU, politique de comptes inactifs, frais de gestion, permis ou plainte en ligne, message déposé dans une messagerie sécurisée. Distinct de invoice_receipt (pas de document comptable) et de login_alert (pas de sécurité). À archiver plutôt qu'à supprimer."),
+    ("dev_activity", "Activité dev / CI — Notification d'une forge logicielle ou d'un outil de développement : issue créée ou fermée, PR fusionnée, commentaire de revue, build CI en échec ou réussi, release publiée, rapport de monitoring applicatif. Reconnaissable au dépôt entre crochets ([Projet/repo]), au numéro (#42), au SHA, aux noms de fichiers de code (ci.yml, docker.yml). Non urgent par défaut, sauf build en échec sur la branche principale ou rapport de bug critique."),
+    ("invoice_receipt", "Facture / reçu / paie — Document comptable ou de paie mis à disposition : facture, reçu, ticket de caisse, avis d'échéance, relevé de situation, bulletin de paie, attestation fiscale, facture d'abonnement (IONOS, OVH, opérateur, assurance). À conserver : c'est la seule notification qui a une valeur d'archive comptable. Distinct de account_notice (pas de montant) et de order_confirmation (pas de document)."),
+    ("social_digest", "Notification de plateforme — Notification d'activité d'un réseau, d'une boutique de jeux ou d'une communauté : mention, publication ou story partagée, récapitulatif de posts, suggestion d'abonnement, suggestion d'emploi ou de candidature, nouvel abonné, résumé de stream, invitation à un playtest, disponibilité d'une démo ou d'un jeu de la liste de souhaits, code de récompense, invitation à rejoindre une famille ou un groupe. Bruit par nature, nettoyable, sauf mention directe d'une personne connue."),
+    ("newsletter_digest", "Newsletter / digest — Envoi périodique d'information, de veille ou de marketing de masse, non transactionnel : digest produit, actualités, conseils, promotions saisonnières (Black Friday, French Days), liste de souhaits en promotion, lettre d'information d'une association, d'un bailleur ou d'une banque, série d'onboarding. Reconnaissable à la récurrence de l'expéditeur et à l'absence de commande, de facture et d'échéance personnelle. Regroupe newsletters commerciales et associatives (appels au don) ; nettoyable, sauf expéditeur explicitement suivi."),
+    ("messaging_notice", "Message déposé / messagerie — Notification qu'un message humain attend dans une messagerie : messagerie sécurisée d'une banque ou d'une assurance (Crédit Mutuel, Macif), Mon espace santé, ameli, Doctolib, messages de vendeurs d'une place de marché, message privé sur un réseau, fil de support d'un marchand. Le corps du mail ne contient pas le message : il faut aller le lire. Seul type de notification qui mérite d'être marqué « réponse attendue »."),
+    ("system_alert", "Alerte système / quota — Alerte technique d'un service ou d'un appareil : quota atteint, filtrage DNS suspendu, certificat expirant, service indisponible, mise à jour de firmware ou de tunnel à appliquer, rappel d'entretien d'un objet connecté, création ou modification d'instances cloud. Émise par la machine, adressée à l'administrateur du service, jamais marketing. Priorité technique quand le sujet contient « action requise »."),
+    ("survey_request", "Enquête / demande d'avis — Sollicitation d'opinion : enquête de satisfaction, avis après prestation ou commande, sondage institut (IFOP, coteclients, Sphinx, Avis Vérifiés, Immodvisor, Wizville), « votre avis nous intéresse », relance d'enquête. Souvent déguisée en info ou en promo. Aucune action attendue, nettoyable — mais peu prioritaire à supprimer puisque l'utilisateur les garde."),
+    ("finance_activity", "Activité bancaire / crypto — Notification d'opération sur un compte de titres ou de crypto-actifs : achat, conversion, dépôt de fonds, récompenses de staking, vérification d'identité, confirmation de données personnelles. Émise par la plateforme financière. Faible priorité sauf si le mail demande une confirmation (KYC) : dans ce cas, priorité haute."),
+    ("calendar_invite", "Rendez-vous / calendrier — Confirmation, rappel ou préparation d'un rendez-vous daté : médecin, imagerie, coiffeur, prestation, « votre rendez-vous est confirmé le … », « préparation requise pour votre rendez-vous de demain ». Contient toujours une date et une heure. Candidat naturel à un événement de calendrier, pas à une notification : ne jamais supprimer automatiquement."),
+];
+
 pub fn build_triage_questions(
     config: &DecisionConfig,
     team_members: &[String],
@@ -904,17 +926,27 @@ pub fn build_triage_questions(
     );
     criteria.insert(
         "auth_totp".to_string(),
-        "Code de vérification, OTP, TOTP, 2FA, lien magique de connexion ou confirmation de compte"
+        "Code de vérification, OTP, TOTP, 2FA, lien magique de connexion ou confirmation de compte : \
+         le mail demande une authentification ou une confirmation immédiate (vérification d'e-mail, \
+         réinitialisation de mot de passe, confirmation de nouvel appareil)"
             .to_string(),
     );
+    for (id, description) in NOTIFICATION_CRITERIA {
+        criteria.insert(id.to_string(), description.to_string());
+    }
     criteria.insert(
         "notification".to_string(),
-        "Notification automatique de service, suivi de commande, reçu ou alerte système"
+        "Message automatique d'un service qui ne relève d'aucune des catégories ci-dessus : \
+         annonce de maintenance, changement de contrat ou de politique, message in-app relayé, \
+         notification diverse sans famille identifiable"
             .to_string(),
     );
     criteria.insert(
         "promo".to_string(),
-        "Publicité, offre commerciale, marketing ou newsletter promotionnelle".to_string(),
+        "Publicité, offre commerciale ou marketing individuel : offre unique, bon plan, promotion \
+         personnalisée. Les envois périodiques et newsletters, même commerciales, relèvent de \
+         newsletter_digest"
+            .to_string(),
     );
     if config.spam_enabled {
         criteria.insert(
@@ -1368,6 +1400,23 @@ pub async fn triage_message_with_timeout(
 
 /// Détermine si un mail trié doit déclencher une notification système selon le
 /// mode de filtrage configuré.
+///
+/// Table de comportement par catégorie (mode `Smart`) :
+///
+/// - `auth_totp` ou code TOTP extrait : notifie toujours.
+/// - `login_alert`, `messaging_notice`, `system_alert`, `calendar_invite` : notifient
+///   toujours — intrusion possible, humain en attente, alerte technique, rendez-vous.
+/// - `promo`, `spam` et les tags de bruit (`dev_activity`, `social_digest`,
+///   `newsletter_digest`, `survey_request`, `finance_activity`, `order_confirmation`,
+///   `delivery_tracking`, `account_notice`, `invoice_receipt`) : muets sauf
+///   `urgency >= 2.2` — les cas à enjeu (paiement en attente, remise échouée,
+///   KYC, build principal en échec) remontent par l'urgence que le modèle score haut.
+/// - `custom:<id>` : `allow_notifications` du tag.
+/// - Tout le reste, **y compris le résiduel `notification`** : important, réponse
+///   attendue au-dessus du seuil, ou `urgency >= 1.5`.
+///
+/// `UrgentOnly` ne garde que le TOTP, `auth_totp`, `login_alert` (seule alerte
+/// pouvant signaler une intrusion) et `urgency >= 2.0`. `All` notifie tout.
 pub fn should_notify(config: &DecisionConfig, decision: &MailDecision) -> bool {
     let category = if !config.spam_enabled && decision.category == "spam" {
         "info"
@@ -1377,13 +1426,37 @@ pub fn should_notify(config: &DecisionConfig, decision: &MailDecision) -> bool {
     match config.notif_mode {
         NotifFilterMode::All => true,
         NotifFilterMode::UrgentOnly => {
-            decision.totp_code.is_some() || category == "auth_totp" || decision.urgency >= 2.0
+            decision.totp_code.is_some()
+                || matches!(category, "auth_totp" | "login_alert")
+                || decision.urgency >= 2.0
         }
         NotifFilterMode::Smart => {
-            if decision.totp_code.is_some() || category == "auth_totp" {
+            if decision.totp_code.is_some()
+                || matches!(
+                    category,
+                    "auth_totp"
+                        | "login_alert"
+                        | "messaging_notice"
+                        | "system_alert"
+                        | "calendar_invite"
+                )
+            {
                 return true;
             }
-            if matches!(category, "promo" | "spam" | "notification") {
+            if matches!(
+                category,
+                "promo"
+                    | "spam"
+                    | "dev_activity"
+                    | "social_digest"
+                    | "newsletter_digest"
+                    | "survey_request"
+                    | "finance_activity"
+                    | "order_confirmation"
+                    | "delivery_tracking"
+                    | "account_notice"
+                    | "invoice_receipt"
+            ) {
                 return decision.urgency >= 2.2;
             }
             if let Some(custom_id) = category.strip_prefix("custom:") {
@@ -1725,6 +1798,94 @@ mod tests {
     }
 
     #[test]
+    fn smart_notifications_follow_the_per_tag_table() {
+        let config = DecisionConfig {
+            notif_mode: NotifFilterMode::Smart,
+            ..Default::default()
+        };
+
+        for category in [
+            "login_alert",
+            "messaging_notice",
+            "system_alert",
+            "calendar_invite",
+        ] {
+            let mut decision = mail_decision(category);
+            decision.urgency = 0.0;
+            decision.needs_reply = 0.0;
+            assert!(
+                should_notify(&config, &decision),
+                "{category} doit notifier sans urgence"
+            );
+        }
+
+        for category in [
+            "dev_activity",
+            "social_digest",
+            "newsletter_digest",
+            "invoice_receipt",
+            "order_confirmation",
+            "delivery_tracking",
+            "account_notice",
+            "survey_request",
+            "finance_activity",
+            "promo",
+        ] {
+            let mut decision = mail_decision(category);
+            decision.urgency = 0.0;
+            decision.needs_reply = 0.0;
+            assert!(
+                !should_notify(&config, &decision),
+                "{category} doit rester muet sous 2.2"
+            );
+            decision.urgency = 2.3;
+            assert!(
+                should_notify(&config, &decision),
+                "{category} doit remonter au-dessus de 2.2"
+            );
+        }
+    }
+
+    #[test]
+    fn smart_notifications_let_the_residual_notification_through() {
+        let config = DecisionConfig {
+            notif_mode: NotifFilterMode::Smart,
+            ..Default::default()
+        };
+
+        let mut residual = mail_decision("notification");
+        residual.urgency = 0.0;
+        residual.needs_reply = 0.0;
+        assert!(!should_notify(&config, &residual));
+
+        residual.urgency = 1.6;
+        assert!(should_notify(&config, &residual));
+
+        residual.urgency = 0.0;
+        residual.needs_reply = 0.8;
+        assert!(should_notify(&config, &residual));
+    }
+
+    #[test]
+    fn urgent_only_mode_keeps_login_alerts_and_drops_dev_activity() {
+        let config = DecisionConfig {
+            notif_mode: NotifFilterMode::UrgentOnly,
+            ..Default::default()
+        };
+
+        let mut login = mail_decision("login_alert");
+        login.urgency = 0.0;
+        assert!(should_notify(&config, &login));
+
+        let mut dev = mail_decision("dev_activity");
+        dev.urgency = 0.0;
+        assert!(!should_notify(&config, &dev));
+
+        dev.urgency = 2.1;
+        assert!(should_notify(&config, &dev));
+    }
+
+    #[test]
     fn trust_rules_clear_security_and_reclassify_spam_or_promo() {
         let config = DecisionConfig {
             trusted_senders: vec!["Alertes@Banque.FR".into(), "alice@banque.fr".into()],
@@ -1838,6 +1999,57 @@ mod tests {
             ..Default::default()
         };
         assert!(category_criteria(&enabled).contains_key("spam"));
+    }
+
+    #[test]
+    fn triage_questions_ship_the_thirteen_notification_tags_and_a_residual() {
+        let criteria = category_criteria(&DecisionConfig::default());
+
+        for id in [
+            "order_confirmation",
+            "login_alert",
+            "delivery_tracking",
+            "account_notice",
+            "dev_activity",
+            "invoice_receipt",
+            "social_digest",
+            "newsletter_digest",
+            "messaging_notice",
+            "system_alert",
+            "survey_request",
+            "finance_activity",
+            "calendar_invite",
+        ] {
+            let description = criteria
+                .get(id)
+                .unwrap_or_else(|| panic!("critère `{id}` absent"));
+            assert!(description.contains(" — "), "`{id}` perd son libellé");
+        }
+        for kept in ["important", "info", "auth_totp", "promo", "notification"] {
+            assert!(criteria.contains_key(kept), "critère `{kept}` absent");
+        }
+        assert_eq!(
+            criteria.len(),
+            18,
+            "aucun critère de plus que les 18 attendus"
+        );
+
+        assert!(criteria["login_alert"].contains("seul type de notification qui peut signaler"));
+        assert!(criteria["order_confirmation"].contains("en attente de paiement"));
+
+        let residual = &criteria["notification"];
+        assert!(residual.contains("ne relève d'aucune des catégories ci-dessus"));
+        for moved in ["suivi de commande", "reçu", "alerte système"] {
+            assert!(
+                !residual.contains(moved),
+                "le résiduel cite encore « {moved} », qui a son propre tag"
+            );
+        }
+    }
+
+    #[test]
+    fn triage_schema_version_tracks_the_taxonomy() {
+        assert_eq!(TRIAGE_SCHEMA_VERSION, 3);
     }
 
     #[test]

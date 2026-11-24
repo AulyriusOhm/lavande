@@ -21,11 +21,12 @@ import {
   DEFAULT_DECISION_THRESHOLDS,
   isPhishing,
   isPromptInjection,
+  TAG_LABELS,
   type CustomCategory,
   type DecisionThresholds,
   type MailDecision,
 } from "@/lib/decision";
-import { listDescription } from "@/lib/triage";
+import { inboxGroupForCategory, listDescription } from "@/lib/triage";
 import { categoryColorStyle } from "@/components/category-manager-sheet";
 import { accountLabelInk, accountTint, useTheme } from "@/lib/theme";
 
@@ -39,6 +40,21 @@ const ACCOUNT_CHIP_TIGHT = "text-[8px] tracking-[0.01em]";
 
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_SLOP = 10;
+
+/**
+ * Badge du tag de la taxonomie (13 tags + résiduel « notification »), teinté par
+ * le groupe du tag. Les catégories historiques (important, info, auth_totp, promo,
+ * spam) n'ont pas de libellé dans `TAG_LABELS` : pas de badge, comportement inchangé.
+ */
+function tagBadge(category: string): { label: string; className: string } | null {
+  const label = TAG_LABELS[category];
+  if (!label) return null;
+  const color = inboxGroupForCategory(category)?.color;
+  return {
+    label,
+    className: color ? categoryColorStyle(color).pill : "bg-surface-2 text-ink-muted",
+  };
+}
 
 export function accountChipFont(label: string) {
   const length = [...label.trim()].length;
@@ -140,9 +156,13 @@ export function ThreadRow({
     }
   }
 
-  const badges = aiActive && decision
-    ? decisionBadges.filter((badge) => badge.label === "Suspect")
-    : decisionBadges;
+  const tag = decision ? tagBadge(decision.category) : null;
+  const badges = [
+    ...(tag ? [tag] : []),
+    ...(aiActive && decision
+      ? decisionBadges.filter((badge) => badge.label === "Suspect")
+      : decisionBadges),
+  ];
 
   let thirdLine: React.ReactNode = null;
   if (showPreview && excerpt) {

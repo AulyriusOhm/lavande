@@ -60,7 +60,7 @@ import {
   type NotifFilterMode,
   type ThresholdPresetId,
 } from "@/lib/decision";
-import { toApiDecisionConfig } from "@/lib/triage";
+import { INBOX_VIEWS, toApiDecisionConfig } from "@/lib/triage";
 import { CategoryManagerSheet, categoryColorStyle } from "@/components/category-manager-sheet";
 import { ContactsSyncRow } from "@/components/contacts-sync-row";
 import { TrustedWhitelistSection } from "@/components/trusted-whitelist";
@@ -1652,9 +1652,7 @@ export function SettingsScreen({
                 </span>
                 <div role="group" aria-label="Vue par défaut de la boîte" className="flex flex-wrap gap-1.5">
                   {[
-                    { id: "all", label: "Tous" },
-                    { id: "priority", label: "Prioritaire" },
-                    { id: "needs_reply", label: "À répondre" },
+                    ...INBOX_VIEWS,
                     ...decision.customCategories.map((cat) => ({
                       id: `custom:${cat.id}`,
                       label: cat.name,
