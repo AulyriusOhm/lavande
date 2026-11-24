@@ -298,6 +298,51 @@ describe("suggestions · fenêtre temporelle", () => {
     expect(result.current.suggestions.filter((entry) => entry.proposal === proposed.proposal)).toHaveLength(1);
   });
 
+  it("restampe une suggestion en attente déjà connue sans écraser ses champs", () => {
+    const { result } = mount(createMemoryStorage());
+    const stale: MailSuggestion = { ...suggestion("restamp"), timestamp: now - 100 * H };
+    const before = Date.now();
+
+    act(() => {
+      result.current.proposeSuggestion(stale);
+    });
+    let restamped = false;
+    act(() => {
+      restamped = result.current.proposeSuggestion(stale, true);
+    });
+
+    const stored = result.current.suggestions.filter((entry) => entry.proposal === stale.proposal);
+    expect(restamped).toBe(true);
+    expect(stored).toHaveLength(1);
+    expect(stored[0].timestamp).toBeGreaterThanOrEqual(before);
+    expect(stored[0]).toMatchObject({
+      mailId: stale.mailId,
+      account: stale.account,
+      from: stale.from,
+      subject: stale.subject,
+      description: stale.description,
+    });
+  });
+
+  it("ne restampe pas une suggestion écartée", () => {
+    const { result } = mount(createMemoryStorage());
+    const dropped: MailSuggestion = { ...suggestion("ecartee"), timestamp: now - 100 * H };
+
+    act(() => {
+      result.current.proposeSuggestion(dropped);
+    });
+    act(() => {
+      result.current.dismissSuggestion(dropped);
+    });
+    let restamped = true;
+    act(() => {
+      restamped = result.current.proposeSuggestion(dropped, true);
+    });
+
+    expect(restamped).toBe(false);
+    expect(result.current.suggestions.some((entry) => entry.proposal === dropped.proposal)).toBe(false);
+  });
+
   it("projette les fixtures démo comme non-IA, avec leur compte", () => {
     const { result } = mount(createMemoryStorage());
 

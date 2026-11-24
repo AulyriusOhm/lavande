@@ -54,7 +54,7 @@ export type PlanningValue = {
   setTasks: Dispatch<SetStateAction<Task[]>>;
   setEvents: Dispatch<SetStateAction<CalendarEvent[]>>;
   addSuggestion: (suggestion: MailSuggestion) => void;
-  proposeSuggestion: (suggestion: MailSuggestion) => boolean;
+  proposeSuggestion: (suggestion: MailSuggestion, restamp?: boolean) => boolean;
   dismissSuggestion: (suggestion: MailSuggestion) => void;
   readOnlyIds: Set<string>;
   sync: SyncStatus;
@@ -115,6 +115,7 @@ function projectSuggestion(doc: Doc): MailSuggestion | null {
     kind: raw.kind === "event" ? "event" : "task",
   };
   if (raw.ai === true) suggestion.ai = true;
+  if (raw.explicit === true) suggestion.explicit = true;
   if (typeof raw.assignee === "string") suggestion.assignee = raw.assignee;
   if (typeof raw.timestamp === "number" && Number.isFinite(raw.timestamp)) {
     suggestion.timestamp = raw.timestamp;
@@ -171,6 +172,7 @@ function suggestionFields(
     mailId: suggestion.mailId,
     account: suggestion.account,
     ...(suggestion.ai ? { ai: true } : {}),
+    ...(suggestion.explicit ? { explicit: true } : {}),
     ...(suggestion.assignee === undefined ? {} : { assignee: suggestion.assignee }),
     from: suggestion.from,
     subject: suggestion.subject,
@@ -490,11 +492,16 @@ export function PlanningProvider({ children, storage }: { children: ReactNode; s
   );
 
   const proposeSuggestion = useCallback(
-    (suggestion: MailSuggestion) => {
+    (suggestion: MailSuggestion, restamp = false) => {
       const id = suggestionDocId(suggestion);
       const known = visibleDocs(syncStorage.read().docs, "suggestion");
-      if (known.some((doc) => doc.id === id)) return false;
-      emit("suggestion", id, suggestionFields(suggestion, "pending"));
+      const stored = known.find((doc) => doc.id === id);
+      if (stored === undefined) {
+        emit("suggestion", id, suggestionFields(suggestion, "pending"));
+        return true;
+      }
+      if (!restamp || stored.raw.status !== "pending") return false;
+      emit("suggestion", id, { timestamp: Date.now(), ...(suggestion.explicit ? { explicit: true } : {}) });
       return true;
     },
     [emit, syncStorage],

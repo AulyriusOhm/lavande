@@ -166,6 +166,8 @@ export type MailSuggestion = {
   assignee?: string;
   /** Horodatage (ms) du mail source : base du filtre de fenêtre des suggestions IA. */
   timestamp?: number;
+  /** Proposition humaine explicite (« Proposer à l'agenda ») : visible même si le mail est répondu. */
+  explicit?: boolean;
 };
 
 export const MAIL_SUGGESTIONS: MailSuggestion[] = import.meta.env.VITE_DISTRIBUTION === "1" ? [] : [

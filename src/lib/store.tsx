@@ -3024,14 +3024,16 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     [excludedAccounts, receptionMails],
   );
 
-  /** Suggestions affichées : celles de la fenêtre, hors comptes exclus et mails déjà traités. */
+  /** Suggestions affichées : celles de la fenêtre, hors comptes exclus et mails déjà traités, sauf proposition explicite. */
   const suggestions = useMemo(() => {
     const visible = suggestionsInWindow(storedSuggestions, prefs.aiTasks.windowHours);
     const kept =
       excludedAccounts.size === 0
         ? visible
         : visible.filter((suggestion) => !excludedAccounts.has(suggestion.account));
-    return kept.filter((suggestion) => !alreadyReplied(inboxIndex.get(suggestion.mailId)));
+    return kept.filter(
+      (suggestion) => suggestion.explicit === true || !alreadyReplied(inboxIndex.get(suggestion.mailId)),
+    );
   }, [excludedAccounts, inboxIndex, storedSuggestions, prefs.aiTasks.windowHours]);
 
   /** Entrée minimale du moteur : expéditeur, objet, aperçu et horodatage, rien d'autre. */
@@ -3325,7 +3327,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
    * un événement déjà présent à l'agenda.
    */
   const proposeEvents = useCallback(
-    (proposed: SummaryEvent[], byId: Map<string, Mail>, label: string): number => {
+    (proposed: SummaryEvent[], byId: Map<string, Mail>, label: string, explicit = false): number => {
       const key = (mailId: string, title: string, date: string) => `${mailId}:${normalize(title)}:${date}`;
       const known = new Set([
         ...planning.suggestions.map((entry) => key(entry.mailId, entry.proposal, entry.date ?? "")),
@@ -3346,14 +3348,35 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       let added = 0;
       for (const event of proposed) {
         const mail = event.mailId ? byId.get(event.mailId) : undefined;
-        if (alreadyReplied(mail)) continue;
+        if (!explicit && alreadyReplied(mail)) continue;
         const dedup = key(event.mailId ?? "", event.title, event.date);
-        if (known.has(dedup)) continue;
+        if (known.has(dedup)) {
+          if (!explicit) continue;
+          const match = planning.suggestions.find(
+            (entry) =>
+              entry.kind === "event" &&
+              entry.mailId === (event.mailId ?? "") &&
+              normalize(entry.proposal) === normalize(event.title) &&
+              (entry.date ?? "") === event.date,
+          );
+          if (
+            match !== undefined &&
+            planning.proposeSuggestion({ ...match, timestamp: Date.now(), explicit: true }, true)
+          ) {
+            added += 1;
+          }
+          continue;
+        }
         const candidate = { mailId: event.mailId ?? "", title: event.title, when: event.date };
         if (nearDuplicate(existing, candidate)) continue;
         known.add(dedup);
         existing.push(candidate);
-        if (planning.proposeSuggestion(eventSuggestion(event, mail, label))) added += 1;
+        const suggestion = eventSuggestion(event, mail, label);
+        if (explicit) {
+          suggestion.timestamp = Date.now();
+          suggestion.explicit = true;
+        }
+        if (planning.proposeSuggestion(suggestion)) added += 1;
       }
       return added;
     },
@@ -3533,8 +3556,8 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
 
   const acceptAnalyseEvent = useCallback(
     (event: SummaryEvent) => {
-      proposeEvents([event], inboxIndex, "Analyse IA");
-      notify("Rendez-vous proposé dans l'agenda");
+      const added = proposeEvents([event], inboxIndex, "Analyse IA", true);
+      notify(added > 0 ? "Rendez-vous proposé dans l'agenda" : "Rendez-vous déjà proposé dans l'agenda");
     },
     [inboxIndex, notify, proposeEvents],
   );

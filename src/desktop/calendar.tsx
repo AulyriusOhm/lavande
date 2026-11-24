@@ -38,9 +38,11 @@ import {
   externalBadge,
   externalCalendarEvents,
   externalEventKind,
+  reloadCaldavSource,
   updateCaldavEvent,
   useExternalCalendarRefresh,
 } from "@/lib/ics";
+import { mailApi, type CaldavCollection } from "@/lib/api";
 
 import {
   DAY_END_MIN,
@@ -1719,17 +1721,45 @@ function NewEventForm({
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [caldavCollections, setCaldavCollections] = useState<CaldavCollection[] | null>(null);
+  const [caldavHref, setCaldavHref] = useState("");
 
   useEscapeLayer(true, onClose);
 
-  const invalid = !title.trim() || end <= start;
-  const clashes =
-    invalid || !date ? [] : overlappingEvents(events.filter((entry) => entry.id !== event?.id), date, start, end);
-  const resolvedTone = tone === "" ? toneOfEvent({ calendar }, calendars) : Number(tone);
   /** Un événement CalDAV s'écrit chez le démon ; un calendrier local garde le store. */
   const caldavDef = event?.caldav
     ? calendars.find((def) => caldavSourceIdOf(def) === event.caldav?.sourceId)
     : calendars.find((def) => def.name === calendar && isCaldavCalendar(def));
+  const caldavSourceId = caldavDef ? caldavSourceIdOf(caldavDef) : undefined;
+
+  /** Le démon refuse d'écrire dans une source à plusieurs calendriers sans `calendar_href` choisi. */
+  useEffect(() => {
+    setCaldavCollections(null);
+    setCaldavHref("");
+    if (editing || !caldavSourceId) return;
+    let live = true;
+    void (async () => {
+      try {
+        const sources = await mailApi.caldavSources();
+        const source = sources.find((entry) => entry.id === caldavSourceId);
+        if (!live || !source || (source.calendar_href ?? "").trim() !== "") return;
+        const collections = await mailApi.sourceCaldavCollections(caldavSourceId);
+        if (!live || collections.length < 2) return;
+        setCaldavCollections(collections);
+      } catch {
+        return;
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [caldavSourceId, editing]);
+
+  const missingCaldavHref = caldavCollections !== null && caldavHref === "";
+  const invalid = !title.trim() || end <= start || missingCaldavHref;
+  const clashes =
+    invalid || !date ? [] : overlappingEvents(events.filter((entry) => entry.id !== event?.id), date, start, end);
+  const resolvedTone = tone === "" ? toneOfEvent({ calendar }, calendars) : Number(tone);
 
   const guests = guestEmails(people);
   const caldavInput = () => ({
@@ -1747,9 +1777,15 @@ function NewEventForm({
     setFailure(null);
     try {
       const target = event;
+      const chosenHref = editing ? "" : caldavHref;
+      const sourceId = caldavSourceIdOf(def);
+      if (sourceId && chosenHref) {
+        await mailApi.updateCaldavSource(sourceId, { calendar_href: chosenHref });
+      }
       commitIcsState(
         target ? await updateCaldavEvent(def, target, caldavInput()) : await createCaldavEvent(def, caldavInput()),
       );
+      if (chosenHref) void reloadCaldavSource(def).then(commitIcsState).catch(() => {});
       notify(target ? "Rendez-vous mis à jour" : "Rendez-vous créé");
       setSelectedDate(date);
       if (!target) onCreated?.();
@@ -1972,6 +2008,28 @@ function NewEventForm({
             </Field>
           </div>
 
+          {caldavCollections ? (
+            <Field label="Calendrier de destination">
+              <div className="relative">
+                <select
+                  aria-label="Calendrier de destination"
+                  data-testid="event-caldav-href-input"
+                  value={caldavHref}
+                  onChange={(inputEvent) => setCaldavHref(inputEvent.target.value)}
+                  className="focus-ring h-10 w-full appearance-none rounded-xl border border-line bg-surface pr-7 pl-3 text-[12.5px] font-bold text-ink"
+                >
+                  <option value="">Choisir un calendrier</option>
+                  {caldavCollections.map((collection) => (
+                    <option key={collection.href} value={collection.href}>
+                      {collection.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDownGlyph />
+              </div>
+            </Field>
+          ) : null}
+
           <Field label="Lieu">
             <TextInput
               data-testid="event-location-input"
@@ -2007,6 +2065,16 @@ function NewEventForm({
             >
               <Link2 className="size-3.5 shrink-0" strokeWidth={2.4} />
               Calendrier CalDAV : l'événement est écrit sur le serveur.
+            </p>
+          ) : null}
+
+          {missingCaldavHref ? (
+            <p
+              data-testid="event-caldav-href-hint"
+              className="flex items-center gap-1.5 text-[10.5px] font-semibold text-amber-700 dark:text-amber-300"
+            >
+              <AlertTriangle className="size-3.5 shrink-0" strokeWidth={2.4} />
+              Choisissez le calendrier de destination : cette source en annonce plusieurs.
             </p>
           ) : null}
 

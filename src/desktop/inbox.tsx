@@ -1680,8 +1680,9 @@ export function DesktopInbox({
   }, []);
 
   const openById = (id: string) => {
-    const mail = mails.find((entry) => entry.id === id);
+    const mail = mails.find((entry) => entry.id === id) ?? summaryMails.find((entry) => entry.id === id);
     if (mail) openMessage(mail);
+    else openMessage(id);
   };
 
   const myKey = pgpKeys?.find((key) => key.has_secret) ?? null;

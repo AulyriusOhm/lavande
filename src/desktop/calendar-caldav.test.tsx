@@ -406,10 +406,33 @@ const requestOf = (fetchMock: ReturnType<typeof stubRoutes>, index = 0) => {
   return { url, init, body: init.body === undefined ? undefined : JSON.parse(String(init.body)) };
 };
 
+/** La source CalDAV telle que le démon la rend : sans `calendar_href` choisi. */
+const CALDAV_SOURCE = { id: "travail", name: "Travail", url: "https://dav.exemple.tld/" };
+
+/** La source telle qu'elle est rangée quand son calendrier d'écriture est déjà choisi. */
+const CALDAV_SOURCE_BOUND = { ...CALDAV_SOURCE, calendar_href: "/dav/travail/Agenda/" };
+
+const CALDAV_COLLECTIONS = [
+  { href: "/dav/travail/Agenda/", name: "Agenda" },
+  { href: "/dav/travail/Projets/", name: "Projets" },
+];
+
+/** L'écriture de l'événement, après les lectures que le formulaire a pu faire avant. */
+const writeCallOf = (fetchMock: ReturnType<typeof stubRoutes>) =>
+  requestOf(
+    fetchMock,
+    fetchMock.mock.calls.findIndex(([url]) => String(url).includes("/events")),
+  );
+
+const eventPosts = (fetchMock: ReturnType<typeof stubRoutes>) =>
+  fetchMock.mock.calls.filter(([url]) => String(url).includes("/events"));
+
 describe("Agenda · écriture d'une source CalDAV", () => {
   it("crée l'événement par le démon quand la cible est CalDAV", async () => {
     seedCalendars();
-    const fetchMock = stubRoutes(() => jsonResponse(writtenPayload, 201));
+    const fetchMock = stubRoutes((url) =>
+      url === "/api/calendars/caldav/sources" ? jsonResponse([CALDAV_SOURCE_BOUND]) : jsonResponse(writtenPayload, 201),
+    );
     const { onClose, onCreated } = mountDialog(null);
 
     fireEvent.change(screen.getByTestId("event-title-input"), { target: { value: "Revue serveur" } });
@@ -419,7 +442,7 @@ describe("Agenda · écriture d'une source CalDAV", () => {
     fireEvent.click(screen.getByRole("button", { name: "Créer le rendez-vous" }));
 
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
-    const { url, init, body } = requestOf(fetchMock);
+    const { url, init, body } = writeCallOf(fetchMock);
     expect(url).toBe("/api/calendars/caldav/sources/travail/events/create");
     expect(init.method).toBe("POST");
     expect(body).toEqual({ title: "Revue serveur", date: TODAY_ISO, start: "14:00", end: "15:00" });
@@ -440,7 +463,9 @@ describe("Agenda · écriture d'une source CalDAV", () => {
 
   it("envoie les invités saisis avec l'événement CalDAV", async () => {
     seedCalendars();
-    const fetchMock = stubRoutes(() => jsonResponse(writtenPayload, 201));
+    const fetchMock = stubRoutes((url) =>
+      url === "/api/calendars/caldav/sources" ? jsonResponse([CALDAV_SOURCE_BOUND]) : jsonResponse(writtenPayload, 201),
+    );
     const { onClose } = mountDialog(null);
 
     fireEvent.change(screen.getByTestId("event-title-input"), { target: { value: "Revue serveur" } });
@@ -451,13 +476,15 @@ describe("Agenda · écriture d'une source CalDAV", () => {
     fireEvent.click(screen.getByRole("button", { name: "Créer le rendez-vous" }));
 
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
-    const { body } = requestOf(fetchMock);
+    const { body } = writeCallOf(fetchMock);
     expect(body.attendees).toEqual(["camille@studio-lilas.fr", "marc@mail.fr"]);
   });
 
   it("n'envoie pas d'invités quand le champ est vide", async () => {
     seedCalendars();
-    const fetchMock = stubRoutes(() => jsonResponse(writtenPayload, 201));
+    const fetchMock = stubRoutes((url) =>
+      url === "/api/calendars/caldav/sources" ? jsonResponse([CALDAV_SOURCE_BOUND]) : jsonResponse(writtenPayload, 201),
+    );
     const { onClose } = mountDialog(null);
 
     fireEvent.change(screen.getByTestId("event-title-input"), { target: { value: "Revue serveur" } });
@@ -466,8 +493,80 @@ describe("Agenda · écriture d'une source CalDAV", () => {
     fireEvent.click(screen.getByRole("button", { name: "Créer le rendez-vous" }));
 
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
-    const { body } = requestOf(fetchMock);
+    const { body } = writeCallOf(fetchMock);
     expect("attendees" in body).toBe(false);
+  });
+
+  it("demande le calendrier de destination quand la source en annonce plusieurs", async () => {
+    seedCalendars();
+    const fetchMock = stubRoutes((url) => {
+      if (url === "/api/calendars/caldav/sources") return jsonResponse([CALDAV_SOURCE]);
+      if (url === "/api/calendars/caldav/sources/travail/collections") return jsonResponse(CALDAV_COLLECTIONS);
+      if (url === "/api/calendars/caldav/sources/travail/events") return jsonResponse([writtenPayload]);
+      if (url === "/api/calendars/caldav/sources/travail") return jsonResponse(CALDAV_SOURCE_BOUND);
+      return jsonResponse(writtenPayload, 201);
+    });
+    const { onClose, onCreated } = mountDialog(null);
+
+    fireEvent.change(screen.getByTestId("event-title-input"), { target: { value: "Revue serveur" } });
+    fireEvent.change(screen.getByTestId("event-calendar-input"), { target: { value: "Travail" } });
+
+    const selector = (await screen.findByTestId("event-caldav-href-input")) as HTMLSelectElement;
+    expect(selector.value).toBe("");
+    expect(within(selector).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Choisir un calendrier",
+      "Agenda",
+      "Projets",
+    ]);
+    expect(screen.getByTestId("event-caldav-href-hint")).toBeTruthy();
+
+    const blocked = screen.getByRole("button", { name: "Créer le rendez-vous" }) as HTMLButtonElement;
+    expect(blocked.disabled).toBe(true);
+    fireEvent.click(blocked);
+    expect(eventPosts(fetchMock)).toHaveLength(0);
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.change(selector, { target: { value: "/dav/travail/Projets/" } });
+    expect(screen.queryByTestId("event-caldav-href-hint")).toBeNull();
+    expect((screen.getByRole("button", { name: "Créer le rendez-vous" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Créer le rendez-vous" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    const patchIndex = urls.indexOf("/api/calendars/caldav/sources/travail");
+    const createIndex = urls.indexOf("/api/calendars/caldav/sources/travail/events/create");
+    expect(patchIndex).toBeGreaterThan(-1);
+    expect(createIndex).toBeGreaterThan(patchIndex);
+    const chosen = requestOf(fetchMock, patchIndex);
+    expect(chosen.init.method).toBe("PATCH");
+    expect(chosen.body).toEqual({ calendar_href: "/dav/travail/Projets/" });
+    const created = requestOf(fetchMock, createIndex);
+    expect(created.init.method).toBe("POST");
+    expect(created.body).toEqual({ title: "Revue serveur", date: TODAY_ISO, start: "14:00", end: "15:00" });
+    expect(onCreated).toHaveBeenCalledTimes(1);
+  });
+
+  it("crée directement quand la source a déjà son calendrier d'écriture", async () => {
+    seedCalendars();
+    const fetchMock = stubRoutes((url) =>
+      url === "/api/calendars/caldav/sources" ? jsonResponse([CALDAV_SOURCE_BOUND]) : jsonResponse(writtenPayload, 201),
+    );
+    const { onClose } = mountDialog(null);
+
+    fireEvent.change(screen.getByTestId("event-title-input"), { target: { value: "Revue serveur" } });
+    fireEvent.change(screen.getByTestId("event-calendar-input"), { target: { value: "Travail" } });
+
+    await waitFor(() => expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/calendars/caldav/sources"));
+    await act(async () => {});
+    expect(screen.queryByTestId("event-caldav-href-input")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Créer le rendez-vous" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls.some((url) => url.endsWith("/collections"))).toBe(false);
+    expect(fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "PATCH")).toBe(false);
+    expect(urls).toContain("/api/calendars/caldav/sources/travail/events/create");
   });
 
   it("met à jour l'événement avec l'etag détenu", async () => {
@@ -520,7 +619,11 @@ describe("Agenda · écriture d'une source CalDAV", () => {
 
   it("signale une écriture refusée sans relire la source", async () => {
     seedCalendars();
-    const fetchMock = stubRoutes(() => jsonResponse({ error: "source inconnue", kind: "caldav" }, 404));
+    const fetchMock = stubRoutes((url) =>
+      url === "/api/calendars/caldav/sources"
+        ? jsonResponse([CALDAV_SOURCE_BOUND])
+        : jsonResponse({ error: "source inconnue", kind: "caldav" }, 404),
+    );
     const { onClose } = mountDialog(null);
 
     fireEvent.change(screen.getByTestId("event-title-input"), { target: { value: "Revue serveur" } });
@@ -530,7 +633,7 @@ describe("Agenda · écriture d'une source CalDAV", () => {
     await waitFor(() => expect(screen.getByTestId("event-error")).toBeTruthy());
     expect(screen.getByTestId("event-error").textContent).toContain("source inconnue");
     expect(onClose).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(eventPosts(fetchMock)).toHaveLength(1);
   });
 
   it("supprime l'événement du serveur après confirmation", async () => {

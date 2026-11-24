@@ -307,6 +307,68 @@ describe("analyse à la demande · suggestions validées par l'humain", () => {
     expect(result.current.notices.some((entry) => entry.message === "Rendez-vous proposé dans l'agenda")).toBe(true);
   });
 
+  it("affiche un rendez-vous accepté même si le mail est plus vieux que la fenêtre", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs();
+    const stale = new Date(Date.now() - 100 * H).toISOString();
+    mockBackend([apiThread(1, "Camille", "Maquettes v3", stale)]);
+    const { result } = mount();
+    await openMailOf(result);
+    await run(result);
+
+    const event = result.current.analyse?.result?.events[0];
+    expect(event).toBeDefined();
+    act(() => {
+      result.current.acceptAnalyseEvent(event!);
+    });
+
+    const shown = () => result.current.suggestions.filter((entry) => entry.proposal === "Point maquettes");
+    expect(shown()).toHaveLength(1);
+    expect(shown()[0].description).toContain("Analyse IA");
+    const first = shown()[0].timestamp;
+    expect(typeof first).toBe("number");
+    expect(first!).toBeGreaterThan(Date.now() - H);
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 5));
+    });
+    act(() => {
+      result.current.acceptAnalyseEvent(event!);
+    });
+
+    expect(shown()).toHaveLength(1);
+    expect(shown()[0].timestamp!).toBeGreaterThan(first!);
+    expect(result.current.events.some((entry) => entry.title === "Point maquettes")).toBe(false);
+    expect(
+      result.current.notices.filter((entry) => entry.message === "Rendez-vous déjà proposé dans l'agenda"),
+    ).toHaveLength(0);
+    expect(
+      result.current.notices.filter((entry) => entry.message === "Rendez-vous proposé dans l'agenda"),
+    ).toHaveLength(2);
+  });
+
+  it("affiche un rendez-vous accepté même si le mail est déjà répondu", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs();
+    const thread = apiThread(1, "Camille", "Maquettes v3", RECEIVED);
+    thread.primary.flags.answered = true;
+    mockBackend([thread]);
+    const { result } = mount();
+    await openMailOf(result);
+    await run(result);
+
+    const event = result.current.analyse?.result?.events[0];
+    expect(event).toBeDefined();
+    act(() => {
+      result.current.acceptAnalyseEvent(event!);
+    });
+
+    const shown = result.current.suggestions.filter((entry) => entry.proposal === "Point maquettes");
+    expect(shown).toHaveLength(1);
+    expect(shown[0].explicit).toBe(true);
+    expect(result.current.notices.some((entry) => entry.message === "Rendez-vous proposé dans l'agenda")).toBe(true);
+  });
+
   it("ouvre une réponse pré-remplie avec le corps suggéré", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs();
