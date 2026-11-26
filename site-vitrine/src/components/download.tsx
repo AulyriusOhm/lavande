@@ -23,8 +23,8 @@ const PLATFORMS: Platform[] = [
     os: "x86_64",
     brand: "linux",
     copy: "Un fichier unique, sans installation : rendez-le exécutable et lancez-le. C’est le format qui se met à jour en place.",
-    file: "Lavande_0.5.6_amd64.AppImage.tar.gz",
-    href: "/updates/Lavande_0.5.6_amd64.AppImage.tar.gz",
+    file: "Lavande_0.5.7_amd64.AppImage.tar.gz",
+    href: "/updates/Lavande_0.5.7_amd64.AppImage.tar.gz",
     cta: "Télécharger l’AppImage",
     featured: true,
   },
@@ -33,8 +33,8 @@ const PLATFORMS: Platform[] = [
     os: "Fedora · RHEL",
     brand: "linux",
     copy: "Paquet système pour Fedora et dérivés RHEL. Installation et mises à jour via polkit ou sudo. Sur Fedora Atomic, Bazzite ou Silverblue (système immuable), prenez l’AppImage : c’est le seul format qui se met à jour en place.",
-    file: "Lavande-0.5.6-1.x86_64.rpm",
-    href: "/updates/Lavande-0.5.6-1.x86_64.rpm",
+    file: "Lavande-0.5.7-1.x86_64.rpm",
+    href: "/updates/Lavande-0.5.7-1.x86_64.rpm",
     cta: "Télécharger le RPM",
   },
   {
@@ -42,8 +42,8 @@ const PLATFORMS: Platform[] = [
     os: "Debian · Ubuntu",
     brand: "linux",
     copy: "Paquet système pour Debian, Ubuntu et dérivés. Installation et mises à jour via sudo.",
-    file: "Lavande_0.5.6_amd64.deb",
-    href: "/updates/Lavande_0.5.6_amd64.deb",
+    file: "Lavande_0.5.7_amd64.deb",
+    href: "/updates/Lavande_0.5.7_amd64.deb",
     cta: "Télécharger le DEB",
   },
   {
@@ -51,8 +51,8 @@ const PLATFORMS: Platform[] = [
     os: "x64",
     brand: "windows",
     copy: "Installeur NSIS pour Windows 10/11 (WebView2 préinstallé). Le moteur mail et l’agenda tournent en local, comme sur Linux.",
-    file: "Lavande_0.5.6_x64-setup.exe",
-    href: "/updates/Lavande_0.5.6_x64-setup.exe",
+    file: "Lavande_0.5.7_x64-setup.exe",
+    href: "/updates/Lavande_0.5.7_x64-setup.exe",
     cta: "Télécharger l’installeur",
   },
   {
@@ -83,7 +83,7 @@ export function Download() {
       />
       <div className={`relative ${container}`}>
         <SectionHead index="05" kicker="Téléchargement" title="Installez-la chez vous" titleId="download-title">
-          Version 0.5.6. Paquets signés pour Linux et Android, mises à jour automatiques sur le bureau.
+          Version 0.5.7. Paquets signés pour Linux et Android, mises à jour automatiques sur le bureau.
         </SectionHead>
 
         <Reveal className="mt-5 flex flex-wrap gap-x-5 gap-y-2">
