@@ -48,7 +48,7 @@ export const MAIL_PREVIEW_STYLES: { id: MailPreviewStyle; label: string; hint: s
   {
     id: "phrase",
     label: "Description rapide",
-    hint: "Phrase de synthèse générée par le modèle de décision ou le LLM.",
+    hint: "Phrase de synthèse générée par le LLM configuré dans les Réglages IA.",
   },
 ];
 
@@ -58,10 +58,8 @@ import { recordDecisionUsage, recordUsage } from "@/lib/ai-stats";
 import { refreshCopilotSession } from "@/lib/copilot";
 import {
   DEFAULT_DECISION,
-  asDescriptionSource,
   clampRecentMailCount,
   clampThresholds,
-  defaultDescriptionModel,
   setDecisionUsageSink,
   type CustomCategory,
   type DecisionAuthHeader,
@@ -449,11 +447,6 @@ export const asDecision = (value: unknown): DecisionConfig => {
     protocol,
     endpoint: typeof raw.endpoint === "string" ? raw.endpoint : DEFAULT_DECISION.endpoint,
     model: typeof raw.model === "string" ? raw.model : DEFAULT_DECISION.model,
-    descriptionModel:
-      typeof raw.descriptionModel === "string"
-        ? raw.descriptionModel.trim()
-        : defaultDescriptionModel(provider),
-    descriptionSource: asDescriptionSource(raw.descriptionSource),
     authHeader,
     apiKey: typeof raw.apiKey === "string" ? raw.apiKey : "",
     daemonHasKey: asBoolean(raw.daemonHasKey, false),

@@ -1,16 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_DECISION,
-  DECISION_PROVIDERS,
-  DESCRIPTION_MODEL_NEURALWATT,
   NEURALWATT_ENDPOINT,
   THRESHOLD_PRESETS,
   applyDecisionProvider,
-  asDescriptionSource,
   decisionCallDirect,
   decisionProbeDirect,
   decisionReady,
-  defaultDescriptionModel,
   detectThresholdPreset,
   isBlockedFromAutoLlm,
   isExcludedFromPriority,
@@ -90,40 +86,6 @@ describe("decision (Système 1)", () => {
     const jev = applyDecisionProvider(DEFAULT_DECISION, "jev");
     expect(jev.protocol).toBe("jev");
     expect(jev.model).toBe("jev-latest");
-  });
-
-  it("donne un modèle de description au seul fournisseur qui sait rédiger", () => {
-    expect(DESCRIPTION_MODEL_NEURALWATT).toBe("nw-flash");
-    expect(DEFAULT_DECISION.descriptionModel).toBe("nw-flash");
-    expect(defaultDescriptionModel("neuralwatt")).toBe("nw-flash");
-    expect(defaultDescriptionModel("baseten")).toBe("");
-    expect(defaultDescriptionModel("jev")).toBe("");
-    expect(defaultDescriptionModel("custom")).toBe("");
-
-    expect(applyDecisionProvider(DEFAULT_DECISION, "baseten").descriptionModel).toBe("");
-    expect(applyDecisionProvider(DEFAULT_DECISION, "jev").descriptionModel).toBe("");
-    expect(applyDecisionProvider(DEFAULT_DECISION, "neuralwatt").descriptionModel).toBe("nw-flash");
-
-    const custom = applyDecisionProvider(
-      { ...DEFAULT_DECISION, provider: "custom", descriptionModel: "mon-chat" },
-      "custom",
-    );
-    expect(custom.descriptionModel).toBe("mon-chat");
-  });
-
-  it("garde la source de description au changement de fournisseur", () => {
-    expect(DEFAULT_DECISION.descriptionSource).toBe("decision");
-    expect(DECISION_PROVIDERS.every((entry) => entry.descriptionSource === "decision")).toBe(true);
-
-    const llm = { ...DEFAULT_DECISION, descriptionSource: "llm" as const };
-    expect(applyDecisionProvider(llm, "baseten").descriptionSource).toBe("llm");
-    expect(applyDecisionProvider(llm, "custom").descriptionSource).toBe("llm");
-
-    expect(asDescriptionSource("llm")).toBe("llm");
-    expect(asDescriptionSource("decision")).toBe("decision");
-    expect(asDescriptionSource(undefined)).toBe("decision");
-    expect(asDescriptionSource("LLM")).toBe("decision");
-    expect(asDescriptionSource(42)).toBe("decision");
   });
 
   it("détecte le profil de seuils actif et bloque pub/spam/totp/bruit/injection du LLM auto", () => {

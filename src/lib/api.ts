@@ -442,10 +442,6 @@ export type ApiDecisionConfig = {
   protocol: "systemone" | "jev";
   endpoint: string;
   model: string;
-  /** Modèle de chat qui rédige la phrase de résumé ; vide = description désactivée. */
-  description_model?: string;
-  /** `decision` : le fournisseur écrit la phrase ; `llm` : le front la demande au LLM. */
-  description_source?: string;
   auth_header: "bearer" | "api_key" | "none";
   thresholds: ApiDecisionThresholds;
   custom_categories: ApiCustomCategory[];

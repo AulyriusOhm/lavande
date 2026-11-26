@@ -152,8 +152,8 @@ function mount() {
   return renderHook(() => useMailStore(), { wrapper });
 }
 
-const seedPrefs = (decision: Record<string, unknown>) =>
-  window.localStorage.setItem("lavande.prefs", JSON.stringify({ llm: LLM, decision }));
+const seedPrefs = (decision: Record<string, unknown>, mailPreviewStyle: "signaux" | "phrase" = "phrase") =>
+  window.localStorage.setItem("lavande.prefs", JSON.stringify({ llm: LLM, decision, mailPreviewStyle }));
 
 const describedKeys = (result: { current: ReturnType<typeof useMailStore> }) =>
   Object.values(result.current.decisions)
@@ -176,9 +176,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("description IA · source llm", () => {
+describe("description IA · LLM du front", () => {
   it("décrit les mails triés une seule fois et publie la phrase", async () => {
-    seedPrefs({ ...DECISION_CFG, descriptionSource: "llm" });
+    seedPrefs(DECISION_CFG);
     const imported = mockBackend();
     const { result, rerender } = mount();
 
@@ -209,7 +209,7 @@ describe("description IA · source llm", () => {
   });
 
   it("ne rappelle pas le modèle après un échec, même sans description", async () => {
-    seedPrefs({ ...DECISION_CFG, descriptionSource: "llm" });
+    seedPrefs(DECISION_CFG);
     mockBackend();
     vi.mocked(llmChat).mockRejectedValue(new Error("réseau"));
     const { result, rerender } = mount();
@@ -224,8 +224,8 @@ describe("description IA · source llm", () => {
     expect(vi.mocked(llmChat).mock.calls.length).toBe(2);
   });
 
-  it("n'appelle pas le LLM quand la source reste le modèle de décision", async () => {
-    seedPrefs(DECISION_CFG);
+  it("n'appelle pas le LLM quand le style reste Signaux", async () => {
+    seedPrefs(DECISION_CFG, "signaux");
     mockBackend();
     const { result } = mount();
 
@@ -241,7 +241,8 @@ describe("description IA · source llm", () => {
       "lavande.prefs",
       JSON.stringify({
         llm: { endpoint: "", apiKey: "", model: "" },
-        decision: { ...DECISION_CFG, descriptionSource: "llm" },
+        decision: DECISION_CFG,
+        mailPreviewStyle: "phrase",
       }),
     );
     mockBackend();

@@ -13,8 +13,6 @@ import { endpointHost } from "@/lib/ai-stats";
 export type DecisionProvider = "neuralwatt" | "baseten" | "jev" | "custom";
 export type DecisionProtocol = "systemone" | "jev";
 export type DecisionAuthHeader = "bearer" | "api_key" | "none";
-/** Qui rédige la phrase de description : le modèle de chat du fournisseur ou le LLM du front. */
-export type DescriptionSource = "decision" | "llm";
 export type NotifFilterMode = "all" | "smart" | "urgent_only";
 export type ThresholdPresetId = "prudent" | "balanced" | "strict";
 
@@ -45,10 +43,6 @@ export type DecisionConfig = {
   protocol: DecisionProtocol;
   endpoint: string;
   model: string;
-  /** Modèle de chat qui rédige la phrase de résumé ; vide = description désactivée. */
-  descriptionModel: string;
-  /** `decision` : le fournisseur écrit la phrase ; `llm` : le front la demande au LLM. */
-  descriptionSource: DescriptionSource;
   authHeader: DecisionAuthHeader;
   /** Clé locale hors démon (web/tests) ; en mode démon, la clé vit dans le trousseau Rust. */
   apiKey: string;
@@ -147,9 +141,6 @@ export const NEURALWATT_ENDPOINT = "https://api.neuralwatt.com/v1/systemone";
 export const BASETEN_ENDPOINT = "https://inference.baseten.co/v1/systemone";
 export const JEV_ENDPOINT = "https://api.typesafe.ai/v1/decide";
 
-/** Modèle de chat du fournisseur par défaut, seul à savoir rédiger la phrase de résumé. */
-export const DESCRIPTION_MODEL_NEURALWATT = "nw-flash";
-
 export const THRESHOLD_PRESETS: Record<
   ThresholdPresetId,
   { label: string; hint: string; values: DecisionThresholds }
@@ -182,8 +173,6 @@ export const DECISION_PROVIDERS: {
   protocol: DecisionProtocol;
   authHeader: DecisionAuthHeader;
   models: string[];
-  descriptionModel: string;
-  descriptionSource: DescriptionSource;
 }[] = [
   {
     id: "neuralwatt",
@@ -192,8 +181,6 @@ export const DECISION_PROVIDERS: {
     protocol: "systemone",
     authHeader: "bearer",
     models: ["mammoth-1", "elephant-1"],
-    descriptionModel: DESCRIPTION_MODEL_NEURALWATT,
-    descriptionSource: "decision",
   },
   {
     id: "baseten",
@@ -205,8 +192,6 @@ export const DECISION_PROVIDERS: {
       "decision-models/baseten-mammoth-27b-latest",
       "decision-models/baseten-elephant-9b-latest",
     ],
-    descriptionModel: "",
-    descriptionSource: "decision",
   },
   {
     id: "jev",
@@ -215,8 +200,6 @@ export const DECISION_PROVIDERS: {
     protocol: "jev",
     authHeader: "bearer",
     models: ["jev-latest", "jev-1.14.0"],
-    descriptionModel: "",
-    descriptionSource: "decision",
   },
   {
     id: "custom",
@@ -225,19 +208,8 @@ export const DECISION_PROVIDERS: {
     protocol: "systemone",
     authHeader: "bearer",
     models: ["baselabs/mammoth-1", "baselabs/elephant-1"],
-    descriptionModel: "",
-    descriptionSource: "decision",
   },
 ];
-
-/** Fournisseur sans modèle de chat connu : description vide, donc désactivée. */
-export function defaultDescriptionModel(provider: DecisionProvider): string {
-  return decisionProviderPreset(provider).descriptionModel;
-}
-
-/** Source de description : tout ce qui n'est pas explicitement `llm` reste `decision`. */
-export const asDescriptionSource = (value: unknown): DescriptionSource =>
-  value === "llm" ? "llm" : "decision";
 
 export const DEFAULT_DECISION: DecisionConfig = {
   enabled: false,
@@ -245,8 +217,6 @@ export const DEFAULT_DECISION: DecisionConfig = {
   protocol: "systemone",
   endpoint: NEURALWATT_ENDPOINT,
   model: "mammoth-1",
-  descriptionModel: DESCRIPTION_MODEL_NEURALWATT,
-  descriptionSource: "decision",
   authHeader: "bearer",
   apiKey: "",
   daemonHasKey: false,
@@ -289,7 +259,6 @@ export function applyDecisionProvider(
     authHeader: preset.authHeader,
     endpoint: keepCustom ? current.endpoint : preset.endpoint,
     model: keepCustom ? current.model : preset.models[0] ?? current.model,
-    descriptionModel: keepCustom ? current.descriptionModel : preset.descriptionModel,
   };
 }
 

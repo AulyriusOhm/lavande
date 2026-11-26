@@ -117,7 +117,6 @@ import {
   type DecisionConfig,
   type DecisionProtocol,
   type DecisionProvider,
-  type DescriptionSource,
   type NotifFilterMode,
   type ThresholdPresetId,
 } from "@/lib/decision";
@@ -241,23 +240,6 @@ const PREVIEW_EXAMPLES: readonly {
 }[] = [
   { id: "signaux", tag: "Signaux", text: "Réponse attendue · Tâche détectée" },
   { id: "phrase", tag: "Description rapide", text: "Avenant signé : confirmer le lancement de la phase 2 lundi." },
-];
-
-const DESCRIPTION_SOURCES: readonly {
-  id: DescriptionSource;
-  label: string;
-  hint: string;
-}[] = [
-  {
-    id: "decision",
-    label: "Modèle de décision",
-    hint: "La phrase est rédigée par le modèle de chat du provider de décision.",
-  },
-  {
-    id: "llm",
-    label: "LLM",
-    hint: "La phrase est rédigée par le LLM conversationnel (Copilot, OpenAI ou custom) configuré dans les Réglages IA.",
-  },
 ];
 
 const anchor = (id: SectionId) => `reglages-${id}`;
@@ -2871,58 +2853,6 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
                     onUpdate={updateDecision}
                   />
                   <ImagesAllowedSection readOnly={readOnly} />
-                </Surface>
-
-                <Surface className="mt-3 p-4">
-                  <SectionLabel>Description des mails</SectionLabel>
-                  <p className="mt-1.5 text-[12.5px] leading-snug font-medium text-ink-muted">
-                    Source de la description
-                  </p>
-                  <div className="mt-2 grid grid-cols-2 gap-1.5">
-                    {DESCRIPTION_SOURCES.map((option) => {
-                      const selected = decision.descriptionSource === option.id;
-                      return (
-                        <button
-                          key={option.id}
-                          type="button"
-                          aria-pressed={selected}
-                          onClick={() => updateDecision({ descriptionSource: option.id })}
-                          className={cn(
-                            "focus-ring flex h-10 items-center justify-center rounded-[14px] text-[12px] font-bold transition-colors duration-200",
-                            selected
-                              ? "bg-accent-soft text-accent-ink ring-1 ring-accent-ring/60"
-                              : "border border-line bg-surface text-ink-soft hover:text-ink",
-                          )}
-                        >
-                          {option.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <p className="mt-1.5 text-[12.5px] leading-snug font-medium text-ink-muted">
-                    {DESCRIPTION_SOURCES.find((option) => option.id === decision.descriptionSource)?.hint}
-                  </p>
-
-                  {decision.descriptionSource === "decision" ? (
-                    <>
-                      <p className="mt-3 text-[12.5px] font-bold text-ink">Modèle de description</p>
-                      <input
-                        aria-label="Modèle de description"
-                        placeholder="nw-flash"
-                        value={decision.descriptionModel}
-                        onChange={(event) => updateDecision({ descriptionModel: event.target.value })}
-                        className="focus-ring mt-1.5 w-full rounded-[12px] border border-line bg-surface px-3 py-2 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
-                      />
-                      <p className="mt-1.5 text-[12.5px] leading-snug font-medium text-ink-muted">
-                        Modèle de chat qui rédige la phrase. Vide = signaux uniquement. nw-flash pour
-                        NeuralWatt.
-                      </p>
-                    </>
-                  ) : (
-                    <p className="mt-3 text-[12.5px] leading-snug font-medium text-ink-muted">
-                      Aucun modèle supplémentaire : la phrase utilise le LLM configuré ci-dessus.
-                    </p>
-                  )}
                 </Surface>
 
                 <Surface className="mt-3 p-4">

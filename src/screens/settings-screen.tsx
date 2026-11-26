@@ -1795,67 +1795,6 @@ export function SettingsScreen({
             </Card>
           </BlurFade>
 
-          <BlurFade delay={0.07}>
-            <Card className="mx-5 mt-3 p-3.5">
-              <p className="text-[12.5px] font-bold text-ink">Description des mails</p>
-              <p className="text-[10.5px] font-medium text-ink-muted">Source de la phrase de résumé</p>
-              <div className="mt-2.5 flex gap-1.5">
-                {(
-                  [
-                    { id: "decision" as const, label: "Modèle de décision" },
-                    { id: "llm" as const, label: "LLM" },
-                  ]
-                ).map((option) => {
-                  const selected = decision.descriptionSource === option.id;
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      aria-pressed={selected}
-                      onClick={() => updateDecision({ descriptionSource: option.id })}
-                      className={cn(
-                        "focus-ring min-h-11 flex-1 rounded-xl px-1 text-[11.5px] font-bold transition-colors",
-                        selected
-                          ? "bg-accent text-accent-contrast"
-                          : "border border-line bg-surface text-ink-soft hover:border-accent-ring",
-                      )}
-                    >
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="mt-2 text-[12px] leading-relaxed font-medium text-ink-muted">
-                {decision.descriptionSource === "llm"
-                  ? "Phrase rédigée par le LLM conversationnel configuré dans les Réglages IA."
-                  : "Phrase rédigée par le modèle de chat du provider de décision."}
-              </p>
-              {decision.descriptionSource === "decision" ? (
-                <label className="block">
-                  <span className="mt-3 block text-[12.5px] font-bold text-ink">Modèle de description</span>
-                  <input
-                    aria-label="Modèle de description"
-                    type="text"
-                    autoComplete="off"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                    placeholder="nw-flash"
-                    value={decision.descriptionModel}
-                    onChange={(event) => updateDecision({ descriptionModel: event.target.value })}
-                    className="focus-ring mt-1.5 w-full rounded-xl border border-line bg-surface px-3 py-2 text-[13px] font-medium text-ink placeholder:font-medium placeholder:text-ink-muted"
-                  />
-                  <span className="mt-2 block text-[12px] leading-relaxed font-medium text-ink-muted">
-                    Vide = signaux uniquement. nw-flash pour NeuralWatt.
-                  </span>
-                </label>
-              ) : (
-                <p className="mt-3 text-[12px] leading-relaxed font-medium text-ink-muted">
-                  Aucun modèle supplémentaire : la phrase utilise le LLM configuré ci-dessus.
-                </p>
-              )}
-            </Card>
-          </BlurFade>
-
           <SectionTitle hint={llmReady(llm) ? "modèle configuré" : "local"}>
             Intelligence artificielle
           </SectionTitle>

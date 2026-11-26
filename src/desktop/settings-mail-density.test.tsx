@@ -134,7 +134,7 @@ describe("Réglages PC · aperçu de la liste", () => {
     await waitFor(() => expect(stored().mailPreviewStyle).toBe("phrase"));
     expect(phrase.getAttribute("aria-pressed")).toBe("true");
     expect(
-      screen.getByText("Phrase de synthèse générée par le modèle de décision ou le LLM."),
+      screen.getByText("Phrase de synthèse générée par le LLM configuré dans les Réglages IA."),
     ).toBeTruthy();
 
     const phraseRow = screen.getByRole("button", {

@@ -3624,10 +3624,10 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     triageMails,
   ]);
 
-  // Source `llm` : la phrase de description vient du LLM du front, une fois par mail.
+  // Description rapide : la phrase vient du LLM du front, une fois par mail.
   useEffect(() => {
     if (mode !== "api" || demoReadOnly || isComposeWindow()) return;
-    if (prefs.decision.descriptionSource !== "llm" || !llmReady(prefs.llm)) return;
+    if (prefs.mailPreviewStyle !== "phrase" || !llmReady(prefs.llm)) return;
     const batch: { key: string; mail: Mail; decision: MailDecision }[] = [];
     for (const mail of receptionMails) {
       if (batch.length >= LLM_DESCRIPTION_BATCH) break;
@@ -3663,7 +3663,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     decisionIndex,
     mergeDecisions,
     mode,
-    prefs.decision.descriptionSource,
+    prefs.mailPreviewStyle,
     prefs.llm,
     publishDecisionSync,
     receptionMails,

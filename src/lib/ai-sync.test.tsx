@@ -254,7 +254,7 @@ describe("useAiSync", () => {
     expect(screen.getByTestId("devices").textContent).toBe("2");
   });
 
-  it("porte la description du modèle de décision dans le doc decision:settings", async () => {
+  it("n'emporte plus les réglages de description hérités dans decision:settings", async () => {
     window.localStorage.setItem(
       "lavande.prefs",
       JSON.stringify({
@@ -269,8 +269,8 @@ describe("useAiSync", () => {
     const decisionKey = docKey("ai", "decision:settings");
     await waitFor(() => expect(storage.read().docs[decisionKey]).toBeDefined());
     const raw = storage.read().docs[decisionKey]?.raw ?? {};
-    expect(raw.descriptionModel).toBe("my-chat-model");
-    expect(raw.descriptionSource).toBe("llm");
+    expect(raw).not.toHaveProperty("descriptionModel");
+    expect(raw).not.toHaveProperty("descriptionSource");
     expect(JSON.stringify(raw)).not.toContain(LLM.apiKey);
   });
 

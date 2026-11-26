@@ -932,8 +932,6 @@ export function toApiDecisionConfig(
     protocol: config.protocol,
     endpoint: config.endpoint,
     model: config.model,
-    description_model: config.descriptionModel.trim(),
-    description_source: config.descriptionSource,
     auth_header: config.authHeader,
     thresholds: {
       llm_escalate: config.thresholds.llmEscalate,

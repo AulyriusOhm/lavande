@@ -862,31 +862,20 @@ describe("triage · configuration de décision envoyée au démon", () => {
     ...overrides,
   });
 
-  it("envoie description_model tel quel, espaces retirés", () => {
-    expect(toApiDecisionConfig(config()).description_model).toBe("nw-flash");
-    expect(
-      toApiDecisionConfig(config({ descriptionModel: "  my-chat-model  " })).description_model,
-    ).toBe("my-chat-model");
-    expect(toApiDecisionConfig(config({ descriptionModel: "" })).description_model).toBe("");
-  });
-
-  it("envoie la source de description", () => {
-    expect(toApiDecisionConfig(config()).description_source).toBe("decision");
-    expect(
-      toApiDecisionConfig(config({ descriptionSource: "llm", descriptionModel: "" }))
-        .description_source,
-    ).toBe("llm");
+  it("n'envoie plus de réglages de description au démon", () => {
+    const api = toApiDecisionConfig(config());
+    expect(api).not.toHaveProperty("description_model");
+    expect(api).not.toHaveProperty("description_source");
   });
 
   it("garde les autres champs du contrat intacts", () => {
     const api = toApiDecisionConfig(
-      config({ provider: "baseten", descriptionModel: "my-chat-model", recentMailCount: 120 }),
+      config({ provider: "baseten", recentMailCount: 120 }),
     );
 
     expect(api.provider).toBe("baseten");
     expect(api.endpoint).toBe(DEFAULT_DECISION.endpoint);
     expect(api.recent_mail_count).toBe(120);
-    expect(api.description_model).toBe("my-chat-model");
     expect(api).not.toHaveProperty("api_key");
     expect(toApiDecisionConfig(config(), { apiKey: "nw-key" }).api_key).toBe("nw-key");
   });

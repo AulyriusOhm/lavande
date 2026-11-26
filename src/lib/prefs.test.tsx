@@ -785,7 +785,7 @@ describe("préférences · style de description", () => {
     expect(MAIL_PREVIEW_STYLES.map((entry) => entry.id)).toEqual(["signaux", "phrase"]);
     expect(MAIL_PREVIEW_STYLES[1].label).toBe("Description rapide");
     expect(MAIL_PREVIEW_STYLES[1].hint).toBe(
-      "Phrase de synthèse générée par le modèle de décision ou le LLM.",
+      "Phrase de synthèse générée par le LLM configuré dans les Réglages IA.",
     );
     expect(MAIL_PREVIEW_STYLES[0].label).toBe("Signaux");
   });
@@ -1027,46 +1027,10 @@ describe("préférences · modèle de décision", () => {
     expect(asDecision({ spamEnabled: true }).spamEnabled).toBe(true);
   });
 
-  it("hydrate le modèle de description, avec nw-flash par défaut", () => {
-    expect(asDecision({}).descriptionModel).toBe("nw-flash");
-    expect(asDecision({ descriptionModel: 42 }).descriptionModel).toBe("nw-flash");
-    expect(asDecision({ descriptionModel: "  nw-flash  " }).descriptionModel).toBe("nw-flash");
-    expect(asDecision({ descriptionModel: "my-chat-model" }).descriptionModel).toBe("my-chat-model");
-    expect(asDecision({ descriptionModel: "" }).descriptionModel).toBe("");
-  });
-
-  it("suit le fournisseur pour le défaut du modèle de description", () => {
-    expect(asDecision({ provider: "baseten" }).descriptionModel).toBe("");
-    expect(asDecision({ provider: "jev" }).descriptionModel).toBe("");
-    expect(asDecision({ provider: "custom" }).descriptionModel).toBe("");
-    expect(asDecision({ provider: "neuralwatt" }).descriptionModel).toBe("nw-flash");
-    expect(asDecision({ provider: "baseten", descriptionModel: "my-chat" }).descriptionModel).toBe(
-      "my-chat",
-    );
-  });
-
-  it("hydrate la source de description, decision par défaut", () => {
-    expect(asDecision({}).descriptionSource).toBe("decision");
-    expect(asDecision({ descriptionSource: "llm" }).descriptionSource).toBe("llm");
-    expect(asDecision({ descriptionSource: "LLM" }).descriptionSource).toBe("decision");
-    expect(asDecision({ descriptionSource: 1 }).descriptionSource).toBe("decision");
-  });
-
-  it("persiste le modèle de description choisi et le relit", () => {
-    const { result } = mount();
-
-    act(() => result.current.setDecision({ descriptionModel: "my-chat-model" }));
-
-    expect(result.current.decision.descriptionModel).toBe("my-chat-model");
-    expect(
-      (stored().decision as Record<string, unknown> | undefined)?.descriptionModel,
-    ).toBe("my-chat-model");
-
-    act(() => result.current.setDecision({ descriptionModel: "" }));
-
-    expect(
-      (stored().decision as Record<string, unknown> | undefined)?.descriptionModel,
-    ).toBe("");
+  it("ignore les réglages de description hérités (modèle et source)", () => {
+    const parsed = asDecision({ descriptionModel: "nw-flash", descriptionSource: "llm" });
+    expect("descriptionModel" in parsed).toBe(false);
+    expect("descriptionSource" in parsed).toBe(false);
   });
 
   it("borne le nombre de mails récents analysés entre 10 et 200", () => {
