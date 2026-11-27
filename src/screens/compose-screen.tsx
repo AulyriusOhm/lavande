@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { ComposeDraft, DraftAttachment } from "@/lib/draft";
 import { MAX_ATTACHMENT_BYTES, attachmentsSize, formatBytes, readAttachment } from "@/lib/draft";
@@ -36,6 +36,7 @@ import { teamContextOf, teamPromptBlock } from "@/lib/team";
 import { llmReady } from "@/lib/llm";
 import { ReplySuggestSheet, RewriteSheet } from "@/screens/assist-sheet";
 import { IconButton } from "@/components/ui/primitives";
+import { isNativeShell } from "@/lib/native";
 import { useEscapeLayer } from "@/desktop/escape";
 import { useBackLayer } from "@/lib/back";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
@@ -121,6 +122,13 @@ export function ComposeScreen({
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
+  const [editorReady, setEditorReady] = useState(() => !isNativeShell());
+
+  useEffect(() => {
+    if (editorReady) return;
+    const id = window.setTimeout(() => setEditorReady(true), 260);
+    return () => window.clearTimeout(id);
+  }, [editorReady]);
 
   const suggestions = useMemo(
     () => replySuggestions({ subject: draft.subject, to: draft.to, body: htmlToText(draft.body) }),
@@ -596,13 +604,25 @@ export function ComposeScreen({
         <label htmlFor="compose-body" className="sr-only">
           Message
         </label>
-        <RichEditor
-          value={ensureHtml(draft.body)}
-          onChange={(html) => update({ body: html })}
-          placeholder="Écris ton message… (Markdown supporté : **gras**, # titre, - liste)"
-          minHeight="11rem"
-          className="mt-3 flex-1"
-        />
+        {editorReady ? (
+          <RichEditor
+            value={ensureHtml(draft.body)}
+            onChange={(html) => update({ body: html })}
+            placeholder="Écris ton message… (Markdown supporté : **gras**, # titre, - liste)"
+            minHeight="11rem"
+            className="mt-3 flex-1"
+          />
+        ) : (
+          <div
+            aria-hidden
+            className="mt-3 flex-1 text-[13.5px] leading-[1.7] font-medium text-ink-soft"
+            style={{ minHeight: "11rem" }}
+          >
+            {isHtmlEmpty(draft.body)
+              ? "Écris ton message… (Markdown supporté : **gras**, # titre, - liste)"
+              : htmlToText(draft.body)}
+          </div>
+        )}
 
         {accountSignature && draft.includeSignature !== false ? (
           <div className="mt-2 border-t border-line/60 pt-2.5" data-testid="signature-preview">

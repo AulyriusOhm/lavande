@@ -1,4 +1,5 @@
 import { motion, useReducedMotion } from "motion/react";
+import { isNativeShell } from "@/lib/native";
 import { cn } from "@/lib/utils";
 
 type BlurFadeProps = {
@@ -21,11 +22,17 @@ export function BlurFade({
 
   if (reduce) return <div className={cn(className)}>{children}</div>;
 
+  const native = isNativeShell();
+
   return (
     <motion.div
-      initial={{ opacity: 0, y: yOffset, filter: "blur(8px)" }}
-      animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-      transition={{ delay, duration, ease: [0.22, 1, 0.36, 1] }}
+      initial={native ? { opacity: 0, y: yOffset } : { opacity: 0, y: yOffset, filter: "blur(8px)" }}
+      animate={
+        native
+          ? { opacity: 1, y: 0 }
+          : { opacity: 1, y: 0, filter: "blur(0px)", transitionEnd: { filter: "none" } }
+      }
+      transition={{ delay, duration: native ? Math.min(duration, 0.28) : duration, ease: [0.22, 1, 0.36, 1] }}
       className={cn(className)}
     >
       {children}

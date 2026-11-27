@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { animate, motion, useMotionValue, useSpring, useTransform } from "motion/react";
 import { Archive, Check, ChevronDown, ChevronUp, Copy, CornerUpLeft, ExternalLink, FolderInput, Inbox, KeyRound, Layers, Loader2, PenLine, Plus, RotateCcw, Rows3, Search, RefreshCw, Send, ShieldAlert, ShieldCheck, Sparkles, Trash2, type LucideIcon } from "lucide-react";
 import type { FolderId, Mail } from "@/lib/mail";
 import { folderLabel } from "@/lib/mail";
@@ -308,19 +307,6 @@ export function InboxScreen({
   const heroRef = useRef<HTMLDivElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
 
-  const raw = useMotionValue(0);
-  const progress = useSpring(raw, { stiffness: 200, damping: 28, mass: 0.9 });
-
-  const heroHeight = useTransform(progress, [0, 0.7], [sizes.hero, 0]);
-  const heroOpacity = useTransform(progress, [0, 0.45], [1, 0]);
-  const heroScale = useTransform(progress, [0, 1], [1, 0.96]);
-  const cardBody = useTransform(progress, [0, 0.45], [1, 0]);
-  const barOpacity = useTransform(progress, [0.55, 0.95], [0, 1]);
-  const barY = useTransform(progress, [0.55, 0.95], [-14, 0]);
-  const barSpace = useTransform(progress, [0.5, 1], [0, sizes.bar + 14]);
-  const cardCompact = useTransform(progress, [0.35, 0.85], [0, 1]);
-  const cardExpand = useTransform(progress, [0, 0.35], [1, 0]);
-
   useLayoutEffect(() => {
     const measure = () =>
       setSizes({
@@ -334,26 +320,23 @@ export function InboxScreen({
 
   const collapse = useCallback(() => {
     setCompact(true);
-    animate(raw, 1, { duration: 0.9, ease: [0.22, 1, 0.36, 1] });
-  }, [raw]);
+  }, []);
 
   useEffect(() => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      raw.set(1);
       setCompact(true);
       return;
     }
 
     const timer = window.setTimeout(collapse, INTRO_HOLD_MS);
     return () => window.clearTimeout(timer);
-  }, [collapse, raw]);
+  }, [collapse]);
 
-  const expand = () => {
+  const expand = useCallback(() => {
     setCompact(false);
-    animate(raw, 0, { duration: 0.7, ease: [0.22, 1, 0.36, 1] });
-  };
+  }, []);
 
-  const threads = threadsInFolder(mails, folder, account);
+  const threads = useMemo(() => threadsInFolder(mails, folder, account), [mails, folder, account]);
   const heading =
     folderOptions.find(
       (entry) => entry.id === folder && (entry.id !== "other" || entry.path === folderPath),
@@ -678,8 +661,19 @@ export function InboxScreen({
       <div ref={scrollRef} className="h-full overflow-y-auto no-scrollbar pb-32">
         <MeshGlow className="h-56" />
 
-        <motion.div style={{ height: heroHeight, opacity: heroOpacity }} className="overflow-hidden">
-          <motion.div ref={heroRef} style={{ scale: heroScale }} className="origin-top px-4 pt-4 min-[380px]:px-5">
+        <div
+          className="overflow-hidden transition-[height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+          style={{
+            height: sizes.hero > 0 ? (compact ? sizes.bar + 14 : sizes.hero) : undefined,
+          }}
+        >
+          <div
+            ref={heroRef}
+            className={cn(
+              "origin-top px-4 pt-4 min-[380px]:px-5 transition-[opacity,transform] duration-250 ease-[cubic-bezier(0.22,1,0.36,1)]",
+              compact ? "pointer-events-none scale-[0.96] opacity-0" : "scale-100 opacity-100",
+            )}
+          >
             <div className="flex items-start justify-between gap-1.5">
               <div className="flex min-w-0 items-center gap-2 min-[380px]:gap-2.5">
                 <IconButton
@@ -768,54 +762,54 @@ export function InboxScreen({
               </span>
               <ChevronDown className="size-3.5 text-ink-muted" />
             </button>
-          </motion.div>
-        </motion.div>
-
-        <motion.div style={{ height: barSpace }} />
+          </div>
+        </div>
 
         {reception && (
           <>
-            <motion.div
-              initial={false}
-              animate={{ height: compact ? 50 : "auto" }}
-              transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
-              className="relative mx-5 overflow-hidden rounded-[26px] bg-accent-soft ring-1 ring-accent-ring/40"
-            >
-              <BorderBeam duration={9} />
+            <div className="relative mx-5 min-h-[50px] overflow-hidden rounded-[26px] bg-accent-soft ring-1 ring-accent-ring/40">
+              {active && !compact ? <BorderBeam duration={9} /> : null}
 
-              <motion.button
+              <button
                 type="button"
                 onClick={collapse}
                 aria-label="Réduire le résumé"
-                style={{ opacity: cardExpand }}
                 className={cn(
-                  "absolute top-2.5 right-2.5 z-10 grid size-7 place-items-center rounded-full bg-surface/80 text-accent-ink before:absolute before:-inset-2 before:rounded-full before:content-['']",
-                  compact && "pointer-events-none",
+                  "absolute top-2.5 right-2.5 z-10 grid size-7 place-items-center rounded-full bg-surface/80 text-accent-ink transition-opacity duration-200 before:absolute before:-inset-2 before:rounded-full before:content-['']",
+                  compact ? "pointer-events-none opacity-0" : "opacity-100",
                 )}
               >
                 <ChevronUp className="size-3.5" />
-              </motion.button>
+              </button>
 
               {summary ? (
-                <motion.button
+                <button
                   type="button"
                   onClick={() => void refreshSummary(true)}
                   disabled={summaryLoading}
                   aria-label="Régénérer le résumé"
-                  style={{ opacity: cardExpand }}
                   className={cn(
-                    "absolute top-2.5 right-11 z-10 grid size-7 place-items-center rounded-full bg-surface/80 text-accent-ink before:absolute before:-inset-2 before:rounded-full before:content-['']",
-                    compact && "pointer-events-none",
+                    "absolute top-2.5 right-11 z-10 grid size-7 place-items-center rounded-full bg-surface/80 text-accent-ink transition-opacity duration-200 before:absolute before:-inset-2 before:rounded-full before:content-['']",
+                    compact ? "pointer-events-none opacity-0" : "opacity-100",
                   )}
                 >
                   <RefreshCw className={cn("size-3.5", summaryLoading && "animate-spin")} />
-                </motion.button>
+                </button>
               ) : null}
 
-              <motion.div
-                style={{ opacity: cardBody }}
-                className={cn("p-3.5", compact && "pointer-events-none")}
+              <div
+                className={cn(
+                  "grid transition-[grid-template-rows] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                  compact ? "grid-rows-[0fr]" : "grid-rows-[1fr]",
+                )}
               >
+                <div className="min-h-0 overflow-hidden">
+                  <div
+                    className={cn(
+                      "p-3.5 transition-opacity duration-200",
+                      compact ? "pointer-events-none opacity-0" : "opacity-100",
+                    )}
+                  >
                 <div className="flex items-center gap-2 pr-16">
                   <span className="grid size-6 place-items-center rounded-full bg-accent/15">
                     <Sparkles
@@ -1340,18 +1334,19 @@ export function InboxScreen({
                     <span>{summaryLoading ? "Mise à jour…" : `Généré à ${clockOf(summary.generatedAt)}`}</span>
                   </div>
                 ) : null}
-              </motion.div>
+                  </div>
+                </div>
+              </div>
 
-              <motion.button
+              <button
                 type="button"
                 onClick={expand}
                 aria-hidden={!compact}
                 tabIndex={compact ? 0 : -1}
                 aria-label={`Réafficher le ${(summary?.period.label ?? summaryLabel).toLowerCase()}`}
-                style={{ opacity: cardCompact }}
                 className={cn(
-                  "absolute inset-0 flex w-full items-center gap-2 px-4 text-left",
-                  !compact && "pointer-events-none",
+                  "absolute inset-0 flex h-[50px] w-full items-center gap-2 px-4 text-left transition-opacity duration-200",
+                  compact ? "opacity-100" : "pointer-events-none opacity-0",
                 )}
               >
                 <Sparkles className="size-3.5 shrink-0 text-accent-ink" strokeWidth={2.4} />
@@ -1362,8 +1357,8 @@ export function InboxScreen({
                   {summary ? `${summary.mailCount} mail${summary.mailCount > 1 ? "s" : ""}` : `${unreadCount} non lus`}
                 </span>
                 <ChevronDown className="ml-auto size-3.5 shrink-0 text-accent-ink/70" />
-              </motion.button>
-            </motion.div>
+              </button>
+            </div>
           </>
         )}
 
@@ -1511,7 +1506,7 @@ export function InboxScreen({
           </div>
         ) : null}
 
-        <div ref={rowsRef} className="mt-3 space-y-1 px-1">
+        <div ref={rowsRef} className="mt-3 space-y-1 px-1 [contain:layout_style]">
           {visible.map((thread, index) => (
             <div
               key={thread.id}
@@ -1599,10 +1594,12 @@ export function InboxScreen({
         </div>
       </div>
 
-      <motion.div
+      <div
         ref={barRef}
-        style={{ opacity: barOpacity, y: barY }}
-        className={cn("absolute inset-x-0 top-0 z-30", compact ? "" : "pointer-events-none")}
+        className={cn(
+          "absolute inset-x-0 top-0 z-30 will-change-transform transition-[opacity,transform] duration-250 ease-[cubic-bezier(0.22,1,0.36,1)]",
+          compact ? "translate-y-0 opacity-100" : "pointer-events-none -translate-y-3.5 opacity-0",
+        )}
       >
         <div className="glass flex items-center gap-1.5 border-b border-line/70 px-3 pt-2.5 pb-2 min-[380px]:gap-2 min-[380px]:px-4">
           <IconButton
@@ -1654,7 +1651,7 @@ export function InboxScreen({
             </IconButton>
           </div>
         </div>
-      </motion.div>
+      </div>
 
       <CategoryManagerSheet
         open={categoriesOpen}

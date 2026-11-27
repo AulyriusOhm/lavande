@@ -1,3 +1,4 @@
+import { isNativeShell } from "@/lib/native";
 import { cn } from "@/lib/utils";
 
 export function AnimatedGradientText({
@@ -9,6 +10,7 @@ export function AnimatedGradientText({
   className?: string;
   duration?: number;
 }) {
+  const native = isNativeShell();
   return (
     <span
       className={cn(
@@ -16,7 +18,11 @@ export function AnimatedGradientText({
         "bg-[linear-gradient(110deg,var(--accent),45%,color-mix(in_oklab,var(--accent)_40%,white),55%,var(--accent))] bg-[length:200%_auto]",
         className,
       )}
-      style={{ animation: `gradient-pan ${duration}s ease-in-out infinite` }}
+      style={
+        native
+          ? { backgroundPosition: "35% 50%" }
+          : { animation: `gradient-pan ${duration}s ease-in-out infinite` }
+      }
     >
       {children}
     </span>

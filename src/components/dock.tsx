@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { CalendarDays, CalendarPlus, Inbox, ListChecks, PenLine, Plus, Settings2 } from "lucide-react";
 import { haptic } from "@/lib/haptics";
@@ -14,7 +15,7 @@ export const TABS = [
 
 export type TabId = (typeof TABS)[number]["id"];
 
-export function Dock({
+export const Dock = memo(function Dock({
   active,
   onChange,
   onCompose,
@@ -69,7 +70,7 @@ export function Dock({
     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-4 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+1.35rem)] sm:pb-7">
       <div
         className={cn(
-          "pointer-events-auto flex items-center gap-0.5 rounded-full border border-line p-1.5",
+          "pointer-events-auto flex items-center gap-0.5 rounded-full border border-line p-1.5 will-change-transform",
           "glass shadow-[0_20px_45px_-20px_var(--accent)]",
         )}
       >
@@ -84,26 +85,16 @@ export function Dock({
               aria-label={tab.label}
               aria-current={isActive}
               className={cn(
-                "focus-ring relative flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-full px-3 transition-colors duration-300",
-                isActive ? "text-accent-ink" : "text-ink-muted hover:text-ink-soft",
+                "focus-ring relative flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-full px-3 transition-colors duration-200",
+                isActive ? "bg-accent-soft text-accent-ink" : "text-ink-muted hover:text-ink-soft",
               )}
             >
-              {isActive && (
-                <motion.span
-                  layoutId="dock-pill"
-                  transition={{ type: "spring", stiffness: 420, damping: 34 }}
-                  className="absolute inset-0 rounded-full bg-accent-soft"
-                />
-              )}
               <Icon className="relative z-10 size-[19px]" strokeWidth={isActive ? 2.4 : 1.9} />
-              <span
-                className={cn(
-                  "relative z-10 overflow-hidden text-[12.5px] font-semibold whitespace-nowrap transition-all duration-300",
-                  isActive ? "max-w-24 opacity-100" : "max-w-0 opacity-0",
-                )}
-              >
-                {tab.label}
-              </span>
+              {isActive ? (
+                <span className="relative z-10 text-[12.5px] font-semibold whitespace-nowrap">
+                  {tab.label}
+                </span>
+              ) : null}
             </button>
           );
         })}
@@ -129,4 +120,4 @@ export function Dock({
       </div>
     </div>
   );
-}
+});

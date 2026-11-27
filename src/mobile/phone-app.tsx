@@ -64,6 +64,7 @@ const PlanningScreen = memo(PlanningView);
 const SettingsScreen = memo(SettingsView);
 
 const OVERLAY_STATE = { lavandeOverlay: true };
+const SLIDE_TRANSITION = { duration: 0.26, ease: [0.22, 1, 0.36, 1] } as const;
 
 export function PhoneApp({ native }: { native?: boolean }) {
   const prefs = usePrefs();
@@ -224,8 +225,7 @@ export function PhoneApp({ native }: { native?: boolean }) {
     [isDecisionReady, mode, openMailCustomFolders, prefs.decision],
   );
 
-  const [dragX, setDragX] = useState(0);
-  const [dragging, setDragging] = useState(false);
+  const stripRef = useRef<HTMLDivElement>(null);
   const gesture = useRef<{ x: number; y: number; axis: "x" | "y" | null } | null>(null);
   const mailNav = useRef<MailNavigation | null>(null);
 
@@ -340,13 +340,16 @@ export function PhoneApp({ native }: { native?: boolean }) {
         return;
       }
       state.axis = "x";
-      setDragging(true);
+      if (stripRef.current) stripRef.current.style.transition = "none";
     }
 
     if (state.axis !== "x") return;
 
     const blocking = (index === 0 && dx > 0) || (index === last && dx < 0);
-    setDragX(blocking ? dx * 0.25 : dx);
+    const offset = blocking ? dx * 0.25 : dx;
+    if (stripRef.current) {
+      stripRef.current.style.transform = `translate3d(calc(${-index * 100}% + ${offset}px), 0, 0)`;
+    }
   };
 
   const changeTab = useCallback((next: TabId) => {
@@ -377,6 +380,8 @@ export function PhoneApp({ native }: { native?: boolean }) {
   const openSearch = useCallback(() => setSearchOpen(true), []);
   const openPgp = useCallback(() => setPgpOpen(true), []);
   const openMcp = useCallback(() => setMcpOpen(true), []);
+  const openCleanup = useCallback(() => setCleanupOpen(true), []);
+  const openSettingsTab = useCallback(() => changeTab("settings"), [changeTab]);
   const openTaskDraft = useCallback(
     (draft?: NewTaskDraft) => {
       if (readOnly) return;
@@ -526,21 +531,35 @@ export function PhoneApp({ native }: { native?: boolean }) {
   );
   const mod = useShortcuts(shortcuts);
 
+  const openEmptyTaskDraft = useCallback(() => openTaskDraft(), [openTaskDraft]);
+  const openEmptyEventDraft = useCallback(() => openEventDraft(), [openEventDraft]);
+
   const endGesture = (event: React.PointerEvent) => {
     const state = gesture.current;
     gesture.current = null;
-    setDragging(false);
+
+    if (stripRef.current) {
+      stripRef.current.style.transition = "";
+    }
 
     if (!state || state.axis !== "x") {
-      setDragX(0);
       return;
     }
 
     const dx = event.clientX - state.x;
-    setDragX(0);
+    let targetIndex = index;
 
-    if (dx < -55 && index < last) changeTab(order[index + 1]);
-    else if (dx > 55 && index > 0) changeTab(order[index - 1]);
+    if (dx < -55 && index < last) {
+      targetIndex = index + 1;
+      changeTab(order[targetIndex]);
+    } else if (dx > 55 && index > 0) {
+      targetIndex = index - 1;
+      changeTab(order[targetIndex]);
+    }
+
+    if (stripRef.current) {
+      stripRef.current.style.transform = `translate3d(${-targetIndex * 100}%, 0, 0)`;
+    }
   };
 
   if (mode === "api" && phase === "loading") {
@@ -573,14 +592,12 @@ export function PhoneApp({ native }: { native?: boolean }) {
         style={{ touchAction: "pan-y" }}
       >
         <div
-          className={cn(
-            "flex h-full w-full",
-            !dragging && "transition-transform duration-[420ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
-          )}
-          style={{ transform: `translate3d(calc(${-index * 100}% + ${dragX}px), 0, 0)` }}
+          ref={stripRef}
+          className="flex h-full w-full will-change-transform transition-transform duration-[420ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
+          style={{ transform: `translate3d(${-index * 100}%, 0, 0)` }}
         >
           {order.map((id) => (
-            <div key={id} className="h-full w-full shrink-0">
+            <div key={id} className="h-full w-full shrink-0 [contain:layout_style_paint]">
               {id === "inbox" && (
                 <InboxScreen
                   mails={mails}
@@ -599,7 +616,7 @@ export function PhoneApp({ native }: { native?: boolean }) {
                   onNotSpam={moveToInbox}
                   onRestore={restoreMail}
                   onOpenMenu={setContextMail}
-                  onOpenCleanup={() => setCleanupOpen(true)}
+                  onOpenCleanup={openCleanup}
                   onPlanMail={readOnly ? undefined : openTaskDraft}
                   onScheduleMail={readOnly ? undefined : openEventDraft}
                 />
@@ -628,7 +645,7 @@ export function PhoneApp({ native }: { native?: boolean }) {
                   onNewTask={readOnly ? undefined : openTaskDraft}
                   movingTask={movingTask}
                   onMovingChange={setMovingTask}
-                  onOpenSync={() => changeTab("settings")}
+                  onOpenSync={openSettingsTab}
                 />
               )}
               {id === "settings" && (
@@ -650,8 +667,8 @@ export function PhoneApp({ native }: { native?: boolean }) {
           active={tab}
           onChange={changeTab}
           onCompose={openComposer}
-          onNewTask={() => openTaskDraft()}
-          onNewEvent={() => openEventDraft()}
+          onNewTask={openEmptyTaskDraft}
+          onNewEvent={openEmptyEventDraft}
           readOnly={readOnly}
         />
 
@@ -683,11 +700,11 @@ export function PhoneApp({ native }: { native?: boolean }) {
         {openMail && openThread && (
             <motion.div
               key="message"
-              className="absolute inset-0 z-[36] bg-canvas"
+              className="absolute inset-0 z-[36] bg-canvas will-change-transform [contain:layout_style_paint]"
               initial={{ x: "100%" }}
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
-              transition={{ type: "spring", stiffness: 340, damping: 34 }}
+              transition={SLIDE_TRANSITION}
             >
               <MessageScreen
                 thread={openThread}
@@ -758,11 +775,11 @@ export function PhoneApp({ native }: { native?: boolean }) {
           {cleanupOpen && (
             <motion.div
               key="cleanup"
-              className="absolute inset-0 z-[35] bg-canvas"
+              className="absolute inset-0 z-[35] bg-canvas will-change-transform [contain:layout_style_paint]"
               initial={{ x: "100%" }}
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
-              transition={{ type: "spring", stiffness: 340, damping: 34 }}
+              transition={SLIDE_TRANSITION}
             >
               <CleanupScreen
                 mails={mails}
@@ -788,11 +805,11 @@ export function PhoneApp({ native }: { native?: boolean }) {
           {pgpOpen && (
             <motion.div
               key="pgp"
-              className="absolute inset-0 z-[32] bg-canvas"
+              className="absolute inset-0 z-[32] bg-canvas will-change-transform [contain:layout_style_paint]"
               initial={{ x: "100%" }}
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
-              transition={{ type: "spring", stiffness: 340, damping: 34 }}
+              transition={SLIDE_TRANSITION}
             >
               <PgpScreen onClose={() => setPgpOpen(false)} />
             </motion.div>
@@ -803,11 +820,11 @@ export function PhoneApp({ native }: { native?: boolean }) {
           {detail && (
             <motion.div
               key="task"
-              className="absolute inset-0 z-[34] bg-canvas"
+              className="absolute inset-0 z-[34] bg-canvas will-change-transform [contain:layout_style_paint]"
               initial={{ x: "100%" }}
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
-              transition={{ type: "spring", stiffness: 340, damping: 34 }}
+              transition={SLIDE_TRANSITION}
             >
               <TaskScreen
                 task={detail.task}
@@ -879,11 +896,11 @@ export function PhoneApp({ native }: { native?: boolean }) {
           {mcpOpen && (
             <motion.div
               key="mcp"
-              className="absolute inset-0 z-[33] bg-canvas"
+              className="absolute inset-0 z-[33] bg-canvas will-change-transform [contain:layout_style_paint]"
               initial={{ x: "100%" }}
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
-              transition={{ type: "spring", stiffness: 340, damping: 34 }}
+              transition={SLIDE_TRANSITION}
             >
               <McpScreen onClose={() => setMcpOpen(false)} />
             </motion.div>
@@ -894,11 +911,11 @@ export function PhoneApp({ native }: { native?: boolean }) {
           {searchOpen && (
             <motion.div
               key="search"
-              className="absolute inset-0 z-30 bg-canvas"
+              className="absolute inset-0 z-30 bg-canvas will-change-transform [contain:layout_style_paint]"
               initial={{ opacity: 0, y: 24 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 24 }}
-              transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             >
               <button
                 type="button"
@@ -921,57 +938,63 @@ export function PhoneApp({ native }: { native?: boolean }) {
         </AnimatePresence>
 
         <AnimatePresence>
-          {accountsOpen && (
-            <motion.div key="accounts" className="absolute inset-0 z-40" initial={false}>
-              <motion.div
-                className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={() => setAccountsOpen(false)}
+          {accountsOpen ? (
+            <motion.div
+              key="accounts-scrim"
+              className="absolute inset-0 z-40 bg-black/18 dark:bg-black/45 will-change-[opacity]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={SLIDE_TRANSITION}
+              onClick={() => setAccountsOpen(false)}
+            />
+          ) : null}
+          {accountsOpen ? (
+            <motion.div
+              key="accounts-sheet"
+              className="absolute inset-x-0 bottom-0 z-40 max-h-[70%] overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-8px_24px_-8px_rgba(40,20,80,0.24)] will-change-transform"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={SLIDE_TRANSITION}
+            >
+              <AccountSwitchSheet
+                active={account}
+                onSelect={setAccount}
+                onClose={() => setAccountsOpen(false)}
               />
-              <motion.div
-                className="absolute inset-x-0 bottom-0 max-h-[70%] overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-20px_60px_-20px_rgba(40,20,80,0.35)]"
-                initial={{ y: "100%" }}
-                animate={{ y: 0 }}
-                exit={{ y: "100%" }}
-                transition={{ type: "spring", stiffness: 320, damping: 32 }}
-              >
-                <AccountSwitchSheet
-                  active={account}
-                  onSelect={setAccount}
-                  onClose={() => setAccountsOpen(false)}
-                />
-              </motion.div>
             </motion.div>
-          )}
+          ) : null}
         </AnimatePresence>
 
         <AnimatePresence>
-          {foldersOpen && (
-            <motion.div key="folders" className="absolute inset-0 z-40" initial={false}>
-              <motion.div
-                className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={() => setFoldersOpen(false)}
+          {foldersOpen ? (
+            <motion.div
+              key="folders-scrim"
+              className="absolute inset-0 z-40 bg-black/18 dark:bg-black/45 will-change-[opacity]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={SLIDE_TRANSITION}
+              onClick={() => setFoldersOpen(false)}
+            />
+          ) : null}
+          {foldersOpen ? (
+            <motion.div
+              key="folders-sheet"
+              className="absolute inset-x-0 bottom-0 z-40 max-h-[70%] overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-8px_24px_-8px_rgba(40,20,80,0.24)] will-change-transform"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={SLIDE_TRANSITION}
+            >
+              <MailboxSheet
+                folder={folder}
+                onSelect={setFolder}
+                onClose={() => setFoldersOpen(false)}
               />
-              <motion.div
-                className="absolute inset-x-0 bottom-0 max-h-[70%] overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-20px_60px_-20px_rgba(40,20,80,0.35)]"
-                initial={{ y: "100%" }}
-                animate={{ y: 0 }}
-                exit={{ y: "100%" }}
-                transition={{ type: "spring", stiffness: 320, damping: 32 }}
-              >
-                <MailboxSheet
-                  folder={folder}
-                  onSelect={setFolder}
-                  onClose={() => setFoldersOpen(false)}
-                />
-              </motion.div>
             </motion.div>
-          )}
+          ) : null}
         </AnimatePresence>
 
         {contextMail ? (
@@ -979,111 +1002,120 @@ export function PhoneApp({ native }: { native?: boolean }) {
         ) : null}
 
         <AnimatePresence>
-          {(eventDraftOpen || eventEdit) && (
-            <motion.div key="newevent" className="absolute inset-0 z-[45]" initial={false}>
-              <motion.div
-                className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={closeEventDraft}
+          {eventDraftOpen || eventEdit ? (
+            <motion.div
+              key="newevent-scrim"
+              className="absolute inset-0 z-[45] bg-black/18 dark:bg-black/45 will-change-[opacity]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={SLIDE_TRANSITION}
+              onClick={closeEventDraft}
+            />
+          ) : null}
+          {eventDraftOpen || eventEdit ? (
+            <motion.div
+              key="newevent-sheet"
+              className="absolute inset-x-0 bottom-0 top-16 z-[45] overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-8px_24px_-8px_rgba(40,20,80,0.24)] will-change-transform"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={SLIDE_TRANSITION}
+            >
+              <NewEventSheet
+                event={eventEdit ?? undefined}
+                initialDate={selectedDate}
+                events={widgetEvents}
+                draft={eventDraft ?? undefined}
+                onClose={closeEventDraft}
+                onUpdate={updateEvent}
+                onCreate={(event) => {
+                  setEvents((current) => [...current, event]);
+                  notify("Rendez-vous créé");
+                }}
               />
-              <motion.div
-                className="absolute inset-x-0 bottom-0 top-16 overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-20px_60px_-20px_rgba(40,20,80,0.35)]"
-                initial={{ y: "100%" }}
-                animate={{ y: 0 }}
-                exit={{ y: "100%" }}
-                transition={{ type: "spring", stiffness: 320, damping: 32 }}
-              >
-                <NewEventSheet
-                  event={eventEdit ?? undefined}
-                  initialDate={selectedDate}
-                  events={[...events, ...externalEvents]}
-                  draft={eventDraft ?? undefined}
-                  onClose={closeEventDraft}
-                  onUpdate={updateEvent}
-                  onCreate={(event) => {
-                    setEvents((current) => [...current, event]);
-                    notify("Rendez-vous créé");
-                  }}
-                />
-              </motion.div>
             </motion.div>
-          )}
+          ) : null}
         </AnimatePresence>
 
         <AnimatePresence>
-          {eventDetail && (
-            <motion.div key="eventdetail" className="absolute inset-0 z-[45]" initial={false}>
-              <motion.div
-                className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={() => setEventDetail(null)}
+          {eventDetail ? (
+            <motion.div
+              key="eventdetail-scrim"
+              className="absolute inset-0 z-[45] bg-black/18 dark:bg-black/45 will-change-[opacity]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={SLIDE_TRANSITION}
+              onClick={() => setEventDetail(null)}
+            />
+          ) : null}
+          {eventDetail ? (
+            <motion.div
+              key="eventdetail-sheet"
+              className="absolute inset-x-0 bottom-0 top-16 z-[45] overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-8px_24px_-8px_rgba(40,20,80,0.24)] will-change-transform"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={SLIDE_TRANSITION}
+            >
+              <EventDetailSheet
+                event={eventDetail}
+                conflict={detailConflict}
+                onClose={() => setEventDetail(null)}
+                onEdit={readOnly ? undefined : openEventEdit}
+                onDelete={readOnly ? undefined : removeEvent}
+                onOpenMail={
+                  eventDetail.mailId && availableMailIds.has(eventDetail.mailId) ? openEventMail : undefined
+                }
+                freeBusyAccount={zimbraAccountOf(accounts)?.id ?? null}
               />
-              <motion.div
-                className="absolute inset-x-0 bottom-0 top-16 overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-20px_60px_-20px_rgba(40,20,80,0.35)]"
-                initial={{ y: "100%" }}
-                animate={{ y: 0 }}
-                exit={{ y: "100%" }}
-                transition={{ type: "spring", stiffness: 320, damping: 32 }}
-              >
-                <EventDetailSheet
-                  event={eventDetail}
-                  conflict={detailConflict}
-                  onClose={() => setEventDetail(null)}
-                  onEdit={readOnly ? undefined : openEventEdit}
-                  onDelete={readOnly ? undefined : removeEvent}
-                  onOpenMail={
-                    eventDetail.mailId && availableMailIds.has(eventDetail.mailId) ? openEventMail : undefined
-                  }
-                  freeBusyAccount={zimbraAccountOf(accounts)?.id ?? null}
-                />
-              </motion.div>
             </motion.div>
-          )}
+          ) : null}
         </AnimatePresence>
 
         <AnimatePresence>
-          {taskDraftOpen && (
-            <motion.div key="newtask" className="absolute inset-0 z-[45]" initial={false}>
-              <motion.div
-                className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={closeTaskDraft}
+          {taskDraftOpen ? (
+            <motion.div
+              key="newtask-scrim"
+              className="absolute inset-0 z-[45] bg-black/18 dark:bg-black/45 will-change-[opacity]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={SLIDE_TRANSITION}
+              onClick={closeTaskDraft}
+            />
+          ) : null}
+          {taskDraftOpen ? (
+            <motion.div
+              key="newtask-sheet"
+              className="absolute inset-x-0 bottom-0 top-16 z-[45] overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-8px_24px_-8px_rgba(40,20,80,0.24)] will-change-transform"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={SLIDE_TRANSITION}
+            >
+              <NewTaskSheet
+                draft={taskDraft ?? undefined}
+                onClose={closeTaskDraft}
+                onCreate={(task) => {
+                  setTasks((current) => createTask(current, task));
+                  notify("Tâche créée");
+                }}
               />
-              <motion.div
-                className="absolute inset-x-0 bottom-0 top-16 overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-20px_60px_-20px_rgba(40,20,80,0.35)]"
-                initial={{ y: "100%" }}
-                animate={{ y: 0 }}
-                exit={{ y: "100%" }}
-                transition={{ type: "spring", stiffness: 320, damping: 32 }}
-              >
-                <NewTaskSheet
-                  draft={taskDraft ?? undefined}
-                  onClose={closeTaskDraft}
-                  onCreate={(task) => {
-                    setTasks((current) => createTask(current, task));
-                    notify("Tâche créée");
-                  }}
-                />
-              </motion.div>
             </motion.div>
-          )}
+          ) : null}
         </AnimatePresence>
 
         <AnimatePresence>
           {connectOpen && (
             <motion.div
               key="connect"
-              className="absolute inset-0 z-[60] bg-canvas"
+              className="absolute inset-0 z-[60] bg-canvas will-change-transform"
               initial={{ x: "100%" }}
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
-              transition={{ type: "spring", stiffness: 340, damping: 34 }}
+              transition={SLIDE_TRANSITION}
             >
               <ConnectScreen onClose={closeConnect} />
             </motion.div>
@@ -1091,35 +1123,38 @@ export function PhoneApp({ native }: { native?: boolean }) {
         </AnimatePresence>
 
         <AnimatePresence>
-          {composeOpen && composeDraft && (
-            <motion.div key="compose" className="absolute inset-0 z-[45]" initial={false}>
-              <motion.div
-                className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={minimizeCompose}
+          {composeOpen && composeDraft ? (
+            <motion.div
+              key="compose-scrim"
+              className="absolute inset-0 z-[45] bg-black/18 dark:bg-black/45 will-change-[opacity]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={SLIDE_TRANSITION}
+              onClick={minimizeCompose}
+            />
+          ) : null}
+          {composeOpen && composeDraft ? (
+            <motion.div
+              key="compose-sheet"
+              className="absolute inset-x-0 bottom-0 top-10 z-[45] overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-8px_24px_-8px_rgba(40,20,80,0.24)] will-change-transform"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={SLIDE_TRANSITION}
+            >
+              <ComposeScreen
+                title={composeTitle}
+                draft={composeDraft}
+                onDraftChange={setComposeDraft}
+                onSend={sendDraft}
+                sending={composeSending}
+                sendError={composeSendError}
+                onMinimize={minimizeCompose}
+                onClose={closeCompose}
               />
-              <motion.div
-                className="absolute inset-x-0 bottom-0 top-10 overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-20px_60px_-20px_rgba(40,20,80,0.35)]"
-                initial={{ y: "100%" }}
-                animate={{ y: 0 }}
-                exit={{ y: "100%" }}
-                transition={{ type: "spring", stiffness: 320, damping: 32 }}
-              >
-                <ComposeScreen
-                  title={composeTitle}
-                  draft={composeDraft}
-                  onDraftChange={setComposeDraft}
-                  onSend={sendDraft}
-                  sending={composeSending}
-                  sendError={composeSendError}
-                  onMinimize={minimizeCompose}
-                  onClose={closeCompose}
-                />
-              </motion.div>
             </motion.div>
-          )}
+          ) : null}
         </AnimatePresence>
 
       <Notice notice={notices[0] ?? null} onClose={dismissNotice} />

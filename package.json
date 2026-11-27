@@ -12,6 +12,7 @@
     "test": "vitest run",
     "e2e": "node scripts/e2e-sync.mjs",
     "e2e:ui": "node scripts/e2e-ui.mjs",
+    "perf:mobile": "node scripts/perf-mobile.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "tauri": "tauri",
     "android:init": "tauri android init && node scripts/patch-android.mjs",

@@ -32,10 +32,28 @@ export function DotPattern({
 
 export function MeshGlow({ className }: { className?: string }) {
   return (
-    <div aria-hidden className={cn("pointer-events-none absolute inset-0", className)}>
-      <div className="absolute -left-24 -top-32 h-64 w-64 rounded-full bg-accent opacity-[0.11] blur-[90px]" />
-      <div className="absolute -right-20 top-6 h-56 w-56 rounded-full bg-accent opacity-[0.07] blur-[100px]" />
-      <div className="absolute -bottom-24 left-1/3 h-64 w-64 rounded-full bg-accent opacity-[0.06] blur-[110px]" />
+    <div aria-hidden className={cn("pointer-events-none absolute inset-0 overflow-x-clip", className)}>
+      <div
+        className="absolute -left-24 -top-32 h-[340px] w-[340px] rounded-full"
+        style={{
+          background:
+            "radial-gradient(closest-side, color-mix(in oklab, var(--accent) 12%, transparent), color-mix(in oklab, var(--accent) 4%, transparent) 48%, transparent 100%)",
+        }}
+      />
+      <div
+        className="absolute -right-20 top-2 h-[300px] w-[300px] rounded-full"
+        style={{
+          background:
+            "radial-gradient(closest-side, color-mix(in oklab, var(--accent) 8%, transparent), color-mix(in oklab, var(--accent) 2.5%, transparent) 48%, transparent 100%)",
+        }}
+      />
+      <div
+        className="absolute -bottom-16 left-1/4 h-[280px] w-[280px] rounded-full"
+        style={{
+          background:
+            "radial-gradient(closest-side, color-mix(in oklab, var(--accent) 6%, transparent), color-mix(in oklab, var(--accent) 1.5%, transparent) 48%, transparent 100%)",
+        }}
+      />
     </div>
   );
 }

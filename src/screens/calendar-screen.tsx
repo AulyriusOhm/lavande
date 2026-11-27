@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   AlertTriangle,
@@ -76,7 +76,10 @@ export function CalendarScreen({
   const [view, setView] = useState({ year: CURRENT_YEAR, month: CURRENT_MONTH });
   const [selected, setSelected] = useState(TODAY_ISO);
 
-  const eventSuggestions = suggestions.filter((suggestion) => suggestion.kind === "event");
+  const eventSuggestions = useMemo(
+    () => suggestions.filter((suggestion) => suggestion.kind === "event"),
+    [suggestions],
+  );
 
   const pick = (date: string) => {
     setSelected(date);
@@ -84,14 +87,21 @@ export function CalendarScreen({
   };
 
   /** Une seule source de vérité : les événements locaux et les sources relues à leur serveur. */
-  const allEvents = [...events, ...externalEvents];
-  const cells = monthGrid(view.year, view.month);
-  const counts = new Map<string, number>();
-  for (const event of allEvents) counts.set(event.date, (counts.get(event.date) ?? 0) + 1);
-  const conflicts = conflictingIds(allEvents);
-  const dayEvents = allEvents
-    .filter((event) => event.date === selected)
-    .sort((a, b) => a.start.localeCompare(b.start));
+  const allEvents = useMemo(() => [...events, ...externalEvents], [events, externalEvents]);
+  const cells = useMemo(() => monthGrid(view.year, view.month), [view.year, view.month]);
+  const counts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const event of allEvents) map.set(event.date, (map.get(event.date) ?? 0) + 1);
+    return map;
+  }, [allEvents]);
+  const conflicts = useMemo(() => conflictingIds(allEvents), [allEvents]);
+  const dayEvents = useMemo(
+    () =>
+      allEvents
+        .filter((event) => event.date === selected)
+        .sort((a, b) => a.start.localeCompare(b.start)),
+    [allEvents, selected],
+  );
   const label = capitalizeFirst(DATE_FMT.format(new Date(`${selected}T12:00:00`)).replace(/[\u202f\u00a0]/g, " "));
   const shortLabel = SHORT_FMT.format(new Date(`${selected}T12:00:00`)).replace(/[\u202f\u00a0]/g, " ");
 
