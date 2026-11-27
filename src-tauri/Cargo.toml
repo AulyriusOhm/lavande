@@ -1,6 +1,6 @@
 [package]
 name = "lavande"
-version = "0.5.11"
+version = "0.5.12"
 description = "Lavande — client mail Rust + Tauri (Orchidée en thème sombre)"
 authors = ["Roman"]
 edition = "2021"
