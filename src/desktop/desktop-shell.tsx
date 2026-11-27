@@ -38,6 +38,7 @@ function DesktopMain() {
     dismissNotice,
     openComposer,
     openMail,
+    messageOpenSeq,
     mode,
     phase,
     connectOpen,
@@ -75,7 +76,7 @@ function DesktopMain() {
   const openMailId = openMail?.id ?? null;
   useEffect(() => {
     if (openMailId) setView("inbox");
-  }, [openMailId]);
+  }, [openMailId, messageOpenSeq]);
 
   const changeView = useCallback((next: DesktopView) => {
     setView(next);
