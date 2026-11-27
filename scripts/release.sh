@@ -54,6 +54,7 @@ done
 
 export PATH="$RPM_TOOLS:$PATH"
 export LAVANDE_GPG_KEY_ID="$GPG_KEY_ID"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 
 echo "== étape 0 : prérequis"
 command -v docker >/dev/null 2>&1 || die "docker introuvable dans le PATH"
