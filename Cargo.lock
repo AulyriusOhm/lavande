@@ -1861,7 +1861,7 @@ dependencies = [
 
 [[package]]
 name = "lavande-mail"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "ammonia",
  "async-imap",
@@ -1889,7 +1889,7 @@ dependencies = [
 
 [[package]]
 name = "lavande-mail-api"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "async-imap",
  "axum",
