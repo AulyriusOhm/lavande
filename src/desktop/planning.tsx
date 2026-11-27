@@ -308,7 +308,7 @@ export function DesktopPlanning({
                   <p
                     className={cn(
                       "grid place-items-center rounded-[18px] border border-dashed px-2 py-4 text-center text-[10.5px] font-semibold transition-colors duration-200",
-                      active ? "border-accent-ring text-accent-ink" : "border-line text-ink-muted/80",
+                      active ? "border-accent-ring text-accent-ink" : "border-line text-ink-muted",
                     )}
                   >
                     Aucune tâche
@@ -477,7 +477,7 @@ function Panel({
       initial={{ x: 430 }}
       animate={{ x: 0 }}
       transition={{ type: "spring", stiffness: 340, damping: 34 }}
-      className="absolute inset-y-0 right-0 z-[25] flex w-[430px] flex-col border-l border-line bg-surface shadow-[-34px_0_80px_-56px_var(--accent)]"
+      className="absolute inset-y-0 right-0 z-[35] flex w-[430px] max-w-full flex-col border-l border-line bg-surface shadow-[-34px_0_80px_-56px_var(--accent)]"
     >
       <div className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-3">
         {dot ? <span className={cn("size-2 shrink-0 rounded-full", dot)} /> : null}

@@ -187,6 +187,7 @@ export function DesktopComposePage() {
   return (
     <div className="h-full w-full bg-canvas" data-testid="compose-page">
       <ComposeScreen
+        variant="desktop"
         title={state.title}
         draft={state.draft}
         onDraftChange={onDraftChange}

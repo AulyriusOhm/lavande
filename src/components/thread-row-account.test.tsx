@@ -79,19 +79,19 @@ describe("étiquette de compte de la ligne de mail", () => {
     const label = mount();
 
     expect(label.className).toContain("text-[10.5px]");
-    expect(label.className).toContain("tracking-[0.08em]");
-    expect(label.className).toContain("max-w-[64px]");
+    expect(label.className).toContain("tracking-[0.06em]");
+    expect(label.className).toContain("max-w-[60px]");
     expect(label.className).toContain("text-clip");
     expect(label.className).not.toContain("truncate");
-    expect(label.className).toContain("-ml-1");
+    expect(label.className).not.toContain("-ml-1");
     expect(label.getAttribute("title")).toBe(ACCOUNT.label);
   });
 
   it("rétrécit la police à mesure que le libellé s'allonge", () => {
-    expect(accountChipFont("Perso")).toBe("text-[10.5px] tracking-[0.08em]");
-    expect(accountChipFont("Studio")).toBe("text-[10.5px] tracking-[0.08em]");
-    expect(accountChipFont("POLARIS")).toBe("text-[9.5px] tracking-[0.05em]");
-    expect(accountChipFont("POLARIS07")).toBe("text-[8.5px] tracking-[0.03em]");
-    expect(accountChipFont("POLARIS07-XL")).toBe("text-[8px] tracking-[0.01em]");
+    expect(accountChipFont("Perso")).toBe("text-[10.5px] tracking-[0.06em]");
+    expect(accountChipFont("Studio")).toBe("text-[10.5px] tracking-[0.06em]");
+    expect(accountChipFont("POLARIS")).toBe("text-[10px] tracking-[0.04em]");
+    expect(accountChipFont("POLARIS07")).toBe("text-[9.5px] tracking-[0.02em]");
+    expect(accountChipFont("POLARIS07-XL")).toBe("text-[9.5px] tracking-[0.01em]");
   });
 });

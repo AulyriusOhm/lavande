@@ -16,7 +16,7 @@ import { ensureHtml, htmlToText } from "@/lib/rich-text";
 export { demoReadOnly, mailMode, READ_ONLY_NOTICE } from "@/lib/demo-mode";
 export type { MailMode } from "@/lib/demo-mode";
 
-const ACCOUNT_COLORS = ["#8b7cf6", "#38bdf8", "#fb7185", "#34d399", "#fbbf24", "#c084fc"];
+const ACCOUNT_COLORS = ["#705ce8", "#0369a1", "#dc264c", "#047857", "#b45309", "#9333ea"];
 
 export const ROLE_TO_FOLDER: Record<ApiFolderRole, FolderId> = {
   inbox: "inbox",

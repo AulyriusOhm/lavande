@@ -73,11 +73,12 @@ export function SyncBadge({ onOpen, className }: { onOpen?: () => void; classNam
       }
       aria-label={`Synchronisation : ${text}`}
       className={cn(
-        "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold ring-1 transition-transform",
+        "relative inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold ring-1 transition-transform",
         tone.surface,
         tone.ring,
         tone.ink,
-        interactive && "active:scale-95",
+        interactive &&
+          "before:absolute before:-inset-y-2.5 before:-inset-x-1 before:rounded-full before:content-[''] active:scale-95",
         !interactive && "cursor-default",
         className,
       )}

@@ -24,13 +24,13 @@ export const CATEGORY_COLORS: {
     id: "emerald",
     label: "Émeraude",
     dot: "bg-emerald-500",
-    pill: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
+    pill: "bg-emerald-500/12 text-emerald-800 dark:text-emerald-300",
   },
   {
     id: "amber",
     label: "Ambre",
     dot: "bg-amber-500",
-    pill: "bg-amber-500/14 text-amber-700 dark:text-amber-300",
+    pill: "bg-amber-500/14 text-amber-800 dark:text-amber-300",
   },
   {
     id: "rose",
@@ -42,13 +42,13 @@ export const CATEGORY_COLORS: {
     id: "sky",
     label: "Ciel",
     dot: "bg-sky-500",
-    pill: "bg-sky-500/12 text-sky-700 dark:text-sky-300",
+    pill: "bg-sky-500/12 text-sky-800 dark:text-sky-300",
   },
   {
     id: "violet",
     label: "Orchidée",
     dot: "bg-violet-500",
-    pill: "bg-violet-500/12 text-violet-700 dark:text-violet-300",
+    pill: "bg-violet-500/12 text-violet-800 dark:text-violet-300",
   },
 ];
 

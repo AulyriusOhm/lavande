@@ -5,6 +5,7 @@ import type { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useMailStore } from "@/lib/store";
 import { ComposeScreen } from "@/screens/compose-screen";
 import { DIconButton } from "@/desktop/ui";
+import { useEscapeLayer } from "@/desktop/escape";
 import { composeWindowUrl } from "@/lib/compose-bus";
 import { isTauriShell } from "@/lib/open-external";
 import { cn } from "@/lib/utils";
@@ -90,6 +91,8 @@ export function DesktopCompose() {
   const windowRef = useRef<ComposeWindowHandle | null>(null);
   const detachedRef = useRef(composeDetached);
   detachedRef.current = composeDetached;
+
+  useEscapeLayer(composeOpen && Boolean(composeDraft), minimizeCompose);
 
   useEffect(() => {
     try {
@@ -301,6 +304,7 @@ export function DesktopCompose() {
             ))}
           <div className="min-h-0 flex-1">
             <ComposeScreen
+              variant="desktop"
               title={composeTitle}
               draft={composeDraft}
               onDraftChange={setComposeDraft}

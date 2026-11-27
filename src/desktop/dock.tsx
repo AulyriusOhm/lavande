@@ -97,11 +97,11 @@ export function DesktopDock({
             {fab && (
               <motion.div
                 key="fab"
-                initial={{ opacity: 0, scale: 0.6 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.6 }}
-                transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                className="flex items-center"
+                initial={{ width: 0, opacity: 0 }}
+                animate={{ width: "auto", opacity: 1 }}
+                exit={{ width: 0, opacity: 0 }}
+                transition={{ type: "spring", stiffness: 380, damping: 34 }}
+                className="flex items-center overflow-hidden"
               >
                 <div className="mx-1.5 h-6 w-px shrink-0 bg-accent-ring" />
                 <button

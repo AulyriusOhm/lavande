@@ -169,7 +169,7 @@ describe("ligne de mail · densité", () => {
 
   it("étiquette de compte compacte en mode compact", () => {
     renderRow({ density: "compact", preview: "excerpt", showAccount: true });
-    expect(rowOf().querySelector("[data-account-chip]")!.className).toContain("text-[8px]");
+    expect(rowOf().querySelector("[data-account-chip]")!.className).toContain("text-[9.5px]");
   });
 
   it("en compact, le badge PGP rejoint la ligne du nom sans ligne vide", () => {
@@ -179,10 +179,11 @@ describe("ligne de mail · densité", () => {
     expect(rowOf().querySelector('span[title*="PGP"]')).toBeTruthy();
   });
 
-  it("en confort, le badge PGP garde sa ligne dédiée", () => {
+  it("en confort, le badge PGP rejoint aussi la ligne de l'heure sans ligne dédiée vide", () => {
     renderRow({ density: "cozy", preview: "excerpt", thread: PGP_THREAD });
 
-    expect(rowOf().querySelector('div[class*="mt-1.5"]')).toBeTruthy();
+    expect(rowOf().querySelector('div[class*="mt-1.5"]')).toBeNull();
+    expect(rowOf().querySelector('span[title*="PGP"]')).toBeTruthy();
   });
 });
 

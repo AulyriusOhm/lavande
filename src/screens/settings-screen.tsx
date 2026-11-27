@@ -158,7 +158,7 @@ type GroupId =
   | "application";
 
 const GROUPS: { id: GroupId; label: string; hint: string; icon: typeof Sun }[] = [
-  { id: "comptes", label: "Comptes", hint: "Boîtes mail, signatures, dossiers", icon: Users },
+  { id: "comptes", label: "Comptes", hint: "Boîtes mail, signatures, dossiers", icon: MailIcon },
   { id: "moi-equipe", label: "Moi et mon équipe", hint: "Identité, rôle, équipe par boîte", icon: Users },
   { id: "apparence", label: "Apparence", hint: "Thème, couleur d'accent, modules", icon: Palette },
   { id: "synchronisation", label: "Synchronisation", hint: "Appareils, calendriers, notifications", icon: RefreshCw },

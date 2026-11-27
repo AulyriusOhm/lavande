@@ -104,11 +104,11 @@ const INTRO_HOLD_MS = 2000;
 const ISO_DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 const SUMMARY_CHIP =
-  "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-line bg-surface px-2 text-[10px] font-bold text-ink-soft transition-colors duration-200";
+  "focus-ring relative inline-flex h-7 shrink-0 items-center gap-1 rounded-full border border-line bg-surface px-2.5 text-[10.5px] font-bold text-ink-soft transition-colors duration-200 before:absolute before:-inset-y-2 before:inset-x-0 before:rounded-full before:content-['']";
 const SUMMARY_CHIP_FILLED =
-  "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-accent px-2 text-[10px] font-bold text-accent-contrast transition-colors duration-200";
+  "focus-ring relative inline-flex h-7 shrink-0 items-center gap-1 rounded-full bg-accent px-2.5 text-[10.5px] font-bold text-accent-contrast transition-colors duration-200 before:absolute before:-inset-y-2 before:inset-x-0 before:rounded-full before:content-['']";
 const SUMMARY_CHIP_DONE =
-  "inline-flex h-6 shrink-0 cursor-default items-center gap-1 rounded-full border border-accent-ring/60 bg-accent-soft px-2 text-[10px] font-bold text-accent-ink";
+  "inline-flex h-7 shrink-0 cursor-default items-center gap-1 rounded-full border border-accent-ring/60 bg-accent-soft px-2.5 text-[10.5px] font-bold text-accent-ink";
 const SUMMARY_DUE_TONE: Record<ReturnType<typeof dueToneFor>, string> = {
   late: "bg-rose-500/12 text-rose-700 dark:text-rose-300",
   soon: "bg-amber-500/14 text-amber-700 dark:text-amber-300",
@@ -518,7 +518,7 @@ export function InboxScreen({
               type="button"
               aria-label="Archiver"
               onClick={() => onMailAction("archive", mail)}
-              className="focus-ring grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+              className="focus-ring relative grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors before:absolute before:-inset-2.5 before:rounded-full before:content-[''] hover:bg-surface-2 hover:text-ink"
             >
               <Archive className="size-3" />
             </button>
@@ -526,7 +526,7 @@ export function InboxScreen({
               type="button"
               aria-label="Supprimer"
               onClick={() => onMailAction("delete", mail)}
-              className="focus-ring grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-rose-500/10 hover:text-rose-700 dark:hover:text-rose-300"
+              className="focus-ring relative grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors before:absolute before:-inset-2.5 before:rounded-full before:content-[''] hover:bg-rose-500/10 hover:text-rose-700 dark:hover:text-rose-300"
             >
               <Trash2 className="size-3" />
             </button>
@@ -679,9 +679,9 @@ export function InboxScreen({
         <MeshGlow className="h-56" />
 
         <motion.div style={{ height: heroHeight, opacity: heroOpacity }} className="overflow-hidden">
-          <motion.div ref={heroRef} style={{ scale: heroScale }} className="origin-top px-5 pt-4">
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-2.5">
+          <motion.div ref={heroRef} style={{ scale: heroScale }} className="origin-top px-4 pt-4 min-[380px]:px-5">
+            <div className="flex items-start justify-between gap-1.5">
+              <div className="flex min-w-0 items-center gap-2 min-[380px]:gap-2.5">
                 <IconButton
                   aria-label="Ouvrir les dossiers"
                   onClick={onOpenFolders}
@@ -693,12 +693,12 @@ export function InboxScreen({
                   name="Roman"
                   size={40}
                   rounded="rounded-full"
-                  className="ring-2 ring-accent-ring ring-offset-2 ring-offset-canvas"
+                  className="ring-2 ring-accent-ring ring-offset-2 ring-offset-canvas max-[379px]:hidden"
                 />
                 <h1
                   className={cn(
-                    "leading-[1.05] font-extrabold tracking-[-0.035em] text-ink",
-                    mailDensity === "compact" ? "text-[18px]" : "text-[24px]",
+                    "min-w-0 truncate leading-[1.05] font-extrabold tracking-[-0.035em] text-ink",
+                    mailDensity === "compact" ? "text-[18px]" : "text-[21px] min-[380px]:text-[24px]",
                   )}
                 >
                   {reception ? (
@@ -712,8 +712,8 @@ export function InboxScreen({
                   )}
                 </h1>
               </div>
-              <div className="flex items-center gap-1">
-                <IconButton aria-label="Rechercher" onClick={onSearch}>
+              <div className="flex shrink-0 items-center gap-0 min-[380px]:gap-1">
+                <IconButton aria-label="Rechercher" onClick={onSearch} className="max-[379px]:size-10 max-[379px]:min-w-10">
                   <Search className="size-4" />
                 </IconButton>
                 <IconButton
@@ -721,7 +721,7 @@ export function InboxScreen({
                   title="Affichage compact"
                   aria-pressed={mailDensity === "compact"}
                   onClick={() => setMailDensity(mailDensity === "compact" ? "cozy" : "compact")}
-                  className={cn(mailDensity === "compact" && "bg-accent-soft text-accent-ink")}
+                  className={cn("max-[379px]:size-10 max-[379px]:min-w-10", mailDensity === "compact" && "bg-accent-soft text-accent-ink")}
                 >
                   <Rows3 className="size-4" />
                 </IconButton>
@@ -730,6 +730,7 @@ export function InboxScreen({
                   aria-busy={syncing}
                   onClick={syncFolder}
                   disabled={syncing}
+                  className="max-[379px]:size-10 max-[379px]:min-w-10"
                 >
                   <RefreshCw className={cn("size-4", syncing && "animate-spin")} />
                 </IconButton>
@@ -1261,7 +1262,7 @@ export function InboxScreen({
                                           type="button"
                                           aria-label="Archiver"
                                           onClick={() => onMailAction("archive", mail)}
-                                          className="focus-ring grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+                                          className="focus-ring relative grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors before:absolute before:-inset-2.5 before:rounded-full before:content-[''] hover:bg-surface-2 hover:text-ink"
                                         >
                                           <Archive className="size-3" />
                                         </button>
@@ -1269,7 +1270,7 @@ export function InboxScreen({
                                           type="button"
                                           aria-label="Supprimer"
                                           onClick={() => onMailAction("delete", mail)}
-                                          className="focus-ring grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors hover:bg-rose-500/10 hover:text-rose-700 dark:hover:text-rose-300"
+                                          className="focus-ring relative grid size-6 shrink-0 place-items-center rounded-full text-ink-muted transition-colors before:absolute before:-inset-2.5 before:rounded-full before:content-[''] hover:bg-rose-500/10 hover:text-rose-700 dark:hover:text-rose-300"
                                         >
                                           <Trash2 className="size-3" />
                                         </button>
@@ -1552,7 +1553,7 @@ export function InboxScreen({
             </div>
           )}
           {visible.length === 0 && !threadsLoading && (
-            <div className="px-6 py-12 text-center">
+            <div className="px-6 py-6 text-center">
               <p className="text-[13px] font-bold text-ink">Aucun message</p>
               <p className="mt-1 text-[11.5px] leading-relaxed font-medium text-ink-muted">
                 {filter !== "all"
@@ -1603,44 +1604,55 @@ export function InboxScreen({
         style={{ opacity: barOpacity, y: barY }}
         className={cn("absolute inset-x-0 top-0 z-30", compact ? "" : "pointer-events-none")}
       >
-        <div className="glass flex items-center gap-2.5 border-b border-line/70 px-4 pt-2.5 pb-2">
+        <div className="glass flex items-center gap-1.5 border-b border-line/70 px-3 pt-2.5 pb-2 min-[380px]:gap-2 min-[380px]:px-4">
           <IconButton
             aria-label="Ouvrir les dossiers"
             onClick={onOpenFolders}
-            className="bg-accent-soft text-accent-ink hover:bg-accent-soft"
+            className="bg-accent-soft text-accent-ink hover:bg-accent-soft max-[379px]:size-10 max-[379px]:min-w-10"
           >
             <Inbox className="size-[18px]" strokeWidth={2.2} />
           </IconButton>
           <div className="min-w-0 flex-1 leading-tight">
             <p className="truncate text-[12.5px] font-bold text-ink">{heading}</p>
-            <p className="truncate text-[10px] font-semibold text-ink-muted">
-              {threads.length} conversation{threads.length > 1 ? "s" : ""} · {unreadCount} non lues ·{" "}
-              {folderStats("spam").unread} spam
+            <p className="truncate text-[10.5px] font-semibold text-ink-muted">
+              {threads.length} conv. · {unreadCount} non lues
+              {folderStats("spam").unread > 0 ? ` · ${folderStats("spam").unread} spam` : ""}
             </p>
           </div>
-          <IconButton aria-label="Rechercher" onClick={onSearch}>
-            <Search className="size-4" />
-          </IconButton>
-          <IconButton
-            aria-label="Affichage compact"
-            title="Affichage compact"
-            aria-pressed={mailDensity === "compact"}
-            onClick={() => setMailDensity(mailDensity === "compact" ? "cozy" : "compact")}
-            className={cn(mailDensity === "compact" && "bg-accent-soft text-accent-ink")}
-          >
-            <Rows3 className="size-4" />
-          </IconButton>
-          <IconButton aria-label="Changer de compte" onClick={onOpenAccounts}>
-            <span
-              className="grid size-5 place-items-center rounded-full text-[10px] font-black"
-              style={{
-                backgroundColor: current?.color ?? "var(--accent)",
-                color: current ? accentContrast(current.color) : "var(--accent-contrast)",
-              }}
+          <div className="flex shrink-0 items-center">
+            <IconButton aria-label="Rechercher" onClick={onSearch} className="size-10 min-w-10">
+              <Search className="size-4" />
+            </IconButton>
+            <IconButton
+              aria-label={syncing ? "Synchronisation en cours" : "Synchroniser le dossier"}
+              aria-busy={syncing}
+              onClick={syncFolder}
+              disabled={syncing}
+              className="size-10 min-w-10"
             >
-              {current ? current.label[0] : "∀"}
-            </span>
-          </IconButton>
+              <RefreshCw className={cn("size-4", syncing && "animate-spin")} />
+            </IconButton>
+            <IconButton
+              aria-label="Affichage compact"
+              title="Affichage compact"
+              aria-pressed={mailDensity === "compact"}
+              onClick={() => setMailDensity(mailDensity === "compact" ? "cozy" : "compact")}
+              className={cn("size-10 min-w-10", mailDensity === "compact" && "bg-accent-soft text-accent-ink")}
+            >
+              <Rows3 className="size-4" />
+            </IconButton>
+            <IconButton aria-label="Changer de compte" onClick={onOpenAccounts} className="size-10 min-w-10">
+              <span
+                className="grid size-5 place-items-center rounded-full text-[10px] font-black"
+                style={{
+                  backgroundColor: current?.color ?? "var(--accent)",
+                  color: current ? accentContrast(current.color) : "var(--accent-contrast)",
+                }}
+              >
+                {current ? current.label[0] : "∀"}
+              </span>
+            </IconButton>
+          </div>
         </div>
       </motion.div>
 

@@ -26,10 +26,10 @@ export const TASK_STATES: {
   chip: string;
 }[] = [
   { id: "todo", label: "À faire", dot: "bg-accent", chip: "bg-accent-soft text-accent-ink" },
-  { id: "doing", label: "En cours", dot: "bg-sky-500", chip: "bg-sky-500/12 text-sky-700 dark:text-sky-300" },
-  { id: "waiting", label: "En attente", dot: "bg-amber-500", chip: "bg-amber-500/12 text-amber-700 dark:text-amber-300" },
-  { id: "review", label: "À valider", dot: "bg-fuchsia-500", chip: "bg-fuchsia-500/12 text-fuchsia-700 dark:text-fuchsia-300" },
-  { id: "done", label: "Fait", dot: "bg-emerald-500", chip: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300" },
+  { id: "doing", label: "En cours", dot: "bg-sky-500", chip: "bg-sky-500/12 text-sky-800 dark:text-sky-300" },
+  { id: "waiting", label: "En attente", dot: "bg-amber-500", chip: "bg-amber-500/12 text-amber-800 dark:text-amber-300" },
+  { id: "review", label: "À valider", dot: "bg-fuchsia-500", chip: "bg-fuchsia-500/12 text-fuchsia-800 dark:text-fuchsia-300" },
+  { id: "done", label: "Fait", dot: "bg-emerald-500", chip: "bg-emerald-500/12 text-emerald-800 dark:text-emerald-300" },
 ];
 
 export function stateMeta(state: TaskState) {

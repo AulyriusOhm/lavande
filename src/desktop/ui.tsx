@@ -121,9 +121,9 @@ export function DChip({
 const BADGE_TONES = {
   accent: "bg-accent-soft text-accent-ink",
   neutral: "bg-surface-2 text-ink-muted",
-  green: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
-  amber: "bg-amber-500/14 text-amber-700 dark:text-amber-300",
-  sky: "bg-sky-500/12 text-sky-700 dark:text-sky-300",
+  green: "bg-emerald-500/12 text-emerald-800 dark:text-emerald-300",
+  amber: "bg-amber-500/14 text-amber-800 dark:text-amber-300",
+  sky: "bg-sky-500/12 text-sky-800 dark:text-sky-300",
   rose: "bg-rose-500/12 text-rose-700 dark:text-rose-300",
 } as const;
 

@@ -75,6 +75,7 @@ export function ComposeScreen({
   onHeaderPointerDown,
   onHeaderDoubleClick,
   onRetarget,
+  variant = "mobile",
 }: {
   onClose: () => void;
   draft: ComposeDraft;
@@ -90,6 +91,7 @@ export function ComposeScreen({
   onHeaderDoubleClick?: () => void;
   /** Réorienter le brouillon vers un autre message ; à défaut, le store s'en charge. */
   onRetarget?: (mail: Mail) => void;
+  variant?: "mobile" | "desktop";
 }) {
   const {
     mailAccounts,
@@ -308,10 +310,11 @@ export function ComposeScreen({
 
   return (
     <div className="relative flex h-full flex-col bg-canvas">
-      <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-line" />
+      {variant === "mobile" ? <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-line" /> : null}
       <div
         className={cn(
-          "flex items-center gap-2 px-3 pt-2 pb-2",
+          "flex items-center gap-2 px-3 pb-2",
+          variant === "desktop" ? "pt-3" : "pt-2",
           onHeaderPointerDown && "cursor-grab touch-none select-none active:cursor-grabbing",
         )}
         onPointerDown={onHeaderPointerDown}
@@ -415,7 +418,7 @@ export function ComposeScreen({
             aria-pressed={showCc}
             aria-label={showCc ? "Masquer et vider le champ Cc" : "Afficher le champ Cc"}
             className={cn(
-              "inline-flex min-h-11 items-center justify-center rounded-full px-2.5 text-[10.5px] font-bold transition-colors",
+              "relative inline-flex h-8 items-center justify-center rounded-full px-3 text-[11px] font-bold transition-colors before:absolute before:-inset-y-2 before:-inset-x-1 before:rounded-full before:content-['']",
               showCc ? "bg-accent text-accent-contrast" : "bg-accent-soft text-accent-ink",
             )}
           >
@@ -430,7 +433,7 @@ export function ComposeScreen({
             aria-pressed={showCci}
             aria-label={showCci ? "Masquer et vider le champ Cci" : "Afficher le champ Cci"}
             className={cn(
-              "inline-flex min-h-11 items-center justify-center rounded-full px-2.5 text-[10.5px] font-bold transition-colors",
+              "relative inline-flex h-8 items-center justify-center rounded-full px-3 text-[11px] font-bold transition-colors before:absolute before:-inset-y-2 before:-inset-x-1 before:rounded-full before:content-['']",
               showCci ? "bg-accent text-accent-contrast" : "bg-accent-soft text-accent-ink",
             )}
           >
@@ -565,7 +568,7 @@ export function ComposeScreen({
             onClick={() => update({ pgpEncrypt: !draft.pgpEncrypt })}
             aria-pressed={draft.pgpEncrypt}
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-bold transition-colors",
+              "relative inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[12px] font-bold transition-colors before:absolute before:-inset-y-1.5 before:inset-x-0 before:rounded-full before:content-['']",
               draft.pgpEncrypt
                 ? "bg-accent-soft text-accent-ink ring-1 ring-accent-ring/60"
                 : "border border-line text-ink-muted",
@@ -579,9 +582,9 @@ export function ComposeScreen({
             onClick={() => update({ pgpSign: !draft.pgpSign })}
             aria-pressed={draft.pgpSign}
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-bold transition-colors",
+              "relative inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[12px] font-bold transition-colors before:absolute before:-inset-y-1.5 before:inset-x-0 before:rounded-full before:content-['']",
               draft.pgpSign
-                ? "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-500/30"
+                ? "bg-emerald-500/12 text-emerald-800 dark:text-emerald-300 ring-1 ring-emerald-500/30"
                 : "border border-line text-ink-muted",
             )}
           >

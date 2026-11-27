@@ -675,15 +675,6 @@ export function MessageScreen({
                 {mail.time}
               </span>
             </button>
-            {readOnly ? null : (
-              <IconButton
-                aria-label={mail.folder === "drafts" ? "Reprendre le brouillon" : "Répondre"}
-                onClick={() => (mail.folder === "drafts" ? onResume?.(mail) : onReply(mail))}
-                className="bg-accent-soft text-accent-ink"
-              >
-                {mail.folder === "drafts" ? <PenLine className="size-4" /> : <CornerUpLeft className="size-4" />}
-              </IconButton>
-            )}
           </div>
 
           <MailRecipients mail={mail} className="mt-2" />
@@ -904,7 +895,7 @@ export function MessageScreen({
               <button
                 type="button"
                 onClick={() => onPlan(mail)}
-                className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+                className="relative inline-flex h-9 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11.5px] font-bold text-ink-soft transition-colors before:absolute before:-inset-y-1 before:inset-x-0 before:rounded-full before:content-[''] hover:border-accent-ring hover:text-accent-ink"
               >
                 <ListTodo className="size-3.5" strokeWidth={2.3} />
                 Planifier
@@ -914,7 +905,7 @@ export function MessageScreen({
               <button
                 type="button"
                 onClick={() => onSchedule(mail)}
-                className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11.5px] font-bold text-ink-soft transition-colors hover:border-accent-ring hover:text-accent-ink"
+                className="relative inline-flex h-9 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11.5px] font-bold text-ink-soft transition-colors before:absolute before:-inset-y-1 before:inset-x-0 before:rounded-full before:content-[''] hover:border-accent-ring hover:text-accent-ink"
               >
                 <CalendarPlus className="size-3.5" strokeWidth={2.3} />
                 + Agenda

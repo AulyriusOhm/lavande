@@ -81,9 +81,9 @@ export function agendaCalendars(
 
 export const TONE_PILL = [
   "bg-accent-soft text-accent-ink",
-  "bg-sky-500/12 text-sky-700 dark:text-sky-300",
-  "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
-  "bg-amber-500/14 text-amber-700 dark:text-amber-300",
+  "bg-sky-500/12 text-sky-800 dark:text-sky-300",
+  "bg-emerald-500/12 text-emerald-800 dark:text-emerald-300",
+  "bg-amber-500/14 text-amber-800 dark:text-amber-300",
   "bg-rose-500/12 text-rose-700 dark:text-rose-300",
 ];
 

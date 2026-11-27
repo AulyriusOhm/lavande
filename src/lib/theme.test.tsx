@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, waitFor } from "@testing-library/react";
-import { ThemeProvider } from "./theme";
+import { ACCENT_PRESETS, ThemeProvider, accentContrast, contrastRatio } from "./theme";
 
 const STORAGE_KEY = "lavande.theme";
 const ANDROID_UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8)";
@@ -222,5 +222,26 @@ describe("thème auto", () => {
     mount();
 
     expect(invokeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("contraste des couleurs d'accent", () => {
+  it("tous les préréglages garantissent un texte blanc lisible (≥ 4,5:1)", () => {
+    for (const preset of ACCENT_PRESETS) {
+      expect(accentContrast(preset.value), preset.name).toBe("#ffffff");
+      expect(contrastRatio(preset.value, "#ffffff"), preset.name).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("ne tombe jamais en texte noir sur un violet ou indigo saturé (#6366f1)", () => {
+    expect(accentContrast("#6366f1")).toBe("#ffffff");
+    expect(accentContrast("#9333ea")).toBe("#ffffff");
+  });
+
+  it("migre les anciens préréglages pastel enregistrés dans localStorage", () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ accent: "#c084fc", mode: "light" }));
+    mount();
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#9333ea");
+    expect(document.documentElement.style.getPropertyValue("--accent-contrast")).toBe("#ffffff");
   });
 });

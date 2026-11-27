@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { PenLine } from "lucide-react";
+import { PenLine, X } from "lucide-react";
 import { isFolderHidden, usePrefs } from "@/lib/prefs";
 import type { MailSuggestion, Task } from "@/lib/tasks";
 import { sortTasks, taskFromSuggestion } from "@/lib/tasks";
@@ -656,20 +656,31 @@ export function PhoneApp({ native }: { native?: boolean }) {
         />
 
         {composeDraft && !composeOpen && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-[calc(env(safe-area-inset-bottom,0px)+9.5rem)] z-[44] flex justify-center px-4">
-            <button
-              type="button"
-              onClick={resumeCompose}
-              className="pointer-events-auto inline-flex min-h-11 items-center gap-2 rounded-full border border-line px-4 text-[11.5px] font-bold text-accent-ink glass shadow-[0_14px_34px_-20px_var(--accent)] transition-transform duration-200 active:scale-95"
-            >
-              <PenLine className="size-3.5" strokeWidth={2.4} />
-              Reprendre le brouillon
-            </button>
+          <div className="pointer-events-none absolute inset-x-0 bottom-[calc(env(safe-area-inset-bottom,0px)+5.75rem)] z-[24] flex justify-center px-4">
+            <div className="pointer-events-auto inline-flex items-center gap-0.5 rounded-full border border-line py-1 pr-1 pl-3.5 glass shadow-[0_14px_34px_-20px_var(--accent)]">
+              <button
+                type="button"
+                onClick={resumeCompose}
+                className="focus-ring inline-flex min-h-9 items-center gap-2 rounded-full pr-1.5 text-[11.5px] font-bold text-accent-ink transition-transform duration-200 active:scale-95"
+              >
+                <PenLine className="size-3.5 shrink-0" strokeWidth={2.4} />
+                Reprendre le brouillon
+              </button>
+              <button
+                type="button"
+                onClick={closeCompose}
+                aria-label="Fermer le brouillon"
+                className="focus-ring relative grid size-8 shrink-0 place-items-center rounded-full text-ink-muted transition-colors before:absolute before:-inset-1.5 before:rounded-full before:content-[''] hover:bg-surface-2 hover:text-ink"
+              >
+                <X className="size-3.5" strokeWidth={2.4} />
+              </button>
+            </div>
           </div>
         )}
+      </div>
 
-        <AnimatePresence>
-          {openMail && openThread && (
+      <AnimatePresence>
+        {openMail && openThread && (
             <motion.div
               key="message"
               className="absolute inset-0 z-[36] bg-canvas"
@@ -1110,7 +1121,6 @@ export function PhoneApp({ native }: { native?: boolean }) {
             </motion.div>
           )}
         </AnimatePresence>
-      </div>
 
       <Notice notice={notices[0] ?? null} onClose={dismissNotice} />
       <AccountRemoveDialog />

@@ -47,7 +47,7 @@ function ToolButton({
       onMouseDown={(event) => event.preventDefault()}
       onClick={onClick}
       className={cn(
-        "grid size-8 shrink-0 place-items-center rounded-lg transition-colors duration-150",
+        "grid size-9 shrink-0 place-items-center rounded-lg transition-colors duration-150 sm:size-8",
         active
           ? "bg-accent-soft text-accent-ink ring-1 ring-accent-ring/50"
           : "text-ink-muted hover:bg-surface-2 hover:text-ink",
@@ -141,7 +141,26 @@ export function RichEditor({
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const [toolbarEdges, setToolbarEdges] = useState({ left: false, right: false });
   refuseRef.current = (message) => setNotice(message);
+
+  useEffect(() => {
+    const el = toolbarRef.current;
+    if (!el) return;
+    const sync = () =>
+      setToolbarEdges({
+        left: el.scrollLeft > 4,
+        right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4,
+      });
+    sync();
+    el.addEventListener("scroll", sync, { passive: true });
+    window.addEventListener("resize", sync);
+    return () => {
+      el.removeEventListener("scroll", sync);
+      window.removeEventListener("resize", sync);
+    };
+  }, []);
 
   const editor = useEditor({
     extensions: [
@@ -251,6 +270,7 @@ export function RichEditor({
     <div className={cn("flex flex-col", className)}>
       <div className="relative">
         <div
+          ref={toolbarRef}
           role="toolbar"
           aria-label="Mise en forme du message"
           className="flex items-center gap-0.5 overflow-x-auto no-scrollbar rounded-xl border border-line bg-surface px-1.5 py-1"
@@ -308,6 +328,12 @@ export function RichEditor({
             <RemoveFormatting className="size-4" strokeWidth={2.4} />
           </ToolButton>
         </div>
+        {toolbarEdges.left ? (
+          <div className="pointer-events-none absolute inset-y-px left-px w-6 rounded-l-xl bg-gradient-to-r from-surface to-transparent" />
+        ) : null}
+        {toolbarEdges.right ? (
+          <div className="pointer-events-none absolute inset-y-px right-px w-7 rounded-r-xl bg-gradient-to-l from-surface to-transparent" />
+        ) : null}
 
         {linkOpen && (
           <div className="absolute left-0 top-full z-30 mt-1.5 flex w-full max-w-sm items-center gap-1.5 rounded-xl border border-line bg-surface p-1.5 shadow-lg">

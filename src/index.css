@@ -29,8 +29,8 @@
   --surface: #ffffff;
   --surface-2: #f6f3fd;
   --ink: #1b1523;
-  --ink-soft: #6b6478;
-  --ink-muted: #726c7f;
+  --ink-soft: #544d63;
+  --ink-muted: #655f73;
   --line: #ece8f5;
   --shadow-color: 265 40% 55%;
 
@@ -39,8 +39,8 @@
   --native-top: 44px;
   --sheet-shadow: 0 -3px 10px rgba(27, 21, 35, 0.07);
 
-  --accent: #8b7cf6;
-  --accent-contrast: #1b1523;
+  --accent: #705ce8;
+  --accent-contrast: #ffffff;
   --accent-soft: color-mix(in oklab, var(--accent) 12%, white);
   --accent-ring: color-mix(in oklab, var(--accent) 34%, white);
   --accent-ink: color-mix(in oklab, var(--accent) 52%, #241b3a);
@@ -61,8 +61,8 @@
   --surface: #16131f;
   --surface-2: #1d1929;
   --ink: #f4f1fa;
-  --ink-soft: #a8a1b8;
-  --ink-muted: #8c8699;
+  --ink-soft: #b5aec7;
+  --ink-muted: #9e97ad;
   --line: #2a2438;
   --shadow-color: 265 60% 4%;
   --sheet-shadow: 0 -3px 12px rgba(0, 0, 0, 0.45);

@@ -1141,6 +1141,7 @@ function ThreadRow({
   const { accountById } = useMailStore();
   const account = accountById(mail.account);
   const name = mail.folder === "sent" && mail.to ? `À ${mail.to}` : mail.name;
+  const avatarName = mail.folder === "sent" && mail.to ? mail.to : mail.name;
   const unread = thread.unread > 0;
   const tight = density === "compact";
   const aiMode = preview === "ai";
@@ -1259,7 +1260,7 @@ function ThreadRow({
                   )}
                 />
                 <Avatar
-                  name={name}
+                  name={avatarName}
                   tone={mail.tone}
                   size={tight ? 28 : 40}
                   rounded="rounded-full"
@@ -1267,7 +1268,7 @@ function ThreadRow({
                 />
               </div>
             ) : (
-              <Avatar name={name} tone={mail.tone} size={tight ? 28 : 40} rounded="rounded-full" />
+              <Avatar name={avatarName} tone={mail.tone} size={tight ? 28 : 40} rounded="rounded-full" />
             )}
             {checked ? (
               <span className="absolute -top-1 -left-1 grid size-4 place-items-center rounded-full border-2 border-surface bg-accent text-accent-contrast">
@@ -1430,7 +1431,7 @@ export function DesktopInbox({
     trustSender,
     trustDomain,
   } = useMailStore();
-  const { dark, setDark } = useTheme();
+  const { dark, setDark, brand } = useTheme();
   const prefs = usePrefs();
   const { decision: decisionPrefs } = prefs;
   const smartActive = decisionReady(decisionPrefs) || Object.keys(decisions).length > 0;
@@ -2286,7 +2287,7 @@ export function DesktopInbox({
                   aria-hidden
                   className="size-[22px] rounded-[8px] bg-gradient-to-br from-accent-ring to-accent shadow-[0_7px_16px_-7px_var(--accent)]"
                 />
-                <p className="text-[15px] font-extrabold tracking-[-0.035em] text-ink">Lavande</p>
+                <p className="text-[15px] font-extrabold tracking-[-0.035em] text-ink">{brand}</p>
                 <span className="rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent-ink">PC</span>
                 <DIconButton
                   label={dark ? "Passer en thème clair" : "Passer en thème sombre"}
@@ -2532,6 +2533,14 @@ export function DesktopInbox({
               >
                 <Rows3 className="size-4" />
               </DIconButton>
+              {tier !== "wide" ? (
+                <DIconButton
+                  label={dark ? "Passer en thème clair" : "Passer en thème sombre"}
+                  onClick={() => setDark(!dark)}
+                >
+                  {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+                </DIconButton>
+              ) : null}
             </div>
 
             <button
@@ -2547,38 +2556,42 @@ export function DesktopInbox({
               </span>
             </button>
 
-            {tier !== "wide" ? (
+            {tier !== "wide" && (folderOptions.length > 0 || mailAccounts.length > 0) ? (
               <div className="mt-2.5 flex flex-wrap gap-1.5" data-testid="inbox-scope">
-                <select
-                  aria-label="Dossier"
-                  value={`${folder}:${folderPath ?? ""}`}
-                  onChange={(event) => {
-                    const [id, path] = event.target.value.split(":");
-                    setFolder(id as FolderId, id === "other" ? (path ?? null) : null);
-                  }}
-                  className="focus-ring h-9 min-w-0 flex-1 rounded-full border border-line bg-surface px-3 text-[12px] font-semibold text-ink"
-                >
-                  {folderOptions.map((entry) => (
-                    <option key={`${entry.id}:${entry.path}`} value={`${entry.id}:${entry.path}`}>
-                      {entry.id === "other" ? entry.path : entry.label}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  aria-label="Compte"
-                  value={account}
-                  onChange={(event) => setAccount(event.target.value)}
-                  className="focus-ring h-9 min-w-0 flex-1 rounded-full border border-line bg-surface px-3 text-[12px] font-semibold text-ink"
-                >
-                  {mailAccounts.length > 1 ? (
-                    <option value={ALL_ACCOUNTS}>Tous les comptes</option>
-                  ) : null}
-                  {mailAccounts.map((entry) => (
-                    <option key={entry.id} value={entry.id}>
-                      {entry.label}
-                    </option>
-                  ))}
-                </select>
+                {folderOptions.length > 0 ? (
+                  <select
+                    aria-label="Dossier"
+                    value={`${folder}:${folderPath ?? ""}`}
+                    onChange={(event) => {
+                      const [id, path] = event.target.value.split(":");
+                      setFolder(id as FolderId, id === "other" ? (path ?? null) : null);
+                    }}
+                    className="focus-ring h-9 min-w-0 flex-1 rounded-full border border-line bg-surface px-3 text-[12px] font-semibold text-ink"
+                  >
+                    {folderOptions.map((entry) => (
+                      <option key={`${entry.id}:${entry.path}`} value={`${entry.id}:${entry.path}`}>
+                        {entry.id === "other" ? entry.path : entry.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+                {mailAccounts.length > 0 ? (
+                  <select
+                    aria-label="Compte"
+                    value={account}
+                    onChange={(event) => setAccount(event.target.value)}
+                    className="focus-ring h-9 min-w-0 flex-1 rounded-full border border-line bg-surface px-3 text-[12px] font-semibold text-ink"
+                  >
+                    {mailAccounts.length > 1 ? (
+                      <option value={ALL_ACCOUNTS}>Tous les comptes</option>
+                    ) : null}
+                    {mailAccounts.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
                 {myKey && pgpState ? (
                   <Badge tone={pgpTone} className="self-center">
                     PGP · {PGP_STATE[pgpState].label}

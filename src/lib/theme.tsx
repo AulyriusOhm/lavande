@@ -4,16 +4,29 @@ import { isTauriShell } from "@/lib/open-external";
 import { applySystemBars } from "@/lib/system-bars";
 
 export const ACCENT_PRESETS = [
-  { name: "Lavande", value: "#8b7cf6" },
-  { name: "Iris", value: "#6366f1" },
-  { name: "Lilas", value: "#c084fc" },
-  { name: "Rose poudré", value: "#f472b6" },
-  { name: "Menthe", value: "#34d399" },
-  { name: "Océan", value: "#38bdf8" },
-  { name: "Ambre", value: "#f59e0b" },
-  { name: "Corail", value: "#fb7185" },
-  { name: "Graphite", value: "#64748b" },
+  { name: "Lavande", value: "#705ce8" },
+  { name: "Iris", value: "#5550e6" },
+  { name: "Lilas", value: "#9333ea" },
+  { name: "Rose poudré", value: "#d92672" },
+  { name: "Menthe", value: "#047857" },
+  { name: "Océan", value: "#0369a1" },
+  { name: "Ambre", value: "#b45309" },
+  { name: "Corail", value: "#dc264c" },
+  { name: "Graphite", value: "#54647a" },
 ];
+
+/** Anciennes teintes pastel des préréglages : migrées vers leurs versions contrastées (texte blanc ≥ 4,5:1). */
+const LEGACY_PRESET_MAP: Record<string, string> = {
+  "#8b7cf6": "#705ce8",
+  "#6366f1": "#5550e6",
+  "#c084fc": "#9333ea",
+  "#f472b6": "#d92672",
+  "#34d399": "#047857",
+  "#38bdf8": "#0369a1",
+  "#f59e0b": "#b45309",
+  "#fb7185": "#dc264c",
+  "#64748b": "#54647a",
+};
 
 const DEFAULT_ACCENT = ACCENT_PRESETS[0].value;
 const STORAGE_KEY = "lavande.theme";
@@ -53,7 +66,12 @@ type Stored = { accent?: string; dark?: boolean; mode?: ThemeMode };
 
 function readStored(): Stored {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}") as Stored;
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}") as Stored;
+    if (typeof parsed.accent === "string") {
+      const migrated = LEGACY_PRESET_MAP[parsed.accent.toLowerCase()];
+      if (migrated) return { ...parsed, accent: migrated };
+    }
+    return parsed;
   } catch {
     return {};
   }
@@ -91,8 +109,10 @@ export function contrastRatio(a: string, b: string) {
 export function accentContrast(accent: string) {
   const light = contrastRatio(accent, CONTRAST_LIGHT);
   const dark = contrastRatio(accent, CONTRAST_DARK);
-  const best = light >= dark ? CONTRAST_LIGHT : CONTRAST_DARK;
-  return Math.max(light, dark) >= CONTRAST_MIN ? best : CONTRAST_FALLBACK;
+  if (light >= dark) return CONTRAST_LIGHT;
+  if (dark >= CONTRAST_MIN) return CONTRAST_DARK;
+  const black = contrastRatio(accent, CONTRAST_FALLBACK);
+  return black > light ? CONTRAST_FALLBACK : CONTRAST_LIGHT;
 }
 
 export function accountTint(colour: string) {

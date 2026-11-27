@@ -264,7 +264,7 @@ function MonthView({
   const cells = monthCells(year, month);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col pb-[92px]">
       <div className="grid shrink-0 grid-cols-7 border-b border-line">
         {WEEKDAYS.map((weekday, index) => (
           <span
@@ -386,7 +386,7 @@ function Timeline({
   };
 
   return (
-    <div data-testid={single ? undefined : "week-grid"} className="flex items-start">
+    <div data-testid={single ? undefined : "week-grid"} className="flex items-start pt-3 pb-[104px]">
       <div className="relative w-[58px] shrink-0" style={{ height: TIMELINE_HEIGHT }}>
         {HOURS.map((minutes) => (
           <span
@@ -642,7 +642,7 @@ function ListView({
         </span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-1 pb-6">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-1 pb-[104px]">
         {groups.length === 0 ? (
           <EmptyState
             icon={<CalendarDays className="size-5" strokeWidth={2.2} />}
@@ -1389,7 +1389,7 @@ export function DesktopCalendar({
       data-testid="calendar-layout"
       className={cn("flex h-full min-h-0 w-full", narrow ? "flex-col overflow-y-auto" : "flex-row")}
     >
-      <section className={cn("flex min-h-0 min-w-0 flex-1 flex-col", narrow && "min-h-[520px]")}>
+      <section className={cn("flex min-h-0 min-w-0 flex-1 flex-col", narrow && "min-h-[640px] shrink-0")}>
         <header
           data-testid="calendar-header"
           className={cn(
@@ -1522,7 +1522,7 @@ export function DesktopCalendar({
           narrow ? "w-full border-t" : "min-w-[320px] w-[32%] max-w-[440px] border-l",
         )}
       >
-        <div className={cn("flex min-h-0 flex-col gap-3.5 px-4 pt-4", narrow ? "pb-6" : "flex-1 overflow-y-auto pb-6")}>
+        <div className={cn("flex min-h-0 flex-col gap-3.5 px-4 pt-4", narrow ? "pb-[104px]" : "flex-1 overflow-y-auto pb-[104px]")}>
           {mode === "month" ? null : (
             <MiniMonth
               anchor={anchor}

@@ -31,12 +31,12 @@ import { categoryColorStyle } from "@/components/category-manager-sheet";
 import { accountLabelInk, accountTint, useTheme } from "@/lib/theme";
 
 const ACCOUNT_CHIP_TIERS = [
-  { max: 6, classes: "text-[10.5px] tracking-[0.08em]" },
-  { max: 8, classes: "text-[9.5px] tracking-[0.05em]" },
-  { max: 10, classes: "text-[8.5px] tracking-[0.03em]" },
+  { max: 6, classes: "text-[10.5px] tracking-[0.06em]" },
+  { max: 8, classes: "text-[10px] tracking-[0.04em]" },
+  { max: 10, classes: "text-[9.5px] tracking-[0.02em]" },
 ] as const;
 
-const ACCOUNT_CHIP_TIGHT = "text-[8px] tracking-[0.01em]";
+const ACCOUNT_CHIP_TIGHT = "text-[9.5px] tracking-[0.01em]";
 
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_SLOP = 10;
@@ -108,6 +108,7 @@ export function ThreadRow({
   const { accountById, isDecisionReady } = useMailStore();
   const account = accountById(mail.account);
   const senderName = mail.folder === "sent" && mail.to ? `À ${mail.to}` : mail.name;
+  const avatarName = mail.folder === "sent" && mail.to ? mail.to : mail.name;
   const unread = thread.unread > 0;
   const { swipeLeft, swipeRight } = usePrefs();
   const { dark } = useTheme();
@@ -340,7 +341,7 @@ export function ThreadRow({
       >
         <div className={cn("flex w-[56px] shrink-0 flex-col items-start", tight ? "gap-0.5" : "gap-1")}>
           {thread.count > 1 ? (
-            <div className={cn("relative", tight ? "h-[32px] w-[44px]" : "h-[48px] w-[56px]")}>
+            <div className={cn("relative", tight ? "h-[32px] w-[44px]" : "h-[44px] w-[56px]")}>
               <span
                 className={cn(
                   "absolute bottom-0 rounded-[14px] border border-line bg-surface-2/70",
@@ -354,20 +355,20 @@ export function ThreadRow({
                 )}
               />
               <Avatar
-                name={senderName}
+                name={avatarName}
                 tone={mail.tone}
                 size={avatarSize}
                 className="absolute bottom-0 left-0"
               />
               {unread && (
-                <span className="absolute top-0 left-0 size-2.5 rounded-full border-2 border-surface bg-accent" />
+                <span className="absolute top-0 -left-0.5 size-2.5 rounded-full border-2 border-surface bg-accent" />
               )}
             </div>
           ) : (
-            <div className={cn("relative flex w-[56px] items-end", tight ? "h-[32px]" : "h-[48px]")}>
-              <Avatar name={senderName} tone={mail.tone} size={avatarSize} className="relative" />
+            <div className={cn("relative flex w-[56px] items-end", tight ? "h-[32px]" : "h-[44px]")}>
+              <Avatar name={avatarName} tone={mail.tone} size={avatarSize} className="relative" />
               {unread && (
-                <span className="absolute top-[3px] left-0 size-2.5 rounded-full border-2 border-surface bg-accent" />
+                <span className="absolute top-0 -left-0.5 size-2.5 rounded-full border-2 border-surface bg-accent" />
               )}
             </div>
           )}
@@ -376,9 +377,9 @@ export function ThreadRow({
               data-account-chip={account.id}
               title={account.label}
               className={cn(
-                "-ml-1 inline-block max-w-[64px] overflow-hidden text-clip whitespace-nowrap rounded-full leading-none font-extrabold uppercase",
+                "inline-block max-w-[60px] overflow-hidden text-clip whitespace-nowrap rounded-full leading-none font-extrabold uppercase",
                 tight
-                  ? "px-1 py-[2px] text-[8px] tracking-[0.02em]"
+                  ? "px-1 py-[2px] text-[9.5px] tracking-[0.02em]"
                   : cn("px-1.5 py-[3px]", accountChipFont(account.label)),
               )}
               style={{
@@ -405,7 +406,7 @@ export function ThreadRow({
             </div>
 
             <span className="flex shrink-0 items-center gap-1.5">
-              {tight && mail.pgp !== "none" ? (
+              {mail.pgp !== "none" ? (
                 <PgpBadge state={mail.pgp} detail={mail.pgp_detail} compact className="size-4" />
               ) : null}
               {mail.answered ? (
@@ -452,7 +453,7 @@ export function ThreadRow({
 
           {thirdLine}
 
-          {(badges.length > 0 || (!tight && mail.pgp !== "none")) && (
+          {badges.length > 0 && (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               {badges.map((badge) => (
                 <span
@@ -465,7 +466,6 @@ export function ThreadRow({
                   {badge.label}
                 </span>
               ))}
-              {!tight ? <PgpBadge state={mail.pgp} detail={mail.pgp_detail} compact className="ml-auto" /> : null}
             </div>
           )}
         </div>

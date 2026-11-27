@@ -404,7 +404,7 @@ export function PlanningScreen({
                     if (event.key === "Enter") onOpenTask(task);
                   }}
                   className={cn(
-                    "flex cursor-pointer items-center gap-3 rounded-2xl border px-3 py-2.5 transition-colors",
+                    "flex cursor-pointer items-start gap-3 rounded-2xl border px-3 py-2.5 transition-colors",
                     done ? "border-line/70 bg-surface/60" : "border-line bg-surface hover:border-accent-ring/70",
                   )}
                 >
@@ -417,7 +417,7 @@ export function PlanningScreen({
                       setState(task.id, done ? "todo" : "done");
                     }}
                     className={cn(
-                      "relative grid size-5 shrink-0 place-items-center rounded-md border-2 transition-colors before:absolute before:-inset-3 before:rounded-full before:content-['']",
+                      "relative mt-0.5 grid size-5 shrink-0 place-items-center rounded-md border-2 transition-colors before:absolute before:-inset-3 before:rounded-full before:content-['']",
                       done ? "border-accent bg-accent text-accent-contrast" : "border-accent-ring/70 hover:border-accent",
                     )}
                   >
@@ -427,23 +427,13 @@ export function PlanningScreen({
                   <div className="min-w-0 flex-1">
                     <p
                       className={cn(
-                        "line-clamp-2 text-[12.5px] leading-tight font-bold",
+                        "line-clamp-2 text-[13px] leading-snug font-bold",
                         done ? "text-ink-muted line-through" : "text-ink",
                       )}
                     >
                       {task.title}
                     </p>
-                    <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug font-medium text-ink-muted">{task.meta}</p>
-                    {task.assignee ? (
-                      <span
-                        data-testid="assignee-chip"
-                        title={`Assigné à ${task.assignee}`}
-                        className="mt-1 inline-flex max-w-full items-center gap-1 rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent-ink"
-                      >
-                        <UserRound className="size-2.5 shrink-0" strokeWidth={2.8} />
-                        <span className="truncate">{task.assignee}</span>
-                      </span>
-                    ) : null}
+                    <p className="mt-0.5 line-clamp-2 text-[11.5px] leading-snug font-medium text-ink-muted">{task.meta}</p>
                     {typeof task.progress === "number" && !done ? (
                       <div className="mt-1.5 flex items-center gap-1.5">
                         <div
@@ -461,34 +451,44 @@ export function PlanningScreen({
                         </span>
                       </div>
                     ) : null}
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      {task.dueTone !== "none" ? (
+                        <span
+                          className={cn(
+                            "shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-extrabold whitespace-nowrap",
+                            DUE_STYLE[task.dueTone],
+                          )}
+                        >
+                          {task.due}
+                        </span>
+                      ) : null}
+                      {task.assignee ? (
+                        <span
+                          data-testid="assignee-chip"
+                          title={`Assigné à ${task.assignee}`}
+                          className="inline-flex max-w-full items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-[10.5px] font-bold text-accent-ink"
+                        >
+                          <UserRound className="size-2.5 shrink-0" strokeWidth={2.8} />
+                          <span className="truncate">{task.assignee}</span>
+                        </span>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setMoving(task);
+                        }}
+                        aria-label={`Changer l'état de ${task.title}`}
+                        className={cn(
+                          "relative ml-auto inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 text-[11px] font-extrabold before:absolute before:-inset-y-1.5 before:-inset-x-1 before:rounded-full before:content-['']",
+                          meta.chip,
+                        )}
+                      >
+                        {meta.label}
+                        <ChevronRight className="size-2.5 opacity-70" />
+                      </button>
+                    </div>
                   </div>
-
-                  {task.dueTone !== "none" ? (
-                    <span
-                      className={cn(
-                        "shrink-0 rounded-full px-2 py-1 text-[10.5px] font-extrabold whitespace-nowrap",
-                        DUE_STYLE[task.dueTone],
-                      )}
-                    >
-                      {task.due}
-                    </span>
-                  ) : null}
-
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setMoving(task);
-                    }}
-                    aria-label={`Changer l'état de ${task.title}`}
-                    className={cn(
-                      "inline-flex min-h-11 shrink-0 items-center gap-1 rounded-full px-2.5 text-[11px] font-extrabold",
-                      meta.chip,
-                    )}
-                  >
-                    {meta.label}
-                    <ChevronRight className="size-2.5 opacity-70" />
-                  </button>
                 </div>
               </BlurFade>
             );

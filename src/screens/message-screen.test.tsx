@@ -354,7 +354,7 @@ describe("reprise d'un brouillon", () => {
     const onResume = vi.fn();
     const draft = renderDraft(onResume);
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Reprendre le brouillon" })[1]);
+    fireEvent.click(screen.getByRole("button", { name: "Reprendre le brouillon" }));
 
     expect(onResume).toHaveBeenCalledWith(draft);
     expect(screen.queryAllByLabelText("Répondre")).toHaveLength(0);

@@ -1476,7 +1476,9 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
               </PaneTitle>
               <Badge tone="accent">{brand}</Badge>
             </div>
-            <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">v0.1.0</span>
+            <span className="text-[10.5px] font-bold tracking-[0.16em] text-ink-muted uppercase">
+              v{installedVersion}
+            </span>
           </header>
 
           <div
@@ -3798,7 +3800,7 @@ export function DesktopSettings({ onOpenPgp }: { onOpenPgp?: () => void }) {
               <Block id="apropos" label="À propos">
                 <Surface className="flex flex-wrap items-center justify-between gap-3 p-4">
                   <div className="leading-tight">
-                    <p className="text-[12.5px] font-bold text-ink">{brand} · v0.1.0</p>
+                    <p className="text-[12.5px] font-bold text-ink">{brand} · v{installedVersion}</p>
                     <p className="mt-0.5 text-[11.5px] font-medium text-ink-muted">
                       React 19 · Vite 7 · Tailwind 4 · Tauri v2
                     </p>
