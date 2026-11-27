@@ -421,6 +421,8 @@ export type MailStoreValue = {
   events: CalendarEvent[];
   selectedDate: string;
   openMail: Mail | null;
+  /** Incrémenté à chaque demande d'ouverture, même pour un mail déjà ouvert. */
+  messageOpenSeq: number;
   openThread: Thread | undefined;
   /** Message dont le corps est en cours de lecture sur le serveur. */
   bodyFetching: string | null;
@@ -586,6 +588,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   const [removeTarget, setRemoveTarget] = useState<Account | null>(null);
   const [selectedDate, setSelectedDate] = useState(TODAY_ISO);
   const [openMail, setOpenMail] = useState<Mail | null>(null);
+  const [messageOpenSeq, setMessageOpenSeq] = useState(0);
   /** Fil complet du message ouvert, tous dossiers du compte : `null` tant que
    * le démon n'a pas répondu, le fil local fait alors foi. */
   const [fullThread, setFullThread] = useState<Mail[] | null>(null);
@@ -1774,6 +1777,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       setOpenMail({ ...mail, unread: false });
+      setMessageOpenSeq((value) => value + 1);
       if (!demoReadOnly) {
         setMails((current) =>
           current.map((item) => (item.id === mail.id ? { ...item, unread: false } : item)),
@@ -3055,7 +3059,9 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     const kept =
       excludedAccounts.size === 0
         ? visible
-        : visible.filter((suggestion) => !excludedAccounts.has(suggestion.account));
+        : visible.filter(
+            (suggestion) => suggestion.explicit === true || !excludedAccounts.has(suggestion.account),
+          );
     return kept.filter(
       (suggestion) => suggestion.explicit === true || !alreadyReplied(inboxIndex.get(suggestion.mailId)),
     );
@@ -3091,7 +3097,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
    * une même action ne devient jamais deux suggestions.
    */
   const proposeTasks = useCallback(
-    (proposed: SummaryTask[], byId: Map<string, Mail>, label: string): number => {
+    (proposed: SummaryTask[], byId: Map<string, Mail>, label: string, explicit = false): number => {
       const known = new Set([
         ...planning.suggestions.map((entry) => `${entry.mailId}:${normalize(entry.proposal)}`),
         ...planning.tasks.map((entry) => `${entry.mailId ?? ""}:${normalize(entry.title)}`),
@@ -3111,14 +3117,33 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       let added = 0;
       for (const task of proposed) {
         const mail = task.mailId ? byId.get(task.mailId) : undefined;
-        if (alreadyReplied(mail)) continue;
+        if (!explicit && alreadyReplied(mail)) continue;
         const suggestion = summarySuggestion(task, mail, label);
         const key = `${suggestion.mailId}:${normalize(suggestion.proposal)}`;
-        if (known.has(key)) continue;
+        if (known.has(key)) {
+          if (!explicit) continue;
+          const match = planning.suggestions.find(
+            (entry) =>
+              entry.kind !== "event" &&
+              entry.mailId === suggestion.mailId &&
+              normalize(entry.proposal) === normalize(suggestion.proposal),
+          );
+          if (
+            match !== undefined &&
+            planning.proposeSuggestion({ ...match, timestamp: Date.now(), explicit: true }, true)
+          ) {
+            added += 1;
+          }
+          continue;
+        }
         const candidate = { mailId: suggestion.mailId, title: suggestion.proposal, when: suggestion.due };
         if (nearDuplicate(existing, candidate)) continue;
         known.add(key);
         existing.push(candidate);
+        if (explicit) {
+          suggestion.timestamp = Date.now();
+          suggestion.explicit = true;
+        }
         if (planning.proposeSuggestion(suggestion)) added += 1;
       }
       return added;
@@ -3574,9 +3599,10 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
   /** Une tâche analysée suit le circuit de suggestions : validation humaine obligatoire. */
   const acceptAnalyseTask = useCallback(
     (task: AnalyseTask) => {
-      proposeTasks([task], inboxIndex, "Analyse IA");
+      const added = proposeTasks([task], inboxIndex, "Analyse IA", true);
+      notify(added > 0 ? "Tâche proposée dans la planification" : "Tâche déjà proposée dans la planification");
     },
-    [inboxIndex, proposeTasks],
+    [inboxIndex, notify, proposeTasks],
   );
 
   const acceptAnalyseEvent = useCallback(
@@ -3783,6 +3809,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       events,
       selectedDate,
       openMail: resolvedOpenMail,
+      messageOpenSeq,
       openThread,
       bodyFetching,
       fetchBody,
@@ -3903,6 +3930,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       events,
       selectedDate,
       resolvedOpenMail,
+      messageOpenSeq,
       openThread,
       bodyFetching,
       fetchBody,
