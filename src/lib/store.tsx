@@ -33,8 +33,8 @@ import { hasCriteria, mergeCriteria, parseSearchQuery } from "@/lib/search-query
 import type { SearchCriteria, SearchFilter } from "@/lib/search-query";
 import { threadOf } from "@/lib/threads";
 import type { Thread } from "@/lib/threads";
-import type { MailSuggestion, Task } from "@/lib/tasks";
-import { dueToneFor, formatDueDate, isoToday } from "@/lib/tasks";
+import type { MailSuggestion, Task, TaskState } from "@/lib/tasks";
+import { dueToneFor, formatDueDate, isoToday, sortTasks } from "@/lib/tasks";
 import {
   currentPeriod,
   generateSummary,
@@ -413,7 +413,7 @@ export type MailStoreValue = {
   runAnalyse: (mail: Mail, force?: boolean) => Promise<void>;
   closeAnalyse: () => void;
   /** Une tâche analysée devient une suggestion en attente, jamais une tâche. */
-  acceptAnalyseTask: (task: AnalyseTask) => void;
+  acceptAnalyseTask: (task: AnalyseTask, state: TaskState) => boolean;
   /** Un rendez-vous analysé devient une suggestion en attente, jamais un événement. */
   acceptAnalyseEvent: (event: SummaryEvent) => void;
   /** Réponse pré-remplie : ouvre la réponse au mail avec ce corps. */
@@ -3097,7 +3097,7 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
    * une même action ne devient jamais deux suggestions.
    */
   const proposeTasks = useCallback(
-    (proposed: SummaryTask[], byId: Map<string, Mail>, label: string, explicit = false): number => {
+    (proposed: SummaryTask[], byId: Map<string, Mail>, label: string): number => {
       const known = new Set([
         ...planning.suggestions.map((entry) => `${entry.mailId}:${normalize(entry.proposal)}`),
         ...planning.tasks.map((entry) => `${entry.mailId ?? ""}:${normalize(entry.title)}`),
@@ -3117,33 +3117,14 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
       let added = 0;
       for (const task of proposed) {
         const mail = task.mailId ? byId.get(task.mailId) : undefined;
-        if (!explicit && alreadyReplied(mail)) continue;
+        if (alreadyReplied(mail)) continue;
         const suggestion = summarySuggestion(task, mail, label);
         const key = `${suggestion.mailId}:${normalize(suggestion.proposal)}`;
-        if (known.has(key)) {
-          if (!explicit) continue;
-          const match = planning.suggestions.find(
-            (entry) =>
-              entry.kind !== "event" &&
-              entry.mailId === suggestion.mailId &&
-              normalize(entry.proposal) === normalize(suggestion.proposal),
-          );
-          if (
-            match !== undefined &&
-            planning.proposeSuggestion({ ...match, timestamp: Date.now(), explicit: true }, true)
-          ) {
-            added += 1;
-          }
-          continue;
-        }
+        if (known.has(key)) continue;
         const candidate = { mailId: suggestion.mailId, title: suggestion.proposal, when: suggestion.due };
         if (nearDuplicate(existing, candidate)) continue;
         known.add(key);
         existing.push(candidate);
-        if (explicit) {
-          suggestion.timestamp = Date.now();
-          suggestion.explicit = true;
-        }
         if (planning.proposeSuggestion(suggestion)) added += 1;
       }
       return added;
@@ -3596,13 +3577,51 @@ export function MailStoreProvider({ children }: { children: React.ReactNode }) {
     [decisionIndex, events, folderRecords, mails, mode, prefs.decision.thresholds, prefs.llm, teamContextFor],
   );
 
-  /** Une tâche analysée suit le circuit de suggestions : validation humaine obligatoire. */
+  /** Ajout explicite : le clic vaut validation, la tâche est créée directement dans l'état choisi. */
   const acceptAnalyseTask = useCallback(
-    (task: AnalyseTask) => {
-      const added = proposeTasks([task], inboxIndex, "Analyse IA", true);
-      notify(added > 0 ? "Tâche proposée dans la planification" : "Tâche déjà proposée dans la planification");
+    (task: AnalyseTask, state: TaskState): boolean => {
+      if (readOnlyBlocked()) return false;
+      const title = task.title.trim();
+      if (!title) return false;
+      const mailId = task.mailId ?? "";
+      const duplicate = planning.tasks.some(
+        (entry) => (entry.mailId ?? "") === mailId && normalize(entry.title) === normalize(title),
+      );
+      if (duplicate) {
+        notify("Tâche déjà dans la planification");
+        return false;
+      }
+      const mail = mailId ? inboxIndex.get(mailId) : undefined;
+      const from = task.from || mail?.name || "";
+      const day = ISO_DAY.test(task.due) ? task.due : "";
+      const id = `t-${Date.now()}`;
+      const created: Task = {
+        id,
+        title,
+        meta: from ? `mail · ${from}` : "mail",
+        state,
+        due: day ? formatDueDate(day) : "sans échéance",
+        dueTone: day ? dueToneFor(day) : "none",
+        ...(day ? { dueDate: day } : {}),
+        description: "Analyse IA",
+        ...(mailId ? { mailId } : {}),
+        ...(task.assignee ? { assignee: task.assignee } : {}),
+      };
+      setTasks((current) => sortTasks([created, ...current]));
+      const matching = planning.suggestions.find(
+        (entry) =>
+          entry.kind !== "event" &&
+          entry.mailId === mailId &&
+          normalize(entry.proposal) === normalize(title),
+      );
+      if (matching) planning.dismissSuggestion(matching);
+      notify("Tâche ajoutée à la planification", {
+        label: "Annuler",
+        run: () => setTasks((current) => current.filter((entry) => entry.id !== id)),
+      });
+      return true;
     },
-    [inboxIndex, notify, proposeTasks],
+    [inboxIndex, notify, planning, readOnlyBlocked, setTasks],
   );
 
   const acceptAnalyseEvent = useCallback(

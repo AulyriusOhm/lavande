@@ -1,11 +1,12 @@
-import { useEffect } from "react";
-import { AlertTriangle, Clock, Loader2, MapPin, Sparkles, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertTriangle, Check, Clock, Loader2, MapPin, Sparkles, X } from "lucide-react";
 import type { AnalyseResult, AnalyseTask, FreeSlot } from "@/lib/analyse";
 import type { SummaryEvent } from "@/lib/summary";
 import type { MailAnalyse } from "@/lib/store";
 import type { Mail } from "@/lib/mail";
-import { dueToneFor, formatDueDate } from "@/lib/tasks";
-import { clockOf } from "@/lib/utils";
+import type { TaskState } from "@/lib/tasks";
+import { TASK_STATES, dueToneFor, formatDueDate, stateMeta } from "@/lib/tasks";
+import { clockOf, cn } from "@/lib/utils";
 import { isoTime } from "@/lib/calendar";
 import { Badge, DButton, DIconButton } from "@/desktop/ui";
 
@@ -23,8 +24,10 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
-function TaskCard({ task, onAccept }: { task: AnalyseTask; onAccept: () => void }) {
+function TaskCard({ task, onAccept }: { task: AnalyseTask; onAccept: (state: TaskState) => boolean }) {
   const day = ISO_DAY.test(task.due) ? task.due : "";
+  const [picking, setPicking] = useState(false);
+  const [added, setAdded] = useState<TaskState | null>(null);
   return (
     <div
       data-testid="analyse-task"
@@ -44,9 +47,39 @@ function TaskCard({ task, onAccept }: { task: AnalyseTask; onAccept: () => void 
           </span>
         ) : null}
       </div>
-      <DButton size="sm" variant="soft" className="mt-2 max-sm:min-h-11" onClick={onAccept}>
-        Ajouter à la planif
-      </DButton>
+      {added ? (
+        <p className="mt-2 flex items-center gap-1.5 text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
+          <Check className="size-3.5" strokeWidth={2.8} />
+          Ajoutée · {stateMeta(added).label}
+        </p>
+      ) : picking ? (
+        <div role="group" aria-label="Choisir l'état de la tâche" className="mt-2 flex flex-wrap items-center gap-1.5">
+          {TASK_STATES.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              onClick={() => {
+                setPicking(false);
+                if (onAccept(entry.id)) setAdded(entry.id);
+              }}
+              className={cn(
+                "focus-ring inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-bold transition-colors max-sm:min-h-11",
+                entry.chip,
+              )}
+            >
+              <span className={cn("size-1.5 rounded-full", entry.dot)} />
+              {entry.label}
+            </button>
+          ))}
+          <DButton size="sm" variant="ghost" className="max-sm:min-h-11" onClick={() => setPicking(false)}>
+            Annuler
+          </DButton>
+        </div>
+      ) : (
+        <DButton size="sm" variant="soft" className="mt-2 max-sm:min-h-11" onClick={() => setPicking(true)}>
+          Ajouter à la planif
+        </DButton>
+      )}
     </div>
   );
 }
@@ -134,7 +167,7 @@ export function AnalysePanel({
   mail: Mail;
   variant: "desktop" | "mobile";
   onClose: () => void;
-  onAcceptTask: (task: AnalyseTask) => void;
+  onAcceptTask: (task: AnalyseTask, state: TaskState) => boolean;
   onAcceptEvent: (event: SummaryEvent) => void;
   onUseReply: (body: string) => void;
   onRetry: () => void;
@@ -197,7 +230,7 @@ export function AnalysePanel({
                 <TaskCard
                   key={`${task.title}-${index}`}
                   task={task}
-                  onAccept={() => onAcceptTask(task)}
+                  onAccept={(state) => onAcceptTask(task, state)}
                 />
               ))}
             </div>

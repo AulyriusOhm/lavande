@@ -6,7 +6,8 @@ import { PlanningProvider } from "@/lib/planning-store";
 import { PrefsProvider } from "@/lib/prefs";
 import { MailStoreProvider, useMailStore, type MailStoreValue } from "@/lib/store";
 import { isoToday } from "@/lib/tasks";
-import { createMemoryStorage } from "@/lib/sync/storage";
+import { createDevice, createMemoryStorage, emptyState, type SyncStorage } from "@/lib/sync/storage";
+import { LOCAL_SCHEMA_VERSION, docKey, suggestionId, type Doc } from "@/lib/sync/merge";
 
 const ALPHA = "alpha";
 const LLM = { endpoint: "https://llm.test/v1", apiKey: "sk-test", model: "modele" };
@@ -124,10 +125,10 @@ function mockBackend(threads: ApiThread[], analysisJson: unknown = ANALYSIS_JSON
   return llmCalls;
 }
 
-function mount() {
+function mount(storage: SyncStorage = createMemoryStorage()) {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <PrefsProvider>
-      <PlanningProvider storage={createMemoryStorage()}>
+      <PlanningProvider storage={storage}>
         <MailStoreProvider>{children}</MailStoreProvider>
       </PlanningProvider>
     </PrefsProvider>
@@ -263,8 +264,8 @@ describe("analyse à la demande · appels au modèle", () => {
   });
 });
 
-describe("analyse à la demande · suggestions validées par l'humain", () => {
-  it("une tâche acceptée devient une suggestion en attente, jamais une tâche", async () => {
+describe("analyse à la demande · ajout direct des tâches", () => {
+  it("une tâche acceptée est ajoutée directement dans l'état choisi", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs();
     mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)]);
@@ -274,16 +275,19 @@ describe("analyse à la demande · suggestions validées par l'humain", () => {
 
     const task = result.current.analyse?.result?.tasks[0];
     expect(task).toBeDefined();
+    let added = false;
     act(() => {
-      result.current.acceptAnalyseTask(task!);
+      added = result.current.acceptAnalyseTask(task!, "doing");
     });
 
-    const suggestion = result.current.suggestions.find((entry) => entry.proposal === "Envoyer le compte rendu");
-    expect(suggestion?.mailId).toBe(MAIL_ID);
-    expect(suggestion?.account).toBe(ALPHA);
-    expect(suggestion?.assignee).toBe("Camille");
-    expect(suggestion?.description).toContain("Analyse IA");
-    expect(result.current.tasks.some((entry) => entry.title === "Envoyer le compte rendu")).toBe(false);
+    expect(added).toBe(true);
+    const created = result.current.tasks.find((entry) => entry.title === "Envoyer le compte rendu");
+    expect(created?.state).toBe("doing");
+    expect(created?.mailId).toBe(MAIL_ID);
+    expect(created?.assignee).toBe("Camille");
+    expect(created?.description).toContain("Analyse IA");
+    expect(result.current.suggestions.some((entry) => entry.proposal === "Envoyer le compte rendu")).toBe(false);
+    expect(result.current.notices.some((entry) => entry.message === "Tâche ajoutée à la planification")).toBe(true);
   });
 
   it("un rendez-vous accepté devient une suggestion en attente, jamais un événement", async () => {
@@ -433,14 +437,19 @@ describe("analyse à la demande · suggestions validées par l'humain", () => {
 
     const task = result.current.analyse?.result?.tasks[0];
     act(() => {
-      result.current.acceptAnalyseTask(task!);
-      result.current.acceptAnalyseTask(task!);
+      result.current.acceptAnalyseTask(task!, "todo");
+    });
+    let second = true;
+    act(() => {
+      second = result.current.acceptAnalyseTask(task!, "todo");
     });
 
-    expect(result.current.suggestions.filter((entry) => entry.proposal === "Envoyer le compte rendu")).toHaveLength(1);
+    expect(second).toBe(false);
+    expect(result.current.tasks.filter((entry) => entry.title === "Envoyer le compte rendu")).toHaveLength(1);
+    expect(result.current.notices.some((entry) => entry.message === "Tâche déjà dans la planification")).toBe(true);
   });
 
-  it("affiche une tâche acceptée même si le mail est plus vieux que la fenêtre", async () => {
+  it("ajoute une tâche même si le mail est plus vieux que la fenêtre", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs();
     const stale = new Date(Date.now() - 100 * H).toISOString();
@@ -452,31 +461,13 @@ describe("analyse à la demande · suggestions validées par l'humain", () => {
     const task = result.current.analyse?.result?.tasks[0];
     expect(task).toBeDefined();
     act(() => {
-      result.current.acceptAnalyseTask(task!);
+      result.current.acceptAnalyseTask(task!, "todo");
     });
 
-    const shown = () => result.current.suggestions.filter((entry) => entry.proposal === "Envoyer le compte rendu");
-    expect(shown()).toHaveLength(1);
-    const first = shown()[0].timestamp;
-    expect(typeof first).toBe("number");
-    expect(first!).toBeGreaterThan(Date.now() - H);
-
-    await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 5));
-    });
-    act(() => {
-      result.current.acceptAnalyseTask(task!);
-    });
-
-    expect(shown()).toHaveLength(1);
-    expect(shown()[0].timestamp!).toBeGreaterThan(first!);
-    expect(result.current.tasks.some((entry) => entry.title === "Envoyer le compte rendu")).toBe(false);
-    expect(
-      result.current.notices.filter((entry) => entry.message === "Tâche proposée dans la planification"),
-    ).toHaveLength(2);
+    expect(result.current.tasks.some((entry) => entry.title === "Envoyer le compte rendu")).toBe(true);
   });
 
-  it("affiche une tâche acceptée même si le mail est déjà répondu", async () => {
+  it("ajoute une tâche même si le mail est déjà répondu", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     seedPrefs();
     const thread = apiThread(1, "Camille", "Maquettes v3", RECEIVED);
@@ -489,16 +480,13 @@ describe("analyse à la demande · suggestions validées par l'humain", () => {
     const task = result.current.analyse?.result?.tasks[0];
     expect(task).toBeDefined();
     act(() => {
-      result.current.acceptAnalyseTask(task!);
+      result.current.acceptAnalyseTask(task!, "todo");
     });
 
-    const shown = result.current.suggestions.filter((entry) => entry.proposal === "Envoyer le compte rendu");
-    expect(shown).toHaveLength(1);
-    expect(shown[0].explicit).toBe(true);
-    expect(result.current.notices.some((entry) => entry.message === "Tâche proposée dans la planification")).toBe(true);
+    expect(result.current.tasks.some((entry) => entry.title === "Envoyer le compte rendu")).toBe(true);
   });
 
-  it("affiche une tâche acceptée même si le compte est exclu des suggestions IA", async () => {
+  it("ajoute une tâche même si le compte est exclu des suggestions IA", async () => {
     vi.stubEnv("VITE_MAIL_BACKEND", "api");
     window.localStorage.setItem(
       "lavande.prefs",
@@ -516,11 +504,72 @@ describe("analyse à la demande · suggestions validées par l'humain", () => {
     const task = result.current.analyse?.result?.tasks[0];
     expect(task).toBeDefined();
     act(() => {
-      result.current.acceptAnalyseTask(task!);
+      result.current.acceptAnalyseTask(task!, "todo");
     });
 
-    const shown = result.current.suggestions.filter((entry) => entry.proposal === "Envoyer le compte rendu");
-    expect(shown).toHaveLength(1);
-    expect(shown[0].explicit).toBe(true);
+    expect(result.current.tasks.some((entry) => entry.title === "Envoyer le compte rendu")).toBe(true);
+  });
+
+  it("Annuler retire la tâche ajoutée", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs();
+    mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)]);
+    const { result } = mount();
+    await openMailOf(result);
+    await run(result);
+
+    const task = result.current.analyse?.result?.tasks[0];
+    act(() => {
+      result.current.acceptAnalyseTask(task!, "todo");
+    });
+    const notice = result.current.notices.find((entry) => entry.message === "Tâche ajoutée à la planification");
+    act(() => {
+      notice?.onAction?.();
+    });
+
+    expect(result.current.tasks.some((entry) => entry.title === "Envoyer le compte rendu")).toBe(false);
+  });
+
+  it("masque la suggestion en attente correspondante quand la tâche est ajoutée", async () => {
+    vi.stubEnv("VITE_MAIL_BACKEND", "api");
+    seedPrefs();
+    const id = suggestionId(`${ALPHA}:${MAIL_ID}`, "Envoyer le compte rendu");
+    const doc: Doc = {
+      id,
+      kind: "suggestion",
+      v: LOCAL_SCHEMA_VERSION,
+      raw: {
+        status: "pending",
+        mailId: MAIL_ID,
+        account: ALPHA,
+        from: "Camille",
+        subject: "Maquettes v3",
+        proposal: "Envoyer le compte rendu",
+        due: "",
+        dueTone: "none",
+        tone: 0,
+        description: "",
+        ai: true,
+      },
+      fields: {},
+      readOnly: false,
+      updatedAt: new Date(0).toISOString(),
+    };
+    const base = emptyState(createDevice("test", "test"));
+    const storage = createMemoryStorage({ ...base, docs: { [docKey("suggestion", id)]: doc } });
+    mockBackend([apiThread(1, "Camille", "Maquettes v3", RECEIVED)]);
+    const { result } = mount(storage);
+    await openMailOf(result);
+    await run(result);
+
+    expect(result.current.suggestions.some((entry) => entry.proposal === "Envoyer le compte rendu")).toBe(true);
+
+    const task = result.current.analyse?.result?.tasks[0];
+    act(() => {
+      result.current.acceptAnalyseTask(task!, "todo");
+    });
+
+    expect(result.current.tasks.some((entry) => entry.title === "Envoyer le compte rendu")).toBe(true);
+    expect(result.current.suggestions.some((entry) => entry.proposal === "Envoyer le compte rendu")).toBe(false);
   });
 });

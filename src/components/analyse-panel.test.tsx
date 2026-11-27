@@ -165,16 +165,43 @@ describe("panneau d'analyse · états et actions", () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  it("accepte une tâche et un rendez-vous", () => {
-    const onAcceptTask = vi.fn();
+  it("accepte une tâche dans l'état choisi et un rendez-vous", () => {
+    const onAcceptTask = vi.fn(() => true);
     const onAcceptEvent = vi.fn();
     mount(ready(), { onAcceptTask, onAcceptEvent });
 
     fireEvent.click(screen.getByText("Ajouter à la planif"));
-    expect(onAcceptTask).toHaveBeenCalledWith(RESULT.tasks[0]);
+    expect(onAcceptTask).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "En cours" }));
+    expect(onAcceptTask).toHaveBeenCalledWith(RESULT.tasks[0], "doing");
+    expect(screen.getByText("Ajoutée · En cours")).toBeTruthy();
+    expect(screen.queryByText("Ajouter à la planif")).toBeNull();
 
     fireEvent.click(screen.getByText("Proposer à l'agenda"));
     expect(onAcceptEvent).toHaveBeenCalledWith(RESULT.events[0]);
+  });
+
+  it("annule le choix d'état sans rien ajouter", () => {
+    const onAcceptTask = vi.fn(() => true);
+    mount(ready(), { onAcceptTask });
+
+    fireEvent.click(screen.getByText("Ajouter à la planif"));
+    fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
+
+    expect(onAcceptTask).not.toHaveBeenCalled();
+    expect(screen.getByText("Ajouter à la planif")).toBeTruthy();
+  });
+
+  it("garde la carte ajoutable quand l'ajout est refusé (doublon)", () => {
+    const onAcceptTask = vi.fn(() => false);
+    mount(ready(), { onAcceptTask });
+
+    fireEvent.click(screen.getByText("Ajouter à la planif"));
+    fireEvent.click(screen.getByRole("button", { name: "À faire" }));
+
+    expect(onAcceptTask).toHaveBeenCalledWith(RESULT.tasks[0], "todo");
+    expect(screen.queryByText(/Ajoutée ·/)).toBeNull();
+    expect(screen.getByText("Ajouter à la planif")).toBeTruthy();
   });
 
   it("remet la réponse suggérée dans une réponse", () => {
