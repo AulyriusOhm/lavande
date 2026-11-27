@@ -600,6 +600,7 @@ export type ExternalEvent = {
   organizer?: string | null;
   /** Adresses des invités, `mailto:` retiré. */
   attendees?: string[] | null;
+  etag?: string | null;
   source: string | null;
 };
 

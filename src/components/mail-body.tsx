@@ -115,11 +115,15 @@ img{height:auto!important}
 }`;
 }
 
+const MAIL_CSP =
+  "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob: http: https:; font-src 'self' data:; script-src 'none'";
+
 export function mailDocument(body: string, theme: Theme) {
   return `<!DOCTYPE html>
 <html lang="fr">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="${MAIL_CSP}">
 <base target="_blank">
 <style>${mailStyles(theme)}</style>
 </head>

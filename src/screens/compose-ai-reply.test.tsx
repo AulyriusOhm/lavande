@@ -104,7 +104,7 @@ describe("suggestion de réponse · IA", () => {
     expect(await screen.findByText("IA")).toBeTruthy();
     expect(screen.getByText("C'est confirmé.")).toBeTruthy();
 
-    const init = fetchMock.mock.calls.at(-1)?.[1] as RequestInit;
+    const init = (fetchMock.mock.calls.at(-1) as unknown[] | undefined)?.[1] as RequestInit;
     const user = JSON.parse(String(init.body)).messages[1].content as string;
     expect(user).toContain("<<<CONVERSATION>>>");
     expect(user).toContain("<<<FIN_CONVERSATION>>>");

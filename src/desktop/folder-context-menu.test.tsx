@@ -145,7 +145,7 @@ function rightClick(path: string, x = 150, y = 220) {
 }
 
 async function openRail() {
-  render(<DesktopInbox />, { wrapper });
+  render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
   await waitFor(() => expect(document.querySelector(`[data-folder-row="${INBOX}"]`)).toBeTruthy());
 }
 

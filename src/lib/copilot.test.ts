@@ -205,10 +205,10 @@ describe("useCopilotSession", () => {
     const { result } = renderHook(() => useCopilotSession());
     expect(result.current.connected).toBe(true);
 
-    await act(async () => {
+    act(() => {
       result.current.disconnect();
-      await waitFor(() => expect(result.current.connected).toBe(false));
     });
+    await waitFor(() => expect(result.current.connected).toBe(false));
 
     expect(result.current.login).toBeNull();
     expect(

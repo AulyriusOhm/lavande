@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use lavande_sync::{config::Config, db, routes, state::AppState};
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tracing_subscriber::EnvFilter;
+
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(900);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -19,6 +21,27 @@ async fn main() -> Result<()> {
         pool,
         config: Arc::new(config),
     };
+    let cleanup_pool = state.pool.clone();
+    let cleanup_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(CLEANUP_INTERVAL);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            if let Err(err) = sqlx::query("delete from sessions where expires_at <= now()")
+                .execute(&cleanup_pool)
+                .await
+            {
+                tracing::warn!(error = %err, "purge des sessions expirées échouée");
+            }
+            if let Err(err) = sqlx::query("delete from pairing_sessions where expires_at <= now()")
+                .execute(&cleanup_pool)
+                .await
+            {
+                tracing::warn!(error = %err, "purge des appairages expirés échouée");
+            }
+        }
+    });
+
     let bind_addr = state.config.bind_addr.clone();
     let app = routes::router(state);
 
@@ -27,10 +50,16 @@ async fn main() -> Result<()> {
         .with_context(|| format!("écoute impossible sur {bind_addr}"))?;
     tracing::info!("lavande-sync à l'écoute sur http://{bind_addr}");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("erreur du serveur HTTP")
+    let result = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("erreur du serveur HTTP");
+
+    cleanup_task.abort();
+    result
 }
 
 fn init_tracing() {

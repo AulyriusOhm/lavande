@@ -98,7 +98,7 @@ afterEach(() => {
 describe("rail des dossiers · masquage", () => {
   it("n'offre plus de masquage ni de réaffichage dans le rail", async () => {
     stubBackend();
-    render(<DesktopInbox />, { wrapper });
+    render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
 
     await screen.findByRole("button", { name: /^Projets/ });
     expect(screen.queryByLabelText(/^Masquer le dossier/)).toBeNull();
@@ -108,7 +108,7 @@ describe("rail des dossiers · masquage", () => {
   it("garde les dossiers masqués consultables dans le groupe repliable", async () => {
     stubBackend();
     seedHidden({ a1: ["Projets"] });
-    render(<DesktopInbox />, { wrapper });
+    render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
 
     const toggle = await screen.findByRole("button", { name: /1 masqué/ });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
@@ -127,7 +127,7 @@ describe("rail des dossiers · masquage", () => {
   it("replie le groupe des masqués au second clic", async () => {
     stubBackend();
     seedHidden({ a1: ["Projets"] });
-    render(<DesktopInbox />, { wrapper });
+    render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
 
     const toggle = await screen.findByRole("button", { name: /1 masqué/ });
     fireEvent.click(toggle);
@@ -140,7 +140,7 @@ describe("rail des dossiers · masquage", () => {
   it("n'affiche pas le groupe des masqués en vue tous comptes", async () => {
     stubBackend(ACCOUNTS);
     seedHidden({ a1: ["Projets"] });
-    render(<DesktopInbox />, { wrapper });
+    render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
 
     await screen.findByText("Projets");
     expect(screen.queryByRole("button", { name: /masqué/ })).toBeNull();

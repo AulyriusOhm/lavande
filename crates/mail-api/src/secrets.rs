@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
@@ -145,6 +146,7 @@ impl Secrets {
                 let file = file.clone();
                 let id = account_id.to_string();
                 tokio::task::spawn_blocking(move || {
+                    let _guard = file.lock()?;
                     let mut secrets = file.load()?;
                     Ok(secrets.remove(&id))
                 })
@@ -163,6 +165,7 @@ impl Secrets {
                 let id = account_id.to_string();
                 let secrets = secrets.clone();
                 tokio::task::spawn_blocking(move || {
+                    let _guard = file.lock()?;
                     let mut all = file.load()?;
                     all.insert(id, secrets);
                     file.store(&all)
@@ -181,6 +184,7 @@ impl Secrets {
                 let file = file.clone();
                 let id = account_id.to_string();
                 tokio::task::spawn_blocking(move || {
+                    let _guard = file.lock()?;
                     let mut all = file.load()?;
                     if all.remove(&id).is_some() {
                         file.store(&all)?;
@@ -204,6 +208,7 @@ fn join_error(error: tokio::task::JoinError) -> ApiError {
 pub struct FileSecrets {
     key_path: PathBuf,
     secrets_path: PathBuf,
+    lock: Arc<Mutex<()>>,
 }
 
 impl FileSecrets {
@@ -211,9 +216,16 @@ impl FileSecrets {
         let file = Self {
             key_path: data_dir.join(KEY_FILE),
             secrets_path: data_dir.join(SECRETS_FILE),
+            lock: Arc::new(Mutex::new(())),
         };
         file.key()?;
         Ok(file)
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, ()>, ApiError> {
+        self.lock
+            .lock()
+            .map_err(|_| ApiError::internal("config", "verrou du coffre de secrets empoisonné"))
     }
 
     fn key(&self) -> Result<[u8; KEY_LEN], ApiError> {
@@ -373,5 +385,43 @@ mod keychain {
 
     fn platform_error(error: keyring::Error) -> ApiError {
         ApiError::internal("config", format!("trousseau système : {error}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn file_secrets_serializes_concurrent_puts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let secrets = Secrets::open(SecretBackend::File, dir.path())
+            .await
+            .expect("ouverture");
+
+        let mut tasks = Vec::new();
+        for index in 0..16 {
+            let secrets = secrets.clone();
+            tasks.push(tokio::spawn(async move {
+                let id = format!("compte-{index}");
+                let value = AccountSecrets::Password {
+                    password: format!("mdp-{index}"),
+                };
+                secrets.put(&id, &value).await.expect("écriture");
+            }));
+        }
+        for task in tasks {
+            task.await.expect("jointure");
+        }
+        for index in 0..16 {
+            let id = format!("compte-{index}");
+            let stored = secrets.get(&id).await.expect("lecture");
+            assert_eq!(
+                stored,
+                Some(AccountSecrets::Password {
+                    password: format!("mdp-{index}")
+                })
+            );
+        }
     }
 }

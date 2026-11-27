@@ -23,6 +23,7 @@ pub struct Config {
     pub pairing_ttl_secs: i64,
     pub session_ttl_secs: i64,
     pub cors_origins: Vec<HeaderValue>,
+    pub trust_proxy: bool,
 }
 
 impl Config {
@@ -45,6 +46,7 @@ impl Config {
             pairing_ttl_secs: parsed("PAIRING_TTL_SECS", 300)?,
             session_ttl_secs: parsed("SESSION_TTL_SECS", 2_592_000)?,
             cors_origins: origins()?,
+            trust_proxy: parsed_bool("TRUST_PROXY", false)?,
         };
 
         if config.server_max_schema < 1 {
@@ -104,5 +106,16 @@ where
         Some(value) => value
             .parse::<T>()
             .map_err(|err| anyhow::anyhow!("{PREFIX}{name} invalide : {value} ({err})")),
+    }
+}
+
+fn parsed_bool(name: &str, default: bool) -> Result<bool> {
+    match raw(name) {
+        None => Ok(default),
+        Some(value) => match value.to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" => Ok(true),
+            "0" | "false" | "no" => Ok(false),
+            _ => bail!("{PREFIX}{name} invalide : {value} (attendu true/false)"),
+        },
     }
 }

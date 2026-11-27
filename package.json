@@ -8,6 +8,7 @@
     "dev:portal": "VITE_BASE=/lavande/ vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
     "build:distribution": "tsc --noEmit && VITE_DISTRIBUTION=1 vite build",
+    "typecheck:tests": "tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
     "e2e": "node scripts/e2e-sync.mjs",
     "e2e:ui": "node scripts/e2e-ui.mjs",

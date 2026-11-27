@@ -172,7 +172,19 @@ describe("résumé · cache sur le poste", () => {
 describe("résumé · mails analysés", () => {
   it("expose les ids analysés pour retrouver leurs pièces jointes", () => {
     const mails = [mail("1"), mail("2")];
-    const result = fallbackSummary(mails, currentPeriod({ enabled: true, llmConsent: false, morningStart: 6, middayStart: 12, eveningStart: 18, lookbackHours: 24 }));
+    const result = fallbackSummary(
+      mails,
+      currentPeriod({
+        enabled: true,
+        llmConsent: false,
+        mode: "period",
+        rollingDays: 7,
+        morningStart: 6,
+        middayStart: 12,
+        eveningStart: 18,
+        lookbackHours: 24,
+      }),
+    );
 
     expect(result.mailIds).toEqual(["1", "2"]);
     expect(result.mailCount).toBe(2);

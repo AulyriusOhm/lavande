@@ -135,6 +135,11 @@ impl AppState {
         self.copilot = settings;
     }
 
+    #[doc(hidden)]
+    pub fn set_accounts_path(&mut self, path: PathBuf) {
+        self.accounts_path = path;
+    }
+
     pub fn copilot_sessions(&self) -> &copilot::Sessions {
         &self.copilot_sessions
     }

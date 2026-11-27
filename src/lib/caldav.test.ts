@@ -204,7 +204,7 @@ describe("caldav · lecture des sources", () => {
     await fetchExternalCalendar(google);
     await fetchExternalCalendar(travail);
 
-    const urls = mock.mock.calls.map(([url]) => String(url));
+    const urls = (mock.mock.calls as unknown[][]).map(([url]) => String(url));
     expect(urls).toEqual(["/api/calendars/ics", "/api/calendars/caldav/sources/travail/events"]);
   });
 
@@ -302,7 +302,7 @@ describe("caldav · routes du démon", () => {
 
     await mailApi.caldavSourceEvents("tra/vail");
 
-    expect(String(mock.mock.calls[0][0])).toBe("/api/calendars/caldav/sources/tra%2Fvail/events");
+    expect(String((mock.mock.calls[0] as unknown[])[0])).toBe("/api/calendars/caldav/sources/tra%2Fvail/events");
   });
 });
 
@@ -456,7 +456,7 @@ describe("caldav · écriture des événements", () => {
     const message = await caldavWriteFailure(travail, new ApiError("ETag périmé", "caldav", 412));
 
     expect(message).toBe(CALDAV_CONFLICT_MESSAGE);
-    expect(String(sources.mock.calls[0][0])).toBe("/api/calendars/caldav/sources/travail/events");
+    expect(String((sources.mock.calls[0] as unknown[])[0])).toBe("/api/calendars/caldav/sources/travail/events");
     expect(loadIcsState().events.travail?.[0]?.title).toBe("Version serveur");
   });
 

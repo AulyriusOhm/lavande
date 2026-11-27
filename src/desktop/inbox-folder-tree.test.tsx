@@ -125,7 +125,7 @@ afterEach(() => {
 describe("rail des dossiers · arbre", () => {
   function mountRail() {
     stubBackend(() => {});
-    return render(<DesktopInbox />, { wrapper });
+    return render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
   }
 
   it("range les sous-dossiers sous leur parent", async () => {
@@ -164,14 +164,16 @@ describe("corps à la demande · état de chargement", () => {
     stubBackend((resolve) => {
       deliver = resolve;
     });
-    render(<DesktopInbox />, { wrapper });
+    render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
 
     fireEvent.click(await screen.findByRole("button", { name: /Camille — Planning de la phase 2/ }));
 
     expect(await screen.findByText("Chargement du message…")).toBeTruthy();
 
     await waitFor(() => expect(deliver).not.toBeNull());
-    deliver?.(response(MESSAGE("La phase 2 démarre lundi, voici le planning.")));
+    (deliver as ((value: Response) => void) | null)?.(
+      response(MESSAGE("La phase 2 démarre lundi, voici le planning.")),
+    );
 
     expect(await screen.findByText("La phase 2 démarre lundi, voici le planning.")).toBeTruthy();
     expect(screen.queryByText("Chargement du message…")).toBeNull();

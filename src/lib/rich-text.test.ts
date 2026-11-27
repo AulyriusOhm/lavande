@@ -256,6 +256,14 @@ describe("sanitizeHtml", () => {
     const html = '<p>Capture :</p><img src="data:image/png;base64,iVBORw==" alt="capture">';
     expect(sanitizeHtml(html)).toBe(html);
   });
+
+  it("bloque les contournements XSS (caractères de contrôle, data HTML, SVG, style)", () => {
+    expect(sanitizeHtml('<a href="java&#x09;script:alert(1)">x</a>')).toBe("<a>x</a>");
+    expect(sanitizeHtml('<a href="data:text/html,<script>alert(1)</script>">x</a>')).toBe("<a>x</a>");
+    expect(sanitizeHtml('<svg><a xlink:href="javascript:alert(1)">x</a></svg><p>ok</p>')).toBe("<p>ok</p>");
+    expect(sanitizeHtml('<img src="data:image/svg+xml;base64,PHN2Zz4=" alt="x">')).toBe('<img alt="x">');
+    expect(sanitizeHtml('<p style="position:fixed;inset:0">x</p>')).toBe("<p>x</p>");
+  });
 });
 
 describe("buildQuotedHtml", () => {

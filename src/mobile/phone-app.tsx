@@ -1,0 +1,1126 @@
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
+import { PenLine } from "lucide-react";
+import { isFolderHidden, usePrefs } from "@/lib/prefs";
+import type { MailSuggestion, Task } from "@/lib/tasks";
+import { sortTasks, taskFromSuggestion } from "@/lib/tasks";
+import { cn } from "@/lib/utils";
+import { insertAt } from "@/lib/draft";
+import { useMailStore } from "@/lib/store";
+import { suggestFolderForMail } from "@/lib/guards";
+import {
+  applyTrustRules,
+  eventDraftFromMail,
+  indexDecisions,
+  taskDraftFromMail,
+  triageDecisionFor,
+} from "@/lib/triage";
+import { Dock, TABS, type TabId } from "@/components/dock";
+import { AccountSwitchSheet, InboxScreen as InboxView, MailboxSheet } from "@/screens/inbox-screen";
+import { MailContextMenu } from "@/components/mail-context-menu";
+import { AnalysePanel } from "@/components/analyse-panel";
+import { SearchScreen } from "@/screens/search-screen";
+import { CalendarScreen as CalendarView } from "@/screens/calendar-screen";
+import { McpApprovalHost, McpScreen } from "@/screens/mcp-screen";
+import { PlanningScreen as PlanningView } from "@/screens/planning-screen";
+import { TaskScreen } from "@/screens/task-screen";
+import { NewTaskSheet, createTask, type NewTaskDraft } from "@/screens/new-task-sheet";
+import { NewEventSheet, type NewEventDraft } from "@/screens/new-event-sheet";
+import { EventDetailSheet } from "@/screens/event-detail-sheet";
+import { SettingsScreen as SettingsView } from "@/screens/settings-screen";
+import { MessageScreen } from "@/screens/message-screen";
+import { ComposeScreen } from "@/screens/compose-screen";
+import { CleanupScreen } from "@/screens/cleanup-screen";
+import { PgpScreen } from "@/screens/pgp-screen";
+import { Notice } from "@/components/ui/notice";
+import { conflictingIds, type CalendarEvent } from "@/lib/calendar";
+import type { Mail } from "@/lib/mail";
+import { caldavSourceIdOf, useCalendars, isExternalCalendar } from "@/lib/calendars";
+import {
+  caldavWriteFailure,
+  commitIcsState,
+  deleteCaldavEvent,
+  externalCalendarEvents,
+  updateCaldavEvent,
+  useExternalCalendarRefresh,
+  useGoogleCalendarAutoAttach,
+  useZimbraCalendarAutoAttach,
+} from "@/lib/ics";
+import { useZimbraContactsAutoSync } from "@/lib/zimbra";
+import { useWidgetAgendaSync } from "@/lib/background-sync";
+import { useAiSync } from "@/lib/ai-sync";
+import { haptic } from "@/lib/haptics";
+import { AccountRemoveDialog, BackendBanner, BackendLoading, ReadOnlyBanner } from "@/components/backend-status";
+import { ConnectScreen } from "@/screens/connect-screen";
+import { useShortcuts } from "@/lib/shortcuts";
+import { appShortcuts, type MailNavigation } from "@/lib/app-shortcuts";
+import { ShortcutsOverlay } from "@/components/shortcuts-overlay";
+import { zimbraAccountOf } from "@/components/zimbra-account";
+import { closeTopBackLayer, onAndroidBack } from "@/lib/back";
+
+const InboxScreen = memo(InboxView);
+const CalendarScreen = memo(CalendarView);
+const PlanningScreen = memo(PlanningView);
+const SettingsScreen = memo(SettingsView);
+
+const OVERLAY_STATE = { lavandeOverlay: true };
+
+export function PhoneApp({ native }: { native?: boolean }) {
+  const prefs = usePrefs();
+  const { calendarEnabled, planningEnabled } = prefs;
+  const {
+    mails,
+    account,
+    accountById,
+    folder,
+    tasks,
+    suggestions,
+    events,
+    selectedDate,
+    openMail,
+    openThread,
+    notices,
+    composeOpen,
+    composeDraft,
+    composeTitle,
+    composeSending,
+    composeSendError,
+    resumeCompose,
+    setAccount,
+    setFolder,
+    setTasks,
+    setEvents,
+    setSelectedDate,
+    setComposeDraft,
+    notify,
+    dismissNotice,
+    toggleStar,
+    mailAction,
+    bulkMailAction,
+    moveToInbox,
+    moveToFolder,
+    restoreMail,
+    addSuggestion,
+    dismissSuggestion,
+    openMessage,
+    closeMessage,
+    bodyFetching,
+    fetchBody,
+    resumeDraft,
+    openComposer,
+    minimizeCompose,
+    closeCompose,
+    replyTo,
+    forwardMail,
+    sendDraft,
+    analyse,
+    runAnalyse,
+    closeAnalyse,
+    acceptAnalyseTask,
+    acceptAnalyseEvent,
+    openReplyWithBody,
+    folderOptions,
+    folderRecords,
+    decisions,
+    isDecisionReady,
+    triageMails,
+    setInboxActive,
+    trustSender,
+    trustDomain,
+    mode,
+    readOnly,
+    accounts,
+    phase,
+    connectOpen,
+    closeConnect,
+    removeTarget,
+    cancelRemoveAccount,
+  } = useMailStore();
+  const order = useMemo<TabId[]>(
+    () =>
+      TABS.filter((tab) =>
+        tab.id === "calendar" ? calendarEnabled : tab.id === "planning" ? planningEnabled : true,
+      ).map((tab) => tab.id),
+    [calendarEnabled, planningEnabled],
+  );
+
+  const [tab, setTab] = useState<TabId>(
+    () => order.find((id) => id === window.location.hash.slice(1)) ?? "inbox",
+  );
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [pgpOpen, setPgpOpen] = useState(false);
+  const [accountsOpen, setAccountsOpen] = useState(false);
+  const [foldersOpen, setFoldersOpen] = useState(false);
+  const [contextMail, setContextMail] = useState<Mail | null>(null);
+  const [mcpOpen, setMcpOpen] = useState(false);
+  const [detail, setDetail] = useState<{ task: Task; suggestion?: MailSuggestion } | null>(null);
+  const [taskDraftOpen, setTaskDraftOpen] = useState(false);
+  const [taskDraft, setTaskDraft] = useState<NewTaskDraft | null>(null);
+  const [eventDraftOpen, setEventDraftOpen] = useState(false);
+  const [eventDraft, setEventDraft] = useState<NewEventDraft | null>(null);
+  const [eventDetail, setEventDetail] = useState<CalendarEvent | null>(null);
+  const [eventEdit, setEventEdit] = useState<CalendarEvent | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [movingTask, setMovingTask] = useState<Task | null>(null);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [cleanupScanning, setCleanupScanning] = useState(false);
+
+  const decisionIndex = useMemo(() => indexDecisions(decisions), [decisions]);
+  const openMailDecision = useMemo(() => {
+    if (!openMail) return null;
+    const raw = triageDecisionFor(openMail, decisionIndex.byKey, decisionIndex.byMessageId);
+    return raw ? applyTrustRules(raw, openMail.email, prefs.decision) : null;
+  }, [openMail, decisionIndex, prefs.decision]);
+
+  const openMailCustomFolders = useMemo(() => {
+    if (!openMail) return [];
+    const accId = openMail.source?.accountId ?? openMail.account;
+    const fromRecords = folderRecords
+      .filter(
+        (record) =>
+          record.accountId === accId &&
+          record.role === "other" &&
+          !isFolderHidden(prefs.hiddenFolders, accId, record.path),
+      )
+      .map((record) => ({ path: record.path, label: record.name }));
+    if (fromRecords.length > 0) return fromRecords;
+    return folderOptions
+      .filter((option) => option.id === "other")
+      .map((option) => ({ path: option.path, label: option.label }));
+  }, [folderOptions, folderRecords, openMail, prefs.hiddenFolders]);
+
+  const handleScanMoreCleanup = useCallback(async () => {
+    if (cleanupScanning) return;
+    const untriaged = mails.filter(
+      (mail) =>
+        mail.source && !triageDecisionFor(mail, decisionIndex.byKey, decisionIndex.byMessageId),
+    );
+    if (untriaged.length === 0) return;
+    setCleanupScanning(true);
+    try {
+      await triageMails(untriaged, false);
+    } finally {
+      setCleanupScanning(false);
+    }
+  }, [cleanupScanning, decisionIndex, mails, triageMails]);
+
+  const handleSuggestFolder = useCallback(
+    (mail: Mail) => {
+      const config =
+        isDecisionReady && !prefs.decision.daemonHasKey
+          ? { ...prefs.decision, enabled: true, daemonHasKey: true }
+          : prefs.decision;
+      return suggestFolderForMail(
+        config,
+        {
+          from: `${mail.name} <${mail.email}>`,
+          subject: mail.subject,
+          excerpt: mail.preview || mail.body.join(" "),
+          folders: openMailCustomFolders,
+        },
+        { useDaemon: mode === "api" },
+      );
+    },
+    [isDecisionReady, mode, openMailCustomFolders, prefs.decision],
+  );
+
+  const [dragX, setDragX] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const gesture = useRef<{ x: number; y: number; axis: "x" | "y" | null } | null>(null);
+  const mailNav = useRef<MailNavigation | null>(null);
+
+  const index = Math.max(order.indexOf(tab), 0);
+  const last = order.length - 1;
+
+
+  useEffect(() => {
+    if (!order.includes(tab)) setTab("inbox");
+  }, [order, tab]);
+
+  const closeTaskDraft = useCallback(() => {
+    setTaskDraftOpen(false);
+    setTaskDraft(null);
+  }, []);
+
+  const closeEventDraft = useCallback(() => {
+    setEventDraftOpen(false);
+    setEventDraft(null);
+    setEventEdit(null);
+  }, []);
+  const openEventEdit = useCallback((target: CalendarEvent) => {
+    setEventDetail(null);
+    setEventEdit(target);
+  }, []);
+
+  useEffect(() => {
+    setInboxActive(tab === "inbox" && !pgpOpen && !mcpOpen && !cleanupOpen);
+  }, [cleanupOpen, mcpOpen, pgpOpen, setInboxActive, tab]);
+
+  const layers: [boolean, () => void][] = [
+    [helpOpen, () => setHelpOpen(false)],
+    [Boolean(removeTarget), cancelRemoveAccount],
+    [connectOpen, closeConnect],
+    [composeOpen, minimizeCompose],
+    [Boolean(eventEdit), () => closeEventDraft()],
+    [eventDraftOpen, () => closeEventDraft()],
+    [Boolean(eventDetail), () => setEventDetail(null)],
+    [taskDraftOpen, () => closeTaskDraft()],
+    [accountsOpen, () => setAccountsOpen(false)],
+    [foldersOpen, () => setFoldersOpen(false)],
+    [Boolean(contextMail), () => setContextMail(null)],
+    [Boolean(movingTask), () => setMovingTask(null)],
+    [Boolean(openMail), () => closeMessage()],
+    [cleanupOpen, () => setCleanupOpen(false)],
+    [Boolean(detail), () => setDetail(null)],
+    [pgpOpen, () => setPgpOpen(false)],
+    [mcpOpen, () => setMcpOpen(false)],
+    [searchOpen, () => setSearchOpen(false)],
+  ];
+  const depth = layers.filter(([open]) => open).length;
+  const layerStack = useRef(layers);
+  layerStack.current = layers;
+  const depthRef = useRef(depth);
+  depthRef.current = depth;
+  const sentinel = useRef(false);
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+
+  useEffect(() => {
+    const closeTop = () => layerStack.current.find(([open]) => open)?.[1]();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || depthRef.current === 0) return;
+      event.preventDefault();
+      closeTop();
+    };
+
+    const onPopState = () => {
+      if (depthRef.current === 0) return;
+      closeTop();
+      if (depthRef.current > 1) window.history.pushState(OVERLAY_STATE, "");
+      else sentinel.current = false;
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("popstate", onPopState);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (depth === 0) {
+      if (!sentinel.current) return;
+      sentinel.current = false;
+      window.history.back();
+      return;
+    }
+    if (sentinel.current) return;
+    sentinel.current = true;
+    window.history.pushState(OVERLAY_STATE, "");
+  }, [depth]);
+
+  const onPointerDown = (event: React.PointerEvent) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    if ((event.target as HTMLElement).closest("[data-swipe]")) return;
+    gesture.current = { x: event.clientX, y: event.clientY, axis: null };
+  };
+
+  const onPointerMove = (event: React.PointerEvent) => {
+    const state = gesture.current;
+    if (!state) return;
+
+    const dx = event.clientX - state.x;
+    const dy = event.clientY - state.y;
+
+    if (!state.axis) {
+      if (Math.abs(dx) < 10 || Math.abs(dx) <= Math.abs(dy)) {
+        if (Math.abs(dy) > 10) state.axis = "y";
+        return;
+      }
+      state.axis = "x";
+      setDragging(true);
+    }
+
+    if (state.axis !== "x") return;
+
+    const blocking = (index === 0 && dx > 0) || (index === last && dx < 0);
+    setDragX(blocking ? dx * 0.25 : dx);
+  };
+
+  const changeTab = useCallback((next: TabId) => {
+    haptic("light");
+    setTab(next);
+    setMovingTask(null);
+  }, []);
+
+  useEffect(() => {
+    const closeTop = () => layerStack.current.find(([open]) => open)?.[1]();
+
+    return onAndroidBack(() => {
+      if (closeTopBackLayer()) return;
+      if (depthRef.current > 0) {
+        closeTop();
+        return;
+      }
+      if (tabRef.current !== "inbox") {
+        changeTab("inbox");
+        return;
+      }
+      void import("@tauri-apps/plugin-process").then(({ exit }) => exit(0));
+    });
+  }, [changeTab]);
+
+  const openAccounts = useCallback(() => setAccountsOpen(true), []);
+  const openFolders = useCallback(() => setFoldersOpen(true), []);
+  const openSearch = useCallback(() => setSearchOpen(true), []);
+  const openPgp = useCallback(() => setPgpOpen(true), []);
+  const openMcp = useCallback(() => setMcpOpen(true), []);
+  const openTaskDraft = useCallback(
+    (draft?: NewTaskDraft) => {
+      if (readOnly) return;
+      setTaskDraft(draft ?? null);
+      setTaskDraftOpen(true);
+    },
+    [readOnly],
+  );
+  const openTask = useCallback((task: Task) => setDetail({ task }), []);
+  const openSuggestion = useCallback(
+    (suggestion: MailSuggestion) =>
+      setDetail({ task: taskFromSuggestion(suggestion, "sugg-" + suggestion.id), suggestion }),
+    [],
+  );
+  const openEventDraft = useCallback(
+    (init?: string | NewEventDraft) => {
+      if (readOnly) return;
+      if (typeof init === "string") {
+        setSelectedDate(init);
+        setEventDraft(null);
+      } else {
+        if (init?.date) setSelectedDate(init.date);
+        setEventDraft(init ?? null);
+      }
+      setEventDraftOpen(true);
+    },
+    [readOnly, setSelectedDate],
+  );
+  const openMailFromEvent = useCallback(
+    (event: CalendarEvent) => {
+      const mail = mails.find((entry) => entry.id === event.mailId);
+      if (mail) openMessage(mail);
+    },
+    [mails, openMessage],
+  );
+  const availableMailIds = useMemo(() => new Set(mails.map((mail) => mail.id)), [mails]);
+  const openEvent = useCallback((target: CalendarEvent) => setEventDetail(target), []);
+  const openEventMail = useCallback(() => {
+    if (eventDetail) openMailFromEvent(eventDetail);
+  }, [eventDetail, openMailFromEvent]);
+  const [calendars] = useCalendars();
+  const { ics } = useExternalCalendarRefresh(calendars, notify);
+  const externalEvents = useMemo(() => externalCalendarEvents(ics, calendars), [ics, calendars]);
+  const sourceCount = useMemo(() => calendars.filter(isExternalCalendar).length, [calendars]);
+  const detailConflict = Boolean(
+    eventDetail && conflictingIds([...events, ...externalEvents]).has(eventDetail.id),
+  );
+  /** Un événement CalDAV s'écrit chez le démon ; un calendrier local garde le store. */
+  const updateEvent = useCallback(
+    async (next: CalendarEvent): Promise<string | null> => {
+      const def = next.caldav
+        ? calendars.find((entry) => caldavSourceIdOf(entry) === next.caldav?.sourceId)
+        : undefined;
+      if (next.caldav && !def) {
+        return "Calendrier CalDAV introuvable · relisez les réglages des calendriers";
+      }
+      if (def) {
+        try {
+          commitIcsState(
+            await updateCaldavEvent(def, next, {
+              title: next.title,
+              date: next.date,
+              ...(next.start && next.end ? { start: next.start, end: next.end } : {}),
+              location: next.location,
+              description: next.description,
+              ...(next.attendees?.length ? { attendees: next.attendees } : {}),
+            }),
+          );
+          notify("Rendez-vous mis à jour");
+          return null;
+        } catch (error) {
+          return await caldavWriteFailure(def, error);
+        }
+      }
+      setEvents((current) => current.map((entry) => (entry.id === next.id ? next : entry)));
+      notify("Rendez-vous mis à jour");
+      return null;
+    },
+    [calendars, notify, setEvents],
+  );
+
+  const removeEvent = useCallback(
+    async (target: CalendarEvent) => {
+      if (!target.caldav) {
+        setEvents((current) => current.filter((entry) => entry.id !== target.id));
+        notify("Rendez-vous supprimé");
+        setEventDetail(null);
+        return;
+      }
+      const def = calendars.find((entry) => caldavSourceIdOf(entry) === target.caldav?.sourceId);
+      if (!def) {
+        notify("Calendrier CalDAV introuvable · relisez les réglages des calendriers");
+        return;
+      }
+      try {
+        commitIcsState(await deleteCaldavEvent(def, target));
+        notify("Rendez-vous supprimé");
+        setEventDetail(null);
+      } catch (error) {
+        notify(await caldavWriteFailure(def, error));
+      }
+    },
+    [calendars, notify, setEvents],
+  );
+
+  const widgetEvents = useMemo(() => [...events, ...externalEvents], [events, externalEvents]);
+  useWidgetAgendaSync(widgetEvents, calendars);
+  useGoogleCalendarAutoAttach(notify);
+  useZimbraCalendarAutoAttach(notify);
+  useZimbraContactsAutoSync();
+  useAiSync();
+
+  const shortcutActions = useMemo(
+    () => ({
+      navigate: changeTab,
+      calendarEnabled,
+      planningEnabled,
+      calendarActive: tab === "calendar",
+      compose: openComposer,
+      newTask: () => openTaskDraft(),
+      newEvent: () => openEventDraft(),
+      search: openSearch,
+      toggleHelp: () => setHelpOpen((current) => !current),
+      mail: {
+        canMove: () => mailNav.current?.canMove() ?? false,
+        canOpen: () => mailNav.current?.canOpen() ?? false,
+        canAct: () => tab === "inbox" && depthRef.current === 0 && (mailNav.current?.canAct() ?? false),
+        current: () => mailNav.current?.current() ?? null,
+        next: () => mailNav.current?.next(),
+        previous: () => mailNav.current?.previous(),
+        open: () => mailNav.current?.open(),
+        selectAll: () => mailNav.current?.selectAll(),
+        deleteSelected: () => mailNav.current?.deleteSelected(),
+        archiveSelected: () => mailNav.current?.archiveSelected(),
+        toggleStarSelected: () => mailNav.current?.toggleStarSelected(),
+        toggleReadSelected: () => mailNav.current?.toggleReadSelected(),
+        replySelected: () => mailNav.current?.replySelected(),
+        forwardSelected: () => mailNav.current?.forwardSelected(),
+      },
+    }),
+    [changeTab, calendarEnabled, planningEnabled, tab, openComposer, openSearch, openTaskDraft, openEventDraft],
+  );
+  const shortcuts = useMemo(() => appShortcuts(shortcutActions), [shortcutActions]);
+  const helpShortcuts = useMemo(
+    () => appShortcuts({ ...shortcutActions, mail: { ...shortcutActions.mail, canAct: () => true } }),
+    [shortcutActions],
+  );
+  const mod = useShortcuts(shortcuts);
+
+  const endGesture = (event: React.PointerEvent) => {
+    const state = gesture.current;
+    gesture.current = null;
+    setDragging(false);
+
+    if (!state || state.axis !== "x") {
+      setDragX(0);
+      return;
+    }
+
+    const dx = event.clientX - state.x;
+    setDragX(0);
+
+    if (dx < -55 && index < last) changeTab(order[index + 1]);
+    else if (dx > 55 && index > 0) changeTab(order[index - 1]);
+  };
+
+  if (mode === "api" && phase === "loading") {
+    return <BackendLoading />;
+  }
+
+  if (mode === "api" && phase === "empty") {
+    return (
+      <div className={cn("h-full w-full", !native && "pt-[env(safe-area-inset-top,0px)]")}>
+        <ConnectScreen />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        "relative flex h-full flex-col overflow-hidden",
+        !native && "pt-[env(safe-area-inset-top,0px)] sm:pt-7",
+      )}
+    >
+      <BackendBanner />
+      <ReadOnlyBanner />
+      <div
+        className="relative flex-1 overflow-hidden"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endGesture}
+        onPointerCancel={endGesture}
+        style={{ touchAction: "pan-y" }}
+      >
+        <div
+          className={cn(
+            "flex h-full w-full",
+            !dragging && "transition-transform duration-[420ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
+          )}
+          style={{ transform: `translate3d(calc(${-index * 100}% + ${dragX}px), 0, 0)` }}
+        >
+          {order.map((id) => (
+            <div key={id} className="h-full w-full shrink-0">
+              {id === "inbox" && (
+                <InboxScreen
+                  mails={mails}
+                  account={account}
+                  folder={folder}
+                  active={tab === "inbox"}
+                  navigationRef={mailNav}
+                  onOpenAccounts={openAccounts}
+                  onOpenFolders={openFolders}
+                  onOpen={openMessage}
+                  onToggleStar={toggleStar}
+                  onSearch={openSearch}
+                  onMailAction={mailAction}
+                  onReply={replyTo}
+                  onForward={forwardMail}
+                  onNotSpam={moveToInbox}
+                  onRestore={restoreMail}
+                  onOpenMenu={setContextMail}
+                  onOpenCleanup={() => setCleanupOpen(true)}
+                  onPlanMail={readOnly ? undefined : openTaskDraft}
+                  onScheduleMail={readOnly ? undefined : openEventDraft}
+                />
+              )}
+              {id === "calendar" && (
+                <CalendarScreen
+                  events={events}
+                  externalEvents={externalEvents}
+                  sourceCount={sourceCount}
+                  suggestions={suggestions}
+                  onAcceptSuggestion={openEventDraft}
+                  onDismissSuggestion={dismissSuggestion}
+                  onOpenEvent={openEvent}
+                  onSelectedDateChange={setSelectedDate}
+                />
+              )}
+              {id === "planning" && (
+                <PlanningScreen
+                  tasks={tasks}
+                  setTasks={setTasks}
+                  suggestions={suggestions}
+                  onAddSuggestion={addSuggestion}
+                  onDismissSuggestion={dismissSuggestion}
+                  onOpenTask={openTask}
+                  onOpenSuggestion={openSuggestion}
+                  onNewTask={readOnly ? undefined : openTaskDraft}
+                  movingTask={movingTask}
+                  onMovingChange={setMovingTask}
+                  onOpenSync={() => changeTab("settings")}
+                />
+              )}
+              {id === "settings" && (
+                <SettingsScreen
+                  mails={mails}
+                  account={account}
+                  onOpenAccounts={openAccounts}
+                  onOpenPgp={openPgp}
+                  onOpenMcp={openMcp}
+                />
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-28 bg-gradient-to-t from-canvas via-canvas/80 to-transparent" />
+
+        <Dock
+          active={tab}
+          onChange={changeTab}
+          onCompose={openComposer}
+          onNewTask={() => openTaskDraft()}
+          onNewEvent={() => openEventDraft()}
+          readOnly={readOnly}
+        />
+
+        {composeDraft && !composeOpen && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-[calc(env(safe-area-inset-bottom,0px)+9.5rem)] z-[44] flex justify-center px-4">
+            <button
+              type="button"
+              onClick={resumeCompose}
+              className="pointer-events-auto inline-flex min-h-11 items-center gap-2 rounded-full border border-line px-4 text-[11.5px] font-bold text-accent-ink glass shadow-[0_14px_34px_-20px_var(--accent)] transition-transform duration-200 active:scale-95"
+            >
+              <PenLine className="size-3.5" strokeWidth={2.4} />
+              Reprendre le brouillon
+            </button>
+          </div>
+        )}
+
+        <AnimatePresence>
+          {openMail && openThread && (
+            <motion.div
+              key="message"
+              className="absolute inset-0 z-[36] bg-canvas"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ type: "spring", stiffness: 340, damping: 34 }}
+            >
+              <MessageScreen
+                thread={openThread}
+                readOnly={readOnly}
+                bodyFetching={bodyFetching}
+                onFetchBody={fetchBody}
+                onClose={() => closeMessage()}
+                onToggleStar={() => toggleStar(openMail.id)}
+                onReply={replyTo}
+                onReplyAll={(mail) => replyTo(mail, true)}
+                onForward={forwardMail}
+                onOpen={openMessage}
+                onOpenMenu={setContextMail}
+                selfEmail={accountById(openMail.account)?.email}
+                onAnalyse={(mail) => void runAnalyse(mail)}
+                onResume={resumeDraft}
+                onArchive={(mail) => {
+                  mailAction("archive", mail);
+                  closeMessage();
+                }}
+                onDelete={(mail) => {
+                  mailAction("delete", mail);
+                  closeMessage();
+                }}
+                onNotSpam={(mail) => {
+                  moveToInbox(mail);
+                  closeMessage();
+                }}
+                onRestore={(mail) => {
+                  restoreMail(mail);
+                  closeMessage();
+                }}
+                onOpenPgp={() => {
+                  closeMessage();
+                  openPgp();
+                }}
+                decision={openMailDecision}
+                customFolders={openMailCustomFolders}
+                onMoveToFolder={moveToFolder}
+                onSuggestFolder={handleSuggestFolder}
+                onPlan={
+                  readOnly
+                    ? undefined
+                    : (mail) =>
+                        openTaskDraft(taskDraftFromMail(mail, undefined, openMailDecision ?? undefined))
+                }
+                onSchedule={readOnly ? undefined : (mail) => openEventDraft(eventDraftFromMail(mail))}
+                onTrustSender={readOnly ? undefined : (mail) => trustSender(mail.email)}
+                onTrustDomain={readOnly ? undefined : (mail) => trustDomain(mail.email)}
+              />
+              {analyse && analyse.mailId === openMail.id ? (
+                <AnalysePanel
+                  analyse={analyse}
+                  mail={openMail}
+                  variant="mobile"
+                  onClose={closeAnalyse}
+                  onAcceptTask={acceptAnalyseTask}
+                  onAcceptEvent={acceptAnalyseEvent}
+                  onUseReply={(body) => openReplyWithBody(openMail, body)}
+                  onRetry={() => void runAnalyse(openMail, true)}
+                />
+              ) : null}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {cleanupOpen && (
+            <motion.div
+              key="cleanup"
+              className="absolute inset-0 z-[35] bg-canvas"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ type: "spring", stiffness: 340, damping: 34 }}
+            >
+              <CleanupScreen
+                mails={mails}
+                decisions={decisions}
+                thresholds={prefs.decision.thresholds}
+                customCategories={prefs.decision.customCategories}
+                onTrash={(targets) => bulkMailAction("delete", targets)}
+                onArchive={(targets) => bulkMailAction("archive", targets)}
+                onRestore={(targets) => bulkMailAction("restore", targets)}
+                onOpenMail={(mail) => {
+                  setCleanupOpen(false);
+                  openMessage(mail);
+                }}
+                onScanMore={handleScanMoreCleanup}
+                scanning={cleanupScanning}
+                onClose={() => setCleanupOpen(false)}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {pgpOpen && (
+            <motion.div
+              key="pgp"
+              className="absolute inset-0 z-[32] bg-canvas"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ type: "spring", stiffness: 340, damping: 34 }}
+            >
+              <PgpScreen onClose={() => setPgpOpen(false)} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {detail && (
+            <motion.div
+              key="task"
+              className="absolute inset-0 z-[34] bg-canvas"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ type: "spring", stiffness: 340, damping: 34 }}
+            >
+              <TaskScreen
+                task={detail.task}
+                suggestion={Boolean(detail.suggestion)}
+                mail={mails.find((mail) => mail.id === detail.task.mailId) ?? null}
+                onClose={() => setDetail(null)}
+                onAdd={() => {
+                  if (detail.suggestion) addSuggestion(detail.suggestion);
+                  setDetail(null);
+                }}
+                onChangeState={(state) => {
+                  setTasks((current) =>
+                    sortTasks(current.map((task) => (task.id === detail.task.id ? { ...task, state } : task))),
+                  );
+                  setDetail((current) => (current ? { ...current, task: { ...current.task, state } } : current));
+                }}
+                onToggleSubtask={(index) => {
+                  const toggle = (task: Task): Task => ({
+                    ...task,
+                    subtasks: (task.subtasks ?? []).map((subtask, position) =>
+                      position === index ? { ...subtask, done: !subtask.done } : subtask,
+                    ),
+                  });
+                  setTasks((current) =>
+                    current.map((task) => (task.id === detail.task.id ? toggle(task) : task)),
+                  );
+                  setDetail((current) => (current ? { task: toggle(current.task), suggestion: current.suggestion } : current));
+                }}
+                onOpenMail={() => {
+                  const mail = mails.find((entry) => entry.id === detail.task.mailId);
+                  if (!mail) return;
+                  openMessage(mail);
+                }}
+                onEdit={
+                  detail.suggestion || readOnly
+                    ? undefined
+                    : (next) => {
+                        setTasks((current) =>
+                          sortTasks(current.map((task) => (task.id === next.id ? next : task))),
+                        );
+                        setDetail((current) => (current ? { ...current, task: next } : current));
+                      }
+                }
+                onDelete={
+                  detail.suggestion || readOnly
+                    ? undefined
+                    : () => {
+                        const removed = detail.task;
+                        const at = tasks.findIndex((task) => task.id === removed.id);
+                        setTasks((current) => current.filter((task) => task.id !== removed.id));
+                        setDetail(null);
+                        notify("Tâche supprimée", {
+                          label: "Annuler",
+                          run: () =>
+                            setTasks((current) =>
+                              current.some((task) => task.id === removed.id)
+                                ? current
+                                : insertAt(current, at, removed),
+                            ),
+                        });
+                      }
+                }
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {mcpOpen && (
+            <motion.div
+              key="mcp"
+              className="absolute inset-0 z-[33] bg-canvas"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ type: "spring", stiffness: 340, damping: 34 }}
+            >
+              <McpScreen onClose={() => setMcpOpen(false)} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {searchOpen && (
+            <motion.div
+              key="search"
+              className="absolute inset-0 z-30 bg-canvas"
+              initial={{ opacity: 0, y: 24 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 24 }}
+              transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <button
+                type="button"
+                onClick={() => setSearchOpen(false)}
+                aria-label="Fermer la recherche"
+                className="absolute top-3 right-4 z-10 rounded-full bg-surface px-3 py-1.5 text-[11.5px] font-bold text-ink-soft shadow-sm"
+              >
+                Fermer
+              </button>
+              <SearchScreen
+                onOpen={openMessage}
+                onToggleStar={toggleStar}
+                onMailAction={mailAction}
+                onReply={replyTo}
+                onNotSpam={moveToInbox}
+                onRestore={restoreMail}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {accountsOpen && (
+            <motion.div key="accounts" className="absolute inset-0 z-40" initial={false}>
+              <motion.div
+                className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setAccountsOpen(false)}
+              />
+              <motion.div
+                className="absolute inset-x-0 bottom-0 max-h-[70%] overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-20px_60px_-20px_rgba(40,20,80,0.35)]"
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", stiffness: 320, damping: 32 }}
+              >
+                <AccountSwitchSheet
+                  active={account}
+                  onSelect={setAccount}
+                  onClose={() => setAccountsOpen(false)}
+                />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {foldersOpen && (
+            <motion.div key="folders" className="absolute inset-0 z-40" initial={false}>
+              <motion.div
+                className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setFoldersOpen(false)}
+              />
+              <motion.div
+                className="absolute inset-x-0 bottom-0 max-h-[70%] overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-20px_60px_-20px_rgba(40,20,80,0.35)]"
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", stiffness: 320, damping: 32 }}
+              >
+                <MailboxSheet
+                  folder={folder}
+                  onSelect={setFolder}
+                  onClose={() => setFoldersOpen(false)}
+                />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {contextMail ? (
+          <MailContextMenu mail={contextMail} onClose={() => setContextMail(null)} />
+        ) : null}
+
+        <AnimatePresence>
+          {(eventDraftOpen || eventEdit) && (
+            <motion.div key="newevent" className="absolute inset-0 z-[45]" initial={false}>
+              <motion.div
+                className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={closeEventDraft}
+              />
+              <motion.div
+                className="absolute inset-x-0 bottom-0 top-16 overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-20px_60px_-20px_rgba(40,20,80,0.35)]"
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", stiffness: 320, damping: 32 }}
+              >
+                <NewEventSheet
+                  event={eventEdit ?? undefined}
+                  initialDate={selectedDate}
+                  events={[...events, ...externalEvents]}
+                  draft={eventDraft ?? undefined}
+                  onClose={closeEventDraft}
+                  onUpdate={updateEvent}
+                  onCreate={(event) => {
+                    setEvents((current) => [...current, event]);
+                    notify("Rendez-vous créé");
+                  }}
+                />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {eventDetail && (
+            <motion.div key="eventdetail" className="absolute inset-0 z-[45]" initial={false}>
+              <motion.div
+                className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setEventDetail(null)}
+              />
+              <motion.div
+                className="absolute inset-x-0 bottom-0 top-16 overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-20px_60px_-20px_rgba(40,20,80,0.35)]"
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", stiffness: 320, damping: 32 }}
+              >
+                <EventDetailSheet
+                  event={eventDetail}
+                  conflict={detailConflict}
+                  onClose={() => setEventDetail(null)}
+                  onEdit={readOnly ? undefined : openEventEdit}
+                  onDelete={readOnly ? undefined : removeEvent}
+                  onOpenMail={
+                    eventDetail.mailId && availableMailIds.has(eventDetail.mailId) ? openEventMail : undefined
+                  }
+                  freeBusyAccount={zimbraAccountOf(accounts)?.id ?? null}
+                />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {taskDraftOpen && (
+            <motion.div key="newtask" className="absolute inset-0 z-[45]" initial={false}>
+              <motion.div
+                className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={closeTaskDraft}
+              />
+              <motion.div
+                className="absolute inset-x-0 bottom-0 top-16 overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-20px_60px_-20px_rgba(40,20,80,0.35)]"
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", stiffness: 320, damping: 32 }}
+              >
+                <NewTaskSheet
+                  draft={taskDraft ?? undefined}
+                  onClose={closeTaskDraft}
+                  onCreate={(task) => {
+                    setTasks((current) => createTask(current, task));
+                    notify("Tâche créée");
+                  }}
+                />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {connectOpen && (
+            <motion.div
+              key="connect"
+              className="absolute inset-0 z-[60] bg-canvas"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ type: "spring", stiffness: 340, damping: 34 }}
+            >
+              <ConnectScreen onClose={closeConnect} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {composeOpen && composeDraft && (
+            <motion.div key="compose" className="absolute inset-0 z-[45]" initial={false}>
+              <motion.div
+                className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={minimizeCompose}
+              />
+              <motion.div
+                className="absolute inset-x-0 bottom-0 top-10 overflow-hidden rounded-t-[32px] border-t border-line bg-canvas shadow-[0_-20px_60px_-20px_rgba(40,20,80,0.35)]"
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", stiffness: 320, damping: 32 }}
+              >
+                <ComposeScreen
+                  title={composeTitle}
+                  draft={composeDraft}
+                  onDraftChange={setComposeDraft}
+                  onSend={sendDraft}
+                  sending={composeSending}
+                  sendError={composeSendError}
+                  onMinimize={minimizeCompose}
+                  onClose={closeCompose}
+                />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      <Notice notice={notices[0] ?? null} onClose={dismissNotice} />
+      <AccountRemoveDialog />
+      <McpApprovalHost />
+      <ShortcutsOverlay
+        open={helpOpen}
+        onClose={() => setHelpOpen(false)}
+        shortcuts={helpShortcuts}
+        mod={mod}
+      />
+    </div>
+  );
+}

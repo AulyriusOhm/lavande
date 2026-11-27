@@ -107,7 +107,7 @@ describe("Modifier un rendez-vous mobile", () => {
     fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
 
     await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
-    expect(onUpdate.mock.calls[0][0]).toMatchObject({
+    expect((onUpdate.mock.calls[0] as unknown[])[0]).toMatchObject({
       id: "e1",
       title: "Standup équipe",
       date: "2026-11-20",

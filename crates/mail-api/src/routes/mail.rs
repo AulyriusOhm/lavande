@@ -314,6 +314,10 @@ async fn attachment(
         header::CONTENT_DISPOSITION,
         header_value(&disposition(&part.filename))?,
     );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
     Ok((headers, part.data).into_response())
 }
 

@@ -318,7 +318,7 @@ describe("Agenda · rafraîchissement des sources CalDAV", () => {
     await waitFor(() => expect(within(dayPanel()).getByText("Réunion CalDAV")).toBeTruthy());
     expect(within(dayPanel()).queryByText("Ancien titre")).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0][0])).toBe("/api/calendars/caldav/sources/travail/events");
+    expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toBe("/api/calendars/caldav/sources/travail/events");
   });
 
   it("garde le cache et signale l'échec quand le démon refuse", async () => {
@@ -348,7 +348,7 @@ describe("Agenda · rafraîchissement des sources CalDAV", () => {
     fireEvent.click(screen.getByRole("button", { name: "Actualiser les sources CalDAV" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(String(fetchMock.mock.calls[0][0])).toBe("/api/calendars/caldav/sources/travail/events");
+    expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toBe("/api/calendars/caldav/sources/travail/events");
   });
 });
 

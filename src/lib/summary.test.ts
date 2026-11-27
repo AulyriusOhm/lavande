@@ -379,9 +379,9 @@ describe("suggestTasks (fenêtre + anti-injection)", () => {
     const tasks = await suggestTasks({ windowHours: 48 }, llm, [mail("1", now.getTime() - H)], now);
 
     expect(tasks).toHaveLength(1);
-    expect(tasks[0].title).toBe("x() Envoyer le devis");
-    expect(tasks[0].due).toBe("aucune");
-    expect(tasks[0].mailId).toBeUndefined();
+    expect(tasks![0].title).toBe("x() Envoyer le devis");
+    expect(tasks![0].due).toBe("aucune");
+    expect(tasks![0].mailId).toBeUndefined();
   });
 });
 

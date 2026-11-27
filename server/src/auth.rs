@@ -20,6 +20,10 @@ use uuid::Uuid;
 
 const LOGIN_WINDOW: Duration = Duration::from_secs(60);
 const LOGIN_MAX_ATTEMPTS: usize = 10;
+const REGISTER_WINDOW: Duration = Duration::from_secs(60);
+const REGISTER_MAX_ATTEMPTS: usize = 30;
+const SALT_WINDOW: Duration = Duration::from_secs(60);
+const SALT_MAX_ATTEMPTS: usize = 30;
 const PAIRING_WINDOW: Duration = Duration::from_secs(60);
 const PAIRING_MAX_CREATIONS: usize = 10;
 const RATE_LIMIT_TRACKED_KEYS: usize = 10_000;
@@ -27,6 +31,8 @@ const SALT_LEN: usize = 16;
 
 static DUMMY_VERIFIER: OnceLock<String> = OnceLock::new();
 static LOGIN_ATTEMPTS: OnceLock<Mutex<HashMap<String, Vec<Instant>>>> = OnceLock::new();
+static REGISTER_ATTEMPTS: OnceLock<Mutex<HashMap<String, Vec<Instant>>>> = OnceLock::new();
+static SALT_ATTEMPTS: OnceLock<Mutex<HashMap<String, Vec<Instant>>>> = OnceLock::new();
 static PAIRING_CREATIONS: OnceLock<Mutex<HashMap<String, Vec<Instant>>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy)]
@@ -87,41 +93,65 @@ fn invalid_base64(field: &str) -> ApiError {
     ApiError::BadRequest(format!("{field} invalide : base64url attendu"))
 }
 
-pub fn hash_auth_key(auth_key: &[u8]) -> Result<(String, Vec<u8>), ApiError> {
-    let mut salt_bytes = [0u8; SALT_LEN];
-    OsRng.fill_bytes(&mut salt_bytes);
-    let salt = SaltString::encode_b64(&salt_bytes)
-        .map_err(|err| ApiError::Internal(anyhow::anyhow!("sel Argon2id invalide : {err}")))?;
-    let hash = Argon2::default()
-        .hash_password(auth_key, &salt)
-        .map_err(|err| {
-            ApiError::Internal(anyhow::anyhow!("hachage Argon2id impossible : {err}"))
-        })?;
-
-    Ok((hash.to_string(), salt_bytes.to_vec()))
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (&left, &right) in a.iter().zip(b.iter()) {
+        diff |= left ^ right;
+    }
+    diff == 0
 }
 
-pub fn verify_auth_key(auth_key: &[u8], auth_verifier: &str) -> bool {
+pub async fn hash_auth_key(auth_key: Vec<u8>) -> Result<(String, Vec<u8>), ApiError> {
+    tokio::task::spawn_blocking(move || {
+        let mut salt_bytes = [0u8; SALT_LEN];
+        OsRng.fill_bytes(&mut salt_bytes);
+        let salt = SaltString::encode_b64(&salt_bytes)
+            .map_err(|err| ApiError::Internal(anyhow::anyhow!("sel Argon2id invalide : {err}")))?;
+        let hash = Argon2::default()
+            .hash_password(&auth_key, &salt)
+            .map_err(|err| {
+                ApiError::Internal(anyhow::anyhow!("hachage Argon2id impossible : {err}"))
+            })?;
+
+        Ok((hash.to_string(), salt_bytes.to_vec()))
+    })
+    .await
+    .map_err(|err| ApiError::Internal(anyhow::anyhow!("tâche Argon2id interrompue : {err}")))?
+}
+
+fn verify_auth_key_sync(auth_key: &[u8], auth_verifier: &str) -> bool {
     match PasswordHash::new(auth_verifier) {
         Ok(parsed) => Argon2::default().verify_password(auth_key, &parsed).is_ok(),
         Err(_) => false,
     }
 }
 
-pub fn verify_dummy(auth_key: &[u8]) {
-    let verifier = DUMMY_VERIFIER.get_or_init(|| {
-        let mut salt_bytes = [0u8; SALT_LEN];
-        OsRng.fill_bytes(&mut salt_bytes);
-        match SaltString::encode_b64(&salt_bytes) {
-            Ok(salt) => Argon2::default()
-                .hash_password(&[0u8; 32], &salt)
-                .map(|hash| hash.to_string())
-                .unwrap_or_default(),
-            Err(_) => String::new(),
-        }
-    });
+pub async fn verify_auth_key(auth_key: Vec<u8>, auth_verifier: String) -> bool {
+    tokio::task::spawn_blocking(move || verify_auth_key_sync(&auth_key, &auth_verifier))
+        .await
+        .unwrap_or(false)
+}
 
-    let _ = verify_auth_key(auth_key, verifier);
+pub async fn verify_dummy(auth_key: Vec<u8>) {
+    let _ = tokio::task::spawn_blocking(move || {
+        let verifier = DUMMY_VERIFIER.get_or_init(|| {
+            let mut salt_bytes = [0u8; SALT_LEN];
+            OsRng.fill_bytes(&mut salt_bytes);
+            match SaltString::encode_b64(&salt_bytes) {
+                Ok(salt) => Argon2::default()
+                    .hash_password(&[0u8; 32], &salt)
+                    .map(|hash| hash.to_string())
+                    .unwrap_or_default(),
+                Err(_) => String::new(),
+            }
+        });
+
+        let _ = verify_auth_key_sync(&auth_key, verifier);
+    })
+    .await;
 }
 
 pub fn check_login_rate_limit(email: &str, ip: &str) -> Result<(), ApiError> {
@@ -130,6 +160,24 @@ pub fn check_login_rate_limit(email: &str, ip: &str) -> Result<(), ApiError> {
         format!("{email}|{ip}"),
         LOGIN_MAX_ATTEMPTS,
         LOGIN_WINDOW,
+    )
+}
+
+pub fn check_register_rate_limit(ip: &str) -> Result<(), ApiError> {
+    check_rate_limit(
+        &REGISTER_ATTEMPTS,
+        ip.to_string(),
+        REGISTER_MAX_ATTEMPTS,
+        REGISTER_WINDOW,
+    )
+}
+
+pub fn check_salt_rate_limit(ip: &str) -> Result<(), ApiError> {
+    check_rate_limit(
+        &SALT_ATTEMPTS,
+        ip.to_string(),
+        SALT_MAX_ATTEMPTS,
+        SALT_WINDOW,
     )
 }
 
@@ -214,14 +262,40 @@ impl FromRequestParts<AppState> for AuthedUser {
         };
 
         if let Some(device_id) = device_id {
-            sqlx::query("update devices set last_seen_at = now() where id = $1")
-                .bind(device_id)
-                .execute(&state.pool)
-                .await?;
+            sqlx::query(
+                "update devices
+                 set last_seen_at = now()
+                 where id = $1
+                   and (last_seen_at is null or last_seen_at < now() - interval '60 seconds')",
+            )
+            .bind(device_id)
+            .execute(&state.pool)
+            .await?;
         }
 
         Ok(AuthedUser { user_id, device_id })
     }
+}
+
+fn forwarded_ip(headers: &HeaderMap) -> Option<String> {
+    if let Some(raw) = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+    {
+        if let Some(first) = raw
+            .split(',')
+            .map(str::trim)
+            .find(|entry| entry.parse::<std::net::IpAddr>().is_ok())
+        {
+            return Some(first.to_string());
+        }
+    }
+    headers
+        .get("x-real-ip")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|entry| entry.parse::<std::net::IpAddr>().is_ok())
+        .map(str::to_string)
 }
 
 impl FromRequestParts<AppState> for ClientIp {
@@ -229,14 +303,49 @@ impl FromRequestParts<AppState> for ClientIp {
 
     async fn from_request_parts(
         parts: &mut Parts,
-        _state: &AppState,
+        state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let ip = parts
-            .extensions
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|ConnectInfo(addr)| addr.ip().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+        let ip = (if state.config.trust_proxy {
+            forwarded_ip(&parts.headers)
+        } else {
+            None
+        })
+        .or_else(|| {
+            parts
+                .extensions
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|ConnectInfo(addr)| addr.ip().to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
 
         Ok(ClientIp(ip))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn constant_time_eq_compares_bytes_accurately() {
+        assert!(constant_time_eq(b"secret", b"secret"));
+        assert!(!constant_time_eq(b"secret", b"secreT"));
+        assert!(!constant_time_eq(b"secret", b"short"));
+    }
+
+    #[test]
+    fn forwarded_ip_parses_valid_proxy_headers_only() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("203.0.113.10, 10.0.0.1"),
+        );
+        assert_eq!(forwarded_ip(&headers).as_deref(), Some("203.0.113.10"));
+
+        let mut invalid = HeaderMap::new();
+        invalid.insert("x-forwarded-for", HeaderValue::from_static("not-an-ip"));
+        invalid.insert("x-real-ip", HeaderValue::from_static("198.51.100.7"));
+        assert_eq!(forwarded_ip(&invalid).as_deref(), Some("198.51.100.7"));
     }
 }

@@ -3,7 +3,7 @@ import { RichEditor } from "@/components/ui/rich-editor";
 import { Avatar, Switch } from "@/components/ui/primitives";
 import { Badge, DButton, SectionLabel, Surface } from "@/desktop/ui";
 import { activeSignature, usePrefs } from "@/lib/prefs";
-import { isHtmlEmpty } from "@/lib/rich-text";
+import { isHtmlEmpty, sanitizeHtml } from "@/lib/rich-text";
 import { cn } from "@/lib/utils";
 
 export type SignatureAccount = {
@@ -119,7 +119,7 @@ export function SignatureEditor({
             >
               <div
                 className="mail-html text-[12.5px] leading-[1.7] font-medium text-ink-soft"
-                dangerouslySetInnerHTML={{ __html: html }}
+                dangerouslySetInnerHTML={{ __html: sanitizeHtml(html) }}
               />
             </div>
             {!enabled ? (

@@ -81,10 +81,11 @@ if [ "$VERSION" != "$OLD_VERSION" ]; then
   echo "   bump $OLD_VERSION → $VERSION"
   python3 - "$VERSION" <<'PY'
 import json
+import re
 import sys
 
 version = sys.argv[1]
-for path in ("package.json", "package-lock.json"):
+for path in ("package.json", "package-lock.json", "site-vitrine/package.json"):
     with open(path) as handle:
         data = json.load(handle)
     data["version"] = version
@@ -92,6 +93,26 @@ for path in ("package.json", "package-lock.json"):
         data["packages"][""]["version"] = version
     with open(path, "w") as handle:
         handle.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+for path in (
+    "crates/mail-core/Cargo.toml",
+    "crates/mail-api/Cargo.toml",
+    "src-tauri/Cargo.toml",
+    "server/Cargo.toml",
+):
+    with open(path) as handle:
+        text = handle.read()
+    updated, count = re.subn(
+        r'^(version\s*=\s*")[^"]+(")',
+        rf'\g<1>{version}\g<2>',
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count != 1:
+        raise SystemExit(f"{path} : champ version introuvable")
+    with open(path, "w") as handle:
+        handle.write(updated)
 PY
   sed -i "s/\"version\": \"$OLD_VERSION\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
   grep -q "\"version\": \"$VERSION\"" src-tauri/tauri.conf.json ||
@@ -100,9 +121,6 @@ PY
   sed -i "s/$old_pattern/$VERSION/g" site-vitrine/src/components/download.tsx
   grep -q "$VERSION" site-vitrine/src/components/download.tsx ||
     die "site-vitrine/src/components/download.tsx : $VERSION absent après remplacement de $OLD_VERSION"
-  sed -i "s/Lavande\/$old_pattern/Lavande\/$VERSION/" crates/mail-api/src/copilot.rs
-  grep -q "Lavande/$VERSION" crates/mail-api/src/copilot.rs ||
-    die "crates/mail-api/src/copilot.rs : Lavande/$VERSION absent après remplacement de Lavande/$OLD_VERSION"
 fi
 echo "   version publiée : $VERSION"
 

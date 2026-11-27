@@ -1,6 +1,6 @@
 [package]
 name = "lavande-mail-api"
-version = "0.1.0"
+version = "0.5.7"
 edition = "2021"
 description = "HTTP API for the Lavande mail daemon"
 

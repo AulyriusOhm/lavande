@@ -120,7 +120,7 @@ afterEach(() => {
 describe("rail des dossiers · ordre d'affichage", () => {
   it("déplace un dossier devant un frère par glisser-déposer et persiste l'ordre", async () => {
     stubBackend();
-    render(<DesktopInbox />, { wrapper });
+    render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
     await screen.findByRole("button", { name: /^Voyages/ });
 
     expect(shown()).toEqual(["INBOX", "Projets", "Voyages"]);
@@ -133,7 +133,7 @@ describe("rail des dossiers · ordre d'affichage", () => {
 
   it("dépose après le frère visé quand le pointeur est dans la moitié basse", async () => {
     stubBackend();
-    render(<DesktopInbox />, { wrapper });
+    render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
     await screen.findByRole("button", { name: /^Projets/ });
 
     const target = rowOf("Projets");
@@ -158,7 +158,7 @@ describe("rail des dossiers · ordre d'affichage", () => {
   it("relit l'ordre enregistré au remontage", async () => {
     stubBackend();
     seedOrder({ a1: ["INBOX", "Voyages", "Projets"] });
-    render(<DesktopInbox />, { wrapper });
+    render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
 
     await screen.findByRole("button", { name: /^Voyages/ });
     expect(shown()).toEqual(["INBOX", "Voyages", "Projets"]);
@@ -167,7 +167,7 @@ describe("rail des dossiers · ordre d'affichage", () => {
   it("garde un ordre indépendant par compte", async () => {
     stubBackend([A1, A2]);
     seedOrder({ a1: ["INBOX", "Voyages", "Projets"], a2: ["Voyages", "Projets", "INBOX"] });
-    render(<DesktopInbox />, { wrapper });
+    render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
 
     await screen.findByRole("button", { name: "Perso" });
     fireEvent.click(screen.getByRole("button", { name: "Perso" }));
@@ -179,7 +179,7 @@ describe("rail des dossiers · ordre d'affichage", () => {
 
   it("ne rend pas les dossiers déplaçables en vue tous comptes", async () => {
     stubBackend([A1, A2]);
-    render(<DesktopInbox />, { wrapper });
+    render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
 
     await screen.findByRole("button", { name: "Perso" });
     expect(rowOf("Projets").getAttribute("draggable")).toBe("false");
@@ -196,7 +196,7 @@ describe("rail des dossiers · ordre d'affichage", () => {
 
   it("réordonne les enfants d'un même parent", async () => {
     stubBackend([A1], NESTED);
-    render(<DesktopInbox />, { wrapper });
+    render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
     await screen.findByText("Voyages");
 
     drop("Projets/2026", "Projets/2025");
@@ -216,7 +216,7 @@ describe("rail des dossiers · ordre d'affichage", () => {
 
   it("ignore un dépôt sur un enfant d'un autre parent", async () => {
     stubBackend([A1], NESTED);
-    render(<DesktopInbox />, { wrapper });
+    render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
     await screen.findByText("Voyages");
 
     const before = shown();

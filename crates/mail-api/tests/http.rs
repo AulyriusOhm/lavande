@@ -340,13 +340,12 @@ async fn a_removed_account_can_be_added_again() {
 
 #[tokio::test]
 async fn a_failed_account_save_leaves_no_half_created_account() {
-    let (directory, state) = state().await;
+    let (directory, mut state) = state().await;
     let config: lavande_mail::config::AccountConfig =
         serde_json::from_value(account("perso")).expect("config");
-    let blocked = directory
-        .path()
-        .join(format!("accounts.json.{}.tmp", std::process::id()));
-    fs::create_dir(&blocked).expect("répertoire bloquant l'écriture temporaire");
+    Arc::get_mut(&mut state)
+        .expect("état exclusif")
+        .set_accounts_path(directory.path().join("absent").join("accounts.json"));
 
     let error = state
         .add_account(&config, &[folder("INBOX", None)])

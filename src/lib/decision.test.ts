@@ -133,7 +133,7 @@ describe("decision (Système 1)", () => {
     expect(probed.answer).toBe(0.95);
     expect(events).toHaveLength(1);
 
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(NEURALWATT_ENDPOINT);
     expect((init.headers as Record<string, string>).authorization).toBe("Bearer nw-key-123");
 

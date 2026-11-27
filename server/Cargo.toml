@@ -1,6 +1,6 @@
 [package]
 name = "lavande-sync"
-version = "0.1.0"
+version = "0.5.7"
 edition = "2021"
 description = "Serveur de synchronisation chiffrée de Lavande"
 publish = false

@@ -35,7 +35,7 @@ function installViewport(width: number) {
         registered.add(listener);
         listeners.set(media, registered);
       },
-      removeEventListener: (type: string, listener: ChangeListener) => {
+      removeEventListener: (_type: string, listener: ChangeListener) => {
         listeners.get(media)?.delete(listener);
       },
       addListener: () => {},
@@ -136,6 +136,8 @@ describe("Boîte PC · reflow aux points de rupture", () => {
     }
 
     fireEvent.keyDown(window, { key: "ArrowDown" });
-    await waitFor(() => expect(document.querySelector('[data-mail-row][aria-current="true"]')?.dataset.mailRow).toBe(first));
+    await waitFor(() =>
+      expect(document.querySelector<HTMLElement>('[data-mail-row][aria-current="true"]')?.dataset.mailRow).toBe(first),
+    );
   });
 });

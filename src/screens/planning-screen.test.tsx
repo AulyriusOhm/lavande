@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { PlanningScreen } from "@/screens/planning-screen";
 import { MailStoreProvider } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";

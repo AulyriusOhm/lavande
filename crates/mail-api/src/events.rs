@@ -472,7 +472,7 @@ mod tests {
             to: Vec::new(),
             cc: Vec::new(),
             subject: subject.to_string(),
-            date: Some(Utc.timestamp_opt(date, 0).unwrap()),
+            date: Some(Utc.timestamp_opt(date, 0).single().expect("horodatage")),
             flags: Flags {
                 unread: true,
                 starred: false,

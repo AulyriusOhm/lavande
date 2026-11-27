@@ -29,7 +29,10 @@ const BIND: &str = "127.0.0.1:8790";
 /// partagent le même fichier `daemon-token` du répertoire de données.
 #[tauri::command]
 fn mail_daemon_token(app: tauri::AppHandle) -> Result<String, String> {
-    let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
     lavande_mail_api::token::load_or_create(&data_dir).map_err(|error| error.to_string())
 }
@@ -84,8 +87,13 @@ fn verify_android_update(
         .and_then(|v| v.get("pubkey"))
         .and_then(|v| v.as_str())
         .ok_or("pubkey updater absente de la configuration")?;
-    let data =
-        std::fs::read(&path).map_err(|e| format!("lecture de l'APK impossible : {e}"))?;
+    const MAX_APK_BYTES: u64 = 250 * 1024 * 1024;
+    let meta =
+        std::fs::metadata(&path).map_err(|e| format!("lecture de l'APK impossible : {e}"))?;
+    if !meta.is_file() || meta.len() > MAX_APK_BYTES {
+        return Err("APK invalide ou trop volumineux".to_string());
+    }
+    let data = std::fs::read(&path).map_err(|e| format!("lecture de l'APK impossible : {e}"))?;
     verify_update_signature(&data, &signature, pubkey, &version)
 }
 
@@ -114,7 +122,9 @@ fn update_host() -> serde_json::Value {
 /// Relais des commandes du plugin Kotlin `LavandeUpdaterPlugin`.
 #[cfg(target_os = "android")]
 mod android_commands {
-    use super::{AttachmentsPluginHandle, SyncPluginHandle, UiBarsPluginHandle, UpdaterPluginHandle};
+    use super::{
+        AttachmentsPluginHandle, SyncPluginHandle, UiBarsPluginHandle, UpdaterPluginHandle,
+    };
     use serde_json::Value;
     use tauri::State;
 
@@ -154,7 +164,12 @@ mod android_commands {
         updater: State<'_, UpdaterPluginHandle>,
         path: String,
     ) -> Result<Value, String> {
-        forward(&updater.0, "installApk", serde_json::json!({ "path": path })).await
+        forward(
+            &updater.0,
+            "installApk",
+            serde_json::json!({ "path": path }),
+        )
+        .await
     }
 
     #[tauri::command]
@@ -162,13 +177,16 @@ mod android_commands {
         sync: State<'_, SyncPluginHandle>,
         enabled: bool,
     ) -> Result<Value, String> {
-        forward(&sync.0, "setBackgroundSync", serde_json::json!({ "enabled": enabled })).await
+        forward(
+            &sync.0,
+            "setBackgroundSync",
+            serde_json::json!({ "enabled": enabled }),
+        )
+        .await
     }
 
     #[tauri::command]
-    pub async fn background_sync_state(
-        sync: State<'_, SyncPluginHandle>,
-    ) -> Result<Value, String> {
+    pub async fn background_sync_state(sync: State<'_, SyncPluginHandle>) -> Result<Value, String> {
         forward(&sync.0, "backgroundSyncState", Value::Null).await
     }
 
@@ -177,7 +195,12 @@ mod android_commands {
         sync: State<'_, SyncPluginHandle>,
         ids: Vec<String>,
     ) -> Result<Value, String> {
-        forward(&sync.0, "setMutedAccounts", serde_json::json!({ "ids": ids })).await
+        forward(
+            &sync.0,
+            "setMutedAccounts",
+            serde_json::json!({ "ids": ids }),
+        )
+        .await
     }
 
     #[tauri::command]
@@ -191,7 +214,12 @@ mod android_commands {
         let summary =
             lavande_mail_api::widget_agenda::summarize_agenda(&events, now, day_start, day_end);
         let json = serde_json::to_string(&summary).map_err(|error| error.to_string())?;
-        forward(&sync.0, "setWidgetAgendaSummary", serde_json::json!({ "summary": json })).await
+        forward(
+            &sync.0,
+            "setWidgetAgendaSummary",
+            serde_json::json!({ "summary": json }),
+        )
+        .await
     }
 
     #[tauri::command]
@@ -204,7 +232,12 @@ mod android_commands {
         bars: State<'_, UiBarsPluginHandle>,
         dark: bool,
     ) -> Result<Value, String> {
-        forward(&bars.0, "setBarsAppearance", serde_json::json!({ "dark": dark })).await
+        forward(
+            &bars.0,
+            "setBarsAppearance",
+            serde_json::json!({ "dark": dark }),
+        )
+        .await
     }
 
     #[tauri::command]
@@ -278,16 +311,15 @@ pub fn run() {
                 app.manage(AttachmentsPluginHandle(handle));
                 Ok(())
             })
-            .invoke_handler(tauri::generate_handler![
-                android_commands::open_attachment
-            ])
+            .invoke_handler(tauri::generate_handler![android_commands::open_attachment])
             .build(),
     );
     #[cfg(target_os = "android")]
     let builder = builder.plugin(
         tauri::plugin::Builder::<_, ()>::new("lavandeuibars")
             .setup(|app, api| {
-                let handle = api.register_android_plugin("mail.lavande.app", "LavandeUiBarsPlugin")?;
+                let handle =
+                    api.register_android_plugin("mail.lavande.app", "LavandeUiBarsPlugin")?;
                 app.manage(UiBarsPluginHandle(handle));
                 Ok(())
             })

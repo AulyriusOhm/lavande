@@ -48,8 +48,11 @@ afterEach(() => {
 });
 
 describe("store · proposition d'une action du résumé", () => {
-  it("retourne « added » puis « existing » pour la même action", () => {
+  it("retourne « added » puis « existing » pour la même action", async () => {
     const { result } = mount();
+    await act(async () => {
+      await Promise.resolve();
+    });
     expect(result.current.mails.some((mail) => mail.id === REF.mailId)).toBe(true);
     expect(MAILS.some((mail) => mail.id === REF.mailId && mail.folder === "inbox")).toBe(true);
 

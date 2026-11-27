@@ -121,6 +121,13 @@ describe("isolation du HTML", () => {
     expect(srcDoc(container)).toContain('<base target="_blank">');
   });
 
+  it("verrouille le document srcdoc avec une CSP script-src 'none'", () => {
+    const doc = srcDoc(renderBody().container);
+
+    expect(doc).toContain('http-equiv="Content-Security-Policy"');
+    expect(doc).toContain("script-src 'none'");
+  });
+
   it("embarque sa propre feuille de style", () => {
     const { container } = renderBody();
     const doc = srcDoc(container);
@@ -222,13 +229,14 @@ describe("largeur du cadre", () => {
     fitMailWidth(document, available);
 
     const rules = style.sheet?.cssRules ?? [];
-    const nested = (index: number) => rules[index].cssRules[0].style;
+    const nested = (index: number) =>
+      ((rules[index] as CSSGroupingRule).cssRules[0] as CSSStyleRule).style;
     return {
-      body: rules[0].style,
-      wrap: rules[1].style,
+      body: (rules[0] as CSSStyleRule).style,
+      wrap: (rules[1] as CSSStyleRule).style,
       media: nested(2),
       supports: nested(3),
-      small: rules[4].style,
+      small: (rules[4] as CSSStyleRule).style,
       cell,
       image,
       smallImage,

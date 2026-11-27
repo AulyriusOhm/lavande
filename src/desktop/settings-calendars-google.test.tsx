@@ -270,7 +270,9 @@ describe("Réglages · calendriers Google", () => {
     await waitFor(() => expect(storedCalendars().map((entry) => entry.name)).toEqual(["Pro"]));
     expect(storedIcs().events.agenda).toBeUndefined();
     expect(storedIcs().synced.agenda).toBeUndefined();
-    expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "DELETE")).toHaveLength(0);
+    expect(
+      (fetchMock.mock.calls as unknown[][]).filter(([, init]) => (init as RequestInit | undefined)?.method === "DELETE"),
+    ).toHaveLength(0);
     expect(within(section()).queryByText("Agenda")).toBeNull();
   });
 

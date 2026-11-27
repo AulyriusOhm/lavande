@@ -4,7 +4,12 @@ fn main() {
             .plugin(
                 "lavandeupdater",
                 tauri_build::InlinedPlugin::new()
-                    .commands(&["download_apk", "can_install", "open_install_settings", "install_apk"])
+                    .commands(&[
+                        "download_apk",
+                        "can_install",
+                        "open_install_settings",
+                        "install_apk",
+                    ])
                     .default_permission(tauri_build::DefaultPermissionRule::AllowAllCommands),
             )
             .plugin(

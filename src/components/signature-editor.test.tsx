@@ -61,4 +61,23 @@ describe("SignatureEditor", () => {
     expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe("false");
     expect(screen.getByText(/Signature désactivée/)).toBeTruthy();
   });
+
+  it("assainit le HTML de l'aperçu de signature", () => {
+    localStorage.setItem(
+      "lavande.prefs",
+      JSON.stringify({
+        signatures: {
+          perso: {
+            html: '<p>Cordialement</p><img src=x onerror="alert(1)"><script>alert(1)</script>',
+            enabled: true,
+          },
+        },
+      }),
+    );
+    const { container } = renderEditor();
+    const preview = container.querySelector(".mail-html");
+    expect(preview?.innerHTML).toContain("Cordialement");
+    expect(preview?.querySelector("script")).toBeNull();
+    expect(preview?.innerHTML).not.toContain("onerror");
+  });
 });

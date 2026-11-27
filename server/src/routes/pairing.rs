@@ -329,7 +329,7 @@ pub async fn poll(
     if row.expires_at <= Utc::now() {
         return Ok(pairing_expired());
     }
-    if row.poll_secret_hash != secret_hash {
+    if !auth::constant_time_eq(&row.poll_secret_hash, &secret_hash) {
         return Ok(invalid_poll_secret());
     }
     if row.token_issued_at.is_some() {

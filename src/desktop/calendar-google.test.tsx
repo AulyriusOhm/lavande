@@ -235,7 +235,7 @@ describe("Agenda · événements d'un calendrier Google", () => {
     await waitFor(() => expect(within(dayPanel()).getByText("Point Google")).toBeTruthy());
     expect(within(dayPanel()).queryByText("Ancien titre")).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0][0])).toBe("/api/calendars/google/gmail/events");
+    expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toBe("/api/calendars/google/gmail/events");
   });
 
   it("garde le cache et signale l'échec quand le démon refuse", async () => {

@@ -7,7 +7,6 @@ import { PrefsProvider } from "@/lib/prefs";
 import { ThemeProvider } from "@/lib/theme";
 import { createMemoryStorage } from "@/lib/sync/storage";
 import type { ApiAccount } from "@/lib/api";
-import type { CalendarDef } from "@/lib/calendars";
 
 const CALENDARS_KEY = "lavande.calendars.v1";
 

@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { ReactNode } from "react";
 import { DesktopSettings } from "@/desktop/settings";
 import { MailStoreProvider } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
@@ -108,7 +107,7 @@ describe("Réglages · section IA", () => {
 
     const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/chat/completions"));
     expect(call).toBeTruthy();
-    const init = call?.[1] as RequestInit;
+    const init = (call as unknown[] | undefined)?.[1] as RequestInit;
     expect(init.headers).toMatchObject({
       authorization: "Bearer sk-test",
       "x-opencode-session": expect.stringMatching(/^lavande-/) as unknown as string,

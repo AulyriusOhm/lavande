@@ -123,17 +123,20 @@ describe("readAiStats", () => {
 describe("mergeAiStats", () => {
   it("somme les appareils, jour par jour et modèle par modèle", () => {
     const today = dayKey();
+    const decision = { prompt: 0, completion: 0, calls: 0, llmSaved: 0, energyJoules: 0, totalLatencyMs: 0 };
     const first = {
       total: { prompt: 10, completion: 5, calls: 2 },
       byDay: { [today]: { prompt: 10, completion: 5, calls: 2 } },
       byModel: { gpt: { prompt: 10, completion: 5, calls: 2 } },
       byDomain: { "api.exemple.fr": { prompt: 10, completion: 5, calls: 2 } },
+      decision,
     };
     const second = {
       total: { prompt: 4, completion: 1, calls: 1 },
       byDay: { [today]: { prompt: 4, completion: 1, calls: 1 } },
       byModel: { gpt: { prompt: 4, completion: 1, calls: 1 } },
       byDomain: { "api.exemple.fr": { prompt: 4, completion: 1, calls: 1 } },
+      decision,
     };
 
     const merged = mergeAiStats([first, second]);
@@ -164,6 +167,7 @@ describe("formatage", () => {
       byDay: { "2026-01-05": { prompt: 1, completion: 1, calls: 1 } },
       byModel: {},
       byDomain: {},
+      decision: { prompt: 0, completion: 0, calls: 0, llmSaved: 0, energyJoules: 0, totalLatencyMs: 0 },
     };
 
     const days = lastDays(stats, 7, new Date(2026, 0, 7, 10, 0, 0));
@@ -184,6 +188,7 @@ describe("formatage", () => {
         a: { prompt: 0, completion: 0, calls: 5 },
       },
       byDomain: {},
+      decision: { prompt: 0, completion: 0, calls: 0, llmSaved: 0, energyJoules: 0, totalLatencyMs: 0 },
     };
 
     expect(topModels(stats).map((entry) => entry.model)).toEqual(["a", "b"]);

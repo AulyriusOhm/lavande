@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { ReactNode } from "react";
 import { DesktopSettings } from "@/desktop/settings";
 import { MailStoreProvider } from "@/lib/store";
 import { PlanningProvider } from "@/lib/planning-store";
@@ -53,8 +52,6 @@ const FOLDERS: ApiFolder[] = [
     last_sync_at: null,
   },
 ];
-
-const WHEN = new Intl.DateTimeFormat("fr-FR", { dateStyle: "short", timeStyle: "short" });
 
 const response = (payload: unknown, status = 200): Response =>
   ({

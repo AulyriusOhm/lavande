@@ -55,6 +55,20 @@ export default defineConfig({
   resolve: {
     alias,
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return;
+          if (id.includes("@tiptap") || id.includes("prosemirror")) return "vendor-editor";
+          if (id.includes("/motion/") || id.includes("framer-motion")) return "vendor-motion";
+          if (id.includes("@noble/")) return "vendor-crypto";
+          if (id.includes("lucide-react")) return "vendor-icons";
+          if (id.includes("react-dom") || id.includes("/react/")) return "vendor-react";
+        },
+      },
+    },
+  },
   server: {
     host: "0.0.0.0",
     port: 1420,

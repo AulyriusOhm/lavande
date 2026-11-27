@@ -265,7 +265,7 @@ mod tests {
             to: Vec::new(),
             cc: Vec::new(),
             subject: subject.to_string(),
-            date: date.map(|seconds| Utc.timestamp_opt(seconds, 0).unwrap()),
+            date: date.map(|seconds| Utc.timestamp_opt(seconds, 0).single().expect("horodatage")),
             flags: Flags {
                 unread,
                 starred: false,

@@ -157,7 +157,7 @@ describe("suggestEvents (fenêtre + anti-injection)", () => {
     const events = await suggestEvents({ windowHours: 48 }, LLM, mails, now);
 
     expect(events).toHaveLength(1);
-    expect(events[0].mailId).toBe("recent");
+    expect(events![0].mailId).toBe("recent");
     const [, , user] = vi.mocked(llmChat).mock.calls[0];
     expect(user).toContain("id=recent");
     expect(user).not.toContain("id=vieux");
@@ -167,7 +167,7 @@ describe("suggestEvents (fenêtre + anti-injection)", () => {
     vi.mocked(llmChat).mockResolvedValue(JSON.stringify({ evenements: [event({ mailId: "inconnu" })] }));
     const events = await suggestEvents({ windowHours: 48 }, LLM, [mail("1", now.getTime() - H)], now);
     expect(events).toHaveLength(1);
-    expect(events[0].mailId).toBeUndefined();
+    expect(events![0].mailId).toBeUndefined();
   });
 
   it("ne sollicite pas le modèle hors fenêtre", async () => {

@@ -146,7 +146,7 @@ describe("réglages · suppression d'un dossier", () => {
 describe("rail des dossiers · suppression retirée", () => {
   it("ne propose plus la suppression depuis la boîte de réception", async () => {
     stubBackend();
-    render(<DesktopInbox />, { wrapper });
+    render(<DesktopInbox onOpenSearch={() => {}} />, { wrapper });
 
     await screen.findByRole("button", { name: /^Projets/ });
     expect(screen.queryByLabelText(/Supprimer le dossier/)).toBeNull();

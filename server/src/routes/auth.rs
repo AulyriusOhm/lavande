@@ -45,8 +45,10 @@ pub struct LoginRequest {
 
 pub async fn salt(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Query(params): Query<SaltQuery>,
 ) -> Result<Response, ApiError> {
+    auth::check_salt_rate_limit(&ip)?;
     let email = normalize_email(&params.email)?;
     let account_salt: Option<Vec<u8>> =
         sqlx::query_scalar("select account_salt from users where email = $1")
@@ -66,12 +68,14 @@ pub async fn salt(
 
 pub async fn register(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Json(body): Json<RegisterRequest>,
 ) -> Result<Response, ApiError> {
+    auth::check_register_rate_limit(&ip)?;
     let email = normalize_email(&body.email)?;
     let auth_key = auth::decode_key(&body.auth_key, 32, "authKey")?;
     let account_salt = auth::decode_key(&body.account_salt, 16, "accountSalt")?;
-    let (auth_verifier, auth_salt) = auth::hash_auth_key(&auth_key)?;
+    let (auth_verifier, auth_salt) = auth::hash_auth_key(auth_key).await?;
     let user_id = Uuid::new_v4();
 
     let inserted = sqlx::query(
@@ -126,11 +130,11 @@ pub async fn login(
     .await?;
 
     let Some((user_id, auth_verifier, account_salt, key_envelope)) = account else {
-        auth::verify_dummy(&auth_key);
+        auth::verify_dummy(auth_key).await;
         return Ok(invalid_credentials());
     };
 
-    if !auth::verify_auth_key(&auth_key, &auth_verifier) {
+    if !auth::verify_auth_key(auth_key, auth_verifier).await {
         return Ok(invalid_credentials());
     }
 

@@ -112,38 +112,155 @@ export function ensureHtml(value: string): string {
   return looksLikeHtml(value) ? value : textToHtml(value);
 }
 
-const BLOCKED_TAGS = new Set([
-  "script",
-  "style",
-  "iframe",
-  "object",
-  "embed",
-  "link",
-  "meta",
-  "base",
-  "form",
-  "input",
-  "button",
-  "textarea",
-  "select",
+const ALLOWED_TAGS = new Set([
+  "a",
+  "b",
+  "blockquote",
+  "br",
+  "code",
+  "del",
+  "div",
+  "em",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "hr",
+  "i",
+  "img",
+  "ins",
+  "li",
+  "ol",
+  "p",
+  "pre",
+  "s",
+  "small",
+  "span",
+  "strike",
+  "strong",
+  "sub",
+  "sup",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "tr",
+  "u",
+  "ul",
 ]);
 
-/** Nettoie un HTML riche avant rendu : pas de script, d'iframe ni de gestionnaire d'événement. */
+const DROPPED_SUBTREE_TAGS = new Set([
+  "applet",
+  "base",
+  "button",
+  "embed",
+  "form",
+  "head",
+  "iframe",
+  "input",
+  "link",
+  "math",
+  "meta",
+  "noscript",
+  "object",
+  "option",
+  "script",
+  "select",
+  "style",
+  "svg",
+  "template",
+  "textarea",
+  "title",
+]);
+
+const GENERIC_ATTRS = new Set(["class", "dir", "lang", "title"]);
+const TAG_ATTRS: Record<string, Set<string>> = {
+  a: new Set(["href", "rel", "target"]),
+  img: new Set(["alt", "height", "src", "width"]),
+  table: new Set(["align"]),
+  td: new Set(["align", "colspan", "rowspan"]),
+  th: new Set(["align", "colspan", "rowspan"]),
+};
+
+const SAFE_DATA_IMAGE = /^data:image\/(?:png|jpeg|jpg|gif|webp);base64,[a-z0-9+/=\s]+$/i;
+
+function normalizeSchemeCandidate(raw: string): string {
+  // Retire espaces et caractères de contrôle ASCII que les navigateurs ignorent
+  // dans une URL (`java&#x09;script:`, `\u0001javascript:`, etc.).
+  return raw.replace(/[\u0000-\u0020\u007f]+/g, "").toLowerCase();
+}
+
+function isSafeHref(raw: string): boolean {
+  const normalized = normalizeSchemeCandidate(raw);
+  if (!normalized) return false;
+  if (normalized.startsWith("#") || normalized.startsWith("/")) return true;
+  if (
+    normalized.startsWith("http://") ||
+    normalized.startsWith("https://") ||
+    normalized.startsWith("mailto:")
+  ) {
+    return true;
+  }
+  const colon = normalized.indexOf(":");
+  const slash = normalized.indexOf("/");
+  return colon === -1 || (slash !== -1 && slash < colon);
+}
+
+function isSafeImageSrc(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (SAFE_DATA_IMAGE.test(trimmed)) return true;
+  const normalized = normalizeSchemeCandidate(trimmed);
+  if (!normalized) return false;
+  if (normalized.startsWith("http://") || normalized.startsWith("https://")) return true;
+  if (normalized.startsWith("/")) return true;
+  const colon = normalized.indexOf(":");
+  const slash = normalized.indexOf("/");
+  return colon === -1 || (slash !== -1 && slash < colon);
+}
+
+/** Nettoie un HTML riche par liste blanche stricte avant rendu dans le DOM. */
 export function sanitizeHtml(html: string): string {
   if (!html || !html.trim()) return "";
   const doc = new DOMParser().parseFromString(html, "text/html");
-  doc.body.querySelectorAll("*").forEach((el) => {
-    if (BLOCKED_TAGS.has(el.tagName.toLowerCase())) {
-      el.remove();
-      return;
-    }
-    for (const attr of Array.from(el.attributes)) {
-      const name = attr.name.toLowerCase();
-      const value = attr.value.trim().toLowerCase();
-      if (name.startsWith("on") || ((name === "href" || name === "src") && value.startsWith("javascript:"))) {
-        el.removeAttribute(attr.name);
+
+  const walk = (parent: Element) => {
+    for (const child of Array.from(parent.childNodes)) {
+      if (child.nodeType === Node.COMMENT_NODE) {
+        child.remove();
+        continue;
+      }
+      if (child.nodeType !== Node.ELEMENT_NODE) continue;
+      const el = child as Element;
+      const tag = el.tagName.toLowerCase();
+      if (DROPPED_SUBTREE_TAGS.has(tag)) {
+        el.remove();
+        continue;
+      }
+      walk(el);
+      if (!ALLOWED_TAGS.has(tag)) {
+        el.replaceWith(...Array.from(el.childNodes));
+        continue;
+      }
+      const allowedForTag = TAG_ATTRS[tag];
+      for (const attr of Array.from(el.attributes)) {
+        const name = attr.name.toLowerCase();
+        if (!GENERIC_ATTRS.has(name) && !allowedForTag?.has(name)) {
+          el.removeAttribute(attr.name);
+          continue;
+        }
+        if (tag === "a" && name === "href" && !isSafeHref(attr.value)) {
+          el.removeAttribute(attr.name);
+        } else if (tag === "img" && name === "src" && !isSafeImageSrc(attr.value)) {
+          el.removeAttribute(attr.name);
+        }
       }
     }
-  });
+  };
+
+  walk(doc.body);
   return doc.body.innerHTML;
 }

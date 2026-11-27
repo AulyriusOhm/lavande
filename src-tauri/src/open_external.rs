@@ -5,6 +5,8 @@ use tauri_plugin_opener::OpenerExt;
 
 #[cfg(target_os = "linux")]
 use std::{
+    io::Write,
+    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
@@ -107,9 +109,25 @@ async fn run_kwin_script(script_path: &Path) -> Option<()> {
 }
 
 #[cfg(target_os = "linux")]
+fn private_runtime_dir() -> std::io::Result<PathBuf> {
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from))
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "répertoire privé absent")
+        })?;
+    let dir = base.join("lavande-kwin");
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700);
+    builder.create(&dir)?;
+    Ok(dir)
+}
+
+#[cfg(target_os = "linux")]
 fn write_activation_script(wm_class: &str) -> std::io::Result<PathBuf> {
     let sequence = KWIN_SCRIPT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!(
+    let path = private_runtime_dir()?.join(format!(
         "lavande-kwin-activation-{}-{sequence}.js",
         std::process::id()
     ));
@@ -121,7 +139,12 @@ fn write_activation_script(wm_class: &str) -> std::io::Result<PathBuf> {
          if (w) workspace.activeWindow = w;\n",
         wm_class.to_lowercase()
     );
-    std::fs::write(&path, script)?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    file.write_all(script.as_bytes())?;
     Ok(path)
 }
 

@@ -201,7 +201,7 @@ const ACCOUNT = {
   token: "session-1",
 };
 
-function readable(state: SyncState): Record<string, unknown> {
+function readable(_state: SyncState): Record<string, unknown> {
   return JSON.parse(localStorage.getItem(KEY) as string) as Record<string, unknown>;
 }
 

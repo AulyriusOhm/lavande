@@ -188,12 +188,13 @@ describe("démo lecture seule", () => {
 
     await act(async () => {
       const created = await result.current.createAccount({
+        id: "demo",
         email: "demo@exemple.tld",
         label: "Démo",
-        incoming: { host: "imap.exemple.tld", port: 993, encryption: "tls" },
-        outgoing: { host: "smtp.exemple.tld", port: 465, encryption: "tls" },
+        imap: { host: "imap.exemple.tld", port: 993, encryption: "tls" },
+        smtp: { host: "smtp.exemple.tld", port: 465, encryption: "tls" },
         username: "demo@exemple.tld",
-        password: "secret",
+        auth: { kind: "password", password: "secret" },
       });
       expect(created).toBe("");
     });

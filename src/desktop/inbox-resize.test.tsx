@@ -36,7 +36,7 @@ function installViewport(width: number) {
         registered.add(listener);
         listeners.set(media, registered);
       },
-      removeEventListener: (type: string, listener: ChangeListener) => {
+      removeEventListener: (_type: string, listener: ChangeListener) => {
         listeners.get(media)?.delete(listener);
       },
       addListener: () => {},
