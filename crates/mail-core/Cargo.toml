@@ -1,6 +1,6 @@
 [package]
 name = "lavande-mail"
-version = "0.5.8"
+version = "0.5.9"
 edition = "2021"
 description = "Mail core for Lavande: model, MIME parsing, threading and local store"
 
